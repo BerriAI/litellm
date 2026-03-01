@@ -8642,29 +8642,45 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
   }
 };
 
-export const uiAuditLogsCall = async (
-  accessToken: string,
-  start_date?: string,
-  end_date?: string,
-  page?: number,
-  page_size?: number,
-) => {
+export interface UiAuditLogsParams {
+  action?: string;
+  table_name?: string;
+  object_id?: string;
+  changed_by?: string;
+  changed_by_api_key?: string;
+  object_team_id?: string;
+  object_key_hash?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+}
+
+export interface UiAuditLogsCallOptions {
+  accessToken: string;
+  page?: number;
+  page_size?: number;
+  params?: UiAuditLogsParams;
+}
+
+export const uiAuditLogsCall = async ({
+  accessToken,
+  page = 1,
+  page_size = 50,
+  params = {},
+}: UiAuditLogsCallOptions) => {
   try {
-    // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/audit` : `/audit`;
 
-    // Add query parameters if they exist
     const queryParams = new URLSearchParams();
-    // if (start_date) queryParams.append('start_date', start_date);
-    // if (end_date) queryParams.append('end_date', end_date);
-    if (page) queryParams.append("page", page.toString());
-    if (page_size) queryParams.append("page_size", page_size.toString());
+    queryParams.append("page", page.toString());
+    queryParams.append("page_size", page_size.toString());
 
-    // Append query parameters to URL if any exist
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
+    for (const [key, value] of Object.entries(params)) {
+      if (value != null && value !== "") {
+        queryParams.append(key, String(value));
+      }
     }
+
+    url += `?${queryParams.toString()}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -8681,8 +8697,7 @@ export const uiAuditLogsCall = async (
       throw new Error(errorMessage);
     }
 
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
     console.error("Failed to fetch audit logs:", error);
     throw error;
