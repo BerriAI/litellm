@@ -1203,6 +1203,12 @@ def completion_cost(  # noqa: PLR0915
                         prompt_tokens = token_counter(model=model, text=prompt)
                     completion_tokens = token_counter(model=model, text=completion)
 
+                # When base_model contains a provider prefix (e.g. "gemini/gemini-2.0-flash"),
+                # use that provider for cost lookup instead of the deployment provider.
+                # Applied after hidden_params extraction to avoid being overridden.
+                if base_model is not None and _model_contains_known_llm_provider(base_model):
+                    custom_llm_provider = base_model.split("/")[0]
+
                 # Handle A2A calls before model check - A2A doesn't require a model
                 if call_type in _A2A_CALL_TYPES:
                     from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
