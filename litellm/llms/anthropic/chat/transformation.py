@@ -398,6 +398,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     for item in value
                 ]
             else:
+                # All other keys (including ``type``, ``default``, ``const``,
+                # ``enum``, ``$ref``, ``title``, ``required``, etc.) are
+                # preserved as-is.  In particular ``type`` is NOT dropped
+                # when composition keywords (``anyOf``, ``allOf``, ``oneOf``)
+                # are also present.
                 result[key] = value
 
         # Ensure additionalProperties: false on object schemas that don't

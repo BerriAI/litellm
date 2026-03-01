@@ -707,3 +707,42 @@ class TestEnforceAdditionalPropertiesFlag:
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
 
         assert result["additionalProperties"] is False
+
+    def test_type_preserved_with_composition_keywords(self):
+        """``type`` is preserved even when ``anyOf``/``oneOf``/``allOf`` are present.
+
+        The filter iterates per-key; ``type`` falls through to the ``else``
+        branch and is copied to the result regardless of composition keywords.
+        """
+        schema = {
+            "type": "object",
+            "anyOf": [
+                {"type": "string"},
+                {"type": "integer"},
+            ],
+            "properties": {"name": {"type": "string"}},
+        }
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+        assert result["type"] == "object"
+        assert "anyOf" in result
+        assert "properties" in result
+
+    def test_default_none_preserved(self):
+        """``"default": None`` (Pydantic Optional fields) is preserved."""
+        schema = {
+            "type": "string",
+            "default": None,
+        }
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+        assert "default" in result
+        assert result["default"] is None
+
+    def test_const_none_preserved(self):
+        """``"const": None`` is preserved (valid JSON Schema)."""
+        schema = {
+            "type": "string",
+            "const": None,
+        }
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+        assert "const" in result
+        assert result["const"] is None
