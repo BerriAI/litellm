@@ -8,16 +8,10 @@ for ALL callbacks — not just those with per-callback turn_off_message_logging.
 Fixes: https://github.com/BerriAI/litellm/issues/9664
 """
 
-import os
-import sys
 from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
-
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-)
 
 import litellm
 from litellm import Choices, Message, ModelResponse
