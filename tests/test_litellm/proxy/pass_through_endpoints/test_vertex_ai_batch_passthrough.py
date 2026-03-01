@@ -227,52 +227,29 @@ class TestVertexAIBatchPassthroughHandler:
                 mock_managed_files_hook.store_unified_object_id.assert_called_once()
 
     def test_batch_cost_calculation_integration(self):
-        """Test integration with batch cost calculation"""
+        """Single Vertex AI response → non-zero cost with correct token counts."""
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage
-        
-        # Mock Vertex AI batch responses
+
         vertex_ai_batch_responses = [
             {
-                "status": "JOB_STATE_SUCCEEDED",
                 "response": {
-                    "candidates": [
-                        {
-                            "content": {
-                                "parts": [
-                                    {"text": "Hello, world!"}
-                                ]
-                            }
-                        }
-                    ],
                     "usageMetadata": {
                         "promptTokenCount": 10,
                         "candidatesTokenCount": 5,
-                        "totalTokenCount": 15
+                        "totalTokenCount": 15,
                     }
                 }
             }
         ]
-        
-        with patch('litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexGeminiConfig') as mock_config:
-            with patch('litellm.completion_cost') as mock_completion_cost:
-                
-                # Setup mocks
-                mock_config.return_value._transform_google_generate_content_to_openai_model_response.return_value = Mock(
-                    usage=Mock(total_tokens=15, prompt_tokens=10, completion_tokens=5)
-                )
-                mock_completion_cost.return_value = 0.001
-                
-                # Test the cost calculation
-                total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
-                    vertex_ai_batch_responses, 
-                    model_name="gemini-1.5-flash"
-                )
-                
-                # Verify results
-                assert total_cost == 0.001
-                assert usage.total_tokens == 15
-                assert usage.prompt_tokens == 10
-                assert usage.completion_tokens == 5
+
+        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+            vertex_ai_batch_responses, model_name="gemini-1.5-flash-001"
+        )
+
+        assert usage.total_tokens == 15
+        assert usage.prompt_tokens == 10
+        assert usage.completion_tokens == 5
+        assert total_cost > 0, "batch_cost_calculator should return a non-zero cost"
 
     def test_batch_response_transformation(self):
         """Test transformation of Vertex AI batch responses to OpenAI format"""
@@ -385,155 +362,107 @@ class TestVertexAIBatchPassthroughHandler:
 
 
 class TestVertexAIBatchCostCalculation:
-    """Test cases for Vertex AI batch cost calculation functionality"""
+    """Test cases for Vertex AI batch cost calculation functionality.
 
-    def test_calculate_vertex_ai_batch_cost_and_usage_success(self):
-        """Test successful batch cost and usage calculation"""
+    The function under test (calculate_vertex_ai_batch_cost_and_usage) extracts
+    usageMetadata directly from Vertex AI response dicts and calls
+    batch_cost_calculator — no VertexGeminiConfig transformation involved.
+    """
+
+    def test_should_aggregate_cost_and_usage_across_responses(self):
+        """Two successful responses → costs and token counts are summed."""
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage
-        
-        # Mock successful batch responses
-        vertex_ai_batch_responses = [
+
+        responses = [
             {
-                "status": "JOB_STATE_SUCCEEDED",
                 "response": {
-                    "candidates": [
-                        {
-                            "content": {
-                                "parts": [
-                                    {"text": "Hello, world!"}
-                                ]
-                            }
-                        }
-                    ],
                     "usageMetadata": {
                         "promptTokenCount": 10,
                         "candidatesTokenCount": 5,
-                        "totalTokenCount": 15
+                        "totalTokenCount": 15,
                     }
                 }
             },
             {
-                "status": "JOB_STATE_SUCCEEDED", 
                 "response": {
-                    "candidates": [
-                        {
-                            "content": {
-                                "parts": [
-                                    {"text": "How are you?"}
-                                ]
-                            }
-                        }
-                    ],
                     "usageMetadata": {
                         "promptTokenCount": 8,
                         "candidatesTokenCount": 3,
-                        "totalTokenCount": 11
+                        "totalTokenCount": 11,
                     }
                 }
-            }
+            },
         ]
-        
-        with patch('litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexGeminiConfig') as mock_config:
-            with patch('litellm.completion_cost') as mock_completion_cost:
-                
-                # Setup mocks
-                mock_model_response = Mock()
-                mock_model_response.usage = Mock(total_tokens=15, prompt_tokens=10, completion_tokens=5)
-                mock_config.return_value._transform_google_generate_content_to_openai_model_response.return_value = mock_model_response
-                mock_completion_cost.return_value = 0.001
-                
-                # Test the calculation
-                total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
-                    vertex_ai_batch_responses, 
-                    model_name="gemini-1.5-flash"
-                )
-                
-                # Verify results
-                assert total_cost == 0.002  # 2 responses * 0.001 each
-                assert usage.total_tokens == 30  # 15 + 15
-                assert usage.prompt_tokens == 20  # 10 + 10
-                assert usage.completion_tokens == 10  # 5 + 5
 
-    def test_calculate_vertex_ai_batch_cost_and_usage_with_failed_responses(self):
-        """Test batch cost calculation with some failed responses"""
+        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+            responses, model_name="gemini-1.5-flash-001"
+        )
+
+        assert usage.prompt_tokens == 18
+        assert usage.completion_tokens == 8
+        assert usage.total_tokens == 26
+        assert total_cost > 0, "batch_cost_calculator should return a non-zero cost"
+
+    def test_should_skip_responses_with_null_response_body(self):
+        """Failed lines (response: None) are skipped without error."""
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage
-        
-        # Mock batch responses with some failures
-        vertex_ai_batch_responses = [
+
+        responses = [
             {
-                "status": "JOB_STATE_SUCCEEDED",
                 "response": {
-                    "candidates": [
-                        {
-                            "content": {
-                                "parts": [
-                                    {"text": "Hello, world!"}
-                                ]
-                            }
-                        }
-                    ],
                     "usageMetadata": {
                         "promptTokenCount": 10,
                         "candidatesTokenCount": 5,
-                        "totalTokenCount": 15
+                        "totalTokenCount": 15,
                     }
                 }
             },
+            {"status": "JOB_STATE_FAILED", "response": None},
             {
-                "status": "JOB_STATE_FAILED",  # Failed response
-                "response": None
-            },
-            {
-                "status": "JOB_STATE_SUCCEEDED",
                 "response": {
-                    "candidates": [
-                        {
-                            "content": {
-                                "parts": [
-                                    {"text": "How are you?"}
-                                ]
-                            }
-                        }
-                    ],
                     "usageMetadata": {
                         "promptTokenCount": 8,
                         "candidatesTokenCount": 3,
-                        "totalTokenCount": 11
+                        "totalTokenCount": 11,
                     }
                 }
-            }
+            },
         ]
-        
-        with patch('litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexGeminiConfig') as mock_config:
-            with patch('litellm.completion_cost') as mock_completion_cost:
-                
-                # Setup mocks
-                mock_model_response = Mock()
-                mock_model_response.usage = Mock(total_tokens=15, prompt_tokens=10, completion_tokens=5)
-                mock_config.return_value._transform_google_generate_content_to_openai_model_response.return_value = mock_model_response
-                mock_completion_cost.return_value = 0.001
-                
-                # Test the calculation
-                total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
-                    vertex_ai_batch_responses, 
-                    model_name="gemini-1.5-flash"
-                )
-                
-                # Verify results - should only process successful responses
-                assert total_cost == 0.002  # 2 successful responses * 0.001 each
-                assert usage.total_tokens == 30  # 15 + 15
-                assert usage.prompt_tokens == 20  # 10 + 10
-                assert usage.completion_tokens == 10  # 5 + 5
 
-    def test_calculate_vertex_ai_batch_cost_and_usage_empty_responses(self):
-        """Test batch cost calculation with empty response list"""
+        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+            responses, model_name="gemini-1.5-flash-001"
+        )
+
+        assert usage.prompt_tokens == 18
+        assert usage.completion_tokens == 8
+        assert usage.total_tokens == 26
+        assert total_cost > 0
+
+    def test_should_return_zeros_for_empty_response_list(self):
+        """Empty input → zero cost and zero usage."""
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage
-        
-        # Test with empty list
-        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage([], model_name="gemini-1.5-flash")
-        
-        # Verify results
+
+        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+            [], model_name="gemini-1.5-flash-001"
+        )
+
         assert total_cost == 0.0
         assert usage.total_tokens == 0
         assert usage.prompt_tokens == 0
         assert usage.completion_tokens == 0
+
+    def test_should_handle_missing_usage_metadata_gracefully(self):
+        """Response without usageMetadata → 0 tokens, 0 cost for that line."""
+        from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage
+
+        responses = [
+            {"response": {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}},
+        ]
+
+        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+            responses, model_name="gemini-1.5-flash-001"
+        )
+
+        assert usage.prompt_tokens == 0
+        assert usage.completion_tokens == 0
+        assert usage.total_tokens == 0
