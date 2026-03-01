@@ -2473,7 +2473,9 @@
       "endpoints": {
         "chat_completions": true,
         "messages": true,
-        "responses": true
+        "responses": true,
+        "audio_transcriptions": true,
+        "audio_speech": true
       }
     }
   },

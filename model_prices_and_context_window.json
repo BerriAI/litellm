@@ -37753,5 +37753,33 @@
         "metadata": {
             "notes": "DuckDuckGo Instant Answer API is free and does not require an API key."
         }
-    }
+    },
+    "sarvam/bulbul:v3": {
+        "input_cost_per_character": 0.000033,
+        "litellm_provider": "sarvam",
+        "metadata": {
+            "calculation": "$0.33/10K characters (₹15/10K characters)",
+            "notes": "Sarvam Bulbul v3 - text-to-speech model"
+        },
+        "mode": "audio_speech",
+        "source": "https://docs.sarvam.ai/api-reference-docs/text-to-speech/overview",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "sarvam/saaras:v3": {
+        "input_cost_per_second": 0.0083333333,
+        "litellm_provider": "sarvam",
+        "metadata": {
+            "calculation": "₹30/hour = ₹0.0083333333 per second",
+            "notes": "Sarvam Saaras v3 - speech-to-text model"
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://docs.sarvam.ai/api-reference-docs/getting-started/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+
 }

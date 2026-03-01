@@ -6407,6 +6407,7 @@ def transcription(
         )
     elif custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
+        and provider_config is None
     ):
         api_base = (
             api_base
@@ -6611,9 +6612,9 @@ def speech(  # noqa: PLR0915
         Coroutine[Any, Any, HttpxBinaryResponseContent],
         None,
     ] = None
-    if (
-        custom_llm_provider == "openai"
-        or custom_llm_provider in litellm.openai_compatible_providers
+    if custom_llm_provider == "openai" or (
+        custom_llm_provider in litellm.openai_compatible_providers
+        and text_to_speech_provider_config is None
     ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
@@ -6970,6 +6971,27 @@ def speech(  # noqa: PLR0915
             api_base=api_base,
             api_key=api_key,
             **kwargs,
+        )
+    elif text_to_speech_provider_config is not None:
+        voice_str = voice if isinstance(voice, str) else None
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice_str,
+            text_to_speech_provider_config=text_to_speech_provider_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
         )
 
     if response is None:
