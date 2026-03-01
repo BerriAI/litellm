@@ -10035,3 +10035,172 @@ export const updateToolPolicy = async (
   }
   return response.json();
 };
+
+export const routingGroupCreateCall = async (
+  accessToken: string,
+  formValues: Record<string, unknown>,
+): Promise<Record<string, unknown>> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/routing_group`
+    : `/v1/routing_group`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(formValues),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Network response was not ok");
+  }
+  return response.json();
+};
+
+export const routingGroupListCall = async (
+  accessToken: string,
+  page: number = 1,
+  size: number = 50,
+): Promise<{ routing_groups: Record<string, unknown>[]; total: number; page: number; size: number }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/routing_group?page=${page}&size=${size}`
+    : `/v1/routing_group?page=${page}&size=${size}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Network response was not ok");
+  }
+  return response.json();
+};
+
+export const routingGroupGetCall = async (
+  accessToken: string,
+  routingGroupId: string,
+): Promise<Record<string, unknown>> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/routing_group/${routingGroupId}`
+    : `/v1/routing_group/${routingGroupId}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Network response was not ok");
+  }
+  return response.json();
+};
+
+export const routingGroupUpdateCall = async (
+  accessToken: string,
+  routingGroupId: string,
+  formValues: Record<string, unknown>,
+): Promise<Record<string, unknown>> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/routing_group/${routingGroupId}`
+    : `/v1/routing_group/${routingGroupId}`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(formValues),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Network response was not ok");
+  }
+  return response.json();
+};
+
+export const routingGroupDeleteCall = async (
+  accessToken: string,
+  routingGroupId: string,
+): Promise<Record<string, unknown>> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/routing_group/${routingGroupId}`
+    : `/v1/routing_group/${routingGroupId}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Network response was not ok");
+  }
+  return response.json();
+};
+
+export const routingGroupTestCall = async (
+  accessToken: string,
+  routingGroupId: string,
+  messages?: Array<Record<string, string>>,
+  mock: boolean = false,
+): Promise<Record<string, unknown>> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/routing_group/${routingGroupId}/test`
+    : `/v1/routing_group/${routingGroupId}/test`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ messages, mock }),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Network response was not ok");
+  }
+  return response.json();
+};
+
+export const routingGroupSimulateCall = async (
+  accessToken: string,
+  routingGroupId: string,
+  config: {
+    num_requests: number;
+    concurrency: number;
+    mock: boolean;
+    failure_injection?: { deployment_failure_rates: Record<string, number> };
+  },
+): Promise<Record<string, unknown>> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/routing_group/${routingGroupId}/simulate`
+    : `/v1/routing_group/${routingGroupId}/simulate`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(config),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Network response was not ok");
+  }
+  return response.json();
+};
+};
