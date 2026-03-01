@@ -36,10 +36,6 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 
   const handleNext = () => {
     if (currentStep === 0) {
-      if (selectedServers.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one MCP server to make public");
-        return;
-      }
       setCurrentStep(1);
     }
   };
@@ -83,11 +79,6 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   }, [visible]); // Only re-run when modal visibility changes, not when mcpHubData updates
 
   const handleSubmit = async () => {
-    if (selectedServers.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one MCP server to make public");
-      return;
-    }
-
     setLoading(true);
     try {
       const serverIdsToMakePublic = Array.from(selectedServers);
@@ -95,7 +86,11 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
       // Make batch API call for all servers
       await makeMCPPublicCall(accessToken, serverIdsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${serverIdsToMakePublic.length} MCP server(s) public!`);
+      if (serverIdsToMakePublic.length === 0) {
+        NotificationsManager.success("All MCP servers are now private.");
+      } else {
+        NotificationsManager.success(`Successfully made ${serverIdsToMakePublic.length} MCP server(s) public!`);
+      }
       handleClose();
       onSuccess();
     } catch (error) {
@@ -207,6 +202,21 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   };
 
   const renderStep2Content = () => {
+    if (selectedServers.size === 0) {
+      return (
+        <div className="space-y-4">
+          <Title>Confirm Making All MCP Servers Private</Title>
+
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <Text className="text-sm text-yellow-800">
+              No MCP servers are selected. All MCP servers will be set to <strong>private</strong> and will no longer be
+              visible on the public model hub.
+            </Text>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-4">
         <Title>Confirm Making MCP Servers Public</Title>
@@ -289,14 +299,14 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
-            <Button onClick={handleNext} disabled={selectedServers.size === 0}>
+            <Button onClick={handleNext}>
               Next
             </Button>
           )}
 
           {currentStep === 1 && (
             <Button onClick={handleSubmit} loading={loading}>
-              Make Public
+              {selectedServers.size === 0 ? "Make All Private" : "Make Public"}
             </Button>
           )}
         </div>

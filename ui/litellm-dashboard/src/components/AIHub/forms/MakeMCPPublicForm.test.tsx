@@ -252,7 +252,7 @@ describe("MakeMCPPublicForm", () => {
     expect(checkboxes[2]).not.toBeChecked();
   });
 
-  it("should show error when no servers selected", async () => {
+  it("should allow proceeding with no servers selected to make all private", async () => {
     render(<MakeMCPPublicForm {...mockProps} />);
 
     // Deselect all servers first
@@ -262,14 +262,19 @@ describe("MakeMCPPublicForm", () => {
       fireEvent.click(checkboxes[0]); // Click select all again to deselect all
     });
 
-    // Try to go to next step
+    // Click Next - should proceed to confirmation step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
     });
 
-    // Should stay on same step
-    expect(screen.getByText("Select MCP Servers to Make Public")).toBeInTheDocument();
+    // Should navigate to make-all-private confirmation
+    await waitFor(() => {
+      expect(screen.getByText("Confirm Making All MCP Servers Private")).toBeInTheDocument();
+    });
+
+    // Submit button should say "Make All Private"
+    expect(screen.getByRole("button", { name: "Make All Private" })).toBeInTheDocument();
   });
 
   it("should display empty state when no servers are available", () => {
@@ -286,9 +291,9 @@ describe("MakeMCPPublicForm", () => {
     const selectAllCheckbox = screen.getByLabelText("Select All");
     expect(selectAllCheckbox).toBeDisabled();
 
-    // Next button should be disabled
+    // Next button should still be enabled (allows making all private)
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).toBeDisabled();
+    expect(nextButton).not.toBeDisabled();
   });
 
   it("should handle Cancel button functionality", async () => {
