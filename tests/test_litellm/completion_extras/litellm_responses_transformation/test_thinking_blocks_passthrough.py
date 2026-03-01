@@ -9,8 +9,7 @@ Covers:
 - transform_request() auto-injection of include: ["reasoning.encrypted_content"]
 """
 
-import json
-from typing import Any, Dict, List
+from typing import Any, Dict
 from unittest.mock import MagicMock
 
 import pytest
@@ -206,22 +205,6 @@ class TestResponseOutputWithEncryptedContent:
     def test_reasoning_with_encrypted_content_returns_thinking_blocks(self) -> None:
         """When response contains a reasoning item with encrypted_content,
         the resulting Message should have thinking_blocks."""
-        reasoning_item = MagicMock()
-        reasoning_item.__class__ = _make_isinstance_match("ResponseReasoningItem")
-        type(reasoning_item).__name__ = "ResponseReasoningItem"
-        reasoning_item.summary = [MagicMock(text="I'm thinking...")]
-        reasoning_item.encrypted_content = "encrypted_blob_xyz"
-        reasoning_item.id = "rs_resp_1"
-
-        output_msg = MagicMock()
-        output_msg.__class__ = _make_isinstance_match("ResponseOutputMessage")
-        type(output_msg).__name__ = "ResponseOutputMessage"
-        output_msg.role = "assistant"
-        content_part = MagicMock()
-        content_part.text = "Hello!"
-        content_part.annotations = None
-        output_msg.content = [content_part]
-
         # Use the real OpenAI types for isinstance checks
         from openai.types.responses import ResponseOutputMessage, ResponseReasoningItem
 
@@ -480,11 +463,4 @@ class TestRoundTrip:
         assert msg.reasoning_content == "New reasoning"
 
 
-# ---------------------------------------------------------------------------
-# Helper for mock isinstance matching
-# ---------------------------------------------------------------------------
 
-def _make_isinstance_match(class_name: str):
-    """Create a class that tricks isinstance checks in tests.
-    Not used in final tests — replaced by spec-based mocking."""
-    pass
