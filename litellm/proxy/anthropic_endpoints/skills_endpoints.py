@@ -6,7 +6,6 @@ from typing import Optional
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import Response as FastAPIResponse
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -603,13 +602,6 @@ async def get_skill_content_endpoint(
             user_api_base=user_api_base,
             version=version,
         )
-        # Handle binary content (e.g., zip files)
-        if isinstance(result, dict) and isinstance(result.get("content"), bytes):
-            return FastAPIResponse(
-                content=result["content"],
-                media_type=result.get("content_type", "application/octet-stream"),
-                status_code=result.get("status_code", 200),
-            )
         return result
     except Exception as e:
         raise await processor._handle_llm_api_exception(
@@ -1013,13 +1005,6 @@ async def get_skill_version_content_endpoint(
             user_api_base=user_api_base,
             version=version,
         )
-        # Handle binary content (e.g., zip files)
-        if isinstance(result, dict) and isinstance(result.get("content"), bytes):
-            return FastAPIResponse(
-                content=result["content"],
-                media_type=result.get("content_type", "application/octet-stream"),
-                status_code=result.get("status_code", 200),
-            )
         return result
     except Exception as e:
         raise await processor._handle_llm_api_exception(
