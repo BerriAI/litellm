@@ -234,22 +234,27 @@ def test_vercel_ai_gateway_glm46_cost_math():
 
     _repo_root = Path(__file__).resolve().parents[4]
     _json_path = _repo_root / "model_prices_and_context_window.json"
+    original_cost = litellm.model_cost.copy()
     with open(_json_path, "r") as f:
         litellm.model_cost = json.load(f)
     from litellm.utils import _invalidate_model_cost_lowercase_map
     _invalidate_model_cost_lowercase_map()
 
-    key = "vercel_ai_gateway/zai/glm-4.6"
-    info = litellm.model_cost[key]
+    try:
+        key = "vercel_ai_gateway/zai/glm-4.6"
+        info = litellm.model_cost[key]
 
-    prompt_cost, completion_cost = cost_per_token(
-        model="vercel_ai_gateway/zai/glm-4.6",
-        prompt_tokens=1000,
-        completion_tokens=500,
-    )
+        prompt_cost, completion_cost = cost_per_token(
+            model="vercel_ai_gateway/zai/glm-4.6",
+            prompt_tokens=1000,
+            completion_tokens=500,
+        )
 
-    assert math.isclose(prompt_cost, 1000 * info["input_cost_per_token"], rel_tol=1e-12)
-    assert math.isclose(completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12)
+        assert math.isclose(prompt_cost, 1000 * info["input_cost_per_token"], rel_tol=1e-12)
+        assert math.isclose(completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12)
+    finally:
+        litellm.model_cost = original_cost
+        _invalidate_model_cost_lowercase_map()
 
 
 @pytest.fixture(autouse=False)
