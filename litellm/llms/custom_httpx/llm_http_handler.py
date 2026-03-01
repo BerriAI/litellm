@@ -9663,7 +9663,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(url=url, headers=headers, timeout=timeout)
+            response = sync_httpx_client.get(url=url, headers=headers)
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -9709,7 +9709,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, timeout=timeout
+                url=url, headers=headers
             )
         except Exception as e:
             raise self._handle_error(
@@ -9900,7 +9900,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(
-                url=url, headers=headers, params=query_params, timeout=timeout
+                url=url, headers=headers, params=query_params
             )
         except Exception as e:
             raise self._handle_error(
@@ -9949,7 +9949,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, params=query_params, timeout=timeout
+                url=url, headers=headers, params=query_params
             )
         except Exception as e:
             raise self._handle_error(
@@ -10008,7 +10008,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(url=url, headers=headers, timeout=timeout)
+            response = sync_httpx_client.get(url=url, headers=headers)
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -10054,7 +10054,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, timeout=timeout
+                url=url, headers=headers
             )
         except Exception as e:
             raise self._handle_error(
@@ -10114,7 +10114,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.delete(
-                url=url, headers=headers, timeout=timeout
+                url=url, headers=headers
             )
         except Exception as e:
             raise self._handle_error(
@@ -10161,7 +10161,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.delete(
-                url=url, headers=headers, timeout=timeout
+                url=url, headers=headers
             )
         except Exception as e:
             raise self._handle_error(
@@ -10220,7 +10220,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(url=url, headers=headers, timeout=timeout)
+            response = sync_httpx_client.get(url=url, headers=headers)
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -10266,7 +10266,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, timeout=timeout
+                url=url, headers=headers
             )
         except Exception as e:
             raise self._handle_error(
