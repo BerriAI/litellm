@@ -3121,6 +3121,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
     MISTRAL = "mistral"
+    MODELSLAB = "modelslab"
     MILVUS = "milvus"
     GROQ = "groq"
     A2A = "a2a"
