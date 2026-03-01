@@ -1336,8 +1336,13 @@ def test_reasoning_auto_summary_injected_without_reasoning_effort():
 
     handler = LiteLLMResponsesTransformationHandler()
     original_flag = litellm.reasoning_auto_summary
+    original_env = os.environ.get("LITELLM_REASONING_AUTO_SUMMARY")
 
     try:
+        # Clear env var to prevent it overriding the flag
+        if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+
         # --- Case 1: auto_summary OFF, no reasoning_effort → no reasoning injected ---
         litellm.reasoning_auto_summary = False
         req1 = ResponsesAPIOptionalRequestParams()
@@ -1389,3 +1394,7 @@ def test_reasoning_auto_summary_injected_without_reasoning_effort():
         print("✓ All reasoning_auto_summary injection tests passed")
     finally:
         litellm.reasoning_auto_summary = original_flag
+        if original_env is not None:
+            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = original_env
+        elif "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
