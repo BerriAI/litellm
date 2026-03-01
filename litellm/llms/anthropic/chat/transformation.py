@@ -77,6 +77,23 @@ if TYPE_CHECKING:
 else:
     LoggingClass = Any
 
+# String formats natively supported by Anthropic's structured output API.
+# See: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/lib/_parse/_transform.py
+_ANTHROPIC_SUPPORTED_STRING_FORMATS = frozenset(
+    {
+        "date-time",
+        "time",
+        "date",
+        "duration",
+        "email",
+        "hostname",
+        "uri",
+        "ipv4",
+        "ipv6",
+        "uuid",
+    }
+)
+
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
@@ -218,8 +235,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return params
 
+
     @staticmethod
-    def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_anthropic_output_schema(
+        schema: Dict[str, Any],
+        enforce_additional_properties: bool = True,
+    ) -> Dict[str, Any]:
         """
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
 
@@ -227,16 +248,25 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         - maxItems/minItems: Not supported for array types
         - minimum/maximum: Not supported for numeric types
         - minLength/maxLength: Not supported for string types
+        - pattern: Not supported for string types
 
         This mirrors the transformation done by the Anthropic Python SDK.
         See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
+        See: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/lib/_parse/_transform.py
 
         The SDK approach:
         1. Remove unsupported constraints from schema
         2. Add constraint info to description (e.g., "Must be at least 100")
-        3. Validate responses against original schema
+        3. Add additionalProperties: false to all object schemas
+        4. Filter string formats to supported list only
+        5. Validate responses against original schema (with all constraints)
+
         Args:
             schema: The JSON schema dictionary to filter
+            enforce_additional_properties: When True (default), forces
+                additionalProperties: false on all object schemas (SDK behavior).
+                Set to False for regular tool schemas where users may
+                intentionally allow additional properties.
 
         Returns:
             A new dictionary with unsupported fields removed and descriptions updated
@@ -257,10 +287,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "exclusiveMaximum",  # numeric constraints
             "minLength",
             "maxLength",  # string constraints
+            "pattern",  # string constraints
         }
 
         # Build description additions from removed constraints
-        constraint_descriptions: list = []
+        constraint_descriptions: List[str] = []
         constraint_labels = {
             "minItems": "minimum number of items: {}",
             "maxItems": "maximum number of items: {}",
@@ -270,12 +301,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "exclusiveMaximum": "exclusive maximum value: {}",
             "minLength": "minimum length: {}",
             "maxLength": "maximum length: {}",
+            "pattern": "pattern: {}",
         }
-        for field in unsupported_fields:
+        # Sort fields for deterministic iteration order
+        for field in sorted(unsupported_fields):
             if field in schema:
                 constraint_descriptions.append(
                     constraint_labels[field].format(schema[field])
                 )
+
+        # Filter unsupported string format values → move to description
+        schema_format = schema.get("format")
+        if (
+            schema_format is not None
+            and schema.get("type") == "string"
+            and schema_format not in _ANTHROPIC_SUPPORTED_STRING_FORMATS
+        ):
+            constraint_descriptions.append(f"format: {schema_format}")
 
         result: Dict[str, Any] = {}
 
@@ -295,35 +337,82 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Already handled above
                 continue
 
+            # Filter unsupported string formats
+            if (
+                key == "format"
+                and schema.get("type") == "string"
+                and value not in _ANTHROPIC_SUPPORTED_STRING_FORMATS
+            ):
+                continue
+
             if key == "properties" and isinstance(value, dict):
                 result[key] = {
-                    k: AnthropicConfig.filter_anthropic_output_schema(v)
+                    k: AnthropicConfig.filter_anthropic_output_schema(
+                        v, enforce_additional_properties
+                    )
                     for k, v in value.items()
                 }
-            elif key == "items" and isinstance(value, dict):
-                result[key] = AnthropicConfig.filter_anthropic_output_schema(value)
+            elif key == "items":
+                # items can be a schema (dict) or tuple validation (list of schemas)
+                if isinstance(value, dict):
+                    result[key] = AnthropicConfig.filter_anthropic_output_schema(
+                        value, enforce_additional_properties
+                    )
+                elif isinstance(value, list):
+                    result[key] = [
+                        AnthropicConfig.filter_anthropic_output_schema(
+                            item, enforce_additional_properties
+                        )
+                        for item in value
+                    ]
+                else:
+                    result[key] = value
+            elif key == "prefixItems" and isinstance(value, list):
+                # prefixItems: list of schemas for tuple validation
+                result[key] = [
+                    AnthropicConfig.filter_anthropic_output_schema(
+                        item, enforce_additional_properties
+                    )
+                    for item in value
+                ]
             elif key == "$defs" and isinstance(value, dict):
                 result[key] = {
-                    k: AnthropicConfig.filter_anthropic_output_schema(v)
+                    k: AnthropicConfig.filter_anthropic_output_schema(
+                        v, enforce_additional_properties
+                    )
                     for k, v in value.items()
                 }
             elif key == "anyOf" and isinstance(value, list):
                 result[key] = [
-                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    AnthropicConfig.filter_anthropic_output_schema(
+                        item, enforce_additional_properties
+                    )
                     for item in value
                 ]
             elif key == "allOf" and isinstance(value, list):
                 result[key] = [
-                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    AnthropicConfig.filter_anthropic_output_schema(
+                        item, enforce_additional_properties
+                    )
                     for item in value
                 ]
             elif key == "oneOf" and isinstance(value, list):
                 result[key] = [
-                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    AnthropicConfig.filter_anthropic_output_schema(
+                        item, enforce_additional_properties
+                    )
                     for item in value
                 ]
             else:
                 result[key] = value
+
+        # Ensure additionalProperties: false on all object schemas
+        # (as the Anthropic SDK does) — only for structured output schemas
+        if (
+            enforce_additional_properties
+            and result.get("type") == "object"
+        ):
+            result["additionalProperties"] = False
 
         return result
 
@@ -398,6 +487,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 },
             )
 
+            # Recursively filter unsupported constraints (minimum, maximum, etc.)
+            # from nested schemas within properties, items, anyOf, etc.
+            # Done BEFORE top-level key restriction so constraint-to-description
+            # propagation happens on the full schema.
+            _input_schema = self.filter_anthropic_output_schema(
+                _input_schema, enforce_additional_properties=False
+            )
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
                 k: v for k, v in _input_schema.items() if k in _allowed_properties
@@ -1071,7 +1167,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _input_schema["additionalProperties"] = True
             _input_schema["properties"] = {}
         else:
-            _input_schema.update(cast(AnthropicInputSchema, json_schema))
+            # Filter out unsupported constraints (minimum, maximum, etc.) before
+            # sending to Anthropic API. Mirrors SDK transformation behavior.
+            # See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
+            filtered_schema = self.filter_anthropic_output_schema(json_schema)
+            _input_schema.update(cast(AnthropicInputSchema, filtered_schema))
 
         _tool = AnthropicMessagesTool(
             name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema
