@@ -207,7 +207,9 @@ class SemanticMCPToolFilter:
 
         return []
 
-    def _get_tools_by_names(self, tool_names: List[str], available_tools: List[Any]) -> List[Any]:
+    def _get_tools_by_names(
+        self, tool_names: List[str], available_tools: List[Any]
+    ) -> List[Any]:
         """Get tools from available_tools by their names, preserving order.
 
         Handles the case where the semantic router indexes tools with raw MCP
