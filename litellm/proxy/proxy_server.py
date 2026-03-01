@@ -400,6 +400,9 @@ from litellm.proxy.management_endpoints.project_endpoints import (
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
+from litellm.proxy.management_endpoints.routing_group_endpoints import (
+    router as routing_group_router,
+)
 from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
@@ -4429,8 +4432,37 @@ class ProxyConfig:
                 prisma_client=prisma_client, proxy_config=self
             )
 
+        await self._load_routing_groups_from_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="semantic_filter_settings"):
             await self._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
+
+    async def _load_routing_groups_from_db(self, prisma_client: PrismaClient) -> None:
+        """Load all active routing groups from DB and sync to router."""
+        from litellm.proxy.management_endpoints.routing_group_endpoints import (
+            _sync_routing_group_to_router,
+        )
+        from litellm.types.router import RoutingGroupConfig, RoutingGroupDeployment
+
+        try:
+            groups = await prisma_client.db.litellm_routinggrouptable.find_many(
+                where={"is_active": True}
+            )
+            for g in groups:
+                config = RoutingGroupConfig(
+                    routing_group_id=g.routing_group_id,
+                    routing_group_name=g.routing_group_name,
+                    routing_strategy=g.routing_strategy,
+                    deployments=[
+                        RoutingGroupDeployment(**d) for d in (g.deployments or [])
+                    ],
+                )
+                await _sync_routing_group_to_router(config)
+            verbose_proxy_logger.debug(
+                f"Loaded {len(groups)} routing groups from DB"
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Could not load routing groups from DB: {e}")
 
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -13056,5 +13088,6 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 
 
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
+app.include_router(routing_group_router)
 app.include_router(mcp_rest_endpoints_router)
 app.include_router(mcp_discoverable_endpoints_router)
