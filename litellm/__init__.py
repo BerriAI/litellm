@@ -454,6 +454,8 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 # Load local backup at import time (fast, ~12 ms, no network I/O).
 # The remote fetch is deferred to first access — no threading, no locks.
 _model_cost_url: str = model_cost_map_url
+# Check at import time to avoid any remote fetch when explicitly disabled.
+# get_model_cost_map() also checks this env var as a secondary guard.
 _model_cost_remote_loaded: bool = (
     os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true"
 )
@@ -462,6 +464,11 @@ model_cost = GetModelCostMap.load_local_model_cost_map()
 
 def _ensure_remote_model_cost() -> None:
     """Fetch and merge the remote model cost map on first use (once only).
+
+    The remote fetch is intentionally limited to cost calculation paths
+    (cost_per_token, completion_cost) where pricing accuracy matters most.
+    Other code paths use the local backup which is sufficient for model
+    capabilities, context windows, etc.
 
     Thread safety: uses update() (not clear()+update()) so concurrent readers
     always see a non-empty dict. The worst case for a race is a redundant
