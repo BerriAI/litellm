@@ -31,15 +31,6 @@ def is_anthropic_oauth_key(value: Optional[str]) -> bool:
         value = value[7:]
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
-def _merge_beta_headers(existing: Optional[str], new_beta: str) -> str:
-    """Merge a new beta value into an existing comma-separated anthropic-beta header."""
-    if not existing:
-        return new_beta
-    betas = {b.strip() for b in existing.split(",") if b.strip()}
-    betas.add(new_beta)
-    return ",".join(sorted(betas))
-
-
 def optionally_handle_anthropic_oauth(
     headers: dict, api_key: Optional[str]
 ) -> tuple[dict, Optional[str]]:
@@ -61,18 +52,14 @@ def optionally_handle_anthropic_oauth(
     if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
         api_key = auth_header.replace("Bearer ", "")
         headers.pop("x-api-key", None)
-        headers["anthropic-beta"] = _merge_beta_headers(
-            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
-        )
+        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
         headers.pop("x-api-key", None)
         headers["authorization"] = f"Bearer {api_key}"
-        headers["anthropic-beta"] = _merge_beta_headers(
-            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
-        )
+        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
         headers["anthropic-dangerous-direct-browser-access"] = "true"
     return headers, api_key
 
@@ -237,46 +224,23 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
-    @staticmethod
-    def _is_claude_4_6_model(model: str) -> bool:
-        """Check if the model is a Claude 4.6 model (Opus 4.6 or Sonnet 4.6)."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6",
-                "sonnet-4-6", "sonnet_4_6", "sonnet-4.6", "sonnet_4.6",
-            )
-        )
-
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
     ) -> bool:
         """
-        Check if effort parameter is being used and requires a beta header.
+        Check if the effort-2025-11-24 beta header is needed.
 
-        Returns True if effort-related parameters are present and
-        the model requires the effort beta header. Claude 4.6 models
-        use output_config as a stable API feature — no beta header needed.
+        Only needed for reasoning_effort on Claude Opus 4.5.
+        Not needed for output_config.effort on Claude 4.6 models
+        (adaptive thinking requires no beta header per Anthropic docs).
         """
         if not optional_params:
             return False
 
-        # Claude 4.6 models use output_config as a stable API feature — no beta header needed
-        if model and self._is_claude_4_6_model(model):
-            return False
-
-        # Check if reasoning_effort is provided for Claude Opus 4.5
+        # Only Opus 4.5 reasoning_effort path needs the beta header
         if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
             reasoning_effort = optional_params.get("reasoning_effort")
             if reasoning_effort and isinstance(reasoning_effort, str):
-                return True
-
-        # Check if output_config is directly provided (for non-4.6 models)
-        output_config = optional_params.get("output_config")
-        if output_config and isinstance(output_config, dict):
-            effort = output_config.get("effort")
-            if effort and isinstance(effort, str):
                 return True
 
         return False
