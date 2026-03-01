@@ -1294,9 +1294,8 @@ def _attempt_json_repair(s: str) -> Optional[Dict[str, Any]]:
     if not stripped:
         return None
 
-    # Count unmatched brackets/braces (ignoring those inside strings)
-    open_braces = 0
-    open_brackets = 0
+    # Track the stack of unmatched openers to respect nesting order
+    opener_stack: list = []
     in_string = False
     escape_next = False
 
@@ -1314,22 +1313,21 @@ def _attempt_json_repair(s: str) -> Optional[Dict[str, Any]]:
         if in_string:
             continue
         if ch == "{":
-            open_braces += 1
-        elif ch == "}":
-            open_braces -= 1
+            opener_stack.append("}")
         elif ch == "[":
-            open_brackets += 1
-        elif ch == "]":
-            open_brackets -= 1
+            opener_stack.append("]")
+        elif ch in ("}", "]"):
+            if opener_stack and opener_stack[-1] == ch:
+                opener_stack.pop()
 
-    if open_braces <= 0 and open_brackets <= 0:
+    if not opener_stack:
         return None
 
     # Remove trailing comma before we close brackets
     candidate = stripped.rstrip(",")
 
-    # Close in reverse order: ] first, then }
-    candidate += "]" * open_brackets + "}" * open_braces
+    # Close in reverse order of opening (respects nesting)
+    candidate += "".join(reversed(opener_stack))
 
     try:
         result = json.loads(candidate)
@@ -1367,17 +1365,20 @@ def parse_tool_call_arguments(
     """
     import json
 
-    if not arguments:
+    if not arguments or not arguments.strip():
         return {}
 
     try:
-        return json.loads(arguments)
+        result = json.loads(arguments)
+        if isinstance(result, dict):
+            return result
+        return {"result": result}
     except json.JSONDecodeError as original_error:
         repaired = _attempt_json_repair(arguments)
         if repaired is not None:
             verbose_logger.warning(
                 "Repaired truncated tool call arguments for tool '%s' (%s). "
-                "Original: %s",
+                "Original (first 200 chars): %.200s",
                 tool_name or "<unknown>",
                 context or "unknown context",
                 arguments,

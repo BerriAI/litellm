@@ -1527,6 +1527,52 @@ def test_attempt_json_repair_returns_none_for_empty():
     assert _attempt_json_repair("   ") is None
 
 
+def test_attempt_json_repair_interleaved_nesting():
+    """Repair JSON with interleaved {} and [] nesting."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    # {"a": [{"b": 2  needs }]} not ]}}
+    truncated = '{"a": [{"b": 2'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result == {"a": [{"b": 2}]}
+
+
+def test_attempt_json_repair_deeply_nested():
+    """Repair deeply nested truncated JSON."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"x": {"y": [1, {"z": [2, 3'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result == {"x": {"y": [1, {"z": [2, 3]}]}}
+
+
+def test_parse_tool_call_arguments_whitespace_only():
+    """Whitespace-only input returns empty dict."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    assert parse_tool_call_arguments("   ") == {}
+    assert parse_tool_call_arguments("\n") == {}
+
+
+def test_parse_tool_call_arguments_non_object_json():
+    """Non-object JSON (list, string, number) is wrapped in a dict."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    result = parse_tool_call_arguments('[1, 2, 3]')
+    assert isinstance(result, dict)
+    assert result == {"result": [1, 2, 3]}
+
+
 def test_parse_tool_call_arguments_repairs_truncated_json():
     """parse_tool_call_arguments should repair truncated JSON instead of raising."""
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
