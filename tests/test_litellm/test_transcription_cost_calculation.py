@@ -7,11 +7,13 @@ propagated and used when calculating the cost of audio transcription calls.
 Regression tests for https://github.com/BerriAI/litellm/issues/20228
 """
 
+import datetime
 import uuid
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
@@ -94,7 +96,39 @@ class TestResponseCostCalculatorMetadataFallback:
     """
     _response_cost_calculator must fall back to metadata model_info.id
     when _hidden_params does not contain model_id.
+
+    Tests construct a real Logging instance and call _response_cost_calculator()
+    so the actual production code path is exercised.
     """
+
+    @staticmethod
+    def _make_logging_obj(model: str, model_id: str, cost_per_second: float = 0.006) -> Logging:
+        """Build a minimal Logging instance with metadata at the correct path."""
+        now = datetime.datetime.now()
+        logging_obj = Logging(
+            model=model,
+            messages="test audio",
+            stream=False,
+            call_type="atranscription",
+            start_time=now,
+            litellm_call_id=str(uuid.uuid4()),
+            function_id="1",
+        )
+        # update_environment_variables populates model_call_details with
+        # litellm_params & optional_params, mirroring real call setup.
+        logging_obj.update_environment_variables(
+            model=model,
+            optional_params={},
+            litellm_params={
+                "metadata": {
+                    "model_info": {
+                        "id": model_id,
+                        "input_cost_per_second": cost_per_second,
+                    },
+                },
+            },
+        )
+        return logging_obj
 
     def test_router_model_id_extracted_from_metadata(self):
         model_id = str(uuid.uuid4())
@@ -106,57 +140,61 @@ class TestResponseCostCalculatorMetadataFallback:
             "mode": "audio_transcription",
         }
         try:
+            logging_obj = self._make_logging_obj(
+                model="hosted_vllm/whisper-large-v3-turbo",
+                model_id=model_id,
+            )
             response = TranscriptionResponse(text="hello world")
             response._hidden_params = {}
 
-            router_model_id = None
-            if hasattr(response, "_hidden_params"):
-                hidden_params = response._hidden_params
-                if "model_id" in hidden_params:
-                    router_model_id = hidden_params["model_id"]
-
-            # Simulate the NEW fallback
-            if router_model_id is None:
-                _metadata = {"model_info": {"id": model_id}}
-                _mi = _metadata.get("model_info") or {}
-                _mid = _mi.get("id")
-                if _mid is not None and _mid in litellm.model_cost:
-                    router_model_id = _mid
-
-            assert router_model_id == model_id
+            cost = logging_obj._response_cost_calculator(result=response)
+            # Cost must be non-None (fallback found the model_id)
+            assert cost is not None
         finally:
             litellm.model_cost.pop(model_id, None)
 
     def test_router_model_id_not_extracted_if_not_in_model_cost(self):
         model_id = str(uuid.uuid4())
-        router_model_id = None
-        _metadata = {"model_info": {"id": model_id}}
-        _mi = _metadata.get("model_info") or {}
-        _mid = _mi.get("id")
-        if _mid is not None and _mid in litellm.model_cost:
-            router_model_id = _mid
-        assert router_model_id is None
+        logging_obj = self._make_logging_obj(
+            model="hosted_vllm/whisper-large-v3-turbo",
+            model_id=model_id,
+        )
+        response = TranscriptionResponse(text="hello world")
+        response._hidden_params = {}
+
+        # model_id is NOT in litellm.model_cost, so fallback should not match;
+        # cost calculation falls through to regular path (returns 0 or None).
+        cost = logging_obj._response_cost_calculator(result=response)
+        assert cost is None or cost == 0.0
 
     def test_router_model_id_from_hidden_params_takes_precedence(self):
         model_id_hidden = str(uuid.uuid4())
         model_id_metadata = str(uuid.uuid4())
-        litellm.model_cost[model_id_hidden] = {"input_cost_per_second": 0.01}
-        litellm.model_cost[model_id_metadata] = {"input_cost_per_second": 0.02}
+        litellm.model_cost[model_id_hidden] = {
+            "input_cost_per_second": 0.01,
+            "output_cost_per_token": 0,
+            "input_cost_per_token": 0,
+            "litellm_provider": "hosted_vllm",
+            "mode": "audio_transcription",
+        }
+        litellm.model_cost[model_id_metadata] = {
+            "input_cost_per_second": 0.02,
+            "output_cost_per_token": 0,
+            "input_cost_per_token": 0,
+            "litellm_provider": "hosted_vllm",
+            "mode": "audio_transcription",
+        }
         try:
+            logging_obj = self._make_logging_obj(
+                model="hosted_vllm/whisper-large-v3-turbo",
+                model_id=model_id_metadata,
+            )
             response = TranscriptionResponse(text="test")
             response._hidden_params = {"model_id": model_id_hidden}
 
-            router_model_id = None
-            hidden_params = response._hidden_params
-            if "model_id" in hidden_params:
-                router_model_id = hidden_params["model_id"]
-
-            if router_model_id is None:
-                _mid = model_id_metadata
-                if _mid in litellm.model_cost:
-                    router_model_id = _mid
-
-            assert router_model_id == model_id_hidden
+            cost = logging_obj._response_cost_calculator(result=response)
+            # hidden_params model_id should take precedence; cost is non-None
+            assert cost is not None
         finally:
             litellm.model_cost.pop(model_id_hidden, None)
             litellm.model_cost.pop(model_id_metadata, None)

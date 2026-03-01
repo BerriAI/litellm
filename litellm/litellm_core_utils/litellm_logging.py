@@ -1422,7 +1422,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Fallback: extract router_model_id from logging metadata when not
         # available in _hidden_params (e.g. transcription responses).
         if router_model_id is None:
-            _metadata = self.model_call_details.get("metadata") or {}
+            _metadata = self.model_call_details.get("litellm_params", {}).get("metadata", {}) or {}
             _mi = _metadata.get("model_info") or {}
             _mid = _mi.get("id")
             if _mid is not None and _mid in litellm.model_cost:
