@@ -159,10 +159,10 @@ def test_get_additional_headers():
         additional_headers
     )
     assert additional_logging_headers == {
-        "x_ratelimit_limit_requests": 2000,
-        "x_ratelimit_remaining_requests": 1999,
-        "x_ratelimit_limit_tokens": 160000,
-        "x_ratelimit_remaining_tokens": 160000,
+        "x_ratelimit_limit_requests": "2000",
+        "x_ratelimit_remaining_requests": "1999",
+        "x_ratelimit_limit_tokens": "160000",
+        "x_ratelimit_remaining_tokens": "160000",
         "llm_provider_request_id": "req_01F6CycZZPSHKRCCctcS1Vto",
     }
 
@@ -182,8 +182,8 @@ def test_get_additional_headers_openai_x_request_id():
     assert result is not None
     assert result["llm_provider_x_request_id"] == "req_abc123"
     assert result["llm_provider_openai_organization"] == "org-test"
-    assert result["llm_provider_openai_processing_ms"] == 42
-    assert result["x_ratelimit_limit_requests"] == 5000
+    assert result["llm_provider_openai_processing_ms"] == "42"
+    assert result["x_ratelimit_limit_requests"] == "5000"
 
 
 def test_get_additional_headers_only_prefixed_ratelimit():
@@ -196,10 +196,10 @@ def test_get_additional_headers_only_prefixed_ratelimit():
     }
     result = StandardLoggingPayloadSetup.get_additional_headers(additional_headers)
     assert result is not None
-    assert result["x_ratelimit_limit_requests"] == 1000
-    assert result["x_ratelimit_remaining_requests"] == 999
-    assert result["x_ratelimit_limit_tokens"] == 50000
-    assert result["x_ratelimit_remaining_tokens"] == 49999
+    assert result["x_ratelimit_limit_requests"] == "1000"
+    assert result["x_ratelimit_remaining_requests"] == "999"
+    assert result["x_ratelimit_limit_tokens"] == "50000"
+    assert result["x_ratelimit_remaining_tokens"] == "49999"
 
 
 def test_get_additional_headers_numeric_request_id_stays_string():
