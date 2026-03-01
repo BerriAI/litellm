@@ -43,6 +43,7 @@ class LoggingWorker:
         timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
         max_queue_size: int = LOGGING_WORKER_MAX_QUEUE_SIZE,
         concurrency: int = LOGGING_WORKER_CONCURRENCY,
+        _register_atexit: bool = True,
     ):
         self.timeout = timeout
         self.max_queue_size = max_queue_size
@@ -59,8 +60,8 @@ class LoggingWorker:
         # preventing stale workers from touching queues bound to a new loop.
         self._epoch: int = 0
 
-        # Register cleanup handler to flush remaining events on exit
-        atexit.register(self._flush_on_exit)
+        if _register_atexit:
+            atexit.register(self._flush_on_exit)
 
     def _reset_loop_state(self) -> None:
         """Reset all event-loop-bound state.

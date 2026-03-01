@@ -9,7 +9,6 @@ module-level singleton survives across tests.
 """
 
 import asyncio
-import atexit
 import contextvars
 
 import pytest
@@ -26,10 +25,10 @@ async def _noop_coro():
 
 
 def _make_fresh_worker() -> LoggingWorker:
-    """Create a standalone worker (no atexit side-effects in tests)."""
-    w = LoggingWorker(timeout=5.0, max_queue_size=100, concurrency=4)
-    atexit.unregister(w._flush_on_exit)
-    return w
+    """Create a standalone worker without atexit side-effects."""
+    return LoggingWorker(
+        timeout=5.0, max_queue_size=100, concurrency=4, _register_atexit=False
+    )
 
 
 # ---------------------------------------------------------------------------
