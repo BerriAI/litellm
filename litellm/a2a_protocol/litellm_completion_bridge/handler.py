@@ -32,6 +32,7 @@ class A2ACompletionBridgeHandler:
         params: Dict[str, Any],
         litellm_params: Dict[str, Any],
         api_base: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Handle non-streaming A2A request via litellm.acompletion.
@@ -41,6 +42,8 @@ class A2ACompletionBridgeHandler:
             params: A2A MessageSendParams containing the message
             litellm_params: Agent's litellm_params (custom_llm_provider, model, etc.)
             api_base: API base URL from agent_card_params
+            metadata: Optional metadata dict; if it contains "trace_id", it will
+                be forwarded as litellm_trace_id to litellm.acompletion
 
         Returns:
             A2A SendMessageResponse dict
@@ -105,6 +108,10 @@ class A2ACompletionBridgeHandler:
         }
         completion_params.update(litellm_params_to_add)
 
+        # Forward trace_id from metadata so all calls share the same session
+        if metadata and "trace_id" in metadata:
+            completion_params["litellm_trace_id"] = metadata["trace_id"]
+
         # Call litellm.acompletion
         response = await litellm.acompletion(**completion_params)
 
@@ -124,6 +131,7 @@ class A2ACompletionBridgeHandler:
         params: Dict[str, Any],
         litellm_params: Dict[str, Any],
         api_base: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Handle streaming A2A request via litellm.acompletion with stream=True.
@@ -139,6 +147,8 @@ class A2ACompletionBridgeHandler:
             params: A2A MessageSendParams containing the message
             litellm_params: Agent's litellm_params (custom_llm_provider, model, etc.)
             api_base: API base URL from agent_card_params
+            metadata: Optional metadata dict; if it contains "trace_id", it will
+                be forwarded as litellm_trace_id to litellm.acompletion
 
         Yields:
             A2A streaming response events
@@ -210,6 +220,10 @@ class A2ACompletionBridgeHandler:
         }
         completion_params.update(litellm_params_to_add)
 
+        # Forward trace_id from metadata so all calls share the same session
+        if metadata and "trace_id" in metadata:
+            completion_params["litellm_trace_id"] = metadata["trace_id"]
+
         # 1. Emit initial task event (kind: "task", status: "submitted")
         task_event = A2ACompletionBridgeTransformation.create_task_event(ctx)
         yield task_event
@@ -269,6 +283,7 @@ async def handle_a2a_completion(
     params: Dict[str, Any],
     litellm_params: Dict[str, Any],
     api_base: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Convenience function for non-streaming A2A completion."""
     return await A2ACompletionBridgeHandler.handle_non_streaming(
@@ -276,6 +291,7 @@ async def handle_a2a_completion(
         params=params,
         litellm_params=litellm_params,
         api_base=api_base,
+        metadata=metadata,
     )
 
 
@@ -284,6 +300,7 @@ async def handle_a2a_completion_streaming(
     params: Dict[str, Any],
     litellm_params: Dict[str, Any],
     api_base: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Convenience function for streaming A2A completion."""
     async for chunk in A2ACompletionBridgeHandler.handle_streaming(
@@ -291,5 +308,6 @@ async def handle_a2a_completion_streaming(
         params=params,
         litellm_params=litellm_params,
         api_base=api_base,
+        metadata=metadata,
     ):
         yield chunk

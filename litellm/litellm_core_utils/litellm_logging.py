@@ -133,8 +133,8 @@ from ..integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
-from ..integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+from ..integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from ..integrations.dotprompt import DotpromptManager
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
@@ -5038,6 +5038,7 @@ class StandardLoggingPayloadSetup:
         """
         dynamic_litellm_session_id = litellm_params.get("litellm_session_id")
         dynamic_litellm_trace_id = litellm_params.get("litellm_trace_id")
+        metadata_trace_id = (litellm_params.get("metadata") or {}).get("trace_id")
 
         # Note: we recommend using `litellm_session_id` for session tracking
         # `litellm_trace_id` is an internal litellm param
@@ -5045,6 +5046,8 @@ class StandardLoggingPayloadSetup:
             return str(dynamic_litellm_session_id)
         elif dynamic_litellm_trace_id:
             return str(dynamic_litellm_trace_id)
+        elif metadata_trace_id:
+            return str(metadata_trace_id)
         else:
             return logging_obj.litellm_trace_id
 

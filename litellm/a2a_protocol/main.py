@@ -24,11 +24,7 @@ from litellm.utils import client
 
 if TYPE_CHECKING:
     from a2a.client import A2AClient as A2AClientType
-    from a2a.types import (
-        AgentCard,
-        SendMessageRequest,
-        SendStreamingMessageRequest,
-    )
+    from a2a.types import AgentCard, SendMessageRequest, SendStreamingMessageRequest
 
 # Runtime imports with availability check
 A2A_SDK_AVAILABLE = False
@@ -221,6 +217,7 @@ async def asend_message(
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
+            metadata=kwargs.get("metadata"),
         )
 
         # Convert to LiteLLMSendMessageResponse
@@ -236,7 +233,8 @@ async def asend_message(
             raise ValueError(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
-        trace_id = str(uuid.uuid4())
+        caller_trace_id = (kwargs.get("metadata") or {}).get("trace_id")
+        trace_id = caller_trace_id or str(uuid.uuid4())
         extra_headers = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
@@ -469,6 +467,7 @@ async def asend_message_streaming(
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
+            metadata=metadata,
         ):
             yield chunk
         return
@@ -483,7 +482,10 @@ async def asend_message_streaming(
             raise ValueError(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
-        a2a_client = await create_a2a_client(base_url=api_base)
+        caller_trace_id = (metadata or {}).get("trace_id")
+        trace_id = caller_trace_id or str(uuid.uuid4())
+        extra_headers = {"X-LiteLLM-Trace-Id": trace_id}
+        a2a_client = await create_a2a_client(base_url=api_base, extra_headers=extra_headers)
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
