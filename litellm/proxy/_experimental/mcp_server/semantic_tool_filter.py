@@ -214,9 +214,13 @@ class SemanticMCPToolFilter:
 
         Handles the case where the semantic router indexes tools with raw MCP
         names (e.g. ``get_transcript``) but the expanded OpenAI-format tools
-        carry a server-name prefix (e.g. ``youtube-get_transcript``).  When an
-        exact match is not found the method falls back to suffix matching so
-        that ``get_transcript`` matches ``youtube-get_transcript``.
+        carry a server-name prefix (e.g. ``youtube<sep>get_transcript`` where
+        ``<sep>`` is ``MCP_TOOL_PREFIX_SEPARATOR``).  When an exact match is
+        not found the method falls back to suffix matching so that
+        ``get_transcript`` matches ``youtube<sep>get_transcript``.
+
+        The separator is **not** hardcoded — ``split_server_prefix_from_name``
+        uses the configurable ``MCP_TOOL_PREFIX_SEPARATOR`` constant.
         """
         tool_name_set = set(tool_names)
 
