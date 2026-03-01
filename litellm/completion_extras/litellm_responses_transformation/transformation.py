@@ -1121,6 +1121,34 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
+            elif output_item.get("type") == "reasoning":
+                # Capture encrypted_content for thinking_blocks passthrough in streaming
+                encrypted = output_item.get("encrypted_content")
+                if encrypted:
+                    summary_texts = output_item.get("summary", [])
+                    thinking_text = ""
+                    if isinstance(summary_texts, list):
+                        thinking_text = "".join(
+                            s.get("text", "") if isinstance(s, dict) else getattr(s, "text", "")
+                            for s in summary_texts
+                        )
+                    block = {
+                        "type": "thinking",
+                        "thinking": thinking_text,
+                        "encrypted_content": encrypted,
+                    }
+                    item_id = output_item.get("id")
+                    if item_id:
+                        block["id"] = item_id
+                    return ModelResponseStream(
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(thinking_blocks=[block]),
+                                finish_reason=None,
+                            )
+                        ]
+                    )
 
         elif event_type == "response.output_text.delta":
             # Content part added to output
