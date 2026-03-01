@@ -7209,10 +7209,16 @@ class Router:
             litellm_params=litellm_params,
         )
 
-        ## SET MODEL TO 'model=' - if base_model is None + not azure
+        ## SET MODEL — use base_model if available, else deployment name
         if custom_llm_provider == "azure" and base_model is None:
-            verbose_router_logger.error(
-                f"Could not identify azure model '{_model}'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models"
+            model = _model
+            verbose_router_logger.debug(
+                "Azure deployment '%s' has no explicit 'base_model'. "
+                "Inferring from deployment name. Set 'base_model' in model_info "
+                "for accurate cost tracking with custom deployment names. "
+                "Docs: https://docs.litellm.ai/docs/proxy/custom_pricing"
+                "#set-base_model-for-cost-tracking-eg-azure-deployments",
+                _model,
             )
         elif custom_llm_provider != "azure":
             model = _model
