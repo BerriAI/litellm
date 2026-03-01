@@ -2166,8 +2166,25 @@ def on_backoff(details):
     print_verbose(f"Backing off... this was attempt #{details['tries']}")
 
 
+def _strip_null_bytes(value: Any) -> Any:
+    """Strip PostgreSQL-incompatible null bytes (\\u0000) from strings.
+
+    PostgreSQL text columns cannot store null bytes and will raise
+    error 22P05 ("unsupported Unicode escape sequence") if they appear.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [_strip_null_bytes(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _strip_null_bytes(v) for k, v in value.items()}
+    return value
+
+
 def jsonify_object(data: dict) -> dict:
     db_data = copy.deepcopy(data)
+
+    db_data = _strip_null_bytes(db_data)
 
     for k, v in db_data.items():
         if isinstance(v, dict):
