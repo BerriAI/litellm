@@ -740,6 +740,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
             )
+        elif reasoning_effort in ("xhigh", "max"):
+            # xhigh/max are only meaningful with adaptive (output_config.effort);
+            # for non-adaptive models, fall back to "high" budget_tokens.
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            )
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
