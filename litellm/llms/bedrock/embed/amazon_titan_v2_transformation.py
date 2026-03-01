@@ -73,7 +73,11 @@ class AmazonTitanV2Config:
                     optional_params["embeddingTypes"] = ["float"]
         return optional_params
 
-    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanV2EmbeddingRequest:
+    def _transform_request(self, input: Union[str, List[str]], inference_params: dict) -> AmazonTitanV2EmbeddingRequest:
+        if isinstance(input, list):
+            if not input:
+                return AmazonTitanV2EmbeddingRequest(inputText="", **inference_params)  # type: ignore
+            input = input[0] if len(input) == 1 and isinstance(input[0], str) else str(input[0])
         return AmazonTitanV2EmbeddingRequest(inputText=input, **inference_params)  # type: ignore
 
     def _transform_response(self, response_list: List[dict], model: str) -> EmbeddingResponse:

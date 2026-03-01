@@ -6869,6 +6869,16 @@ async def embeddings(  # noqa: PLR0915
                             )
                         data["input"] = input_list
 
+        ### FLATTEN DOUBLE-WRAPPED STRING ARRAYS ###
+        # Normalize [[str, ...]] → [str, ...] to prevent providers
+        # (e.g. Bedrock Titan) from receiving a list instead of a string.
+        if "input" in data:
+            from litellm.litellm_core_utils.embedding_utils import (
+                flatten_double_wrapped_embedding_input,
+            )
+
+            data["input"] = flatten_double_wrapped_embedding_input(data["input"])
+
         if user_api_key_dict is not None:
             if data.get("metadata") is None:
                 data["metadata"] = {}

@@ -10,7 +10,7 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 """
 
 import types
-from typing import List
+from typing import List, Union
 
 from litellm.types.llms.bedrock import (
     AmazonTitanG1EmbeddingRequest,
@@ -59,8 +59,12 @@ class AmazonTitanG1Config:
         return optional_params
 
     def _transform_request(
-        self, input: str, inference_params: dict
+        self, input: Union[str, List[str]], inference_params: dict
     ) -> AmazonTitanG1EmbeddingRequest:
+        if isinstance(input, list):
+            if not input:
+                return AmazonTitanG1EmbeddingRequest(inputText="")
+            input = input[0] if len(input) == 1 and isinstance(input[0], str) else str(input[0])
         return AmazonTitanG1EmbeddingRequest(inputText=input)
 
     def _transform_response(
