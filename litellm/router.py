@@ -1989,6 +1989,17 @@ class Router:
             }
             input_kwargs.pop("silent_model", None)
 
+            # If the deployment config specifies force_non_streaming=True,
+            # override the client's stream parameter. This is needed when
+            # the backend doesn't support streaming properly (e.g., vLLM
+            # streaming doesn't emit tool_use events for Anthropic format).
+            # See: https://github.com/BerriAI/litellm/issues/5416
+            if litellm_params.get("force_non_streaming") is True:
+                input_kwargs["stream"] = False
+                input_kwargs.pop("force_non_streaming", None)
+            else:
+                input_kwargs.pop("force_non_streaming", None)
+
             _response = litellm.acompletion(**input_kwargs)
 
             logging_obj: Optional[LiteLLMLogging] = kwargs.get(
@@ -3703,13 +3714,22 @@ class Router:
                 kwargs=kwargs, model=model, model_name=model_name
             )
             ### get custom
-            response = original_generic_function(
-                **{
-                    **data,
-                    "caching": self.cache_responses,
-                    **kwargs,
-                }
-            )
+            _merged_kwargs = {
+                **data,
+                "caching": self.cache_responses,
+                **kwargs,
+            }
+
+            # If the deployment config specifies force_non_streaming=True,
+            # override the client's stream parameter. This is needed when
+            # the backend doesn't support streaming properly (e.g., vLLM
+            # streaming doesn't emit tool_use events for Anthropic format).
+            # See: https://github.com/BerriAI/litellm/issues/5416
+            if data.get("force_non_streaming") is True:
+                _merged_kwargs["stream"] = False
+            _merged_kwargs.pop("force_non_streaming", None)
+
+            response = original_generic_function(**_merged_kwargs)
 
             rpm_semaphore = self._get_client(
                 deployment=deployment,
@@ -3794,14 +3814,23 @@ class Router:
             except Exception:
                 custom_llm_provider = None
 
-            response = original_function(
-                **{
-                    **data,
-                    "custom_llm_provider": custom_llm_provider,
-                    "caching": self.cache_responses,
-                    **kwargs,
-                }
-            )
+            _merged_kwargs = {
+                **data,
+                "custom_llm_provider": custom_llm_provider,
+                "caching": self.cache_responses,
+                **kwargs,
+            }
+
+            # If the deployment config specifies force_non_streaming=True,
+            # override the client's stream parameter. This is needed when
+            # the backend doesn't support streaming properly (e.g., vLLM
+            # streaming doesn't emit tool_use events for Anthropic format).
+            # See: https://github.com/BerriAI/litellm/issues/5416
+            if data.get("force_non_streaming") is True:
+                _merged_kwargs["stream"] = False
+            _merged_kwargs.pop("force_non_streaming", None)
+
+            response = original_function(**_merged_kwargs)
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info(
