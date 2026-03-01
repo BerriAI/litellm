@@ -5,7 +5,8 @@ Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/compl
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    handle_messages_with_content_list_to_str_conversion,
+    _audio_or_image_in_message_content,
+    convert_content_list_to_str,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -33,9 +34,19 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
-        Moonshot AI does not support content in list format.
+        - Moonshot AI doesn't support content as a list. This handles:
+            1. Transforms list content to a string.
+            2. If message contains an image or audio, send as is (user-intended)
         """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        for message in messages:
+            # Do nothing if the message contains an image or audio
+            if _audio_or_image_in_message_content(message):
+                continue
+
+            texts = convert_content_list_to_str(message=message)
+            if texts:
+                message["content"] = texts
+
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
