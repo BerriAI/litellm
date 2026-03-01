@@ -1203,6 +1203,25 @@ def completion_cost(  # noqa: PLR0915
                         prompt_tokens = token_counter(model=model, text=prompt)
                     completion_tokens = token_counter(model=model, text=completion)
 
+                # When base_model is used and its provider prefix differs from
+                # custom_llm_provider, update custom_llm_provider to match the
+                # base_model's provider.  This must happen *after* hidden_params
+                # extraction (which may overwrite custom_llm_provider with the
+                # deployment provider) so the correct provider is used for cost
+                # lookup.
+                # e.g. model="anthropic/gemini-3-flash" (provider=anthropic) with
+                # base_model="gemini/gemini-3-flash-preview" should use
+                # provider=gemini for cost lookup.
+                if base_model is not None and model == base_model:
+                    _base_model_parts = base_model.split("/", 1)
+                    if len(_base_model_parts) > 1:
+                        _base_model_provider_prefix = _base_model_parts[0]
+                        if (
+                            _base_model_provider_prefix in LlmProvidersSet
+                            and _base_model_provider_prefix != custom_llm_provider
+                        ):
+                            custom_llm_provider = _base_model_provider_prefix
+
                 # Handle A2A calls before model check - A2A doesn't require a model
                 if call_type in _A2A_CALL_TYPES:
                     from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
