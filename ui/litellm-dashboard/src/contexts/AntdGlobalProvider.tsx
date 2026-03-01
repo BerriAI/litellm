@@ -2,10 +2,7 @@
 
 import React, { useEffect, useRef } from "react";
 import { notification } from "antd";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { setNotificationInstance } from "@/components/molecules/notifications_manager";
-
-const queryClient = new QueryClient();
 
 export default function AntdGlobalProvider({ children }: { children: React.ReactNode }) {
   const [api, contextHolder] = notification.useNotification();
@@ -19,9 +16,9 @@ export default function AntdGlobalProvider({ children }: { children: React.React
   }, [api]);
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <>
       {contextHolder}
       {children}
-    </QueryClientProvider>
+    </>
   );
 }
