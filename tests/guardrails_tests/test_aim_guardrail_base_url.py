@@ -1,4 +1,4 @@
-import pytest
+from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
 import os
 
