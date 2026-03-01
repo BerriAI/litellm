@@ -2035,6 +2035,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     database_connection_timeout: Optional[float] = Field(
         60, description="default timeout for a connection to the database"
     )
+    database_connection_idle_lifetime: Optional[int] = Field(
+        60,
+        description="max seconds a connection can sit idle before being recycled; prevents cloud providers (RDS, Cloud SQL) from silently dropping stale connections",
+    )
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
     )
