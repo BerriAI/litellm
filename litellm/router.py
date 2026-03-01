@@ -125,6 +125,10 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
+from litellm.router_utils.google_model_variant_utils import (
+    build_variant_deployments,
+    resolve_google_model_variant,
+)
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -201,18 +205,6 @@ else:
     AutoRouter = Any
     ComplexityRouter = Any
     PreRoutingHookResponse = Any
-
-
-"""
-Known Google/Gemini model variant suffixes.
-
-Google exposes model variants via suffixes appended to the base model name
-(e.g. ``gemini-3.1-pro-preview-customtools``).  When a request arrives for a
-variant that is not explicitly configured in the router, we strip these
-suffixes and fall back to the base model's deployment while forwarding the
-original variant name to the upstream API.
-"""
-GOOGLE_MODEL_VARIANT_SUFFIXES: List[str] = ["-customtools"]
 
 
 class RoutingArgs(enum.Enum):
@@ -8575,36 +8567,6 @@ class Router:
         """
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
 
-    def _resolve_google_model_variant(
-        self, model: str
-    ) -> Optional[Tuple[str, str]]:
-        """
-        Resolve Google/Gemini model variant suffixes.
-
-        When a model like ``gemini-3.1-pro-preview-customtools`` is requested
-        but no deployment exists, strip known variant suffixes and check
-        whether the base model is registered.
-
-        Returns
-        -------
-        Tuple[str, str]
-            ``(base_model_name, variant_suffix)`` when a match is found.
-        None
-            When no known variant suffix applies or the base model is not
-            registered.
-        """
-        for suffix in GOOGLE_MODEL_VARIANT_SUFFIXES:
-            if model.endswith(suffix):
-                base_model = model[: -len(suffix)]
-                # Direct model_names lookup
-                if base_model in self.model_names:
-                    return base_model, suffix
-                # model_group_alias lookup
-                alias_model = self._get_model_from_alias(model=base_model)
-                if alias_model is not None:
-                    return alias_model, suffix
-        return None
-
     def _common_checks_available_deployment(
         self,
         model: str,
@@ -8692,6 +8654,32 @@ class Router:
             )
 
         if len(healthy_deployments) == 0:
+            # ── Google/Gemini model variant resolution ──────────────
+            # Gemini CLI appends variant suffixes (e.g. "-customtools")
+            # to the base model name.  Resolve BEFORE default fallbacks
+            # so the original variant name is preserved.
+            variant_result = resolve_google_model_variant(
+                model=model,
+                model_names=self.model_names,
+                get_model_from_alias=lambda m: self._get_model_from_alias(model=m),
+            )
+            if variant_result is not None:
+                base_model_name, variant_suffix = variant_result
+                base_deployments = self._get_all_deployments(
+                    model_name=base_model_name
+                )
+                if len(base_deployments) > 0:
+                    variant_deployments = build_variant_deployments(
+                        base_deployments, variant_suffix
+                    )
+                    verbose_router_logger.info(
+                        "Resolved Google model variant '%s' → base model '%s' (%d deployment(s))",
+                        model,
+                        base_model_name,
+                        len(variant_deployments),
+                    )
+                    return model, variant_deployments
+
             # Check for default fallbacks if no deployments are found for the requested model
             if self._has_default_fallbacks():
                 fallback_model = self._get_first_default_fallback()
@@ -8699,44 +8687,8 @@ class Router:
                     verbose_router_logger.info(
                         f"Model '{model}' not found. Attempting to use default fallback model '{fallback_model}'."
                     )
-                    # Re-assign model to the fallback and try to get deployments again
                     model = fallback_model
                     healthy_deployments = self._get_all_deployments(model_name=model)
-
-            # ── Google/Gemini model variant resolution ──────────────
-            # Gemini CLI appends variant suffixes (e.g. "-customtools")
-            # to the base model name.  If the variant is not explicitly
-            # configured, resolve it to the base model's deployment and
-            # forward the variant name to the upstream API.
-            if len(healthy_deployments) == 0:
-                _original_model = model  # preserve the variant name
-                variant_result = self._resolve_google_model_variant(model)
-                if variant_result is not None:
-                    base_model_name, variant_suffix = variant_result
-                    healthy_deployments = self._get_all_deployments(
-                        model_name=base_model_name
-                    )
-                    if len(healthy_deployments) > 0:
-                        variant_deployments: List[Dict] = []
-                        for dep in healthy_deployments:
-                            dep_copy = dep.copy()
-                            dep_copy["litellm_params"] = dep[
-                                "litellm_params"
-                            ].copy()
-                            base_litellm_model = dep_copy["litellm_params"][
-                                "model"
-                            ]
-                            dep_copy["litellm_params"]["model"] = (
-                                base_litellm_model + variant_suffix
-                            )
-                            variant_deployments.append(dep_copy)
-                        verbose_router_logger.info(
-                            "Resolved Google model variant '%s' → base model '%s' (%d deployment(s))",
-                            _original_model,
-                            base_model_name,
-                            len(variant_deployments),
-                        )
-                        return _original_model, variant_deployments
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:

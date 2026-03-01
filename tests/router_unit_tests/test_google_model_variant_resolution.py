@@ -18,7 +18,10 @@ import pytest
 
 import litellm
 from litellm import Router
-from litellm.router import GOOGLE_MODEL_VARIANT_SUFFIXES
+from litellm.router_utils.google_model_variant_utils import (
+    GOOGLE_MODEL_VARIANT_SUFFIXES,
+    resolve_google_model_variant,
+)
 
 
 @pytest.fixture
@@ -40,11 +43,13 @@ def gemini_router():
 
 
 class TestResolveGoogleModelVariant:
-    """Unit tests for ``_resolve_google_model_variant``."""
+    """Unit tests for ``resolve_google_model_variant``."""
 
     def test_customtools_suffix_resolves_to_base(self, gemini_router):
-        result = gemini_router._resolve_google_model_variant(
-            "gemini-3.1-pro-preview-customtools"
+        result = resolve_google_model_variant(
+            model="gemini-3.1-pro-preview-customtools",
+            model_names=gemini_router.model_names,
+            get_model_from_alias=lambda m: gemini_router._get_model_from_alias(model=m),
         )
         assert result is not None
         base_model, suffix = result
@@ -52,19 +57,27 @@ class TestResolveGoogleModelVariant:
         assert suffix == "-customtools"
 
     def test_base_model_returns_none(self, gemini_router):
-        result = gemini_router._resolve_google_model_variant(
-            "gemini-3.1-pro-preview"
+        result = resolve_google_model_variant(
+            model="gemini-3.1-pro-preview",
+            model_names=gemini_router.model_names,
+            get_model_from_alias=lambda m: gemini_router._get_model_from_alias(model=m),
         )
         assert result is None
 
     def test_unknown_suffix_returns_none(self, gemini_router):
-        result = gemini_router._resolve_google_model_variant(
-            "gemini-3.1-pro-preview-unknownsuffix"
+        result = resolve_google_model_variant(
+            model="gemini-3.1-pro-preview-unknownsuffix",
+            model_names=gemini_router.model_names,
+            get_model_from_alias=lambda m: gemini_router._get_model_from_alias(model=m),
         )
         assert result is None
 
     def test_unrelated_model_returns_none(self, gemini_router):
-        result = gemini_router._resolve_google_model_variant("gpt-4o")
+        result = resolve_google_model_variant(
+            model="gpt-4o",
+            model_names=gemini_router.model_names,
+            get_model_from_alias=lambda m: gemini_router._get_model_from_alias(model=m),
+        )
         assert result is None
 
     def test_customtools_with_missing_base_returns_none(self):
@@ -80,8 +93,10 @@ class TestResolveGoogleModelVariant:
                 }
             ]
         )
-        result = router._resolve_google_model_variant(
-            "gemini-3.1-pro-preview-customtools"
+        result = resolve_google_model_variant(
+            model="gemini-3.1-pro-preview-customtools",
+            model_names=router.model_names,
+            get_model_from_alias=lambda m: router._get_model_from_alias(model=m),
         )
         assert result is None
 
@@ -101,8 +116,10 @@ class TestResolveGoogleModelVariant:
                 "gemini-3.1-pro-preview": "my-gemini",
             },
         )
-        result = router._resolve_google_model_variant(
-            "gemini-3.1-pro-preview-customtools"
+        result = resolve_google_model_variant(
+            model="gemini-3.1-pro-preview-customtools",
+            model_names=router.model_names,
+            get_model_from_alias=lambda m: router._get_model_from_alias(model=m),
         )
         assert result is not None
         base_model, suffix = result
@@ -232,6 +249,40 @@ class TestCommonChecksVariantRouting:
         assert (
             dep["litellm_params"]["model"]
             == "gemini/gemini-3.1-pro-preview-customtools"
+        )
+
+    def test_variant_resolves_even_with_default_fallbacks(self):
+        """Variant resolution must run before and independently of default fallbacks."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gemini-3.1-pro-preview",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-3.1-pro-preview",
+                        "api_key": "fake-key",
+                    },
+                },
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {
+                        "model": "gpt-4o",
+                        "api_key": "fake-key",
+                    },
+                },
+            ],
+            default_fallbacks=["gpt-4o"],
+        )
+        model, deployments = router._common_checks_available_deployment(
+            model="gemini-3.1-pro-preview-customtools",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        # Should resolve to the variant, NOT fall back to gpt-4o
+        assert model == "gemini-3.1-pro-preview-customtools"
+        assert len(deployments) > 0
+        dep = deployments[0]
+        assert (
+            dep["litellm_params"]["model"]
+            == "vertex_ai/gemini-3.1-pro-preview-customtools"
         )
 
 
