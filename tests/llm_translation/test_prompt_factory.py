@@ -1563,13 +1563,24 @@ def test_parse_tool_call_arguments_whitespace_only():
 
 
 def test_parse_tool_call_arguments_non_object_json():
-    """Non-object JSON (list, string, number) is returned as-is (no wrapping)."""
+    """Non-object JSON (list, string, number) is wrapped in a dict."""
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         parse_tool_call_arguments,
     )
 
     result = parse_tool_call_arguments('[1, 2, 3]')
-    assert result == [1, 2, 3]
+    assert result == {"result": [1, 2, 3]}
+
+
+def test_parse_tool_call_arguments_repaired_non_dict_wrapped():
+    """Repaired non-dict result (e.g. list) is wrapped in a dict."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    # Truncated list missing closing bracket
+    result = parse_tool_call_arguments('[1, 2, 3')
+    assert result == {"result": [1, 2, 3]}
 
 
 def test_parse_tool_call_arguments_repairs_truncated_json():

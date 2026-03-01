@@ -1380,14 +1380,14 @@ def parse_tool_call_arguments(
         if repaired is not None:
             verbose_logger.warning(
                 "Repaired truncated tool call arguments for tool '%s' (%s). "
-                "Original (%d chars): %.200s%s",
+                "Original length: %d chars, repaired: True",
                 tool_name or "<unknown>",
                 context or "unknown context",
                 len(arguments),
-                arguments,
-                "..." if len(arguments) > 200 else "",
             )
-            return repaired
+            if isinstance(repaired, dict):
+                return repaired
+            return {"result": repaired}
 
         error_parts = ["Failed to parse tool call arguments"]
 
