@@ -233,7 +233,7 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
                 ),
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
-            )
+            ) from e
         audios = response_json.get("audios", [])
 
         if not audios:
