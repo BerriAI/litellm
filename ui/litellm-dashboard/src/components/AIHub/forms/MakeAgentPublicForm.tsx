@@ -36,10 +36,6 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
   const handleNext = () => {
     if (currentStep === 0) {
-      if (selectedAgents.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one agent to make public");
-        return;
-      }
       setCurrentStep(1);
     }
   };
@@ -82,11 +78,6 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   }, [visible, agentHubData]);
 
   const handleSubmit = async () => {
-    if (selectedAgents.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one agent to make public");
-      return;
-    }
-
     setLoading(true);
     try {
       const agentIdsToMakePublic = Array.from(selectedAgents);
@@ -94,7 +85,11 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
       // Make batch API call for all agents
       await makeAgentsPublicCall(accessToken, agentIdsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${agentIdsToMakePublic.length} agent(s) public!`);
+      if (agentIdsToMakePublic.length === 0) {
+        NotificationsManager.success("All agents are now private.");
+      } else {
+        NotificationsManager.success(`Successfully made ${agentIdsToMakePublic.length} agent(s) public!`);
+      }
       handleClose();
       onSuccess();
     } catch (error) {
@@ -186,6 +181,21 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   };
 
   const renderStep2Content = () => {
+    if (selectedAgents.size === 0) {
+      return (
+        <div className="space-y-4">
+          <Title>Confirm Making All Agents Private</Title>
+
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <Text className="text-sm text-yellow-800">
+              No agents are selected. All agents will be set to <strong>private</strong> and will no longer be
+              visible on the public model hub.
+            </Text>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-4">
         <Title>Confirm Making Agents Public</Title>
@@ -253,14 +263,14 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
-            <Button onClick={handleNext} disabled={selectedAgents.size === 0}>
+            <Button onClick={handleNext}>
               Next
             </Button>
           )}
 
           {currentStep === 1 && (
             <Button onClick={handleSubmit} loading={loading}>
-              Make Public
+              {selectedAgents.size === 0 ? "Make All Private" : "Make Public"}
             </Button>
           )}
         </div>

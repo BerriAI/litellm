@@ -56,10 +56,6 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
   const handleNext = () => {
     if (currentStep === 0) {
-      if (selectedModels.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one model to make public");
-        return;
-      }
       setCurrentStep(1);
     }
   };
@@ -109,17 +105,16 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   }, [visible, modelHubData]);
 
   const handleSubmit = async () => {
-    if (selectedModels.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one model to make public");
-      return;
-    }
-
     setLoading(true);
     try {
       const modelGroupsToMakePublic = Array.from(selectedModels);
       await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
+      if (modelGroupsToMakePublic.length === 0) {
+        NotificationsManager.success("All models are now private.");
+      } else {
+        NotificationsManager.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
+      }
       handleClose();
       onSuccess();
     } catch (error) {
@@ -215,6 +210,21 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   };
 
   const renderStep2Content = () => {
+    if (selectedModels.size === 0) {
+      return (
+        <div className="space-y-4">
+          <Title>Confirm Making All Models Private</Title>
+
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <Text className="text-sm text-yellow-800">
+              No models are selected. All models will be set to <strong>private</strong> and will no longer be
+              visible on the public model hub.
+            </Text>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-4">
         <Title>Confirm Making Models Public</Title>
@@ -283,14 +293,14 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
-            <Button onClick={handleNext} disabled={selectedModels.size === 0}>
+            <Button onClick={handleNext}>
               Next
             </Button>
           )}
 
           {currentStep === 1 && (
             <Button onClick={handleSubmit} loading={loading}>
-              Make Public
+              {selectedModels.size === 0 ? "Make All Private" : "Make Public"}
             </Button>
           )}
         </div>
