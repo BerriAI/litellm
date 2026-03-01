@@ -1662,7 +1662,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
+    with pytest.raises(ValueError, match=r"effort='max' is only supported by Claude Opus 4\.6"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1679,12 +1679,40 @@ def test_max_effort_rejected_for_sonnet_46():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
+    with pytest.raises(ValueError, match=r"effort='max' is only supported by Claude Opus 4\.6"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-sonnet-4-6-20260205",
             messages=messages,
             optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+
+
+def test_reasoning_effort_max_rejected_for_sonnet_46():
+    """Test reasoning_effort='max' flows through map_openai_params → transform_request and is rejected for Sonnet 4.6."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    # First map reasoning_effort='max' to output_config via map_openai_params
+    optional_params: dict = {}
+    mapped = config.map_openai_params(
+        non_default_params={"reasoning_effort": "max"},
+        optional_params=optional_params,
+        model="claude-sonnet-4-6-20260205",
+        drop_params=False,
+    )
+    assert "output_config" in mapped
+    assert mapped["output_config"]["effort"] == "max"
+
+    # Then verify transform_request rejects it
+    with pytest.raises(ValueError, match=r"effort='max' is only supported by Claude Opus 4\.6"):
+        config.transform_request(
+            model="claude-sonnet-4-6-20260205",
+            messages=messages,
+            optional_params=mapped,
             litellm_params={},
             headers={}
         )
