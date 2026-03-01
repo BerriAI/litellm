@@ -609,11 +609,9 @@ def process_items(schema, depth=0):
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     if isinstance(schema, dict):
-        if "items" in schema and schema["items"] == {}:
-            # Empty items {} means "any JSON value is valid as array element".
-            # Don't coerce to {"type": "object"} — leave without type so Gemini
-            # treats it as TYPE_UNSPECIFIED (any type).
-            pass
+        # Note: empty items {} (schema["items"] == {}) means "any JSON value is
+        # valid as array element". We intentionally skip coercion so Gemini
+        # treats it as TYPE_UNSPECIFIED (any type).
         for key, value in schema.items():
             if isinstance(value, dict):
                 process_items(value, depth + 1)
@@ -714,9 +712,9 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 contains_null = True
             elif "type" not in atype and len(atype) == 0:
                 # Empty schema {} inside anyOf means "any JSON type".
-                # Don't coerce to {"type": "object"} — leave without type
-                # so Gemini treats it as TYPE_UNSPECIFIED (any type).
-                pass
+                # Intentionally not coerced — Gemini treats it as
+                # TYPE_UNSPECIFIED (any type).
+                continue
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
