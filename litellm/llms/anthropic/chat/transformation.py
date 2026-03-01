@@ -249,14 +249,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         The SDK approach:
         1. Remove unsupported constraints from schema
         2. Add constraint info to description (e.g., "Must be at least 100")
-        3. Add additionalProperties: false to all object schemas
+        3. Add additionalProperties: false to object schemas (when not already set)
         4. Filter string formats to supported list only
         5. Validate responses against original schema (with all constraints)
 
         Args:
             schema: The JSON schema dictionary to filter
             enforce_additional_properties: When True (default), forces
-                additionalProperties: false on all object schemas (SDK behavior).
+                additionalProperties: false on object schemas that don't already
+                have it set (SDK behavior).
                 Set to False for regular tool schemas where users may
                 intentionally allow additional properties.
 
@@ -398,11 +399,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else:
                 result[key] = value
 
-        # Ensure additionalProperties: false on all object schemas
-        # (as the Anthropic SDK does) — only for structured output schemas
+        # Ensure additionalProperties: false on object schemas that don't
+        # already have it set — preserves explicit additionalProperties: true
         if (
             enforce_additional_properties
             and result.get("type") == "object"
+            and "additionalProperties" not in result
         ):
             result["additionalProperties"] = False
 
