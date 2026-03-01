@@ -10,8 +10,6 @@ Only the *last* message/item should decide, not any message in the array.
 Fixes: https://github.com/BerriAI/litellm/issues/18155
 """
 
-import pytest
-
 from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 from litellm.llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
@@ -98,6 +96,14 @@ class TestChatInitiator:
         msgs = [{"role": "system", "content": "You are helpful"}]
         assert self.config._determine_initiator(msgs) == "user"
 
+    def test_case_insensitive_assistant(self):
+        msgs = [{"role": "Assistant", "content": "reply"}]
+        assert self.config._determine_initiator(msgs) == "agent"
+
+    def test_case_insensitive_tool(self):
+        msgs = [{"role": "TOOL", "content": "result"}]
+        assert self.config._determine_initiator(msgs) == "agent"
+
 
 class TestResponsesInitiator:
     """Tests for GithubCopilotResponsesAPIConfig._get_initiator."""
@@ -154,3 +160,27 @@ class TestResponsesInitiator:
         """Non-dict items don't affect classification."""
         items = ["string_item"]
         assert self.config._get_initiator(items) == "user"
+
+    def test_single_tool_role_item(self):
+        """Explicit tool role item → agent."""
+        items = [{"role": "tool", "content": "tool result"}]
+        assert self.config._get_initiator(items) == "agent"
+
+    def test_multi_items_ending_with_tool(self):
+        """Tool result at the end → agent."""
+        items = [
+            {"role": "user", "content": "run the command"},
+            {"role": "assistant", "content": "running..."},
+            {"role": "tool", "content": "command output"},
+        ]
+        assert self.config._get_initiator(items) == "agent"
+
+    def test_case_insensitive_assistant(self):
+        """Role matching must be case-insensitive."""
+        items = [{"role": "Assistant", "content": "reply"}]
+        assert self.config._get_initiator(items) == "agent"
+
+    def test_case_insensitive_tool(self):
+        """Role matching must be case-insensitive."""
+        items = [{"role": "TOOL", "content": "output"}]
+        assert self.config._get_initiator(items) == "agent"

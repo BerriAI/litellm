@@ -263,7 +263,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 if "role" not in last_item or not last_item.get("role"):
                     return "agent"
                 role = last_item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":
+                if isinstance(role, str) and role.lower() in ("assistant", "tool"):
                     return "agent"
 
         return "user"
