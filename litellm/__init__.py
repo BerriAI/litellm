@@ -463,8 +463,9 @@ model_cost = GetModelCostMap.load_local_model_cost_map()
 def _ensure_remote_model_cost() -> None:
     """Fetch and merge the remote model cost map on first use (once only).
 
-    No threading, no locks — simply fetches on first call and merges
-    remote data into the existing dict so all references stay valid.
+    Thread safety: uses update() (not clear()+update()) so concurrent readers
+    always see a non-empty dict. The worst case for a race is a redundant
+    remote fetch, which is harmless since update() is idempotent for same data.
     """
     global _model_cost_remote_loaded
     if _model_cost_remote_loaded:
