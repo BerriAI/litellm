@@ -1715,7 +1715,7 @@ ResponsesAPIStreamingResponse = Annotated[
 ]
 
 
-REASONING_EFFORT = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+REASONING_EFFORT = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
 class OpenAIRealtimeStreamSession(TypedDict, total=False):
