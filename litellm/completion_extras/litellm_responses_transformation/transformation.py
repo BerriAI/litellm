@@ -485,6 +485,25 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     thinking_blocks.append(block)
 
             elif isinstance(item, ResponseOutputMessage):
+                if not item.content:
+                    # Content-less assistant message: still emit thinking_blocks
+                    if thinking_blocks or reasoning_content:
+                        msg = Message(
+                            role=item.role,
+                            content="",
+                            reasoning_content=reasoning_content,
+                            thinking_blocks=thinking_blocks,
+                        )
+                        choices.append(
+                            Choices(
+                                message=msg,
+                                finish_reason="stop",
+                                index=index,
+                            )
+                        )
+                        reasoning_content = None
+                        thinking_blocks = None
+                        index += 1
                 for content in item.content:
                     response_text = getattr(content, "text", "")
                     # Extract annotations from content if present
