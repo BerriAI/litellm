@@ -7,6 +7,9 @@ and only sent via additionalModelRequestFields in the request body.
 
 import os
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -15,6 +18,7 @@ import litellm
 
 litellm.suppress_debug_info = True
 
+from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
 
@@ -159,6 +163,148 @@ class TestBedrockConverseBetaInBody:
 
     def test_non_anthropic_model_no_beta_in_body(self):
         """Non-Anthropic models should not get anthropic_beta in body."""
+        config = AmazonConverseConfig()
+        extra_headers = {"anthropic-beta": "context-1m-2025-08-07"}
+
+        result = config._transform_request(
+            model="amazon.nova-pro-v1:0",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+            optional_params={},
+            litellm_params={
+                "api_base": "",
+                "model": "bedrock/amazon.nova-pro-v1:0",
+            },
+            headers=extra_headers,
+        )
+
+        amrf = result.get("additionalModelRequestFields", {})
+        assert "anthropic_beta" not in amrf
+
+
+class TestAsyncBetaHeaderHandling:
+    """Verify async paths correctly pass beta values to the request body
+    while stripping from HTTP headers."""
+
+    @pytest.mark.asyncio
+    async def test_async_completion_preserves_beta_in_body(self):
+        """Async completion should extract betas into additionalModelRequestFields
+        even though anthropic-beta is stripped from HTTP headers."""
+        handler = BedrockConverseLLM()
+
+        captured_headers = {}
+
+        async def mock_transform(**kwargs):
+            captured_headers.update(kwargs.get("headers", {}))
+            return {"messages": [], "modelId": "test"}
+
+        with patch.object(
+            litellm.AmazonConverseConfig,
+            "_async_transform_request",
+            side_effect=mock_transform,
+        ):
+            try:
+                await handler.async_completion(
+                    model="anthropic.claude-sonnet-4-20250514-v1:0",
+                    messages=[{"role": "user", "content": "test"}],
+                    api_base="https://bedrock.us-east-1.amazonaws.com",
+                    model_response=MagicMock(),
+                    timeout=30,
+                    encoding=None,
+                    logging_obj=MagicMock(pre_call=MagicMock()),
+                    stream=False,
+                    optional_params={},
+                    litellm_params={"aws_region_name": "us-east-1"},
+                    credentials=MagicMock(),
+                    headers={},  # stripped headers (no anthropic-beta)
+                    extra_headers={
+                        "Content-Type": "application/json",
+                        "anthropic-beta": "context-1m-2025-08-07",
+                    },
+                )
+            except Exception:
+                pass  # We only care about what headers the transform received
+
+        assert "anthropic-beta" in captured_headers
+        assert captured_headers["anthropic-beta"] == "context-1m-2025-08-07"
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_preserves_beta_in_body(self):
+        """Async streaming should extract betas into additionalModelRequestFields
+        even though anthropic-beta is stripped from HTTP headers."""
+        handler = BedrockConverseLLM()
+
+        captured_headers = {}
+
+        async def mock_transform(**kwargs):
+            captured_headers.update(kwargs.get("headers", {}))
+            return {"messages": [], "modelId": "test"}
+
+        with patch.object(
+            litellm.AmazonConverseConfig,
+            "_async_transform_request",
+            side_effect=mock_transform,
+        ):
+            try:
+                await handler.async_streaming(
+                    model="anthropic.claude-sonnet-4-20250514-v1:0",
+                    messages=[{"role": "user", "content": "test"}],
+                    api_base="https://bedrock.us-east-1.amazonaws.com",
+                    model_response=MagicMock(),
+                    timeout=30,
+                    encoding=None,
+                    logging_obj=MagicMock(pre_call=MagicMock()),
+                    stream=True,
+                    optional_params={},
+                    litellm_params={"aws_region_name": "us-east-1"},
+                    credentials=MagicMock(),
+                    headers={},  # stripped headers (no anthropic-beta)
+                    extra_headers={
+                        "Content-Type": "application/json",
+                        "anthropic-beta": "context-1m-2025-08-07",
+                    },
+                )
+            except Exception:
+                pass  # We only care about what headers the transform received
+
+        assert "anthropic-beta" in captured_headers
+        assert captured_headers["anthropic-beta"] == "context-1m-2025-08-07"
+
+    @pytest.mark.asyncio
+    async def test_async_completion_falls_back_to_headers(self):
+        """When extra_headers is None, transform should use headers."""
+        handler = BedrockConverseLLM()
+
+        captured_headers = {}
+
+        async def mock_transform(**kwargs):
+            captured_headers.update(kwargs.get("headers", {}))
+            return {"messages": [], "modelId": "test"}
+
+        with patch.object(
+            litellm.AmazonConverseConfig,
+            "_async_transform_request",
+            side_effect=mock_transform,
+        ):
+            try:
+                await handler.async_completion(
+                    model="anthropic.claude-sonnet-4-20250514-v1:0",
+                    messages=[{"role": "user", "content": "test"}],
+                    api_base="https://bedrock.us-east-1.amazonaws.com",
+                    model_response=MagicMock(),
+                    timeout=30,
+                    encoding=None,
+                    logging_obj=MagicMock(pre_call=MagicMock()),
+                    stream=False,
+                    optional_params={},
+                    litellm_params={"aws_region_name": "us-east-1"},
+                    credentials=MagicMock(),
+                    headers={"Content-Type": "application/json"},
+                    # extra_headers not provided — should fall back to headers
+                )
+            except Exception:
+                pass
+
+        assert captured_headers.get("Content-Type") == "application/json"
         config = AmazonConverseConfig()
         extra_headers = {"anthropic-beta": "context-1m-2025-08-07"}
 
