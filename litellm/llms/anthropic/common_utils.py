@@ -225,7 +225,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return False
 
     def is_effort_used(
-        self, optional_params: Optional[dict], model: Optional[str] = None
+        self, optional_params: Optional[dict], model: str
     ) -> bool:
         """
         Check if the effort-2025-11-24 beta header is needed.
