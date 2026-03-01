@@ -160,9 +160,9 @@ with open("output.wav", "wb") as f:
 
 ```yaml
 model_list:
-- model_name: bulbul:v3
+- model_name: sarvam/bulbul:v3
   litellm_params:
-    model: bulbul:v3
+    model: sarvam/bulbul:v3
     api_key: os.environ/SARVAM_API_KEY
   model_info:
     mode: audio_speech
