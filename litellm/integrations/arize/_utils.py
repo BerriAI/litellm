@@ -231,9 +231,9 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
         safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
     output_tokens_details = getattr(usage, "output_tokens_details", None)
     if output_tokens_details:
-      reasoning_tokens = getattr(output_tokens_details, "reasoning_tokens", None)
-      if reasoning_tokens:
-          safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, reasoning_tokens)
+        reasoning_tokens = getattr(output_tokens_details, "reasoning_tokens", None)
+        if reasoning_tokens:
+            safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, reasoning_tokens)
 
 
 def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
