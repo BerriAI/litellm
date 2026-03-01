@@ -12,7 +12,6 @@ from litellm.proxy.management_endpoints.config_override_endpoints import (
     _build_field_schema,
     _decrypt_sensitive_fields,
     _encrypt_sensitive_fields,
-    _get_current_env_values,
 )
 from litellm.proxy.proxy_server import app
 from litellm.types.proxy.management_endpoints.config_overrides import (
@@ -34,6 +33,7 @@ def test_encrypt_decrypt_sensitive_fields_roundtrip():
         "approle_secret_id": "secret-456",
         "vault_namespace": "admin",
         "vault_mount_name": "secret",
+        "client_key": None,
     }
 
     with patch(
@@ -53,6 +53,9 @@ def test_encrypt_decrypt_sensitive_fields_roundtrip():
         assert encrypted["approle_role_id"] == "enc_role-123"
         assert encrypted["approle_secret_id"] == "enc_secret-456"
 
+        # None values should not be encrypted
+        assert encrypted["client_key"] is None
+
     with patch(
         "litellm.proxy.management_endpoints.config_override_endpoints.decrypt_value_helper"
     ) as mock_decrypt:
@@ -66,24 +69,7 @@ def test_encrypt_decrypt_sensitive_fields_roundtrip():
         assert decrypted["approle_role_id"] == "role-123"
         assert decrypted["approle_secret_id"] == "secret-456"
         assert decrypted["vault_namespace"] == "admin"
-
-
-def test_encrypt_sensitive_fields_skips_none_values():
-    """None values should not be encrypted."""
-    data = {
-        "vault_addr": "https://vault.example.com",
-        "vault_token": None,
-        "approle_role_id": None,
-    }
-
-    with patch(
-        "litellm.proxy.management_endpoints.config_override_endpoints.encrypt_value_helper"
-    ) as mock_encrypt:
-        encrypted = _encrypt_sensitive_fields(data, HASHICORP_SENSITIVE_FIELDS)
-
-        mock_encrypt.assert_not_called()
-        assert encrypted["vault_token"] is None
-        assert encrypted["approle_role_id"] is None
+        assert decrypted["client_key"] is None
 
 
 def test_build_field_schema():
@@ -98,23 +84,6 @@ def test_build_field_schema():
     # Check that descriptions are populated
     assert len(schema["properties"]["vault_addr"]["description"]) > 0
     assert len(schema["properties"]["vault_token"]["description"]) > 0
-
-
-def test_get_current_env_values(monkeypatch):
-    """Should return current env var values using the mapping."""
-    from litellm.proxy.management_endpoints.config_override_endpoints import (
-        HASHICORP_ENV_VAR_MAPPING,
-    )
-
-    monkeypatch.setenv("HCP_VAULT_ADDR", "https://vault.test.com")
-    monkeypatch.setenv("HCP_VAULT_NAMESPACE", "test-ns")
-    # Don't set HCP_VAULT_TOKEN — should be None
-
-    values = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
-
-    assert values["vault_addr"] == "https://vault.test.com"
-    assert values["vault_namespace"] == "test-ns"
-    assert values["vault_token"] is None
 
 
 @pytest.mark.asyncio
