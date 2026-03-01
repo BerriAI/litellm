@@ -19,6 +19,13 @@ vi.mock("./networking", () => ({
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost"),
 }));
 
+vi.mock("./onboarding_link", () => ({
+  __esModule: true,
+  default: ({ isInvitationLinkModalVisible }: { isInvitationLinkModalVisible: boolean }) =>
+    isInvitationLinkModalVisible ? <div data-testid="onboarding-modal">Onboarding Modal</div> : null,
+  InvitationLink: {},
+}));
+
 vi.mock("./bulk_create_users_button", () => ({
   default: () => <div data-testid="bulk-create-users">Bulk Create Users</div>,
 }));
@@ -213,6 +220,23 @@ describe("CreateUserButton", { timeout: 20000 }, () => {
     await waitFor(() => {
       expect(mockNotificationsManager.info).toHaveBeenCalledWith("Making API Call");
     });
+  });
+
+  it("should render send invite email toggle in modal with default off", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CreateUserButton {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /invite user/i });
+    expect(within(dialog).getByText("Send Invite Email")).toBeInTheDocument();
+
+    const switchToggle = within(dialog).getByRole("switch");
+    expect(switchToggle).toBeInTheDocument();
+    expect(switchToggle).not.toBeChecked();
   });
 
   it("should close modal when cancel is clicked in standalone mode", async () => {
