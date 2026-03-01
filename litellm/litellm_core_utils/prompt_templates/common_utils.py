@@ -20,6 +20,7 @@ from typing import (
     cast,
 )
 
+from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1278,6 +1279,68 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
     return images
 
 
+def _attempt_json_repair(s: str) -> Optional[Dict[str, Any]]:
+    """
+    Attempt to repair truncated JSON produced by LLM tool calls.
+
+    Handles the most common truncation patterns where the model generates
+    valid JSON that is cut short (missing closing brackets/braces).
+
+    Returns the parsed dict on success, or None if repair fails.
+    """
+    import json
+
+    stripped = s.rstrip()
+    if not stripped:
+        return None
+
+    # Count unmatched brackets/braces (ignoring those inside strings)
+    open_braces = 0
+    open_brackets = 0
+    in_string = False
+    escape_next = False
+
+    for ch in stripped:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            if in_string:
+                escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            open_braces += 1
+        elif ch == "}":
+            open_braces -= 1
+        elif ch == "[":
+            open_brackets += 1
+        elif ch == "]":
+            open_brackets -= 1
+
+    if open_braces <= 0 and open_brackets <= 0:
+        return None
+
+    # Remove trailing comma before we close brackets
+    candidate = stripped.rstrip(",")
+
+    # Close in reverse order: ] first, then }
+    candidate += "]" * open_brackets + "}" * open_braces
+
+    try:
+        result = json.loads(candidate)
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
 def parse_tool_call_arguments(
     arguments: Optional[str],
     tool_name: Optional[str] = None,
@@ -1286,8 +1349,10 @@ def parse_tool_call_arguments(
     """
     Parse tool call arguments from a JSON string.
 
-    This function handles malformed JSON gracefully by raising a ValueError
-    with context about what failed and what the problematic input was.
+    When the JSON is malformed (e.g. truncated by the model), this function
+    attempts a lightweight repair (closing unmatched brackets/braces) before
+    raising an error.  A warning is logged whenever repair succeeds so that
+    callers are aware the arguments were not perfectly formed.
 
     Args:
         arguments: The JSON string containing tool arguments, or None.
@@ -1298,7 +1363,7 @@ def parse_tool_call_arguments(
         Parsed arguments as a dictionary. Returns empty dict if arguments is None or empty.
 
     Raises:
-        ValueError: If the arguments string is not valid JSON.
+        ValueError: If the arguments string is not valid JSON and cannot be repaired.
     """
     import json
 
@@ -1307,7 +1372,18 @@ def parse_tool_call_arguments(
 
     try:
         return json.loads(arguments)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError as original_error:
+        repaired = _attempt_json_repair(arguments)
+        if repaired is not None:
+            verbose_logger.warning(
+                "Repaired truncated tool call arguments for tool '%s' (%s). "
+                "Original: %s",
+                tool_name or "<unknown>",
+                context or "unknown context",
+                arguments,
+            )
+            return repaired
+
         error_parts = ["Failed to parse tool call arguments"]
 
         if tool_name:
@@ -1316,10 +1392,11 @@ def parse_tool_call_arguments(
             error_parts.append(f"({context})")
 
         error_message = (
-            " ".join(error_parts) + f". Error: {str(e)}. Arguments: {arguments}"
+            " ".join(error_parts)
+            + f". Error: {str(original_error)}. Arguments: {arguments}"
         )
 
-        raise ValueError(error_message) from e
+        raise ValueError(error_message) from original_error
 
 
 def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
