@@ -484,7 +484,11 @@ class TestListToolsRestAPI:
         captured = {"called": False}
 
         async def fake_get_tools(
-            server, server_auth_header, raw_headers=None, user_api_key_auth=None
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            timeout=None,
         ):
             captured["called"] = True
             captured["server"] = server

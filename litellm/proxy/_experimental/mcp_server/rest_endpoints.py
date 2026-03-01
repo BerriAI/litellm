@@ -162,6 +162,7 @@ if MCP_AVAILABLE:
         server_auth_header,
         raw_headers: Optional[Dict[str, str]] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        timeout: Optional[float] = None,
     ):
         """Helper function to get tools for a single server."""
         tools = await global_mcp_server_manager._get_tools_from_server(
@@ -169,6 +170,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=server_auth_header,
             add_prefix=False,
             raw_headers=raw_headers,
+            timeout=timeout,
         )
 
         # Filter tools based on allowed_tools configuration
@@ -234,6 +236,10 @@ if MCP_AVAILABLE:
         request: Request,
         server_id: Optional[str] = Query(
             None, description="The server id to list tools for"
+        ),
+        timeout: Optional[float] = Query(
+            None,
+            description="Timeout in seconds for listing tools from each MCP server. Default is 30 seconds.",
         ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ) -> dict:
@@ -340,6 +346,7 @@ if MCP_AVAILABLE:
                         server_auth_header,
                         raw_headers_from_request,
                         user_api_key_dict,
+                        timeout=timeout,
                     )
                 except Exception as e:
                     verbose_logger.exception(
@@ -392,6 +399,7 @@ if MCP_AVAILABLE:
                             server_auth_header,
                             raw_headers_from_request,
                             user_api_key_dict,
+                            timeout=timeout,
                         )
                         list_tools_result.extend(tools_result)
                     except Exception as e:

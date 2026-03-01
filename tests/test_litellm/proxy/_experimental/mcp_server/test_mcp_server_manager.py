@@ -2307,5 +2307,101 @@ class TestMCPServerManager:
         assert resolved_server.server_name == "test_server"  # server_name matches
 
 
+class TestFetchToolsWithTimeout:
+    """Tests for configurable timeout in _fetch_tools_with_timeout."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_default_timeout(self):
+        """_fetch_tools_with_timeout should use 30s default when no timeout is provided."""
+        manager = MCPServerManager()
+        mock_client = MagicMock()
+        mock_client.list_tools = AsyncMock(
+            return_value=[
+                MCPTool(name="tool1", description="A tool", inputSchema={})
+            ]
+        )
+
+        # Should succeed with default timeout
+        tools = await manager._fetch_tools_with_timeout(mock_client, "test_server")
+        assert len(tools) == 1
+        assert tools[0].name == "tool1"
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_custom_timeout(self):
+        """_fetch_tools_with_timeout should use the provided timeout value."""
+        manager = MCPServerManager()
+        mock_client = MagicMock()
+        mock_client.list_tools = AsyncMock(
+            return_value=[
+                MCPTool(name="tool1", description="A tool", inputSchema={})
+            ]
+        )
+
+        # Should succeed with custom timeout
+        tools = await manager._fetch_tools_with_timeout(
+            mock_client, "test_server", timeout=120.0
+        )
+        assert len(tools) == 1
+        assert tools[0].name == "tool1"
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_passes_timeout(self):
+        """_get_tools_from_server should pass timeout to _fetch_tools_with_timeout."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+        )
+
+        manager._create_mcp_client = AsyncMock(return_value=object())
+
+        upstream_tool = MCPTool(
+            name="my_tool",
+            description="A tool",
+            inputSchema={},
+        )
+
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[upstream_tool])
+
+        # Call with custom timeout
+        await manager._get_tools_from_server(server, timeout=120.0)
+
+        # Verify _fetch_tools_with_timeout was called with the timeout
+        manager._fetch_tools_with_timeout.assert_called_once()
+        call_kwargs = manager._fetch_tools_with_timeout.call_args
+        assert call_kwargs.kwargs.get("timeout") == 120.0
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_default_timeout(self):
+        """_get_tools_from_server should pass None timeout by default."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+        )
+
+        manager._create_mcp_client = AsyncMock(return_value=object())
+
+        upstream_tool = MCPTool(
+            name="my_tool",
+            description="A tool",
+            inputSchema={},
+        )
+
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[upstream_tool])
+
+        # Call without timeout
+        await manager._get_tools_from_server(server)
+
+        # Verify _fetch_tools_with_timeout was called with timeout=None
+        manager._fetch_tools_with_timeout.assert_called_once()
+        call_kwargs = manager._fetch_tools_with_timeout.call_args
+        assert call_kwargs.kwargs.get("timeout") is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
