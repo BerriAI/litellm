@@ -129,10 +129,10 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         url = self.get_complete_url(api_base=api_base, endpoint="skills")
 
         query_params: Dict[str, Any] = {}
-        if "limit" in list_params and list_params["limit"]:
+        if list_params.get("limit") is not None:
             query_params["limit"] = list_params["limit"]
         # Map Anthropic-style 'page' to OpenAI-style 'after' if present
-        if "page" in list_params and list_params["page"]:
+        if list_params.get("page") is not None:
             query_params["after"] = list_params["page"]
 
         verbose_logger.debug(
@@ -309,11 +309,11 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         """Transform list skill versions request → GET /v1/skills/{id}/versions."""
         url = f"{api_base}/v1/skills/{skill_id}/versions"
         query_params: Dict[str, Any] = {}
-        if list_params.get("limit"):
+        if list_params.get("limit") is not None:
             query_params["limit"] = list_params["limit"]
-        if list_params.get("after"):
+        if list_params.get("after") is not None:
             query_params["after"] = list_params["after"]
-        if list_params.get("before"):
+        if list_params.get("before") is not None:
             query_params["before"] = list_params["before"]
         verbose_logger.debug(
             "OpenAI list skill versions - URL: %s, params: %s", url, query_params
