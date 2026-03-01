@@ -4560,9 +4560,10 @@ class ProxyConfig:
         Only runs once at startup (guarded by _hashicorp_config_override_initialized flag).
         """
         from litellm.proxy.management_endpoints.config_override_endpoints import (
-            HASHICORP_ENV_VAR_MAPPING,
             HASHICORP_SENSITIVE_FIELDS,
             _decrypt_sensitive_fields,
+            _parse_config_value,
+            _set_env_vars,
         )
 
         try:
@@ -4573,23 +4574,13 @@ class ProxyConfig:
             if db_record is None or db_record.config_value is None:
                 return
 
-            import json
+            config_data = _parse_config_value(db_record.config_value)
 
-            if isinstance(db_record.config_value, str):
-                config_data = json.loads(db_record.config_value)
-            else:
-                config_data = dict(db_record.config_value)
-
-            # Decrypt sensitive fields
+            # Decrypt sensitive fields and set env vars
             decrypted_data = _decrypt_sensitive_fields(
                 config_data, HASHICORP_SENSITIVE_FIELDS
             )
-
-            # Set env vars
-            for field_name, value in decrypted_data.items():
-                env_var_name = HASHICORP_ENV_VAR_MAPPING.get(field_name)
-                if env_var_name and value is not None:
-                    os.environ[env_var_name] = str(value)
+            _set_env_vars(decrypted_data)
 
             # Reinitialize the secret manager
             self.initialize_secret_manager(

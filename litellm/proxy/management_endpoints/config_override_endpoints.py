@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, Set
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
@@ -87,8 +88,6 @@ def _get_current_env_values(env_var_mapping: Dict[str, str]) -> Dict[str, Any]:
 
 def _build_field_schema(model_class: type) -> Dict[str, Any]:
     """Build field_schema dict from a Pydantic model for UI rendering."""
-    from pydantic import TypeAdapter
-
     schema = TypeAdapter(model_class).json_schema(by_alias=True)
     properties = {}
     for field_name, field_info in schema.get("properties", {}).items():
@@ -100,6 +99,21 @@ def _build_field_schema(model_class: type) -> Dict[str, Any]:
         "description": schema.get("description", ""),
         "properties": properties,
     }
+
+
+def _parse_config_value(raw: Any) -> Dict[str, Any]:
+    """Parse a config_value from DB (may be JSON string or dict)."""
+    if isinstance(raw, str):
+        return json.loads(raw)
+    return dict(raw)
+
+
+def _set_env_vars(config_data: Dict[str, Any]) -> None:
+    """Set HCP_VAULT_* env vars from config data."""
+    for field_name, value in config_data.items():
+        env_var_name = HASHICORP_ENV_VAR_MAPPING.get(field_name)
+        if env_var_name and value is not None:
+            os.environ[env_var_name] = str(value)
 
 
 # --- Hashicorp Vault endpoints ---
@@ -157,16 +171,10 @@ async def update_hashicorp_vault_config(
             },
         )
 
-    # Set environment variables
-    for field_name, value in config_data.items():
-        env_var_name = HASHICORP_ENV_VAR_MAPPING.get(field_name)
-        if env_var_name and value is not None:
-            os.environ[env_var_name] = str(value)
-
     # Encrypt sensitive fields before storing in DB
     encrypted_data = _encrypt_sensitive_fields(config_data, HASHICORP_SENSITIVE_FIELDS)
 
-    # Upsert to DB
+    # Upsert to DB first — only mutate env vars after DB write succeeds
     await prisma_client.db.litellm_configoverrides.upsert(
         where={"config_type": "hashicorp_vault"},
         data={
@@ -179,6 +187,9 @@ async def update_hashicorp_vault_config(
             },
         },
     )
+
+    # Set environment variables after DB write succeeds
+    _set_env_vars(config_data)
 
     # Reinitialize the secret manager on this pod
     try:
@@ -237,10 +248,7 @@ async def get_hashicorp_vault_config(
     )
 
     if db_record is not None and db_record.config_value is not None:
-        if isinstance(db_record.config_value, str):
-            config_data = json.loads(db_record.config_value)
-        else:
-            config_data = dict(db_record.config_value)
+        config_data = _parse_config_value(db_record.config_value)
 
         # Decrypt sensitive fields
         decrypted_data = _decrypt_sensitive_fields(
