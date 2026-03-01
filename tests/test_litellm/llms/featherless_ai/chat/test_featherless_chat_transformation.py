@@ -152,7 +152,9 @@ class TestFeatherlessAIConfig:
     def test_get_provider_info_with_featherless_ai_api_key(self):
         """Test that FEATHERLESS_AI_API_KEY env var is picked up correctly"""
         config = FeatherlessAIConfig()
-        with patch.dict(os.environ, {"FEATHERLESS_AI_API_KEY": "key-from-ai-env"}, clear=False):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("FEATHERLESS")}
+        env["FEATHERLESS_AI_API_KEY"] = "key-from-ai-env"
+        with patch.dict(os.environ, env, clear=True):
             api_base, api_key = config._get_openai_compatible_provider_info(
                 api_base=None, api_key=None
             )
@@ -162,7 +164,9 @@ class TestFeatherlessAIConfig:
     def test_get_provider_info_with_legacy_featherless_api_key(self):
         """Test that legacy FEATHERLESS_API_KEY env var still works"""
         config = FeatherlessAIConfig()
-        with patch.dict(os.environ, {"FEATHERLESS_API_KEY": "key-from-legacy-env"}, clear=False):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("FEATHERLESS")}
+        env["FEATHERLESS_API_KEY"] = "key-from-legacy-env"
+        with patch.dict(os.environ, env, clear=True):
             api_base, api_key = config._get_openai_compatible_provider_info(
                 api_base=None, api_key=None
             )
@@ -172,10 +176,10 @@ class TestFeatherlessAIConfig:
     def test_get_provider_info_prefers_featherless_ai_key_over_legacy(self):
         """Test that FEATHERLESS_AI_API_KEY takes precedence over FEATHERLESS_API_KEY"""
         config = FeatherlessAIConfig()
-        with patch.dict(os.environ, {
-            "FEATHERLESS_AI_API_KEY": "preferred-key",
-            "FEATHERLESS_API_KEY": "legacy-key",
-        }, clear=False):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("FEATHERLESS")}
+        env["FEATHERLESS_AI_API_KEY"] = "preferred-key"
+        env["FEATHERLESS_API_KEY"] = "legacy-key"
+        with patch.dict(os.environ, env, clear=True):
             _, api_key = config._get_openai_compatible_provider_info(
                 api_base=None, api_key=None
             )
