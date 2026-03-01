@@ -2578,6 +2578,10 @@ class StandardLoggingAdditionalHeaders(TypedDict, total=False):
     x_ratelimit_limit_tokens: int
     x_ratelimit_remaining_requests: int
     x_ratelimit_remaining_tokens: int
+    llm_provider_x_request_id: Optional[str]
+    llm_provider_request_id: Optional[str]
+    llm_provider_openai_organization: Optional[str]
+    llm_provider_openai_processing_ms: Optional[str]
 
 
 class StandardLoggingHiddenParams(TypedDict):

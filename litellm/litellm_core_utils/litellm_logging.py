@@ -4854,15 +4854,30 @@ class StandardLoggingPayloadSetup:
         additional_logging_headers: StandardLoggingAdditionalHeaders = {}
 
         for key in StandardLoggingAdditionalHeaders.__annotations__.keys():
-            _key = key.lower()
-            _key = _key.replace("_", "-")
-            if _key in additiona_headers:
-                try:
-                    additional_logging_headers[key] = int(additiona_headers[_key])  # type: ignore
-                except (ValueError, TypeError):
-                    verbose_logger.debug(
-                        f"Could not convert {additiona_headers[_key]} to int for key {key}."
-                    )
+            _key = key.lower().replace("_", "-")
+
+            # For llm_provider-prefixed annotation keys, look up the header
+            # using the canonical llm_provider-{rest} format (underscore
+            # before "provider", hyphens in the rest of the name).
+            if _key.startswith("llm-provider-"):
+                suffix = _key[len("llm-provider-"):]
+                lookup_keys = [f"llm_provider-{suffix}", _key]
+            else:
+                lookup_keys = [_key, f"llm_provider-{_key}"]
+
+            _value = None
+            for lk in lookup_keys:
+                if lk in additiona_headers:
+                    _value = additiona_headers[lk]
+                    break
+
+            if _value is None:
+                continue
+
+            try:
+                additional_logging_headers[key] = int(_value)  # type: ignore
+            except (ValueError, TypeError):
+                additional_logging_headers[key] = str(_value)  # type: ignore
         return additional_logging_headers
 
     @staticmethod
