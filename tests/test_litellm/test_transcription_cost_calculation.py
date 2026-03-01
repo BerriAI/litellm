@@ -146,10 +146,12 @@ class TestResponseCostCalculatorMetadataFallback:
             )
             response = TranscriptionResponse(text="hello world")
             response._hidden_params = {}
+            response.duration = 30.0  # 30 seconds of audio
 
             cost = logging_obj._response_cost_calculator(result=response)
-            # Cost must be non-None (fallback found the model_id)
+            # Fallback must find model_id and compute cost = 0.006 * 30
             assert cost is not None
+            assert abs(cost - 0.006 * 30.0) < 1e-9, f"expected 0.18, got {cost}"
         finally:
             litellm.model_cost.pop(model_id, None)
 
@@ -161,11 +163,12 @@ class TestResponseCostCalculatorMetadataFallback:
         )
         response = TranscriptionResponse(text="hello world")
         response._hidden_params = {}
+        response.duration = 30.0
 
         # model_id is NOT in litellm.model_cost, so fallback should not match;
-        # cost calculation falls through to regular path (returns 0 or None).
+        # cost calculation falls through to regular path (returns None).
         cost = logging_obj._response_cost_calculator(result=response)
-        assert cost is None or cost == 0.0
+        assert cost is None
 
     def test_router_model_id_from_hidden_params_takes_precedence(self):
         model_id_hidden = str(uuid.uuid4())
@@ -191,10 +194,12 @@ class TestResponseCostCalculatorMetadataFallback:
             )
             response = TranscriptionResponse(text="test")
             response._hidden_params = {"model_id": model_id_hidden}
+            response.duration = 10.0  # 10 seconds of audio
 
             cost = logging_obj._response_cost_calculator(result=response)
-            # hidden_params model_id should take precedence; cost is non-None
+            # hidden_params model_id (0.01/s) takes precedence over metadata (0.02/s)
             assert cost is not None
+            assert abs(cost - 0.01 * 10.0) < 1e-9, f"expected 0.10, got {cost}"
         finally:
             litellm.model_cost.pop(model_id_hidden, None)
             litellm.model_cost.pop(model_id_metadata, None)
