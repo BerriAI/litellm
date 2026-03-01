@@ -101,7 +101,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         litellm_params: dict,
         credentials: Credentials,
         logger_fn=None,
-        headers={},
+        headers: Optional[dict] = None,
         extra_headers: Optional[dict] = None,
         client: Optional[AsyncHTTPHandler] = None,
         fake_stream: bool = False,
@@ -109,6 +109,8 @@ class BedrockConverseLLM(BaseAWSLLM):
         api_key: Optional[str] = None,
         stream_chunk_size: int = 1024,
     ) -> CustomStreamWrapper:
+        if headers is None:
+            headers = {}
         # Use extra_headers (original, with betas) for transform so
         # _process_tools_and_beta() can extract beta values for the body.
         transform_headers = extra_headers if extra_headers is not None else headers
@@ -176,11 +178,13 @@ class BedrockConverseLLM(BaseAWSLLM):
         litellm_params: dict,
         credentials: Credentials,
         logger_fn=None,
-        headers: dict = {},
+        headers: Optional[dict] = None,
         extra_headers: Optional[dict] = None,
         client: Optional[AsyncHTTPHandler] = None,
         api_key: Optional[str] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
+        if headers is None:
+            headers = {}
         # Use extra_headers (original, with betas) for transform so
         # _process_tools_and_beta() can extract beta values for the body.
         transform_headers = extra_headers if extra_headers is not None else headers
