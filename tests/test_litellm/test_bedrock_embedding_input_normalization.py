@@ -16,6 +16,9 @@ from litellm.litellm_core_utils.embedding_utils import (
 from litellm.llms.bedrock.embed.amazon_titan_g1_transformation import (
     AmazonTitanG1Config,
 )
+from litellm.llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+    AmazonTitanMultimodalEmbeddingG1Config,
+)
 from litellm.llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
@@ -80,6 +83,30 @@ class TestTitanG1TransformRequest:
         cfg = AmazonTitanG1Config()
         req = cfg._transform_request(input=[], inference_params={})
         assert req["inputText"] == ""
+
+
+class TestTitanMultimodalTransformRequest:
+    """AmazonTitanMultimodalEmbeddingG1Config._transform_request defensive unwrapping."""
+
+    def test_string_input_unchanged(self):
+        cfg = AmazonTitanMultimodalEmbeddingG1Config()
+        req = cfg._transform_request(input="test", inference_params={})
+        assert req["inputText"] == "test"
+
+    def test_list_single_string_unwrapped(self):
+        cfg = AmazonTitanMultimodalEmbeddingG1Config()
+        req = cfg._transform_request(input=["test"], inference_params={})
+        assert req["inputText"] == "test"
+
+    def test_empty_list_returns_empty_string(self):
+        cfg = AmazonTitanMultimodalEmbeddingG1Config()
+        req = cfg._transform_request(input=[], inference_params={})
+        assert req["inputText"] == ""
+
+    def test_list_multiple_strings_takes_first(self):
+        cfg = AmazonTitanMultimodalEmbeddingG1Config()
+        req = cfg._transform_request(input=["first", "second"], inference_params={})
+        assert req["inputText"] == "first"
 
 
 class TestProxyEmbeddingInputNormalization:
