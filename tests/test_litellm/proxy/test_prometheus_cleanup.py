@@ -105,3 +105,5 @@ class TestMaybeSetupPrometheusMultiprocDir:
         result_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
         assert result_dir is not None
         assert os.path.isdir(result_dir)
+
+        monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
