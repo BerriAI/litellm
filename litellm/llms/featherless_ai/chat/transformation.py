@@ -106,7 +106,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
             or get_secret_str("FEATHERLESS_API_BASE")
             or "https://api.featherless.ai/v1"
         )
-        dynamic_api_key = api_key or get_secret_str("FEATHERLESS_API_KEY")
+        dynamic_api_key = api_key or get_secret_str("FEATHERLESS_AI_API_KEY")
         return api_base, dynamic_api_key
 
     def validate_environment(
@@ -120,7 +120,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         if not api_key:
-            raise ValueError("Missing Featherless AI API Key")
+            raise ValueError("Missing Featherless AI API Key - set the FEATHERLESS_AI_API_KEY environment variable")
 
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
