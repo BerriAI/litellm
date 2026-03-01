@@ -68,3 +68,31 @@ class TestAppendQueryParamsIncludesIdleLifetime:
         }
         result = append_query_params(url, params)
         assert "max_idle_connection_lifetime=300" in result
+
+
+class TestIdleLifetimeEnvVarOverride:
+    """LITELLM_DB_IDLE_LIFETIME env var must override the default."""
+
+    def test_env_var_overrides_default(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_DB_IDLE_LIFETIME", "120")
+        import os
+
+        value = int(
+            os.getenv(
+                "LITELLM_DB_IDLE_LIFETIME",
+                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+            )
+        )
+        assert value == 120
+
+    def test_falls_back_to_default_without_env_var(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_DB_IDLE_LIFETIME", raising=False)
+        import os
+
+        value = int(
+            os.getenv(
+                "LITELLM_DB_IDLE_LIFETIME",
+                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+            )
+        )
+        assert value == 60
