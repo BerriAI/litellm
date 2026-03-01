@@ -1190,6 +1190,23 @@ def convert_prefix_message_to_non_prefix_messages(
     return new_messages
 
 
+def _concat_reasoning_details(details: Any) -> str:
+    """Concatenate reasoning_details (list of dicts or string) into a single string.
+
+    # TODO: Other providers (e.g. DeepSeek, Ollama) have similar reasoning_details →
+    # string concatenation patterns scattered across their transformation files.
+    # Consider migrating those call-sites to use this shared utility to reduce
+    # duplication and ensure consistent parsing.
+    """
+    if isinstance(details, list):
+        return "".join(
+            str(item.get("text") or "") for item in details if isinstance(item, dict)
+        )
+    if isinstance(details, str):
+        return details
+    return ""
+
+
 def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
     """
     Extract reasoning content and main content from a message.
@@ -1205,6 +1222,9 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
         return message["reasoning_content"], message_content
     elif "reasoning" in message:
         return message["reasoning"], message_content
+    elif "reasoning_details" in message:
+        text = _concat_reasoning_details(message["reasoning_details"])
+        return text or None, message_content
     elif isinstance(message_content, str):
         return _parse_content_for_reasoning(message_content)
     return None, message_content

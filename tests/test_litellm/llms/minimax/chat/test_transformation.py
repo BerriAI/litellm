@@ -3,7 +3,6 @@ Test MiniMax OpenAI-compatible API support
 """
 import os
 import sys
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -11,7 +10,6 @@ sys.path.insert(
     0, os.path.abspath("../")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm import completion
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
 
@@ -203,6 +201,174 @@ def test_minimax_chat_completion_streaming():
     assert len(chunks) > 0
 
 
+def test_minimax_map_reasoning_details_streaming():
+    """Test that reasoning_details in streaming delta is mapped to reasoning_content."""
+    from litellm.llms.minimax.chat.transformation import (
+        MinimaxChatCompletionStreamingHandler,
+    )
+
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
+    choices = [
+        {
+            "delta": {
+                "reasoning_details": [
+                    {"text": "Let me think about "},
+                    {"text": "this step by step."},
+                ],
+                "content": "The answer is 4.",
+            }
+        }
+    ]
+    result = handler._map_reasoning_to_reasoning_content(choices)
+    delta = result[0]["delta"]
+    assert delta["reasoning_content"] == "Let me think about this step by step."
+    assert "reasoning_details" not in delta
+    assert delta["content"] == "The answer is 4."
+
+
+def test_minimax_map_reasoning_details_string_format():
+    """Test reasoning_details as a plain string (alternative format)."""
+    from litellm.llms.minimax.chat.transformation import (
+        MinimaxChatCompletionStreamingHandler,
+    )
+
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
+    choices = [{"delta": {"reasoning_details": "thinking text"}}]
+    result = handler._map_reasoning_to_reasoning_content(choices)
+    assert result[0]["delta"]["reasoning_content"] == "thinking text"
+    assert "reasoning_details" not in result[0]["delta"]
+
+
+def test_minimax_map_reasoning_details_empty():
+    """Test that empty reasoning_details does not create reasoning_content."""
+    from litellm.llms.minimax.chat.transformation import (
+        MinimaxChatCompletionStreamingHandler,
+    )
+
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
+    choices = [{"delta": {"reasoning_details": [], "content": "hello"}}]
+    result = handler._map_reasoning_to_reasoning_content(choices)
+    assert "reasoning_content" not in result[0]["delta"]
+    assert result[0]["delta"]["content"] == "hello"
+
+
+def test_minimax_map_preserves_existing_reasoning_content():
+    """Test that reasoning_content from parent handler is preserved when no reasoning_details."""
+    from litellm.llms.minimax.chat.transformation import (
+        MinimaxChatCompletionStreamingHandler,
+    )
+
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
+    choices = [{"delta": {"reasoning": "parent reasoning"}}]
+    result = handler._map_reasoning_to_reasoning_content(choices)
+    assert result[0]["delta"]["reasoning_content"] == "parent reasoning"
+
+
+def test_minimax_extract_reasoning_details_non_streaming():
+    """Test that _extract_reasoning_content handles reasoning_details for non-streaming."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    message = {
+        "content": "The answer is 4.",
+        "reasoning_details": [
+            {"text": "Step 1: "},
+            {"text": "2+2=4"},
+        ],
+    }
+    reasoning, content = _extract_reasoning_content(message)
+    assert reasoning == "Step 1: 2+2=4"
+    assert content == "The answer is 4."
+
+
+def test_minimax_extract_reasoning_details_string_non_streaming():
+    """Test _extract_reasoning_content with string reasoning_details."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    message = {"content": "yes", "reasoning_details": "my reasoning"}
+    reasoning, content = _extract_reasoning_content(message)
+    assert reasoning == "my reasoning"
+    assert content == "yes"
+
+
+def test_minimax_extract_reasoning_content_takes_priority():
+    """Test that reasoning_content takes priority over reasoning_details."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    message = {
+        "content": "answer",
+        "reasoning_content": "primary",
+        "reasoning_details": [{"text": "secondary"}],
+    }
+    reasoning, content = _extract_reasoning_content(message)
+    assert reasoning == "primary"
+    assert content == "answer"
+
+
+def test_minimax_concat_reasoning_details_null_text():
+    """Ensure None or non-string text values don't crash concatenation."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _concat_reasoning_details,
+    )
+
+    details = [{"text": None}, {"text": "ok"}, {"text": 42}]
+    result = _concat_reasoning_details(details)
+    assert result == "ok42"
+
+    assert _concat_reasoning_details([{"text": None}]) == ""
+    assert _concat_reasoning_details([]) == ""
+    assert _concat_reasoning_details(None) == ""
+
+
+def test_minimax_extract_reasoning_details_none_text_non_streaming():
+    """Test _extract_reasoning_content with {"text": None} entries."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    message = {
+        "content": "answer",
+        "reasoning_details": [
+            {"text": None},
+            {"text": "valid"},
+            {"text": None},
+        ],
+    }
+    reasoning, content = _extract_reasoning_content(message)
+    assert reasoning == "valid"
+    assert content == "answer"
+
+    # All None → reasoning should be None (empty string coerced to None)
+    message_all_none = {
+        "content": "x",
+        "reasoning_details": [{"text": None}],
+    }
+    reasoning2, content2 = _extract_reasoning_content(message_all_none)
+    assert reasoning2 is None
+    assert content2 == "x"
+
+
 if __name__ == "__main__":
     # Run basic tests that don't require API key
     print("Testing MiniMax Chat Config...")
@@ -220,6 +386,34 @@ if __name__ == "__main__":
     print("\nTesting MiniMax Provider Config Manager...")
     test_minimax_provider_config_manager()
     print("✓ Provider config manager test passed")
-    
-    print("\n✅ All basic tests passed!")
+
+    print("\nTesting MiniMax reasoning_details streaming...")
+    test_minimax_map_reasoning_details_streaming()
+    print("✓ Streaming reasoning_details test passed")
+
+    print("\nTesting MiniMax reasoning_details string format...")
+    test_minimax_map_reasoning_details_string_format()
+    print("✓ String format test passed")
+
+    print("\nTesting MiniMax reasoning_details empty...")
+    test_minimax_map_reasoning_details_empty()
+    print("✓ Empty reasoning_details test passed")
+
+    print("\nTesting MiniMax preserves existing reasoning_content...")
+    test_minimax_map_preserves_existing_reasoning_content()
+    print("✓ Preserve reasoning_content test passed")
+
+    print("\nTesting MiniMax extract reasoning_details non-streaming...")
+    test_minimax_extract_reasoning_details_non_streaming()
+    print("✓ Non-streaming reasoning_details test passed")
+
+    print("\nTesting MiniMax extract reasoning_details string non-streaming...")
+    test_minimax_extract_reasoning_details_string_non_streaming()
+    print("✓ String non-streaming test passed")
+
+    print("\nTesting MiniMax reasoning_content priority...")
+    test_minimax_extract_reasoning_content_takes_priority()
+    print("✓ Priority test passed")
+
+    print("\n✅ All tests passed!")
 

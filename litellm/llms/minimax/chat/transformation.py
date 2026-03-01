@@ -1,12 +1,32 @@
 """
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
-from typing import List, Optional, Tuple
+from typing import AsyncIterator, Iterator, List, Optional, Tuple, Union
 
 import litellm
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _concat_reasoning_details,
+)
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import ModelResponse
+
+
+class MinimaxChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    """Streaming handler that maps MiniMax reasoning_details to reasoning_content."""
+
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning_details" in delta:
+                text = _concat_reasoning_details(delta.pop("reasoning_details"))
+                if text:
+                    delta["reasoning_content"] = text
+        return super()._map_reasoning_to_reasoning_content(choices)
 
 
 class MinimaxChatConfig(OpenAIGPTConfig):
@@ -103,4 +123,16 @@ class MinimaxChatConfig(OpenAIGPTConfig):
             pass
         
         return base_params + additional_params
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> MinimaxChatCompletionStreamingHandler:
+        return MinimaxChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
