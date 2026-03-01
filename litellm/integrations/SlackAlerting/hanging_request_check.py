@@ -125,7 +125,7 @@ class AlertingHangingRequestCheck:
             # and is not hanging
             if request_status is not None:
                 # clear this request from hanging request cache since the request was either success or failed
-                self.hanging_request_cache._remove_key(
+                self.hanging_request_cache.delete_cache(
                     key=request_id,
                 )
                 continue
@@ -143,7 +143,7 @@ class AlertingHangingRequestCheck:
             )
 
             # remove from cache after alerting to prevent duplicate alerts
-            self.hanging_request_cache._remove_key(
+            self.hanging_request_cache.delete_cache(
                 key=request_id,
             )
 

@@ -19,16 +19,18 @@ import asyncio
 import sys
 import time
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-# proxy_server requires apscheduler; pre-populate the module mock
+# proxy_server requires apscheduler; mock the module for the entire test file.
+# The patch is applied once and cleaned up when the test process tears down.
 _mock_proxy_module = MagicMock()
-sys.modules["litellm.proxy.proxy_server"] = _mock_proxy_module
+_patcher = patch.dict(sys.modules, {"litellm.proxy.proxy_server": _mock_proxy_module})
+_patcher.start()
 
-from litellm.integrations.SlackAlerting.hanging_request_check import (
+from litellm.integrations.SlackAlerting.hanging_request_check import (  # noqa: E402
     AlertingHangingRequestCheck,
 )
-from litellm.types.integrations.slack_alerting import HangingRequestData
+from litellm.types.integrations.slack_alerting import HangingRequestData  # noqa: E402
 
 
 def _make_checker(threshold: float = 10.0) -> AlertingHangingRequestCheck:
@@ -80,8 +82,9 @@ class TestHangingRequestStartTime(unittest.TestCase):
         finally:
             loop.close()
         after = time.monotonic()
-        assert isinstance(cached, HangingRequestData)
-        assert before <= cached.start_time <= after
+        self.assertIsInstance(cached, HangingRequestData)
+        self.assertGreaterEqual(cached.start_time, before)
+        self.assertLessEqual(cached.start_time, after)
 
 
 class TestNoFalseAlarm(unittest.TestCase):
@@ -156,11 +159,11 @@ class TestNoDuplicateAlerts(unittest.TestCase):
             )
             # first check → alert fires
             loop.run_until_complete(checker.send_alerts_for_hanging_requests())
-            assert checker.slack_alerting_object.send_alert.call_count == 1
+            self.assertEqual(checker.slack_alerting_object.send_alert.call_count, 1)
 
             # second check → entry removed, no second alert
             loop.run_until_complete(checker.send_alerts_for_hanging_requests())
-            assert checker.slack_alerting_object.send_alert.call_count == 1
+            self.assertEqual(checker.slack_alerting_object.send_alert.call_count, 1)
         finally:
             loop.close()
 
@@ -220,9 +223,9 @@ class TestMixedRequests(unittest.TestCase):
         finally:
             loop.close()
 
-        assert checker.slack_alerting_object.send_alert.call_count == 1
+        self.assertEqual(checker.slack_alerting_object.send_alert.call_count, 1)
         call_kwargs = checker.slack_alerting_object.send_alert.call_args
-        assert "deepseek-r1" in str(call_kwargs)
+        self.assertIn("deepseek-r1", str(call_kwargs))
 
 
 class TestBoundaryElapsedTime(unittest.TestCase):
@@ -283,7 +286,7 @@ class TestNoneRequestData(unittest.TestCase):
             )
         finally:
             loop.close()
-        assert result is None
+        self.assertIsNone(result)
 
 
 class TestLegacyDataBackcompat(unittest.TestCase):
@@ -295,18 +298,23 @@ class TestLegacyDataBackcompat(unittest.TestCase):
         _setup_proxy_mock()
         loop = asyncio.new_event_loop()
         try:
-            # Simulate a very old entry (started 1000s ago)
+            # Legacy entries have no start_time; default 0.0 makes them
+            # appear extremely old, so they should always be flagged.
             data = HangingRequestData(
                 request_id="legacy-1",
                 model="gpt-4",
-                start_time=time.monotonic() - 1000,
             )
             loop.run_until_complete(
                 checker.hanging_request_cache.async_set_cache(
                     key="legacy-1", value=data, ttl=70
                 )
             )
-            loop.run_until_complete(checker.send_alerts_for_hanging_requests())
+            # Simulate a long-running process where monotonic() >> 0.0
+            with patch(
+                "litellm.integrations.SlackAlerting.hanging_request_check.time"
+            ) as mock_time:
+                mock_time.monotonic.return_value = 1000.0
+                loop.run_until_complete(checker.send_alerts_for_hanging_requests())
         finally:
             loop.close()
 
