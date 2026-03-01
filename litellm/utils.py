@@ -5301,6 +5301,10 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
         elif custom_llm_provider == "github":
             # Allow github/<model> aliases to reuse existing provider metadata.
             return True
+        elif custom_llm_provider == "vercel_ai_gateway":
+            # Allow vercel_ai_gateway to fall back to sub-provider pricing
+            # e.g. vercel_ai_gateway/openai/gpt-4.1 can use gpt-4.1's pricing
+            return True
         else:
             return False
 
@@ -5553,6 +5557,21 @@ def _get_model_info_helper(  # noqa: PLR0915
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
                         model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            # For gateway providers (e.g. vercel_ai_gateway/openai/gpt-4.1),
+            # split_model is "openai/gpt-4.1" — try the base model name "gpt-4.1"
+            if _model_info is None and "/" in split_model:
+                _base_model = split_model.rsplit("/", 1)[-1]
+                _matched_key = _get_model_cost_key(_base_model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(
+                        key=cast(str, key)
+                    )
+                    if not _check_provider_match(
+                        model_info=_model_info,
+                        custom_llm_provider=custom_llm_provider,
                     ):
                         _model_info = None
 
