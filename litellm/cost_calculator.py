@@ -1093,13 +1093,6 @@ def completion_cost(  # noqa: PLR0915
             router_model_id=router_model_id,
         )
 
-        # When base_model is used and contains a provider prefix (e.g. "gemini/gemini-3-flash"),
-        # extract the provider from base_model so cost lookup uses the correct provider
-        # instead of the deployment provider (e.g. "anthropic").
-        if base_model is not None and _model_contains_known_llm_provider(base_model):
-            base_model_provider = base_model.split("/")[0]
-            custom_llm_provider = base_model_provider
-
         potential_model_names = [
             selected_model,
             _get_response_model(completion_response),
@@ -1209,6 +1202,12 @@ def completion_cost(  # noqa: PLR0915
                     elif len(prompt) > 0:
                         prompt_tokens = token_counter(model=model, text=prompt)
                     completion_tokens = token_counter(model=model, text=completion)
+
+                # When base_model contains a provider prefix (e.g. "gemini/gemini-3-flash"),
+                # use that provider for cost lookup instead of the deployment provider.
+                # Applied after hidden_params extraction to avoid being overridden.
+                if base_model is not None and _model_contains_known_llm_provider(base_model):
+                    custom_llm_provider = base_model.split("/")[0]
 
                 # Handle A2A calls before model check - A2A doesn't require a model
                 if call_type in _A2A_CALL_TYPES:
