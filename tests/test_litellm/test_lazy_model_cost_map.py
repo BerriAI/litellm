@@ -1,6 +1,20 @@
 """Tests for deferred (lazy) model cost map loading."""
 
+import pytest
 from unittest.mock import patch
+
+
+@pytest.fixture
+def isolate_model_cost_state():
+    """Save and restore _model_cost_remote_loaded state across tests."""
+    import litellm
+    original_state = litellm._model_cost_remote_loaded
+    original_cost_dict = dict(litellm.model_cost)  # shallow copy
+    yield
+    # Restore state after test
+    litellm._model_cost_remote_loaded = original_state
+    litellm.model_cost.clear()
+    litellm.model_cost.update(original_cost_dict)
 
 
 class TestLazyModelCostMap:
@@ -13,7 +27,7 @@ class TestLazyModelCostMap:
         assert isinstance(litellm.model_cost, dict)
         assert len(litellm.model_cost) > 0, "model_cost should not be empty"
 
-    def test_local_only_skips_remote(self):
+    def test_local_only_skips_remote(self, isolate_model_cost_state):
         """When _model_cost_remote_loaded is True, _ensure_remote_model_cost is a no-op."""
         import litellm
 
@@ -22,7 +36,7 @@ class TestLazyModelCostMap:
             litellm._ensure_remote_model_cost()
             mock_get.assert_not_called()
 
-    def test_ensure_remote_idempotent(self):
+    def test_ensure_remote_idempotent(self, isolate_model_cost_state):
         """Calling _ensure_remote_model_cost multiple times only fetches once."""
         import litellm
 
@@ -34,7 +48,7 @@ class TestLazyModelCostMap:
             litellm._ensure_remote_model_cost()
             mock_get.assert_called_once()
 
-    def test_add_known_models_with_arg_skips_remote(self):
+    def test_add_known_models_with_arg_skips_remote(self, isolate_model_cost_state):
         """add_known_models(explicit_map) must NOT trigger remote fetch."""
         import litellm
 
@@ -44,7 +58,7 @@ class TestLazyModelCostMap:
             "passing an explicit map should NOT trigger remote fetch"
         )
 
-    def test_add_known_models_without_arg_uses_current_data(self):
+    def test_add_known_models_without_arg_uses_current_data(self, isolate_model_cost_state):
         """add_known_models() without args uses current model_cost — no remote fetch."""
         import litellm
 
@@ -54,7 +68,7 @@ class TestLazyModelCostMap:
             mock_get.assert_not_called()
             assert litellm._model_cost_remote_loaded is False
 
-    def test_remote_not_fetched_at_import_time(self):
+    def test_remote_not_fetched_at_import_time(self, isolate_model_cost_state):
         """The module-level add_known_models(model_cost) passes args, so
         _ensure_remote_model_cost should NOT fire during import."""
         import litellm
@@ -79,7 +93,7 @@ class TestLazyModelCostMap:
 
         assert type(litellm.model_cost) is dict
 
-    def test_remote_failure_keeps_local_and_allows_retry(self):
+    def test_remote_failure_keeps_local_and_allows_retry(self, isolate_model_cost_state):
         """If remote fetch fails, local backup data remains and next call retries."""
         import litellm
 
@@ -93,7 +107,7 @@ class TestLazyModelCostMap:
             litellm._ensure_remote_model_cost()
             assert mock_get.call_count == 2  # retried
 
-    def test_cost_per_token_triggers_remote_fetch(self):
+    def test_cost_per_token_triggers_remote_fetch(self, isolate_model_cost_state):
         """cost_per_token() should trigger _ensure_remote_model_cost on first use."""
         import litellm
         from litellm.cost_calculator import cost_per_token
@@ -106,7 +120,7 @@ class TestLazyModelCostMap:
                 pass  # model lookup may fail in test env
             mock_ensure.assert_called()
 
-    def test_completion_cost_triggers_remote_fetch(self):
+    def test_completion_cost_triggers_remote_fetch(self, isolate_model_cost_state):
         """completion_cost() should trigger _ensure_remote_model_cost on first use."""
         import litellm
 
