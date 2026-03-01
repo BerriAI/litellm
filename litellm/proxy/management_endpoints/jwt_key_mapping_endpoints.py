@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from litellm.proxy._types import *
+from litellm.proxy._types import hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
@@ -21,12 +22,12 @@ async def create_jwt_key_mapping(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
+        hashed_key = hash_token(data.key)
         new_mapping = await prisma_client.db.litellm_jwtkeymapping.create(
             data={
                 "jwt_claim_name": data.jwt_claim_name,
                 "jwt_claim_value": data.jwt_claim_value,
-                "token": data.token,
-                "is_active": data.is_active,
+                "token": hashed_key,
             }
         )
 
@@ -54,12 +55,12 @@ async def update_jwt_key_mapping(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
-    update_data = data.model_dump(exclude_unset=True, exclude={"mapping_id"})
+    update_data = data.model_dump(exclude_unset=True, exclude={"id"})
 
     try:
         # Get old mapping for cache invalidation
         old_mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(
-            where={"mapping_id": data.mapping_id}
+            where={"id": data.id}
         )
 
         if old_mapping:
@@ -67,7 +68,7 @@ async def update_jwt_key_mapping(
             await user_api_key_cache.async_delete_cache(cache_key)
 
         updated_mapping = await prisma_client.db.litellm_jwtkeymapping.update(
-            where={"mapping_id": data.mapping_id}, data=update_data
+            where={"id": data.id}, data=update_data
         )
 
         # Invalidate new cache key if claim fields changed
@@ -97,7 +98,7 @@ async def delete_jwt_key_mapping(
     try:
         # Get old mapping for cache invalidation
         old_mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(
-            where={"mapping_id": data.mapping_id}
+            where={"id": data.id}
         )
 
         if old_mapping:
@@ -105,7 +106,7 @@ async def delete_jwt_key_mapping(
             await user_api_key_cache.async_delete_cache(cache_key)
 
         await prisma_client.db.litellm_jwtkeymapping.delete(
-            where={"mapping_id": data.mapping_id}
+            where={"id": data.id}
         )
         return {"status": "success"}
     except Exception as e:
@@ -135,7 +136,7 @@ async def list_jwt_key_mappings(
 
 @router.get("/jwt/key/mapping/info", tags=["JWT Key Mapping"])
 async def info_jwt_key_mapping(
-    mapping_id: str,
+    id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     from litellm.proxy.proxy_server import prisma_client
@@ -150,7 +151,7 @@ async def info_jwt_key_mapping(
 
     try:
         mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(
-            where={"mapping_id": mapping_id}
+            where={"id": id}
         )
         if mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")

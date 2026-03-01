@@ -36,6 +36,7 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_model,
     common_checks,
     get_end_user_object,
+    get_jwt_key_mapping_object,
     get_key_object,
     get_project_object,
     get_team_object,
@@ -480,16 +481,13 @@ async def _resolve_jwt_to_virtual_key(
     if prisma_client is None:
         return None
 
-    mapping = await prisma_client.db.litellm_jwtkeymapping.find_first(
-        where={
-            "jwt_claim_name": virtual_key_claim_field,
-            "jwt_claim_value": str(claim_value),
-            "is_active": True,
-        }
+    token_hash = await get_jwt_key_mapping_object(
+        jwt_claim_name=virtual_key_claim_field,
+        jwt_claim_value=str(claim_value),
+        prisma_client=prisma_client,
     )
 
-    if mapping:
-        token_hash = mapping.token
+    if token_hash is not None:
         await user_api_key_cache.async_set_cache(
             key=cache_key,
             value=token_hash,
