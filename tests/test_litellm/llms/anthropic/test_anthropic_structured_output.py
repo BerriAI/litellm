@@ -161,16 +161,16 @@ class TestAnthropicStructuredOutput:
         name_schema = transformed_schema["properties"]["name"]
         assert "maxLength" not in name_schema
         assert "minLength" not in name_schema
-        # But constraint info should be added to description
+        # But constraint info should be added to description (SDK format: {key: value})
         assert "description" in name_schema
-        assert "minimum length: 1" in name_schema["description"]
-        assert "maximum length: 100" in name_schema["description"]
+        assert "minLength: 1" in name_schema["description"]
+        assert "maxLength: 100" in name_schema["description"]
 
         # Number constraints should be REMOVED from schema (Anthropic doesn't support them)
         age_schema = transformed_schema["properties"]["age"]
         assert "minimum" not in age_schema
         assert "maximum" not in age_schema
-        # But constraint info should be added to description
+        # But constraint info should be added to description (SDK format: {key: value})
         assert "description" in age_schema
-        assert "minimum value: 0" in age_schema["description"]
-        assert "maximum value: 150" in age_schema["description"]
+        assert "minimum: 0" in age_schema["description"]
+        assert "maximum: 150" in age_schema["description"]
