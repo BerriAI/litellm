@@ -202,6 +202,19 @@ def test_get_additional_headers_only_prefixed_ratelimit():
     assert result["x_ratelimit_remaining_tokens"] == 49999
 
 
+def test_get_additional_headers_numeric_request_id_stays_string():
+    """String-typed fields must remain strings even when values are numeric."""
+    additional_headers = {
+        "llm_provider-x-request-id": "12345",
+        "llm_provider-request-id": "67890",
+    }
+    result = StandardLoggingPayloadSetup.get_additional_headers(additional_headers)
+    assert result["llm_provider_x_request_id"] == "12345"
+    assert isinstance(result["llm_provider_x_request_id"], str)
+    assert result["llm_provider_request_id"] == "67890"
+    assert isinstance(result["llm_provider_request_id"], str)
+
+
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
     for field in StandardLoggingMetadata.__annotations__.keys():
         assert field in standard_logging_metadata
