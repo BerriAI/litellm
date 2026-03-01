@@ -104,6 +104,9 @@ class MCPClient:
 
         if self.transport_type == MCPTransport.sse:
             headers = self._get_auth_headers()
+            verbose_logger.debug(
+                f"SSE client headers for {self.server_url}: {list(headers.keys())}"
+            )
             httpx_client_factory = self._create_httpx_client_factory()
             return sse_client(
                 url=self.server_url,
@@ -213,10 +216,16 @@ class MCPClient:
                     headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
+                verbose_logger.debug(
+                    f"MCP auth value is dict, updated headers: {list(self._mcp_auth_value.keys())}"
+                )
 
         # update the headers with the extra headers
         if self.extra_headers:
             headers.update(self.extra_headers)
+            verbose_logger.debug(
+                f"Updated headers with extra_headers: {list(self.extra_headers.keys())}"
+            )
 
         return headers
 
