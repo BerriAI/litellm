@@ -137,7 +137,7 @@ jobs:
 
             if [ "$RUN_STATUS" = "completed" ] || [ "$RUN_STATUS" = "failed" ]; then
               echo "Test finished with status: $RUN_STATUS"
-              echo "run_result=$STATUS" >> $GITHUB_OUTPUT
+              echo "$STATUS" > /tmp/observatory_result.json
               exit 0
             fi
 
@@ -149,7 +149,7 @@ jobs:
 
       - name: Verify test results
         run: |
-          RESULT='${{ steps.poll.outputs.run_result }}'
+          RESULT=$(cat /tmp/observatory_result.json)
           echo "Full result: $RESULT"
 
           STATUS=$(echo "$RESULT" | jq -r '.status')
