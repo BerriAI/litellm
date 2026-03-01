@@ -2851,6 +2851,38 @@ class TestIsCachedMessage:
         message = {"role": "user", "content": []}
         assert is_cached_message(message) is False
 
+    def test_message_level_cache_control_returns_true(self):
+        """Message with string content and message-level cache_control should return True.
+
+        This is the format injected by the cache_control_injection_points hook
+        when the message content is a string (common for system messages).
+        Fixes GitHub issue #18519 - Gemini models ignoring cache_control_injection_points.
+        """
+        message = {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": {"type": "ephemeral"},
+        }
+        assert is_cached_message(message) is True
+
+    def test_message_level_cache_control_wrong_type_returns_false(self):
+        """Message-level cache_control with non-ephemeral type should return False."""
+        message = {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": {"type": "permanent"},
+        }
+        assert is_cached_message(message) is False
+
+    def test_message_level_cache_control_non_dict_returns_false(self):
+        """Message-level cache_control that's not a dict should return False."""
+        message = {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": "ephemeral",
+        }
+        assert is_cached_message(message) is False
+
 
 @pytest.mark.asyncio
 class TestProxyLoggingBudgetAlerts:
