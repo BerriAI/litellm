@@ -326,6 +326,6 @@ def _compute_overhead_pct(latency_stats: dict) -> Optional[float]:
         return None
     avg_overhead = overhead.get("avg_ms")
     avg_total = total.get("avg_ms")
-    if avg_overhead and avg_total and avg_total > 0:
+    if avg_overhead is not None and avg_total is not None and avg_total > 0:
         return round((avg_overhead / avg_total) * 100, 1)
     return None
