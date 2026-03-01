@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
@@ -182,6 +183,14 @@ class TestStandardizedResetTime(unittest.TestCase):
         expected = datetime(2023, 3, 13, 0, 0, 0, tzinfo=eastern)
         result = get_next_standardized_reset_time("1d", pre_spring, "US/Eastern")
         self.assertEqual(result, expected)
+
+
+    def test_invalid_timezone_logs_warning(self):
+        """Test that an invalid timezone logs a warning when falling back to UTC."""
+        base_time = datetime(2023, 5, 15, 14, 0, 0, tzinfo=timezone.utc)
+        with patch("litellm.litellm_core_utils.duration_parser.verbose_logger") as mock_logger:
+            get_next_standardized_reset_time("1d", base_time, "NonExistentTimeZone")
+            mock_logger.warning.assert_called_once()
 
 
 if __name__ == "__main__":
