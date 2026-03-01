@@ -82,15 +82,19 @@ class TestLazyModelCostMap(unittest.TestCase):
 
         assert type(litellm.model_cost) is dict
 
-    def test_remote_failure_keeps_local(self):
-        """If remote fetch fails, local backup data remains intact."""
+    def test_remote_failure_keeps_local_and_allows_retry(self):
+        """If remote fetch fails, local backup data remains and next call retries."""
         import litellm
 
         litellm._model_cost_remote_loaded = False
         original_keys = set(litellm.model_cost.keys())
-        with patch("litellm.get_model_cost_map", side_effect=Exception("network")):
+        with patch("litellm.get_model_cost_map", side_effect=Exception("network")) as mock_get:
             litellm._ensure_remote_model_cost()
-        assert set(litellm.model_cost.keys()) == original_keys
+            assert set(litellm.model_cost.keys()) == original_keys
+            assert litellm._model_cost_remote_loaded is False  # flag NOT set on failure
+            # Next call should retry
+            litellm._ensure_remote_model_cost()
+            assert mock_get.call_count == 2  # retried
 
 
 if __name__ == "__main__":
