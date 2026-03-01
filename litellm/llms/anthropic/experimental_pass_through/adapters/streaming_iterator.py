@@ -41,7 +41,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         type="text",
         text="",
     )
-    pending_new_content_block: bool = False
     def __init__(
         self,
         completion_stream: Any,
