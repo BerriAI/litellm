@@ -1,5 +1,13 @@
 """
-Anthropic Skills API endpoints - /v1/skills
+Skills API endpoints - /v1/skills
+
+Provider defaults:
+- Original CRUD endpoints (create, list, get, delete) default to "anthropic" for
+  backward compatibility — these endpoints existed before OpenAI Skills support.
+- OpenAI-only endpoints (update, content, versions CRUD) default to "openai" because
+  these operations are only supported by OpenAI's Skills API.
+
+All endpoints accept a custom_llm_provider query param to override the default.
 """
 
 from typing import Optional
@@ -21,6 +29,26 @@ from litellm.types.llms.anthropic_skills import (
 )
 
 router = APIRouter()
+
+_OPENAI_ONLY_OPERATIONS = frozenset({
+    "update", "content", "create_version", "list_versions",
+    "get_version", "delete_version", "get_version_content",
+})
+
+
+def _validate_openai_only_provider(
+    operation: str, custom_llm_provider: str
+) -> None:
+    """Raise 400 if a non-OpenAI provider is used on an OpenAI-only endpoint."""
+    if custom_llm_provider != "openai":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The '{operation}' operation is only supported by OpenAI's Skills API. "
+                f"Got custom_llm_provider='{custom_llm_provider}'. "
+                "Set custom_llm_provider='openai' or omit it to use the default."
+            ),
+        )
 
 
 @router.post(
@@ -503,6 +531,7 @@ async def update_skill_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
+    _validate_openai_only_provider("update", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -581,6 +610,7 @@ async def get_skill_content_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
+    _validate_openai_only_provider("content", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -654,6 +684,7 @@ async def create_skill_version_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
+    _validate_openai_only_provider("create_version", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -741,6 +772,7 @@ async def list_skill_versions_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
+    _validate_openai_only_provider("list_versions", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -822,6 +854,7 @@ async def get_skill_version_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
+    _validate_openai_only_provider("get_version", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -903,6 +936,7 @@ async def delete_skill_version_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
+    _validate_openai_only_provider("delete_version", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -984,6 +1018,7 @@ async def get_skill_version_content_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
+    _validate_openai_only_provider("get_version_content", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
