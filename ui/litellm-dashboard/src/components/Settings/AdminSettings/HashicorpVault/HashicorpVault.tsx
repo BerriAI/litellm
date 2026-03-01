@@ -90,11 +90,17 @@ export default function HashicorpVault() {
     const fieldSchema = properties[fieldName];
     if (!fieldSchema) return null;
 
+    const rules =
+      fieldName === "vault_addr"
+        ? [{ type: "url" as const, message: "Please enter a valid URL" }]
+        : undefined;
+
     return (
       <Form.Item
         key={fieldName}
         name={fieldName}
         label={FIELD_LABELS[fieldName] ?? fieldName}
+        rules={rules}
       >
         {SENSITIVE_FIELDS.has(fieldName) ? (
           <Input.Password placeholder={fieldSchema?.description} />
