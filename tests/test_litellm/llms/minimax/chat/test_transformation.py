@@ -328,6 +328,19 @@ def test_minimax_extract_reasoning_content_takes_priority():
     assert content == "answer"
 
 
+def test_minimax_concat_reasoning_details_null_text():
+    """Ensure None or non-string text values don't crash concatenation."""
+    from litellm.llms.minimax.chat.transformation import _concat_reasoning_details
+
+    details = [{"text": None}, {"text": "ok"}, {"text": 42}]
+    result = _concat_reasoning_details(details)
+    assert result == "ok42"
+
+    assert _concat_reasoning_details([{"text": None}]) == ""
+    assert _concat_reasoning_details([]) == ""
+    assert _concat_reasoning_details(None) == ""
+
+
 if __name__ == "__main__":
     # Run basic tests that don't require API key
     print("Testing MiniMax Chat Config...")

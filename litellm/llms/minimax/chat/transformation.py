@@ -17,7 +17,7 @@ def _concat_reasoning_details(details: Any) -> str:
     """Concatenate reasoning_details (list of dicts or string) into a single string."""
     if isinstance(details, list):
         return "".join(
-            item.get("text", "") for item in details if isinstance(item, dict)
+            str(item.get("text") or "") for item in details if isinstance(item, dict)
         )
     if isinstance(details, str):
         return details
