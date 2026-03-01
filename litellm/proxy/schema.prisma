@@ -1112,3 +1112,23 @@ model LiteLLM_ClaudeCodePluginTable {
 
   @@map("LiteLLM_ClaudeCodePluginTable")
 }
+
+// Routing Groups table for storing named routing pipelines
+model LiteLLM_RoutingGroupTable {
+  routing_group_id    String   @id @default(uuid())
+  routing_group_name  String   @unique
+  description         String?
+  routing_strategy    String
+  deployments         Json
+  fallback_config     Json?    @default("{}")
+  retry_config        Json?    @default("{}")
+  cooldown_config     Json?    @default("{}")
+  settings            Json?    @default("{}")
+  assigned_team_ids   String[] @default([])
+  assigned_key_ids    String[] @default([])
+  is_active           Boolean  @default(true)
+  created_at          DateTime @default(now())
+  created_by          String
+  updated_at          DateTime @default(now()) @updatedAt
+  updated_by          String
+}
