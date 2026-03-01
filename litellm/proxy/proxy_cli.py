@@ -35,6 +35,7 @@ telemetry = None
 class LiteLLMDatabaseConnectionPool(Enum):
     database_connection_pool_limit = 10
     database_connection_pool_timeout = 60
+    database_connection_idle_lifetime = 60  # seconds; recycles idle connections before cloud providers (RDS, Cloud SQL) silently drop them
 
 
 def append_query_params(url: Optional[str], params: dict) -> str:
@@ -669,6 +670,7 @@ def run_server(  # noqa: PLR0915
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
+        db_connection_idle_lifetime = LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
@@ -775,6 +777,10 @@ def run_server(  # noqa: PLR0915
                 "database_connection_pool_timeout",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
             )
+            db_connection_idle_lifetime = general_settings.get(
+                "database_connection_idle_lifetime",
+                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+            )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is
@@ -806,6 +812,9 @@ def run_server(  # noqa: PLR0915
             db_connection_timeout = (
                 LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
             )
+            db_connection_idle_lifetime = (
+                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value
+            )
 
         if (
             os.getenv("DATABASE_URL", None) is not None
@@ -819,6 +828,7 @@ def run_server(  # noqa: PLR0915
                     params = {
                         "connection_limit": db_connection_pool_limit,
                         "pool_timeout": db_connection_timeout,
+                        "max_idle_connection_lifetime": db_connection_idle_lifetime,
                     }
                     database_url = get_secret("DATABASE_URL", default_value=None)
                     modified_url = append_query_params(database_url, params)
@@ -828,6 +838,7 @@ def run_server(  # noqa: PLR0915
                     params = {
                         "connection_limit": db_connection_pool_limit,
                         "pool_timeout": db_connection_timeout,
+                        "max_idle_connection_lifetime": db_connection_idle_lifetime,
                     }
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, params)
