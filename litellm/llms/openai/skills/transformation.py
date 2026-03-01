@@ -20,14 +20,6 @@ from litellm.types.llms.anthropic_skills import (
     ListSkillsResponse,
     Skill,
 )
-from litellm.types.llms.openai_skills import (
-    OpenAIDeletedSkill,
-    OpenAIDeletedSkillVersion,
-    OpenAISkill,
-    OpenAISkillList,
-    OpenAISkillVersion,
-    OpenAISkillVersionList,
-)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
