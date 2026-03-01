@@ -1191,7 +1191,13 @@ def convert_prefix_message_to_non_prefix_messages(
 
 
 def _concat_reasoning_details(details: Any) -> str:
-    """Concatenate reasoning_details (list of dicts or string) into a single string."""
+    """Concatenate reasoning_details (list of dicts or string) into a single string.
+
+    # TODO: Other providers (e.g. DeepSeek, Ollama) have similar reasoning_details →
+    # string concatenation patterns scattered across their transformation files.
+    # Consider migrating those call-sites to use this shared utility to reduce
+    # duplication and ensure consistent parsing.
+    """
     if isinstance(details, list):
         return "".join(
             str(item.get("text") or "") for item in details if isinstance(item, dict)
