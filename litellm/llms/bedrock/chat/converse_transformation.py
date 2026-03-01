@@ -869,13 +869,13 @@ class AmazonConverseConfig(BaseConfig):
         ):
             optional_params["fake_stream"] = True
 
-    def map_openai_params(
+    def map_openai_params(  # noqa: PLR0915
         self,
         non_default_params: dict,
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # noqa: PLR0915
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
 
         for param, value in non_default_params.items():
@@ -893,10 +893,13 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["stream"] = value
             if param == "stop":
                 if isinstance(value, str):
-                    if len(value) == 0:  # converse raises error for empty strings
-                        continue
-                    value = [value]
-                optional_params["stopSequences"] = value
+                    if len(value) > 0:  # skip empty strings (converse rejects them)
+                        optional_params["stopSequences"] = [value]
+                elif isinstance(value, list):
+                    # Filter out empty strings from list (Bedrock rejects them)
+                    filtered = [v for v in value if isinstance(v, str) and len(v) > 0]
+                    if filtered:  # only set if non-empty after filtering
+                        optional_params["stopSequences"] = filtered
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "top_p":
@@ -1433,6 +1436,16 @@ class AmazonConverseConfig(BaseConfig):
             if tool_choice_values is not None:
                 bedrock_tool_config["toolChoice"] = tool_choice_values
 
+        # Extract config block params BEFORE calling _transform_inference_params
+        # to prevent them from being included in InferenceConfig(**inference_params)
+        # which would place them inside inferenceConfig instead of at the top level.
+        # Fixes: serviceTier, guardrailConfig, performanceConfig placement bug (#17336)
+        config_block_values: dict = {}
+        for config_name, config_class in self.get_config_blocks().items():
+            config_value = inference_params.pop(config_name, None)
+            if config_value is not None:
+                config_block_values[config_name] = config_class(**config_value)  # type: ignore
+
         data: CommonRequestObject = {
             "additionalModelRequestFields": additional_request_params,
             "system": system_content_blocks,
@@ -1441,11 +1454,9 @@ class AmazonConverseConfig(BaseConfig):
             ),
         }
 
-        # Handle all config blocks
-        for config_name, config_class in self.get_config_blocks().items():
-            config_value = inference_params.pop(config_name, None)
-            if config_value is not None:
-                data[config_name] = config_class(**config_value)  # type: ignore
+        # Apply config blocks at top-level (already extracted before _transform_inference_params)
+        for config_name, config_block in config_block_values.items():
+            data[config_name] = config_block  # type: ignore
 
         # Tool Config
         if bedrock_tool_config is not None:
@@ -1633,7 +1644,10 @@ class AmazonConverseConfig(BaseConfig):
         if "cacheWriteInputTokens" in usage:
             cache_creation_input_tokens = usage["cacheWriteInputTokens"]
             input_tokens += cache_creation_input_tokens
-
+        # Only recalculate total_tokens if we added cache tokens to input_tokens
+        # Otherwise, trust the API's totalTokens (which may include other token categories)
+        if cache_read_input_tokens > 0 or cache_creation_input_tokens > 0:
+            total_tokens = input_tokens + output_tokens
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens
         )
