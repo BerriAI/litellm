@@ -4,14 +4,14 @@ import multiprocessing
 import os
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     LITELLM_DETAILED_TIMING,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.performance_endpoints.latency_tracker import (
     latency_tracker,
@@ -24,9 +24,10 @@ router = APIRouter()
 @router.get(
     "/v1/performance/summary",
     tags=["performance"],
-    dependencies=[Depends(user_api_key_auth)],
 )
-async def get_performance_summary() -> Dict[str, Any]:
+async def get_performance_summary(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Dict[str, Any]:
     """
     Returns a performance snapshot for diagnosing proxy overhead.
 
@@ -38,6 +39,12 @@ async def get_performance_summary() -> Dict[str, Any]:
     - per_model: per-model overhead/llm_api/total stats
     - issues: ranked list of detected problems with proposed fixes
     """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to view performance summary",
+        )
+
     # --- Debug flags ---
     from litellm._logging import verbose_proxy_logger as _proxy_logger
     from litellm.proxy.proxy_server import general_settings, prisma_client
@@ -52,7 +59,7 @@ async def get_performance_summary() -> Dict[str, Any]:
     cpu_percent = _get_cpu_percent()
 
     # --- Connection pools ---
-    in_flight_requests = _get_in_flight_requests()
+    active_asyncio_tasks = _get_in_flight_requests()
     db_pool_info = _get_db_pool_info(general_settings, prisma_client)
     redis_pool_info = _get_redis_pool_info()
     http_pool_info = _get_http_pool_info()
@@ -77,7 +84,7 @@ async def get_performance_summary() -> Dict[str, Any]:
             "cpu_percent": cpu_percent,
         },
         "connection_pools": {
-            "in_flight_requests": in_flight_requests,
+            "in_flight_requests": active_asyncio_tasks,
             "db": db_pool_info,
             "redis": redis_pool_info,
             "http": http_pool_info,

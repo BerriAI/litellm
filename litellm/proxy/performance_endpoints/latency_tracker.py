@@ -76,6 +76,8 @@ class _LatencyRingBuffer:
 class _PerModelTracker:
     """Thread-safe per-model latency tracker using one ring buffer per model."""
 
+    _MAX_MODELS = 200  # cap to prevent unbounded memory growth
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._models: Dict[str, _LatencyRingBuffer] = {}
@@ -89,6 +91,10 @@ class _PerModelTracker:
     ) -> None:
         with self._lock:
             if model not in self._models:
+                if len(self._models) >= self._MAX_MODELS:
+                    # Evict the oldest entry to keep memory bounded
+                    oldest = next(iter(self._models))
+                    del self._models[oldest]
                 self._models[model] = _LatencyRingBuffer()
             buf = self._models[model]
         # record outside the outer lock to minimise contention
