@@ -78,6 +78,12 @@ def _close_aiohttp_sessions_sync() -> None:
     any thread or event loop state.  This avoids the need for a running
     event loop, which is unavailable in atexit handlers after
     ``asyncio.run()`` has returned.
+
+    NOTE: This uses aiohttp private APIs (_close(), _closed, _connector).
+    Verified against aiohttp 3.10–3.11. The fallback chain (getattr checks)
+    and blanket ``except Exception`` ensure graceful degradation if internal
+    APIs change in future versions — worst case, the sync cleanup becomes a
+    no-op and the async fallback in cleanup_wrapper handles it.
     """
     for session in _collect_aiohttp_sessions():
         try:
@@ -183,6 +189,11 @@ def register_async_client_cleanup():
             pass
 
         # Async fallback — catches non-aiohttp transports and httpx clients.
+        # Safe to run after sync cleanup: aiohttp's ClientSession.close() with
+        # _connector=None is a no-op, and httpx client.aclose() on an already-
+        # closed transport is also idempotent.  This double-close pattern is
+        # intentional — the sync path handles aiohttp connectors, while the
+        # async path covers httpx and other transports that need await.
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
