@@ -7,6 +7,7 @@ import inspect
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -616,10 +617,22 @@ async def register_guardrail(
             status_code=400,
             detail=f"Only guardrails with litellm_params.guardrail={GENERIC_GUARDRAIL_API!r} are accepted for registration",
         )
-    if not params.get("api_base"):
+    api_base = params.get("api_base")
+    if not api_base:
         raise HTTPException(
             status_code=400,
             detail="litellm_params.api_base is required for generic_guardrail_api",
+        )
+    parsed = urlparse(api_base)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.api_base must use http or https scheme",
+        )
+    if not parsed.hostname:
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.api_base must contain a valid hostname",
         )
     mode = params.get("mode")
     if mode is None:
@@ -742,22 +755,13 @@ async def list_guardrail_submissions(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        # Only team guardrails (team_id is not null)
-        where: Dict[str, Any] = {"team_id": {"not": None}}
-        if status:
-            where["status"] = status
-        if team_id:
-            where["team_id"] = team_id
-
-        rows = await prisma_client.db.litellm_guardrailstable.find_many(
-            where=where,
+        # Single query: fetch all team guardrails (team_id is not null)
+        all_team_rows = await prisma_client.db.litellm_guardrailstable.find_many(
+            where={"team_id": {"not": None}},
             order={"created_at": "desc"},
         )
 
-        # Summary counts (team guardrails only)
-        all_team_rows = await prisma_client.db.litellm_guardrailstable.find_many(
-            where={"team_id": {"not": None}}
-        )
+        # Derive summary counts from the full result set
         total = len(all_team_rows)
         pending_review = sum(
             1 for r in all_team_rows if (r.status or "active") == "pending_review"
@@ -769,6 +773,12 @@ async def list_guardrail_submissions(
             1 for r in all_team_rows if (r.status or "active") == "rejected"
         )
 
+        # Apply filters to get the submissions list
+        rows = all_team_rows
+        if status:
+            rows = [r for r in rows if r.status == status]
+        if team_id:
+            rows = [r for r in rows if r.team_id == team_id]
         if search:
             search_lower = search.lower()
             rows = [
@@ -785,9 +795,8 @@ async def list_guardrail_submissions(
                     and search_lower in r.guardrail_info.lower()
                 )
             ]
-        items = []
-        for r in rows:
-            items.append(_row_to_submission_item(r))
+
+        items = [_row_to_submission_item(r) for r in rows]
         return ListGuardrailSubmissionsResponse(
             submissions=items,
             summary=GuardrailSubmissionSummary(
@@ -902,6 +911,13 @@ async def approve_guardrail_submission(
                 guardrail_id,
                 init_err,
             )
+            return {
+                "guardrail_id": guardrail_id,
+                "status": "active",
+                "message": "Guardrail approved",
+                "warning": f"Guardrail was marked active but failed to initialize in memory: {init_err}. "
+                "It will be picked up on the next sync cycle.",
+            }
 
         return {
             "guardrail_id": guardrail_id,
