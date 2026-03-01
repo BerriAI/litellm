@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">
+    <defs>
+        <style>
+            .cls-1 {
+            fill: #000;
+            }
+            polygon {
+            fill: #fff;
+            }
+            @media ( prefers-color-scheme: dark ) {
+            .cls-1 {
+            fill: #fff;
+            }
+            polygon {
+            fill: #000;
+            }
+            }
+        </style>
+    </defs>
+    <rect class="cls-1" width="1000" height="1000"/>
+    <g>
+        <polygon points="226.83 411.15 501.31 803.15 623.31 803.15 348.82 411.15 226.83 411.15" />
+        <polygon points="348.72 628.87 226.69 803.15 348.77 803.15 409.76 716.05 348.72 628.87" />
+        <polygon points="651.23 196.85 440.28 498.12 501.32 585.29 773.31 196.85 651.23 196.85" />
+        <polygon points="673.31 383.25 673.31 803.15 773.31 803.15 773.31 240.44 673.31 383.25" />
+    </g>
+</svg>
