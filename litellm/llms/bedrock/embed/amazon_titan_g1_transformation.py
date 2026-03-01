@@ -61,6 +61,8 @@ class AmazonTitanG1Config:
     def _transform_request(
         self, input: str, inference_params: dict
     ) -> AmazonTitanG1EmbeddingRequest:
+        if isinstance(input, list):
+            input = input[0] if len(input) == 1 and isinstance(input[0], str) else str(input[0])
         return AmazonTitanG1EmbeddingRequest(inputText=input)
 
     def _transform_response(
