@@ -348,6 +348,7 @@ const sidebars = {
                 "proxy/access_control",
                 "proxy/self_serve",
                 "proxy/public_teams",
+                "proxy/ui_project_management",
                 "proxy/ui/bulk_edit_users",
                 "proxy/ui/page_visibility",
               ]
