@@ -4,10 +4,10 @@ Type definitions for OpenAI Skills API
 Reference: https://developers.openai.com/api/reference/resources/skills
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, List, Optional, Union
 
-from pydantic import BaseModel, Field
-from typing_extensions import Required, TypedDict
+from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 # ──────────────────────────────────────────────
@@ -38,7 +38,7 @@ class OpenAIListSkillsParams(TypedDict, total=False):
 class OpenAIUpdateSkillRequest(TypedDict, total=False):
     """Request body for updating an OpenAI skill (e.g. set default_version)."""
 
-    default_version: Optional[int]
+    default_version: Optional[Union[int, str]]
     """The version number to set as the new default."""
 
 

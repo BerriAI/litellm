@@ -10,16 +10,18 @@ import sys
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import NewSkillRequest, UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.types.llms.anthropic_skills import ListSkillsResponse
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -191,10 +193,6 @@ async def test_slack_gif_skill_creates_gif(prisma_client):
 # ──────────────────────────────────────────────────────────────
 # OpenAI Skills API E2E Tests
 # ──────────────────────────────────────────────────────────────
-
-from typing import Optional
-
-from litellm.types.llms.anthropic_skills import ListSkillsResponse
 
 
 class TestOpenAISkillsAPI:
