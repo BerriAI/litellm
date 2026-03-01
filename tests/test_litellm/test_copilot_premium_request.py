@@ -17,7 +17,7 @@ from litellm.llms.github_copilot.responses.transformation import (
 
 
 class TestChatInitiator:
-    """Tests for GithubCopilotConfig._determine_initiator."""
+    """Tests for GitHub Copilot Chat _determine_initiator."""
 
     def setup_method(self):
         self.config = GithubCopilotConfig()
@@ -106,7 +106,7 @@ class TestChatInitiator:
 
 
 class TestResponsesInitiator:
-    """Tests for GithubCopilotResponsesAPIConfig._get_initiator."""
+    """Tests for GitHub Copilot Responses API _get_initiator."""
 
     def setup_method(self):
         self.config = GithubCopilotResponsesAPIConfig()
