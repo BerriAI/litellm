@@ -465,9 +465,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
-                reasoning_content = "".join(
+                item_text = "".join(
                     getattr(s, "text", "") for s in item.summary
                 )
+                if reasoning_content is None:
+                    reasoning_content = item_text
+                else:
+                    reasoning_content += item_text
 
                 # Capture encrypted_content for thinking_blocks passthrough
                 encrypted = getattr(item, "encrypted_content", None)
@@ -504,6 +508,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         reasoning_content = None
                         thinking_blocks = None
                         index += 1
+                    continue
                 for content in item.content:
                     response_text = getattr(content, "text", "")
                     # Extract annotations from content if present
