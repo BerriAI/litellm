@@ -7209,7 +7209,7 @@ class Router:
             litellm_params=litellm_params,
         )
 
-        ## SET MODEL TO 'model=' - if base_model is None + not azure
+        ## SET MODEL — use base_model if available, else deployment name
         if custom_llm_provider == "azure" and base_model is None:
             model = _model
             verbose_router_logger.debug(

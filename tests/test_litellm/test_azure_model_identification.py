@@ -175,7 +175,7 @@ class TestAzureModelDocLink:
             for r in caplog.records
             if r.levelno == logging.DEBUG and "base_model" in r.getMessage()
         ]
-        if debug_msgs:
-            assert "custom_pricing" in debug_msgs[0].getMessage(), (
-                "Doc link should point to custom_pricing page"
-            )
+        assert len(debug_msgs) >= 1, "Expected at least one DEBUG message about base_model"
+        assert "custom_pricing" in debug_msgs[0].getMessage(), (
+            "Doc link should point to custom_pricing page"
+        )
