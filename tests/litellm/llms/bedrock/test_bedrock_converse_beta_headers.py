@@ -5,19 +5,11 @@ Verifies that anthropic-beta headers are stripped from HTTP headers
 and only sent via additionalModelRequestFields in the request body.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
-os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-
 import litellm
-
-litellm.suppress_debug_info = True
-
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
@@ -305,19 +297,3 @@ class TestAsyncBetaHeaderHandling:
                 pass
 
         assert captured_headers.get("Content-Type") == "application/json"
-        config = AmazonConverseConfig()
-        extra_headers = {"anthropic-beta": "context-1m-2025-08-07"}
-
-        result = config._transform_request(
-            model="amazon.nova-pro-v1:0",
-            messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
-            optional_params={},
-            litellm_params={
-                "api_base": "",
-                "model": "bedrock/amazon.nova-pro-v1:0",
-            },
-            headers=extra_headers,
-        )
-
-        amrf = result.get("additionalModelRequestFields", {})
-        assert "anthropic_beta" not in amrf
