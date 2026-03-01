@@ -105,7 +105,7 @@ os.environ["SARVAM_API_KEY"] = "your-sarvam-api-key"
 
 with open("audio.wav", "rb") as audio_file:
     response = transcription(
-        model="sarvam/saarika:v2.5",
+        model="sarvam/saaras:v3",
         file=audio_file,
         language="hi-IN",  # or "unknown" for auto-detect
     )
@@ -119,7 +119,7 @@ print(response.text)
 model_list:
 - model_name: sarvam-stt
   litellm_params:
-    model: saaras:v2.5/saarika:v2.5
+    model: saaras:v3/saarika:v2.5
     api_key: os.environ/SARVAM_API_KEY
   model_info:
     mode: audio_transcription
@@ -129,7 +129,7 @@ model_list:
 curl --location 'http://0.0.0.0:4000/v1/audio/transcriptions' \
   --header 'Authorization: Bearer sk-1234' \
   --form 'file=@"audio.wav"' \
-  --form 'model="saaras:v2.5"' \
+  --form 'model="saaras:v3"' \
   --form 'language="hi-IN"'
 ```
 
@@ -146,7 +146,7 @@ import os
 os.environ["SARVAM_API_KEY"] = "your-sarvam-api-key"
 
 audio = speech(
-    model="bulbul:v3",
+    model="sarvam/bulbul:v3",
     input="Welcome to Sarvam AI!",
     voice="shubh",
     response_format="wav",

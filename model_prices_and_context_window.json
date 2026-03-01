@@ -37768,10 +37768,11 @@
         ]
     },
     "sarvam/saaras:v3": {
-        "input_cost_per_second": 0.0083333333,
+        "input_cost_per_second": 9.2e-05,
         "litellm_provider": "sarvam",
         "metadata": {
-            "calculation": "₹30/hour = ₹0.0083333333 per second",
+            "original_pricing_inr_per_hour": 30,
+            "calculation": "₹30/hour = $0.33/hour ÷ 3600 sec = $0.000092/sec",
             "notes": "Sarvam Saaras v3 - speech-to-text model"
         },
         "mode": "audio_transcription",
@@ -37780,6 +37781,6 @@
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ]
-    },
+    }
 
 }

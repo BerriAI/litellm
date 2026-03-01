@@ -222,7 +222,7 @@ general_settings:
   # background_health_checks: true
   # use_shared_health_check: true
   # health_check_interval: 30
-  # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>"" # [OPTIONAL] use for token-based auth to proxy
+  # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
 
   pass_through_endpoints:
     - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
