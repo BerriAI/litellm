@@ -670,12 +670,7 @@ def run_server(  # noqa: PLR0915
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
-        db_connection_idle_lifetime = int(
-            os.getenv(
-                "LITELLM_DB_IDLE_LIFETIME",
-                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
-            )
-        )
+        db_connection_idle_lifetime = LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
