@@ -86,6 +86,16 @@ def _get_current_env_values(env_var_mapping: Dict[str, str]) -> Dict[str, Any]:
     return values
 
 
+def _extract_field_type(field_info: Dict[str, Any]) -> str:
+    """Extract the non-null type from a Pydantic v2 JSON schema field."""
+    if "type" in field_info:
+        return field_info["type"]
+    for option in field_info.get("anyOf", []):
+        if option.get("type") != "null":
+            return option.get("type", "string")
+    return "string"
+
+
 def _build_field_schema(model_class: type) -> Dict[str, Any]:
     """Build field_schema dict from a Pydantic model for UI rendering."""
     schema = TypeAdapter(model_class).json_schema(by_alias=True)
@@ -93,7 +103,7 @@ def _build_field_schema(model_class: type) -> Dict[str, Any]:
     for field_name, field_info in schema.get("properties", {}).items():
         properties[field_name] = {
             "description": field_info.get("description", ""),
-            "type": field_info.get("type", "string"),
+            "type": _extract_field_type(field_info),
         }
     return {
         "description": schema.get("description", ""),
