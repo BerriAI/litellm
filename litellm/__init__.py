@@ -356,6 +356,7 @@ anthropic_beta_headers_url: str = os.getenv(
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
 )
 suppress_debug_info = False
+include_litellm_headers: bool = True
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None

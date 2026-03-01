@@ -395,6 +395,10 @@ class ProxyBaseLLMRequestProcessing:
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
         **kwargs,
     ) -> dict:
+        # When include_litellm_headers is False, skip all x-litellm-* headers
+        if litellm.include_litellm_headers is False:
+            return {}
+
         exclude_values = {"", None, "None"}
         hidden_params = hidden_params or {}
 

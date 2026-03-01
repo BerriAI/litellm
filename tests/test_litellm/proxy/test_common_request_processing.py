@@ -691,6 +691,73 @@ class TestProxyBaseLLMRequestProcessing:
             float(headers_7["x-litellm-key-spend"]) == 0.001
         )  # Should use original spend on error
 
+    def test_get_custom_headers_included_by_default(self):
+        """
+        Test that x-litellm-* headers are included by default
+        (backwards compatibility).
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+
+        # Ensure default is True
+        original_value = litellm.include_litellm_headers
+        litellm.include_litellm_headers = True
+        try:
+            headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=mock_user_api_key_dict,
+                call_id="test-call-id",
+                model_id="test-model-id",
+                version="1.0.0",
+            )
+
+            assert "x-litellm-call-id" in headers
+            assert headers["x-litellm-call-id"] == "test-call-id"
+            assert "x-litellm-model-id" in headers
+            assert headers["x-litellm-model-id"] == "test-model-id"
+            assert "x-litellm-version" in headers
+            assert headers["x-litellm-version"] == "1.0.0"
+        finally:
+            litellm.include_litellm_headers = original_value
+
+    def test_get_custom_headers_excluded_when_disabled(self):
+        """
+        Test that x-litellm-* headers are excluded when
+        include_litellm_headers is set to False.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+
+        original_value = litellm.include_litellm_headers
+        litellm.include_litellm_headers = False
+        try:
+            headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=mock_user_api_key_dict,
+                call_id="test-call-id",
+                model_id="test-model-id",
+                version="1.0.0",
+                response_cost=0.001,
+                hidden_params={
+                    "_response_ms": 100.0,
+                    "litellm_overhead_time_ms": 10.0,
+                },
+            )
+
+            # All headers should be stripped
+            assert headers == {}
+            assert "x-litellm-call-id" not in headers
+            assert "x-litellm-model-id" not in headers
+            assert "x-litellm-version" not in headers
+            assert "x-litellm-response-cost" not in headers
+            assert "x-litellm-key-spend" not in headers
+        finally:
+            litellm.include_litellm_headers = original_value
+
     @pytest.mark.asyncio
     async def test_queue_time_seconds_is_set_in_metadata(self, monkeypatch):
         """
