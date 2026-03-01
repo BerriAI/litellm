@@ -120,7 +120,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         if not api_key:
-            raise ValueError("Missing Featherless AI API Key")
+            raise ValueError("Missing Featherless AI API Key - set the FEATHERLESS_AI_API_KEY environment variable")
 
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
