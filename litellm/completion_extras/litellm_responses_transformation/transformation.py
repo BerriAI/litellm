@@ -226,6 +226,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         "content": self._convert_content_to_responses_format(content, cast(str, role)),  # type: ignore[arg-type]
                     }
                 )
+            elif role == "assistant" and content is None and not tool_calls:
+                # Handle assistant messages that only carry thinking_blocks (no content or tool_calls)
+                reasoning_items = self._extract_reasoning_input_items_from_thinking_blocks(msg)
+                if reasoning_items:
+                    input_items.extend(reasoning_items)
 
         return input_items, instructions
 
