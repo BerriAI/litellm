@@ -7,7 +7,6 @@ DATABASE_URL query parameters.
 Regression tests for https://github.com/BerriAI/litellm/issues/22289
 """
 
-import pytest
 
 from litellm.proxy.proxy_cli import (
     LiteLLMDatabaseConnectionPool,
