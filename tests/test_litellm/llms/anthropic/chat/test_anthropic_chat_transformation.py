@@ -1560,19 +1560,27 @@ def test_effort_output_config_preservation():
 
 
 def test_effort_beta_header_injection():
-    """Test that effort beta header is automatically added when output_config is detected."""
+    """Test that effort beta header is only injected for Opus 4.5 reasoning_effort."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     model_info = AnthropicModelInfo()
 
-    # Test with effort parameter
+    # output_config.effort on 4.6 models should NOT trigger the beta header
     optional_params = {
         "output_config": {
             "effort": "low"
         }
     }
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params)
+    effort_used = model_info.is_effort_used(optional_params=optional_params, model="claude-sonnet-4-6-20260205")
+    assert effort_used is False
+
+    # reasoning_effort on Opus 4.5 SHOULD trigger the beta header
+    optional_params_opus = {
+        "reasoning_effort": "low"
+    }
+
+    effort_used = model_info.is_effort_used(optional_params=optional_params_opus, model="claude-opus-4-5-20251101")
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
