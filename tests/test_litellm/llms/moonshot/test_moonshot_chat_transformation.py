@@ -16,7 +16,6 @@ import pytest
 
 import litellm
 import litellm.utils
-from litellm import completion
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 
 
