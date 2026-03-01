@@ -104,8 +104,19 @@ jobs:
       - name: Verify tunnel connectivity
         run: |
           echo "Testing tunnel at ${{ env.TUNNEL_URL }}..."
-          curl -sf "${{ env.TUNNEL_URL }}/health/liveliness"
-          echo "Tunnel is working"
+          # Quick tunnels need time for DNS propagation; retry to avoid
+          # transient NXDOMAIN (curl exit code 6) on first attempt.
+          for i in $(seq 1 10); do
+            if curl -sf "${{ env.TUNNEL_URL }}/health/liveliness" > /dev/null 2>&1; then
+              echo "Tunnel is working (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i/10 - tunnel not routable yet, waiting 5s..."
+            sleep 5
+          done
+          echo "Tunnel failed to become reachable after 50s"
+          cat /tmp/cloudflared.log
+          exit 1
 
       - name: Trigger observatory test run
         id: trigger
