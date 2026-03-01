@@ -470,12 +470,12 @@ def _ensure_remote_model_cost() -> None:
     global _model_cost_remote_loaded
     if _model_cost_remote_loaded:
         return
-    _model_cost_remote_loaded = True
     try:
         remote = get_model_cost_map(url=_model_cost_url)
         model_cost.update(remote)  # merge remote on top of local; no clear() needed
+        _model_cost_remote_loaded = True
     except Exception:
-        pass  # keep using local backup
+        pass  # keep using local backup; next call will retry
 
 
 cost_discount_config: Dict[str, float] = (
