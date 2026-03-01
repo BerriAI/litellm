@@ -295,6 +295,8 @@ def cost_per_token(  # noqa: PLR0915
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
 
+    litellm._ensure_remote_model_cost()
+
     ## RECONSTRUCT USAGE BLOCK ##
     if usage_object is not None:
         usage_block = usage_object
@@ -1041,6 +1043,7 @@ def completion_cost(  # noqa: PLR0915
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
+        litellm._ensure_remote_model_cost()
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 
         if (

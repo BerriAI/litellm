@@ -46,16 +46,15 @@ class TestLazyModelCostMap(unittest.TestCase):
             "passing an explicit map should NOT trigger remote fetch"
         )
 
-    def test_add_known_models_without_arg_triggers_remote(self):
-        """add_known_models() without args triggers _ensure_remote_model_cost."""
+    def test_add_known_models_without_arg_uses_current_data(self):
+        """add_known_models() without args uses current model_cost — no remote fetch."""
         import litellm
 
         litellm._model_cost_remote_loaded = False
         with patch("litellm.get_model_cost_map") as mock_get:
-            mock_get.return_value = {}
             litellm.add_known_models()
-            mock_get.assert_called_once()
-            assert litellm._model_cost_remote_loaded is True
+            mock_get.assert_not_called()
+            assert litellm._model_cost_remote_loaded is False
 
     def test_remote_not_fetched_at_import_time(self):
         """The module-level add_known_models(model_cost) passes args, so
@@ -95,6 +94,19 @@ class TestLazyModelCostMap(unittest.TestCase):
             # Next call should retry
             litellm._ensure_remote_model_cost()
             assert mock_get.call_count == 2  # retried
+
+    def test_cost_per_token_triggers_remote_fetch(self):
+        """cost_per_token() should trigger _ensure_remote_model_cost on first use."""
+        import litellm
+        from litellm.cost_calculator import cost_per_token
+
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm._ensure_remote_model_cost") as mock_ensure:
+            try:
+                cost_per_token(model="gpt-4o", prompt_tokens=10, completion_tokens=5)
+            except Exception:
+                pass  # model lookup may fail in test env
+            mock_ensure.assert_called()
 
 
 if __name__ == "__main__":
