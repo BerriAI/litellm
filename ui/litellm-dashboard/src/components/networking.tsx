@@ -9697,8 +9697,11 @@ export const updateHashicorpVaultConfig = async (
   });
   if (!response.ok) {
     const errorData = await response.json();
-    const raw = deriveErrorMessage(errorData);
-    const errorMessage = typeof raw === "string" ? raw : JSON.stringify(raw);
+    const detail = errorData?.detail;
+    const errorMessage =
+      (typeof detail === "object" && detail?.error) ||
+      (typeof detail === "string" && detail) ||
+      deriveErrorMessage(errorData);
     throw new Error(errorMessage);
   }
   const data = await response.json();
