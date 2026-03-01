@@ -136,7 +136,7 @@ class TestGetWildcardModelsRemovesPatterns:
         # No models expanded for unknown provider
         assert len(expanded) == 0
 
-    def test_wildcard_removed_when_no_router(self):
+    def test_unknown_wildcard_removed_when_no_router(self):
         """Even without a router, unknown-provider wildcards are removed."""
         unique_models = ["unknownprovider/*"]
         expanded = _get_wildcard_models(
@@ -153,7 +153,7 @@ class TestGetWildcardModelsRemovesPatterns:
         router = Router(model_list=[])
 
         unique_models = ["*", "my-custom-model"]
-        expanded = _get_wildcard_models(
+        _get_wildcard_models(
             unique_models=unique_models,
             return_wildcard_routes=False,
             llm_router=router,
@@ -164,7 +164,7 @@ class TestGetWildcardModelsRemovesPatterns:
     def test_global_star_wildcard_removed_without_router(self):
         """The bare '*' wildcard must be removed even without a router."""
         unique_models = ["*"]
-        expanded = _get_wildcard_models(
+        _get_wildcard_models(
             unique_models=unique_models,
             return_wildcard_routes=False,
             llm_router=None,
@@ -306,3 +306,70 @@ class TestRegressionIssue13752:
         anthropic_models = [m for m in result if m.startswith("anthropic/")]
         assert len(openai_models) > 0, "Expected expanded OpenAI models"
         assert len(anthropic_models) > 0, "Expected expanded Anthropic models"
+
+
+class TestRouterDeploymentRegression:
+    """Regression tests for the router deployment path in _get_wildcard_models.
+    Ensures wildcard expansion works correctly when the router has actual
+    deployments configured (the most common production scenario)."""
+
+    def test_router_deployment_expands_wildcards(self):
+        """When router has a deployment for a wildcard, models are expanded
+        from that deployment's litellm_params, not just from known models."""
+        model_list = [
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+        ]
+        router = Router(model_list=model_list)
+
+        unique_models = ["openai/*"]
+        expanded = _get_wildcard_models(
+            unique_models=unique_models,
+            return_wildcard_routes=False,
+            llm_router=router,
+        )
+        # Wildcard removed from unique_models
+        assert "openai/*" not in unique_models
+        # Expanded to concrete model names
+        assert len(expanded) > 0
+        assert all("*" not in m for m in expanded)
+
+    def test_router_deployment_multiple_providers(self):
+        """Multiple wildcard deployments each expand independently."""
+        model_list = [
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+            {"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*"}},
+        ]
+        router = Router(model_list=model_list)
+
+        unique_models = ["openai/*", "anthropic/*"]
+        expanded = _get_wildcard_models(
+            unique_models=unique_models,
+            return_wildcard_routes=False,
+            llm_router=router,
+        )
+        assert "openai/*" not in unique_models
+        assert "anthropic/*" not in unique_models
+        openai_expanded = [m for m in expanded if m.startswith("openai/")]
+        anthropic_expanded = [m for m in expanded if m.startswith("anthropic/")]
+        assert len(openai_expanded) > 0, "Router deployment should expand openai/*"
+        assert len(anthropic_expanded) > 0, "Router deployment should expand anthropic/*"
+
+    def test_router_deployment_preserves_explicit_models(self):
+        """Explicit (non-wildcard) models in unique_models survive expansion."""
+        model_list = [
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+            {
+                "model_name": "my-custom",
+                "litellm_params": {"model": "openai/gpt-4o"},
+            },
+        ]
+        router = Router(model_list=model_list)
+
+        unique_models = ["openai/*", "my-custom"]
+        _get_wildcard_models(
+            unique_models=unique_models,
+            return_wildcard_routes=False,
+            llm_router=router,
+        )
+        assert "openai/*" not in unique_models
+        assert "my-custom" in unique_models
