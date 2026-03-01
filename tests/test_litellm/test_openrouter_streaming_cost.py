@@ -153,3 +153,49 @@ class TestCalculateUsageCost:
         assert usage.prompt_tokens == 63
         assert usage.completion_tokens == 255
         assert usage.total_tokens == 318
+
+
+class TestDictFormatUsageChunks:
+    """Verify cost extraction when usage chunks are plain dicts instead of Usage objects."""
+
+    def setup_method(self):
+        self.processor = _make_processor()
+
+    def test_helper_extracts_cost_from_dict(self):
+        usage_dict = {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.003}
+        result = self.processor._usage_chunk_calculation_helper(usage_dict)
+        assert result["cost"] == 0.003
+
+    def test_helper_cost_none_when_absent_in_dict(self):
+        usage_dict = {"prompt_tokens": 10, "completion_tokens": 20}
+        result = self.processor._usage_chunk_calculation_helper(usage_dict)
+        assert result["cost"] is None
+
+    def test_helper_cost_zero_preserved_in_dict(self):
+        usage_dict = {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0}
+        result = self.processor._usage_chunk_calculation_helper(usage_dict)
+        assert result["cost"] == 0.0
+
+    def test_calculate_usage_with_dict_format_chunks(self):
+        chunks = [
+            {"usage": {"prompt_tokens": 63, "completion_tokens": 255, "cost": 0.00492}},
+        ]
+        usage = self.processor.calculate_usage(
+            chunks=chunks,
+            model="openrouter/x-ai/grok-4-fast",
+            completion_output="Hello!",
+        )
+        assert usage.cost == 0.00492
+        assert usage.prompt_tokens == 63
+        assert usage.completion_tokens == 255
+
+    def test_calculate_usage_dict_without_cost(self):
+        chunks = [
+            {"usage": {"prompt_tokens": 10, "completion_tokens": 20}},
+        ]
+        usage = self.processor.calculate_usage(
+            chunks=chunks,
+            model="openrouter/x-ai/grok-4-fast",
+            completion_output="test",
+        )
+        assert getattr(usage, "cost", None) is None

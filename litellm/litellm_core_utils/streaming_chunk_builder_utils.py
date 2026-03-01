@@ -431,7 +431,7 @@ class ChunkProcessor:
             id=id,
         )
 
-    def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> dict:
+    def _usage_chunk_calculation_helper(self, usage_chunk: Union[Usage, dict]) -> dict:
         prompt_tokens = 0
         completion_tokens = 0
         ## anthropic prompt caching information ##
@@ -467,8 +467,12 @@ class ChunkProcessor:
                 usage_chunk.prompt_tokens_details, PromptTokensDetailsWrapper
             ):
                 prompt_tokens_details = usage_chunk.prompt_tokens_details
-        if hasattr(usage_chunk, "cost") and usage_chunk.cost is not None:
-            cost = usage_chunk.cost
+        # Handle both dict and Usage object for cost extraction
+        _cost = getattr(usage_chunk, "cost", None)
+        if _cost is None and isinstance(usage_chunk, dict):
+            _cost = usage_chunk.get("cost")
+        if _cost is not None:
+            cost = _cost
 
         return {
             "prompt_tokens": prompt_tokens,
