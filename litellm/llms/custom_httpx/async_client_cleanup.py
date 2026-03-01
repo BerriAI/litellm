@@ -111,6 +111,11 @@ def _close_aiohttp_sessions_sync() -> None:
                         # coroutine to suppress the "never awaited" warning.
                         if hasattr(awaitable, "close"):
                             awaitable.close()
+                else:
+                    # No event loop available; close the unawaited coroutine
+                    # to suppress the "never awaited" warning.
+                    if hasattr(awaitable, "close"):
+                        awaitable.close()
 
                 # Fallback: call the synchronous cleanup core directly.
                 _close_fn = getattr(connector, "_close", None)
