@@ -4632,13 +4632,13 @@ async def update_spend_logs_job(
     n_retry_times = 3
     MAX_LOGS_PER_INTERVAL = 10000
 
-    # Atomically pop batch from queue
+    # Atomically check size and pop batch in a single lock context to
+    # prevent a TOCTOU race where another coroutine drains the queue
+    # between the len() check and the drain() call.
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-    if queue_size == 0:
-        return
-
-    async with prisma_client._spend_log_transactions_lock:
+        if queue_size == 0:
+            return
         logs_to_process = prisma_client.spend_log_transactions.drain(
             MAX_LOGS_PER_INTERVAL
         )
