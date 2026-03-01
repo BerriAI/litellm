@@ -536,142 +536,285 @@ export const useRoutingGroupSimulate = () => { ... }  // useMutation
 
 ## Agent 5: UI — Live Tester & Traffic Simulator
 
-**Goal:** Build the testing and simulation UI that lets users see live request flow and traffic distribution.
+**Goal:** Build the Live Tester visualization — the animated traffic flow diagram that shows how requests route through deployments in real-time.
+
+### Design Reference (from mockups)
+
+See `docs/routing_groups_live_tester_*.png` for the exact visual designs.
+
+### Two Modes: Ordered Fallback vs Weighted Round-Robin
+
+The Live Tester has **two visual modes** toggled by a button ("Switch to Weighted" / "Switch to Ordered"):
+
+---
+
+#### MODE 1: Ordered Fallback
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                                                                      │
+│  Live Tester   [Ordered Fallback]          [Switch to Weighted ▸]    │
+│  Sending to prod-model                                               │
+│                                                                      │
+│  REQUESTS        SUCCESS        AVG LATENCY        FALLBACKS         │
+│  336             100%           169ms               51                │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐   │
+│  │                                                                │   │
+│  │                                                                │   │
+│  │  client ═══════════════▶ (LITELLM) ═══════════▶ ┌───────────┐ │   │
+│  │          animated teal                          │  N         │ │   │
+│  │          stream                                 │  Nebius    │ │   │
+│  │                                                 │  Priority 1│ │   │
+│  │                                                 │  149ms avg │ │   │
+│  │                                                 │  85%  285rq│ │   │
+│  │                                                 └─────┬──────┘ │   │
+│  │                                                   fail│(dashed)│   │
+│  │                                                       ▼        │   │
+│  │                                                 ┌───────────┐  │   │
+│  │                                                 │  F         │  │   │
+│  │                                                 │  Fireworks │  │   │
+│  │                                                 │  Priority 2│  │   │
+│  │                                                 │  225ms avg │  │   │
+│  │                                                 │  10%  34rq │  │   │
+│  │                                                 └─────┬──────┘  │   │
+│  │                                                   fail│(dashed) │   │
+│  │                                                       ▼         │   │
+│  │                                                 ┌───────────┐   │   │
+│  │                                                 │  A         │   │   │
+│  │                                                 │  Azure     │   │   │
+│  │                                                 │  Priority 3│   │   │
+│  │                                                 │  321ms avg │   │   │
+│  │                                                 │  5%   17rq │   │   │
+│  │                                                 └────────────┘   │   │
+│  │                                                                  │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  ℹ️ Traffic flows to the primary provider first. When a request      │
+│     fails, it cascades down the priority chain. Thicker streams =    │
+│     more traffic. Dashed red lines show the fallback path.           │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Key visual elements for Ordered Fallback:**
+- Left side: "client" label with an **animated teal/cyan stream** (thick, flowing particles/gradient) going right
+- Center: **LITELLM circle** hub — the stream flows into it
+- From LITELLM hub: a **single thick teal stream** flows right to the first (primary) deployment card
+- **Deployment cards** stacked vertically on the right side, each card contains:
+  - Colored letter icon (N=teal, F=orange, A=purple) in a circle
+  - Provider name (bold)
+  - "Priority N · Xms avg" subtitle
+  - Large percentage circle (colored matching the provider)
+  - Request count ("285 req")
+- Between cards: **dashed lines** labeled "fail" showing the fallback cascade path
+- Stream thickness is proportional to traffic volume
+- The teal stream is thickest going to the primary (Priority 1) deployment
+- Color scheme: dark background (#1a1a2e or similar dark card), teal/cyan (#14b8a6) for primary stream, provider-specific colors for each card
+
+---
+
+#### MODE 2: Weighted Round-Robin
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                                                                      │
+│  Live Tester   [Weighted Round-Robin]       [Switch to Ordered ▸]    │
+│  Sending to prod-model                                               │
+│                                                                      │
+│  REQUESTS        SUCCESS        AVG LATENCY        FALLBACKS         │
+│  336             100%           169ms               0                 │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐   │
+│  │                                                                │   │
+│  │                                        ┌───────────┐           │   │
+│  │                          ╔═════════════▶│  N  Nebius │           │   │
+│  │                          ║  thick teal  │  Wt 83%   │           │   │
+│  │                          ║              │  149ms avg │           │   │
+│  │  client ═══════▶ (LITELLM)              │  83% 278rq│           │   │
+│  │                          ║              └───────────┘           │   │
+│  │                          ║              ┌────────────┐          │   │
+│  │                          ╠═════════════▶│  F Fireworks│          │   │
+│  │                          ║  med orange  │  Wt 10%    │          │   │
+│  │                          ║              │  225ms avg  │          │   │
+│  │                          ║              │  10%  32rq  │          │   │
+│  │                          ║              └────────────┘          │   │
+│  │                          ║              ┌───────────┐           │   │
+│  │                          ╚═════════════▶│  A  Azure  │           │   │
+│  │                             thin purple │  Wt 7%    │           │   │
+│  │                                         │  321ms avg │           │   │
+│  │                                         │  7%   26rq│           │   │
+│  │                                         └───────────┘           │   │
+│  │                                                                │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  ℹ️ Traffic is distributed across providers based on weights.         │
+│     Thicker streams = more traffic. Adjust weights in routing        │
+│     group settings.                                                  │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Key visual elements for Weighted Round-Robin:**
+- Left side: Same "client" label with animated stream → LITELLM hub
+- From LITELLM hub: **THREE separate colored streams** fan out to the right, each curving to its destination:
+  - **Top stream** (teal, thick): curves UP to Nebius card — thickness = 83%
+  - **Middle stream** (orange, medium): goes STRAIGHT to Fireworks card — thickness = 10%
+  - **Bottom stream** (purple, thin): curves DOWN to Azure card — thickness = 7%
+- Stream thickness is proportional to the weight percentage
+- Each stream uses the provider's color
+- **Deployment cards** on the right side, each contains:
+  - Colored letter icon
+  - Provider name
+  - "Weight N% · Xms avg" subtitle
+  - Large percentage circle
+  - Request count
+- NO dashed fallback lines (weighted mode doesn't have fallback cascade)
+- The streams should have a **smooth curved path** (CSS bezier or SVG path) — NOT straight lines
+
+---
 
 ### Tasks
 
-#### 5.1 Live Tester Tab (within Routing Group detail view)
+#### 5.1 Live Tester Component — `LiveTester.tsx`
 
-A tab on the routing group detail/edit page:
+The main container component with:
 
+**Header section:**
+- Title: "Live Tester" + strategy badge (orange for "Ordered Fallback", teal for "Weighted Round-Robin")
+- Subtitle: "Sending to {routing_group_name}"
+- Toggle button: "Switch to Weighted" / "Switch to Ordered"
+
+**Stats bar (horizontal row of 4 metrics):**
+- REQUESTS: total count
+- SUCCESS: percentage
+- AVG LATENCY: in ms
+- FALLBACKS: count (0 for weighted mode)
+
+**Flow visualization area** (dark background card):
+- Renders either `OrderedFallbackFlow` or `WeightedRoundRobinFlow` based on mode
+
+**Info box** at bottom (subtle border, light text):
+- Contextual explanation of the current mode
+
+**Controls:**
+- "Send Test Request" button — sends one real request, updates flow with result
+- "Send Mock Request" button — simulates one request
+- "Run Simulation (N requests)" — bulk test, updates all stats
+
+#### 5.2 Ordered Fallback Flow Component — `OrderedFallbackFlow.tsx`
+
+Renders the left-to-right flow with vertical fallback cascade:
+
+**Implementation using SVG + CSS:**
+1. **Client label** (left, vertically centered)
+2. **Animated stream** — SVG `<path>` with CSS animation (moving gradient or dashed animation) from client to LITELLM hub
+3. **LITELLM circle** — centered hub node
+4. **Primary stream** — SVG path from hub to first deployment card (thickness based on traffic %)
+5. **Deployment cards** — absolutely positioned divs on the right side, stacked vertically
+6. **Fallback dashed lines** — SVG dashed paths between deployment cards, labeled "fail"
+
+**Animated stream effect:**
+- Use CSS `@keyframes` with `stroke-dashoffset` animation on SVG paths
+- Or use a gradient that shifts position over time
+- The stream should appear to "flow" from left to right continuously
+
+**Each deployment card contains:**
+- Provider icon circle (colored: teal=#14b8a6, orange=#f97316, purple=#8b5cf6)
+- Provider name (bold, white text)
+- "Priority {N} · {X}ms avg" (gray subtext)
+- Percentage circle (large, colored)
+- Request count label
+
+#### 5.3 Weighted Round-Robin Flow Component — `WeightedRoundRobinFlow.tsx`
+
+Renders the fan-out flow with curved colored streams:
+
+**Implementation using SVG + CSS:**
+1. Same **Client label** and **LITELLM hub** on the left
+2. **Multiple curved streams** from hub to each deployment:
+   - Use SVG `<path>` with cubic bezier curves (`C` command)
+   - Top stream curves upward, middle goes straight, bottom curves downward
+   - Each stream has the provider's color
+   - Stream `stroke-width` is proportional to weight percentage (e.g., 83% = 12px, 10% = 4px, 7% = 2px)
+   - Same flowing animation as ordered mode
+3. **Deployment cards** spread vertically on the right side
+
+**Stream path calculation:**
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Routing Group: "My LLM Pipeline"                            │
-│                                                              │
-│  [Overview] [Live Tester] [Traffic Simulator] [Settings]     │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ── Send a Test Request ───────────────────────────────────  │
-│                                                              │
-│  Message: [Hello, respond with one word.        ]            │
-│                                                              │
-│  [  Send Test Request  ]    [  Send (Mock)  ]                │
-│                                                              │
-│  ── Request Flow ──────────────────────────────────────────  │
-│                                                              │
-│  ✓ Request sent to: Nebius / meta-llama/Llama-3.3-70B        │
-│    → Status: Success (234ms)                                 │
-│    → Response: "Hello"                                       │
-│                                                              │
-│  OR (with fallback):                                         │
-│                                                              │
-│  ✗ Request sent to: Nebius / meta-llama/Llama-3.3-70B        │
-│    → Status: Error (1203ms) — "RateLimitError: 429"          │
-│  ↓ Fallback triggered                                        │
-│  ✓ Request sent to: Fireworks AI / llama-v3p3-70b            │
-│    → Status: Success (189ms)                                 │
-│    → Response: "Hello"                                       │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-#### 5.2 Traffic Simulator Tab
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  ── Simulation Config ─────────────────────────────────────  │
-│                                                              │
-│  Number of requests: [100]                                   │
-│  Concurrency:        [10 ]                                   │
-│  Mode: ○ Mock (fast, no real LLM calls)                      │
-│        ○ Real (actual LLM calls, costs money)                │
-│                                                              │
-│  ── Failure Injection ─────────────────────────────────────  │
-│                                                              │
-│  Nebius:       [  50]% failure rate   ← slider               │
-│  Fireworks AI: [   0]% failure rate                          │
-│  Azure:        [   0]% failure rate                          │
-│                                                              │
-│  [  Run Simulation  ]                                        │
-│                                                              │
-│  ── Traffic Distribution ──────────────────────────────────  │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────┐     │
-│  │              Traffic Split (Bar Chart)               │     │
-│  │                                                      │     │
-│  │  Nebius        ████████████████░░░░ 50 (25 ok, 25 err)│   │
-│  │  Fireworks AI  ██████████████████░░ 40 (38 ok, 2 err) │   │
-│  │  Azure         ████░░░░░░░░░░░░░░░ 10 (10 ok, 0 err) │   │
-│  │                                                      │     │
-│  └─────────────────────────────────────────────────────┘     │
-│                                                              │
-│  ── Flow Diagram (for Priority Failover) ──────────────────  │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────┐     │
-│  │                                                      │     │
-│  │  [100 requests]                                      │     │
-│  │       │                                              │     │
-│  │       ▼                                              │     │
-│  │  ┌─────────┐   50 ok    ┌──────────┐               │     │
-│  │  │ Nebius  │──────────→│ Response  │               │     │
-│  │  └─────────┘            └──────────┘               │     │
-│  │       │ 50 errors                                    │     │
-│  │       ▼                                              │     │
-│  │  ┌───────────┐  38 ok   ┌──────────┐               │     │
-│  │  │ Fireworks │─────────→│ Response  │               │     │
-│  │  └───────────┘           └──────────┘               │     │
-│  │       │ 12 errors                                    │     │
-│  │       ▼                                              │     │
-│  │  ┌─────────┐   10 ok    ┌──────────┐               │     │
-│  │  │ Azure   │──────────→│ Response  │               │     │
-│  │  └─────────┘            └──────────┘               │     │
-│  │       │ 2 errors                                     │     │
-│  │       ▼                                              │     │
-│  │  ┌─────────┐                                        │     │
-│  │  │ Failed  │ 2 requests                             │     │
-│  │  └─────────┘                                        │     │
-│  │                                                      │     │
-│  └─────────────────────────────────────────────────────┘     │
-│                                                              │
-│  ── Summary ───────────────────────────────────────────────  │
-│                                                              │
-│  Total: 100 | Succeeded: 98 (98%) | Failed: 2 (2%)          │
-│  Avg Latency: 312ms | P50: 245ms | P99: 1,203ms             │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+// Hub position: (centerX, centerY)
+// Card positions: (rightX, topY), (rightX, midY), (rightX, bottomY)
+// Use cubic bezier: M hubX,hubY C controlX1,controlY1 controlX2,controlY2 cardX,cardY
 ```
 
-#### 5.3 Traffic Distribution Chart Component
+#### 5.4 Shared Sub-Components
 
-Use Tremor's `BarChart` (already available in the project) to show:
+**`DeploymentCard.tsx`** — Reusable card for each deployment:
+- Props: `provider`, `providerColor`, `label` (e.g., "Priority 1" or "Weight 83%"), `avgLatencyMs`, `percentage`, `requestCount`
+- Dark card background with rounded corners
+- Provider icon (colored circle with first letter)
 
-- **Horizontal stacked bar chart**: Each deployment gets a bar. Green = success, Red = failure.
-- **Labels**: Deployment name, provider logo, count, percentage.
+**`AnimatedStream.tsx`** — SVG path with flowing animation:
+- Props: `path` (SVG d string), `color`, `thickness`, `animated`
+- CSS keyframe animation for the flow effect
 
-For **priority-failover**: Also render the **flow diagram** (vertical Sankey-like) showing:
-- Entry → Primary → (success → exit) or (error → Fallback 1) → (success → exit) or (error → Fallback 2) → ...
+**`StatsBar.tsx`** — Horizontal metrics row:
+- Props: `requests`, `successRate`, `avgLatency`, `fallbacks`
+- Light gray labels, bold white values
 
-Implementation: CSS flex/grid layout with styled divs and arrows. No need for a heavy charting library.
+#### 5.5 Simulation Controls (integrated into LiveTester)
 
-#### 5.4 Real-Time Progress (for simulation)
+Below the flow diagram or in a collapsible section:
+- "Run Simulation" button with config:
+  - Number of requests (input, default 100)
+  - Mode: Mock / Real (radio)
+  - Failure injection sliders (per deployment, 0-100%)
+- On simulation complete: update all stats, stream thicknesses, percentages, and request counts
+- Loading state: show spinner/progress on the flow diagram
 
-During simulation (which may take several seconds for 100+ mock requests):
-- Show a progress bar
-- Update the traffic distribution chart incrementally as results come in
-- Option: Use SSE (Server-Sent Events) from the `/simulate` endpoint to stream results, OR
-- Simpler option: Poll with the simulation running server-side, return all results at once (simpler to implement)
+#### 5.6 Data Flow
 
-**Recommendation:** Start with the simpler approach (return all results at once). The mock simulation of 100 requests should complete in < 1 second anyway.
+```typescript
+// API response shape the component expects:
+interface LiveTesterData {
+  total_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  avg_latency_ms: number;
+  fallback_count: number;
+  deployments: {
+    deployment_id: string;
+    provider: string;         // "nebius", "fireworks_ai", "azure"
+    display_name: string;     // "Nebius", "Fireworks", "Azure"
+    priority?: number;        // For ordered mode
+    weight?: number;          // For weighted mode
+    request_count: number;
+    success_count: number;
+    failure_count: number;
+    avg_latency_ms: number;
+    percent_of_total: number; // 0-100
+  }[];
+  // For ordered mode: the cascade flow
+  flow_steps?: {
+    from_deployment: string | null;
+    to_deployment: string;
+    request_count: number;
+    reason: "primary" | "fallback_error" | "fallback_rate_limit";
+  }[];
+}
+```
 
 ### Files to Create
 
 | File | Action |
 |------|--------|
-| `ui/litellm-dashboard/src/components/routing_groups/LiveTester.tsx` | **NEW** — Single request tester |
-| `ui/litellm-dashboard/src/components/routing_groups/TrafficSimulator.tsx` | **NEW** — Bulk simulation UI |
-| `ui/litellm-dashboard/src/components/routing_groups/TrafficDistributionChart.tsx` | **NEW** — Bar chart |
-| `ui/litellm-dashboard/src/components/routing_groups/SimulationFlowDiagram.tsx` | **NEW** — Sankey-like flow |
-| `ui/litellm-dashboard/src/components/routing_groups/RequestFlowTrace.tsx` | **NEW** — Single-request trace view |
+| `ui/litellm-dashboard/src/components/routing_groups/LiveTester.tsx` | **NEW** — Main live tester container |
+| `ui/litellm-dashboard/src/components/routing_groups/OrderedFallbackFlow.tsx` | **NEW** — Ordered fallback visualization |
+| `ui/litellm-dashboard/src/components/routing_groups/WeightedRoundRobinFlow.tsx` | **NEW** — Weighted fan-out visualization |
+| `ui/litellm-dashboard/src/components/routing_groups/DeploymentCard.tsx` | **NEW** — Provider deployment card |
+| `ui/litellm-dashboard/src/components/routing_groups/AnimatedStream.tsx` | **NEW** — SVG animated flowing stream |
+| `ui/litellm-dashboard/src/components/routing_groups/StatsBar.tsx` | **NEW** — Metrics bar (requests, success, latency, fallbacks) |
+| `ui/litellm-dashboard/src/components/routing_groups/SimulationControls.tsx` | **NEW** — Simulation config form |
 
 ### Dependencies
 - Agent 3 (test/simulate API must return the right data shapes)
