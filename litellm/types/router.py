@@ -446,6 +446,10 @@ SPECIAL_MODEL_INFO_PARAMS = [
     "output_cost_per_character",
     "input_cost_per_second",
     "output_cost_per_second",
+    "input_cost_per_audio_token",
+    "output_cost_per_audio_token",
+    "input_cost_per_audio_per_second",
+    "output_cost_per_audio_per_second",
 ]
 
 
