@@ -193,8 +193,11 @@ class TestSafeModelDeepCopy:
         def mutator():
             for i in range(100):
                 try:
-                    resp.id = f"chatcmpl-mutated-{i}"
-                    resp._hidden_params = {"mutation": i}
+                    # Mutate __pydantic_private__ directly — this is the dict
+                    # that deepcopy iterates over and where the race occurs.
+                    resp.__pydantic_private__["_hidden_params"] = {
+                        "api_key": f"key-{i}"
+                    }
                 except Exception as e:
                     errors.append(e)
 

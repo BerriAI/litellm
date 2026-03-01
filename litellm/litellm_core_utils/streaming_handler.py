@@ -100,7 +100,8 @@ def _safe_model_deep_copy(model: "BaseModel") -> "BaseModel":
         for attr in ("_hidden_params", "_response_headers"):
             if hasattr(model, attr):
                 try:
-                    setattr(copy, attr, getattr(model, attr))
+                    val = getattr(model, attr)
+                    setattr(copy, attr, val.copy() if isinstance(val, dict) else val)
                 except Exception:
                     pass
         return copy
