@@ -1451,16 +1451,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # When disable_exception_on_block is True, use the guardrail's
             # blocked output text as the masked text instead of raising.
             # This mirrors the behavior of async_pre_call_hook (line ~805).
-            masked_texts = [e.message] if e.message else texts
-            inputs["texts"] = masked_texts
+            blocked_message = e.message or "Content blocked by Bedrock guardrail"
+            inputs["texts"] = [blocked_message]
             # Set mock_response to short-circuit the LLM call, matching
             # the async_pre_call_hook path which also sets data["mock_response"].
             # Without this, the guardrail's blocked text would be sent as
             # input to the LLM instead of being returned as the response.
-            if e.message:
-                request_data["mock_response"] = self.create_guardrail_blocked_response(
-                    response=e.message
-                )
+            request_data["mock_response"] = self.create_guardrail_blocked_response(
+                response=blocked_message
+            )
             return inputs
         except HTTPException:
             # Let HTTP exceptions propagate so the proxy returns the
