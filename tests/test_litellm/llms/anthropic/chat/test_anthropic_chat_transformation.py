@@ -1591,6 +1591,35 @@ def test_effort_beta_header_injection():
     assert "anthropic-beta" in headers
     assert "effort-2025-11-24" in headers["anthropic-beta"]
 
+    # 4.6 headers should NOT include effort beta
+    effort_used_46 = model_info.is_effort_used(
+        optional_params={"output_config": {"effort": "low"}},
+        model="claude-sonnet-4-6-20260205",
+    )
+    assert effort_used_46 is False
+    headers_46 = model_info.get_anthropic_headers(
+        api_key="test-key",
+        effort_used=effort_used_46,
+    )
+    assert "effort-2025-11-24" not in headers_46.get("anthropic-beta", "")
+
+
+@pytest.mark.parametrize("model_name", [
+    "claude-opus-4.5-20251101",
+    "claude-opus_4.5",
+    "anthropic/claude-opus-4-5-20251101",
+])
+def test_effort_beta_header_dot_separated_variants(model_name):
+    """Test that is_effort_used recognizes dot-separated Opus 4.5 model names."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+    result = model_info.is_effort_used(
+        optional_params={"reasoning_effort": "low"},
+        model=model_name,
+    )
+    assert result is True
+
 
 def test_effort_validation():
     """Test that only valid effort values are accepted."""
