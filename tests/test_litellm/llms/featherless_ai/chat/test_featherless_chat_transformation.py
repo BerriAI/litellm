@@ -149,43 +149,36 @@ class TestFeatherlessAIConfig:
             )
         assert "Featherless AI doesn't support tools=" in str(excinfo.value)
 
-    def test_get_provider_info_with_featherless_ai_api_key(self):
+    def test_get_provider_info_with_featherless_ai_api_key(self, monkeypatch):
         """Test that FEATHERLESS_AI_API_KEY env var is picked up correctly"""
         config = FeatherlessAIConfig()
-        with patch.dict(os.environ, {"FEATHERLESS_AI_API_KEY": "key-from-ai-env"}, clear=False):
-            api_base, api_key = config._get_openai_compatible_provider_info(
-                api_base=None, api_key=None
-            )
+        monkeypatch.setenv("FEATHERLESS_AI_API_KEY", "key-from-ai-env")
+        monkeypatch.delenv("FEATHERLESS_API_KEY", raising=False)
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            api_base=None, api_key=None
+        )
         assert api_key == "key-from-ai-env"
         assert api_base == "https://api.featherless.ai/v1"
 
-    def test_get_provider_info_with_legacy_featherless_api_key(self):
+    def test_get_provider_info_with_legacy_featherless_api_key(self, monkeypatch):
         """Test that legacy FEATHERLESS_API_KEY env var still works"""
         config = FeatherlessAIConfig()
-        # Explicitly set the legacy key and remove the primary key to test fallback
-        env = {
-            "FEATHERLESS_API_KEY": "key-from-legacy-env",
-        }
-        # Remove FEATHERLESS_AI_API_KEY if present so it doesn't shadow the legacy key
-        cleaned_env = {k: v for k, v in os.environ.items() if k != "FEATHERLESS_AI_API_KEY"}
-        cleaned_env.update(env)
-        with patch.dict(os.environ, cleaned_env, clear=True):
-            api_base, api_key = config._get_openai_compatible_provider_info(
-                api_base=None, api_key=None
-            )
+        monkeypatch.delenv("FEATHERLESS_AI_API_KEY", raising=False)
+        monkeypatch.setenv("FEATHERLESS_API_KEY", "key-from-legacy-env")
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            api_base=None, api_key=None
+        )
         assert api_key == "key-from-legacy-env"
         assert api_base == "https://api.featherless.ai/v1"
 
-    def test_get_provider_info_prefers_featherless_ai_key_over_legacy(self):
+    def test_get_provider_info_prefers_featherless_ai_key_over_legacy(self, monkeypatch):
         """Test that FEATHERLESS_AI_API_KEY takes precedence over FEATHERLESS_API_KEY"""
         config = FeatherlessAIConfig()
-        with patch.dict(os.environ, {
-            "FEATHERLESS_AI_API_KEY": "preferred-key",
-            "FEATHERLESS_API_KEY": "legacy-key",
-        }, clear=False):
-            _, api_key = config._get_openai_compatible_provider_info(
-                api_base=None, api_key=None
-            )
+        monkeypatch.setenv("FEATHERLESS_AI_API_KEY", "preferred-key")
+        monkeypatch.setenv("FEATHERLESS_API_KEY", "legacy-key")
+        _, api_key = config._get_openai_compatible_provider_info(
+            api_base=None, api_key=None
+        )
         assert api_key == "preferred-key"
 
     def test_default_api_base(self):
