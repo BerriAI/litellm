@@ -64,6 +64,7 @@ from litellm.utils import (
     get_max_tokens,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
+    supports_max_effort,
     supports_reasoning,
     token_counter,
 )
@@ -175,20 +176,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return any(
             v in model_lower
             for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")
-        )
-
-    @staticmethod
-    def _is_opus_4_6_model(model: str) -> bool:
-        """Check if the model is specifically Claude Opus 4.6 (effort='max' is Opus 4.6 only)."""
-        model_lower = model.lower()
-        return any(
-            variant in model_lower
-            for variant in (
-                "opus-4-6",
-                "opus_4_6",
-                "opus-4.6",
-                "opus_4.6",
-            )
         )
 
     def get_supported_openai_params(self, model: str):
@@ -1409,9 +1396,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     raise ValueError(
                         f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
                     )
-                if effort == "max" and not self._is_opus_4_6_model(model):
+                if effort == "max" and not supports_max_effort(
+                    model=model,
+                    custom_llm_provider=self.custom_llm_provider,
+                ):
                     raise ValueError(
-                        f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
+                        f"effort='max' is only supported by models with supports_max_effort capability. Got model: {model}"
                     )
                 data["output_config"] = output_config
 

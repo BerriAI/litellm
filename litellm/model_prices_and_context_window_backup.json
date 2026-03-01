@@ -997,7 +997,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_effort": true
     },
     "global.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1027,7 +1028,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_effort": true
     },
     "us.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1057,7 +1059,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_effort": true
     },
     "eu.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1087,7 +1090,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_effort": true
     },
     "au.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1117,7 +1121,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_effort": true
     },
     "anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -1781,7 +1786,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_max_effort": true
     },
     "azure_ai/claude-opus-4-1": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -8609,7 +8615,8 @@
         "provider_specific_entry": {
             "us": 1.1,
             "fast": 6.0
-        }
+        },
+        "supports_max_effort": true
     },
     "claude-opus-4-6-20260205": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -8644,7 +8651,8 @@
         "provider_specific_entry": {
             "us": 1.1,
             "fast": 6.0
-        }
+        },
+        "supports_max_effort": true
     },
     "claude-sonnet-4-20250514": {
         "deprecation_date": "2026-05-14",
@@ -18145,7 +18153,8 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_max_effort": true
     },
     "github_copilot/claude-opus-41": {
         "litellm_provider": "github_copilot",
@@ -26072,7 +26081,8 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_effort": true
     },
     "openrouter/anthropic/claude-sonnet-4.5": {
         "input_cost_per_image": 0.0048,
@@ -27867,7 +27877,8 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_max_effort": true
     },
     "perplexity/anthropic/claude-opus-4-5": {
         "litellm_provider": "perplexity",
@@ -31083,7 +31094,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_max_effort": true
     },
     "vercel_ai_gateway/anthropic/claude-sonnet-4": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -32322,7 +32334,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_effort": true
     },
     "vertex_ai/claude-opus-4-6@default": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -32352,7 +32365,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_effort": true
     },
     "vertex_ai/claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.75e-06,
