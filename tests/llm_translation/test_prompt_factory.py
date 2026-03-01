@@ -1457,3 +1457,158 @@ def test_convert_to_anthropic_tool_invoke_malformed_json():
     error_msg = str(exc_info.value)
     assert "bad_tool" in error_msg
     assert '{"truncated' in error_msg
+
+
+# ============ _attempt_json_repair Tests ============
+# Tests for the JSON repair utility that fixes truncated tool call arguments
+
+
+def test_attempt_json_repair_missing_closing_brace():
+    """Repair JSON truncated with a missing closing brace (issue #22312)."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"command": ["bash","-lc","find /x/repos -name \'messages.py\' -type f"]'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result["command"] == ["bash", "-lc", "find /x/repos -name 'messages.py' -type f"]
+
+
+def test_attempt_json_repair_missing_bracket_and_brace():
+    """Repair JSON truncated with both missing ] and }."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"items": [1, 2, 3'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result["items"] == [1, 2, 3]
+
+
+def test_attempt_json_repair_trailing_comma():
+    """Repair JSON with a trailing comma before missing close."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"a": 1, "b": 2,'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result == {"a": 1, "b": 2}
+
+
+def test_attempt_json_repair_returns_none_for_unterminated_string():
+    """Cannot repair an unterminated string — returns None."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    assert _attempt_json_repair('{"key": "incomplete value') is None
+
+
+def test_attempt_json_repair_returns_none_for_valid_json():
+    """Valid JSON has no unmatched brackets — returns None (no repair needed)."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    assert _attempt_json_repair('{"key": "value"}') is None
+
+
+def test_attempt_json_repair_returns_none_for_empty():
+    """Empty / whitespace input returns None."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    assert _attempt_json_repair("") is None
+    assert _attempt_json_repair("   ") is None
+
+
+def test_attempt_json_repair_interleaved_nesting():
+    """Repair JSON with interleaved {} and [] nesting."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    # {"a": [{"b": 2  needs }]} not ]}}
+    truncated = '{"a": [{"b": 2'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result == {"a": [{"b": 2}]}
+
+
+def test_attempt_json_repair_deeply_nested():
+    """Repair deeply nested truncated JSON."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _attempt_json_repair,
+    )
+
+    truncated = '{"x": {"y": [1, {"z": [2, 3'
+    result = _attempt_json_repair(truncated)
+    assert result is not None
+    assert result == {"x": {"y": [1, {"z": [2, 3]}]}}
+
+
+def test_parse_tool_call_arguments_whitespace_only():
+    """Whitespace-only input returns empty dict."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    assert parse_tool_call_arguments("   ") == {}
+    assert parse_tool_call_arguments("\n") == {}
+
+
+def test_parse_tool_call_arguments_non_object_json():
+    """Non-object JSON (list, string, number) is wrapped in a dict."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    result = parse_tool_call_arguments('[1, 2, 3]')
+    assert result == {"result": [1, 2, 3]}
+
+
+def test_parse_tool_call_arguments_repaired_non_dict_wrapped():
+    """Repaired non-dict result (e.g. list) is wrapped in a dict."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    # Truncated list missing closing bracket
+    result = parse_tool_call_arguments('[1, 2, 3')
+    assert result == {"result": [1, 2, 3]}
+
+
+def test_parse_tool_call_arguments_repairs_truncated_json():
+    """parse_tool_call_arguments should repair truncated JSON instead of raising."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    truncated = '{"command": ["bash","-lc","find /x -type f"]'
+    result = parse_tool_call_arguments(
+        truncated, tool_name="shell", context="Anthropic tool invoke"
+    )
+    assert result == {"command": ["bash", "-lc", "find /x -type f"]}
+
+
+def test_parse_tool_call_arguments_still_raises_for_unrepairable():
+    """parse_tool_call_arguments raises ValueError when repair also fails."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        parse_tool_call_arguments(
+            '{"key": "unterminated',
+            tool_name="test_tool",
+            context="test context",
+        )
+
+    error_msg = str(exc_info.value)
+    assert "test_tool" in error_msg
+    assert "test context" in error_msg
