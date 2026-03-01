@@ -94,7 +94,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     def _clamp_max_tokens(
         max_tokens: int,
-        model: str,
+        model: Optional[str],
         drop_params: Optional[bool] = None,
     ) -> int:
         """Clamp max_tokens to the backend model's max_output_tokens.
@@ -107,6 +107,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         the value is silently clamped. Otherwise the original value passes through
         so that the backend can return its own validation error.
         """
+        if not model:
+            return max_tokens
+
         should_drop = drop_params is True or litellm.drop_params is True
         if not should_drop:
             return max_tokens

@@ -93,6 +93,39 @@ class TestClampMaxTokens:
         )
         assert result == 8192
 
+    def test_no_clamp_when_model_is_none(self):
+        """max_tokens should pass through unchanged when model is None."""
+        result = LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
+            max_tokens=32000,
+            model=None,
+            drop_params=True,
+        )
+        assert result == 32000
+
+    def test_no_clamp_when_model_is_empty_string(self):
+        """max_tokens should pass through unchanged when model is empty string."""
+        result = LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
+            max_tokens=32000,
+            model="",
+            drop_params=True,
+        )
+        assert result == 32000
+
+    def test_clamp_returns_model_max_output_tokens(self):
+        """Clamped value must equal the model's max_output_tokens exactly."""
+        from litellm import get_model_info
+
+        model = "deepseek/deepseek-chat"
+        model_info = get_model_info(model=model)
+        expected_max = model_info["max_output_tokens"]
+
+        result = LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
+            max_tokens=expected_max + 1,
+            model=model,
+            drop_params=True,
+        )
+        assert result == expected_max
+
 
 class TestPrepareCompletionKwargsMaxTokens:
     """Tests that _prepare_completion_kwargs applies clamping correctly."""
