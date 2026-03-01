@@ -660,24 +660,18 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
-                result = await JWTAuthManager.auth_builder(
-                    request_data=request_data,
-                    general_settings=general_settings,
-                    api_key=api_key,
-                    jwt_handler=jwt_handler,
-                    route=route,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                    parent_otel_span=parent_otel_span,
-                    request_headers=_safe_get_request_headers(request),
-                )
-
-                # JWT-to-Virtual-Key Mapping lookup
+                # Try JWT-to-Virtual-Key mapping first to avoid
+                # unnecessary DB queries in auth_builder
                 do_standard_jwt_auth = True
                 if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
+                    # Decode JWT to get claims without running full auth_builder
+                    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+                        jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
+                    else:
+                        jwt_claims = await jwt_handler.auth_jwt(token=api_key)
+
                     valid_token = await _resolve_jwt_to_virtual_key(
-                        jwt_claims=result["jwt_claims"],
+                        jwt_claims=jwt_claims,
                         jwt_handler=jwt_handler,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
@@ -690,6 +684,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         # Fall through to virtual key checks
 
                 if do_standard_jwt_auth:
+                    result = await JWTAuthManager.auth_builder(
+                        request_data=request_data,
+                        general_settings=general_settings,
+                        api_key=api_key,
+                        jwt_handler=jwt_handler,
+                        route=route,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                        parent_otel_span=parent_otel_span,
+                        request_headers=_safe_get_request_headers(request),
+                    )
+
                     is_proxy_admin = result["is_proxy_admin"]
                     team_id = result["team_id"]
                     team_object = result["team_object"]
