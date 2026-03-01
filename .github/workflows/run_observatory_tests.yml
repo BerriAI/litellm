@@ -118,6 +118,10 @@ jobs:
 
           # Extract request_id for polling this specific run
           REQUEST_ID=$(echo "$BODY" | jq -r '.results.request_id')
+          if [ -z "$REQUEST_ID" ] || [ "$REQUEST_ID" = "null" ]; then
+            echo "Failed to extract request_id from response"
+            exit 1
+          fi
           echo "Request ID: $REQUEST_ID"
           echo "request_id=$REQUEST_ID" >> $GITHUB_OUTPUT
 
