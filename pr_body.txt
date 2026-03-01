@@ -1,0 +1,46 @@
+﻿## Relevant issues
+
+Fixes #19228
+
+## Summary
+
+Fixed `extract_cacheable_prefix` in `PromptCachingCache` to correctly handle messages where `cache_control` is a sibling key of string `content`.
+
+### Problem
+
+When a message has string content with a sibling `cache_control` key like:
+`json
+{
+    "role": "user",
+    "content": "large_message",
+    "cache_control": {"type": "ephemeral", "ttl": "5m"}
+}
+`
+
+The `extract_cacheable_prefix` function would return an empty prefix because it only looked for `cache_control` inside content blocks (when `content` is a list), not at the message level.
+
+This is a valid message format per LiteLLM's `ChatCompletionUserMessage` type definition (lines 692-693 in `types/llms/openai.py`).
+
+### Solution
+
+Added a check for `cache_control` at the message level before checking within content blocks. When a message has message-level `cache_control` with `type="ephemeral"`, the entire message is now correctly included in the cacheable prefix.
+
+## Changes
+
+- `litellm/router_utils/prompt_caching_cache.py`:
+  - Added check for message-level `cache_control` in `extract_cacheable_prefix`
+  - Set `last_cacheable_content_idx = None` to indicate entire message is cacheable
+
+- `tests/router_unit_tests/test_router_prompt_caching.py`:
+  - Added 3 new tests for string content with message-level cache_control
+  - Tests cover: string with cache_control, string without cache_control, mixed formats
+
+## Pre-Submission checklist
+
+- [x] I have Added testing in the `tests/litellm/` directory
+- [ ] My PR passes all unit tests on `make test-unit` (unable to run locally due to dependencies)
+- [x] My PR's scope is as isolated as possible, it only solves 1 specific problem
+
+## Type
+
+Bug Fix
