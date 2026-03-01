@@ -285,6 +285,7 @@ def _get_wildcard_models(
             if llm_router is not None:
                 model_list = llm_router.get_model_list(model_name=model)
                 if model_list:
+                    models_to_remove.add(model)
                     for router_model in model_list:
                         wildcard_models = get_known_models_from_wildcard(
                             wildcard_model=model,
