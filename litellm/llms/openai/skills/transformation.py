@@ -102,8 +102,9 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         - display_title is Anthropic-specific; OpenAI derives name from SKILL.md frontmatter
         """
         result = {k: v for k, v in create_request.items() if v is not None}
-        # Remove Anthropic-specific field that OpenAI doesn't accept
+        # Remove Anthropic-specific fields that OpenAI doesn't accept
         result.pop("display_title", None)
+        result.pop("source", None)
         return result
 
     def transform_create_skill_response(
