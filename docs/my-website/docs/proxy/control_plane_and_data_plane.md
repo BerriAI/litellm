@@ -27,7 +27,40 @@ When scaling LiteLLM for production use, you may want to deploy multiple instanc
 
 ### Typical Deployment Scenario
 
-<Image img={require('../../img/scaling_architecture.png')} />  
+<Image img={require('../../img/scaling_architecture.png')} />
+
+```mermaid
+flowchart TD
+    subgraph CP["Control Plane (Admin Instance)"]
+        UI["Admin UI"]
+        ADMIN_API["Management APIs<br/>/key/*, /user/*, /team/*"]
+    end
+
+    subgraph DP_US["Data Plane - US Region"]
+        WORKER_US["Worker Instance<br/>/chat/completions, /v1/*"]
+    end
+
+    subgraph DP_EU["Data Plane - EU Region"]
+        WORKER_EU["Worker Instance<br/>/chat/completions, /v1/*"]
+    end
+
+    DB[("Shared PostgreSQL<br/>Database")]
+
+    UI -->|"Manage keys, teams,<br/>models, config"| ADMIN_API
+    UI -->|"Switch proxy URL<br/>to view data plane"| WORKER_US
+    UI -->|"Switch proxy URL<br/>to view data plane"| WORKER_EU
+    ADMIN_API --> DB
+    WORKER_US --> DB
+    WORKER_EU --> DB
+
+    USER_US["US Users"] -->|"LLM requests"| WORKER_US
+    USER_EU["EU Users"] -->|"LLM requests"| WORKER_EU
+    ADMIN["Admins"] -->|"Administration"| UI
+
+    style CP fill:#e6f3ff,stroke:#4a90d9
+    style DP_US fill:#e6ffe6,stroke:#4a9950
+    style DP_EU fill:#e6ffe6,stroke:#4a9950
+```
 
 ### Benefits of This Architecture
 
@@ -205,6 +238,92 @@ response = requests.post(
     json={"duration": "30d"}
 )
 ```
+
+## UI Multi-Proxy Switcher
+
+The LiteLLM Admin UI supports switching between multiple proxy instances directly from the browser. This allows administrators to manage all data planes from a single control plane UI without needing separate browser tabs or logins.
+
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant UI as Admin UI
+    participant CP as Control Plane Proxy
+    participant DP as Data Plane Proxy
+
+    Admin->>UI: Open Admin UI
+    UI->>CP: Load dashboard (default proxy)
+    Admin->>UI: Add data plane connection<br/>(URL + API key)
+    UI->>DP: Test connection (/health/readiness)
+    DP-->>UI: OK (v1.x.x)
+    Admin->>UI: Switch to data plane
+    UI->>UI: Save selection to localStorage
+    UI->>UI: Reload page
+    UI->>DP: Load dashboard from data plane
+    Admin->>UI: Switch back to control plane
+    UI->>CP: Load dashboard from control plane
+```
+
+### How It Works
+
+1. Log into the Admin UI on your control plane instance
+2. Click the proxy switcher in the navbar (appears after adding a second connection)
+3. Select **Manage Connections** to add a data plane
+4. Enter the data plane's URL and an API key (master key or virtual key)
+5. Click **Test Connection** to verify connectivity
+6. Save and switch between proxies using the dropdown
+
+### Adding a Data Plane Connection
+
+From the Admin UI navbar, open **Manage Connections** and provide:
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Name** | A label for this connection | `Production US-East` |
+| **Proxy URL** | Full URL of the data plane | `https://us-east.litellm.company.com` |
+| **API Key** | Master key or virtual key for auth | `sk-...` |
+
+### Requirements
+
+- **CORS**: Each data plane proxy must have CORS configured to allow requests from the control plane UI's origin. LiteLLM's FastAPI CORS middleware handles this — ensure `allow_origins` includes your control plane domain.
+- **API Key**: Since the UI authenticates to remote proxies via API key (not cookie-based SSO), provide a key with sufficient permissions for the operations you need.
+- **Network Access**: The admin's browser must be able to reach each data plane URL directly.
+
+### Architecture with Independent Databases
+
+For deployments where each data plane has its own database (true multi-tenancy), the UI switcher allows viewing and managing each independently:
+
+```mermaid
+flowchart TD
+    subgraph CP["Control Plane"]
+        UI["Admin UI<br/>(Proxy Switcher)"]
+        CP_PROXY["Admin Proxy"]
+        CP_DB[("Control Plane DB")]
+    end
+
+    subgraph DP1["Data Plane 1"]
+        DP1_PROXY["Worker Proxy"]
+        DP1_DB[("Data Plane 1 DB")]
+    end
+
+    subgraph DP2["Data Plane 2"]
+        DP2_PROXY["Worker Proxy"]
+        DP2_DB[("Data Plane 2 DB")]
+    end
+
+    UI -->|"Default connection"| CP_PROXY
+    UI -.->|"Switch to DP1"| DP1_PROXY
+    UI -.->|"Switch to DP2"| DP2_PROXY
+
+    CP_PROXY --> CP_DB
+    DP1_PROXY --> DP1_DB
+    DP2_PROXY --> DP2_DB
+
+    style CP fill:#e6f3ff,stroke:#4a90d9
+    style DP1 fill:#fff3e6,stroke:#d9944a
+    style DP2 fill:#fff3e6,stroke:#d9944a
+```
+
+Connections are stored in browser `localStorage`, so they persist across sessions and require no backend configuration.
 
 ## Related Documentation
 

@@ -3,6 +3,7 @@
 import React, { Suspense, useEffect, useState } from "react";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { ProxyConnectionProvider } from "@/contexts/ProxyConnectionContext";
 import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -77,7 +78,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
-      <LayoutContent>{children}</LayoutContent>
+      <ProxyConnectionProvider>
+        <LayoutContent>{children}</LayoutContent>
+      </ProxyConnectionProvider>
     </Suspense>
   );
 }

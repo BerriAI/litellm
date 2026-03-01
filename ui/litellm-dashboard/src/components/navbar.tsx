@@ -9,6 +9,8 @@ import Link from "next/link";
 import React, { useEffect, useState } from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
+import ManageProxiesModal from "./Navbar/ProxySwitcher/ManageProxiesModal";
+import ProxySwitcher from "./Navbar/ProxySwitcher/ProxySwitcher";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 
 interface NavbarProps {
@@ -42,6 +44,7 @@ const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
+  const [showManageProxies, setShowManageProxies] = useState(false);
   const { logoUrl } = useTheme();
   const { data: healthData } = useHealthReadiness();
   const version = healthData?.litellm_version;
@@ -73,6 +76,7 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
+    <>
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
       <div className="w-full">
         <div className="flex items-center h-14 px-4">
@@ -122,6 +126,9 @@ const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
           </div>
+          <div className="flex items-center ml-4">
+            <ProxySwitcher onManageClick={() => setShowManageProxies(true)} />
+          </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
             <CommunityEngagementButtons />
@@ -146,6 +153,8 @@ const Navbar: React.FC<NavbarProps> = ({
         </div>
       </div>
     </nav>
+    <ManageProxiesModal open={showManageProxies} onClose={() => setShowManageProxies(false)} />
+    </>
   );
 };
 
