@@ -129,32 +129,21 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # By this point get_llm_provider() has already been called in the outer
         # anthropic_messages_handler, so `model` is the stripped model name
         # (e.g. "converse/us.amazon.nova-pro-v1:0") and `custom_llm_provider`
-        # is passed via extra_kwargs (e.g. "bedrock"). We try the lookup with
-        # the provider first, then fall back to inferring it from the model
-        # string for cases where extra_kwargs doesn't carry the provider.
+        # is passed via extra_kwargs (e.g. "bedrock"). If no explicit provider
+        # is available we infer it from the model string.
         _custom_llm_provider = (extra_kwargs or {}).get("custom_llm_provider")
-        _capped = False
         try:
+            _lookup_provider = _custom_llm_provider
+            if _lookup_provider is None:
+                _, _lookup_provider, _, _ = litellm.utils.get_llm_provider(model)
             model_info = litellm.get_model_info(
-                model=model, custom_llm_provider=_custom_llm_provider
+                model=model, custom_llm_provider=_lookup_provider
             )
             model_max_output = model_info.get("max_output_tokens")
-            if model_max_output and max_tokens > model_max_output:
+            if model_max_output is not None and max_tokens > model_max_output:
                 max_tokens = model_max_output
-            _capped = True
         except Exception:
             pass
-        if not _capped:
-            try:
-                _, inferred_provider, _, _ = litellm.utils.get_llm_provider(model)
-                model_info = litellm.get_model_info(
-                    model=model, custom_llm_provider=inferred_provider
-                )
-                model_max_output = model_info.get("max_output_tokens")
-                if model_max_output and max_tokens > model_max_output:
-                    max_tokens = model_max_output
-            except Exception:
-                pass
 
         request_data = {
             "model": model,
