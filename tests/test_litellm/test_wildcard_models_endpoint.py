@@ -118,6 +118,35 @@ class TestGetWildcardModelsRemovesPatterns:
         assert "anthropic/*" not in unique_models
         assert "my-custom-model" in unique_models
 
+    def test_wildcard_removed_even_when_no_expansion_possible(self):
+        """A wildcard for an unknown provider with no deployments must still
+        be removed from unique_models. Users should never see glob patterns
+        in the /models response, even if we cannot expand them."""
+        router = Router(model_list=[])
+
+        unique_models = ["unknownprovider/*", "my-custom-model"]
+        expanded = _get_wildcard_models(
+            unique_models=unique_models,
+            return_wildcard_routes=False,
+            llm_router=router,
+        )
+        # Wildcard must be removed even though nothing was expanded
+        assert "unknownprovider/*" not in unique_models
+        assert "my-custom-model" in unique_models
+        # No models expanded for unknown provider
+        assert len(expanded) == 0
+
+    def test_wildcard_removed_when_no_router(self):
+        """Even without a router, unknown-provider wildcards are removed."""
+        unique_models = ["unknownprovider/*"]
+        expanded = _get_wildcard_models(
+            unique_models=unique_models,
+            return_wildcard_routes=False,
+            llm_router=None,
+        )
+        assert "unknownprovider/*" not in unique_models
+        assert len(expanded) == 0
+
 
 class TestGetCompleteModelListEndToEnd:
     """End-to-end test matching issue #13752 scenario."""
@@ -201,3 +230,55 @@ class TestGetCompleteModelListEndToEnd:
         # Real models should also be present
         real_models = [m for m in result if "*" not in m]
         assert len(real_models) > 0
+
+
+class TestRegressionIssue13752:
+    """Regression tests for issue #13752: the exact scenario from the bug
+    report where the router has wildcard deployments and /models returns
+    raw wildcard patterns instead of expanded concrete model names."""
+
+    def test_bug_report_scenario_router_with_wildcard_deployments(self):
+        """Reproduce the exact config from issue #13752.
+
+        Config had:
+            model_list:
+              - model_name: openai/*
+                litellm_params:
+                  model: openai/*
+              - model_name: anthropic/*
+                litellm_params:
+                  model: anthropic/*
+
+        Expected: /models returns concrete model names (openai/gpt-4o, etc.)
+        Bug: /models returned "openai/*", "anthropic/*" as literal strings.
+        """
+        model_list = [
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*"},
+            },
+        ]
+        router = Router(model_list=model_list)
+
+        result = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=["openai/*", "anthropic/*"],
+            user_model=None,
+            infer_model_from_keys=False,
+            return_wildcard_routes=False,
+            llm_router=router,
+        )
+
+        # Core assertion: no wildcard patterns in the response
+        wildcards_found = [m for m in result if "*" in m]
+        assert wildcards_found == [], (
+            f"Wildcard patterns leaked into /models response: {wildcards_found}"
+        )
+
+        # Should have expanded to real model names from both providers
+        openai_models = [m for m in result if m.startswith("openai/")]
+        anthropic_models = [m for m in result if m.startswith("anthropic/")]
+        assert len(openai_models) > 0, "Expected expanded OpenAI models"
+        assert len(anthropic_models) > 0, "Expected expanded Anthropic models"
