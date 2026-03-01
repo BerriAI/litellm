@@ -2,9 +2,6 @@
 import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import ModelHubTable from "@/components/AIHub/ModelHubTable";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
-const queryClient = new QueryClient();
 
 function PublicModelHubTableContent() {
   const searchParams = useSearchParams()!;
@@ -20,9 +17,7 @@ function PublicModelHubTableContent() {
   }, [key]);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} userRole={null} />
-    </QueryClientProvider>
+    <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} userRole={null} />
   );
 }
 
