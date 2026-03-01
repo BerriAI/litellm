@@ -2,6 +2,7 @@
 OpenAI Skills API configuration and transformations
 """
 
+import base64
 from typing import Any, Dict, Optional, Tuple
 
 import httpx
@@ -279,8 +280,9 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         if "json" in content_type:
             return raw_response.json()
         return {
-            "content": raw_response.content,
+            "content": base64.b64encode(raw_response.content).decode("utf-8"),
             "content_type": content_type,
+            "content_encoding": "base64",
             "status_code": raw_response.status_code,
         }
 
@@ -401,8 +403,9 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         if "json" in content_type:
             return raw_response.json()
         return {
-            "content": raw_response.content,
+            "content": base64.b64encode(raw_response.content).decode("utf-8"),
             "content_type": content_type,
+            "content_encoding": "base64",
             "status_code": raw_response.status_code,
         }
 
