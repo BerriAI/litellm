@@ -2581,7 +2581,7 @@ class StandardLoggingAdditionalHeaders(TypedDict, total=False):
     llm_provider_x_request_id: Optional[str]
     llm_provider_request_id: Optional[str]
     llm_provider_openai_organization: Optional[str]
-    llm_provider_openai_processing_ms: Optional[str]
+    llm_provider_openai_processing_ms: Optional[int]
 
 
 class StandardLoggingHiddenParams(TypedDict):
