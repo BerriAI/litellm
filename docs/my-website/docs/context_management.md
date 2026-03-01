@@ -60,9 +60,10 @@ response = litellm.responses(
 
 ### Anthropic
 
-Anthropic supports two types of context edits:
+Anthropic supports three types of context edits:
 - **Compaction** (`compact_20260112`) — auto-summarise old messages
 - **Clear tool uses** (`clear_tool_uses_20250919`) — remove old tool results
+- **Clear thinking** (`clear_thinking_20250919`) — remove old thinking blocks
 
 LiteLLM automatically attaches the required beta headers (`compact-2026-01-12` or `context-management-2025-06-27`).
 
