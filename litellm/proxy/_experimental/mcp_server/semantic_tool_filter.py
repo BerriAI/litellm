@@ -235,8 +235,18 @@ class SemanticMCPToolFilter:
                 # Suffix match: tool_name may be "server<sep>raw_name"
                 raw_name, server_prefix = split_server_prefix_from_name(tool_name)
                 suffix = raw_name if server_prefix else None
-                if suffix and suffix in tool_name_set and suffix not in matched:
-                    matched[suffix] = tool
+                if suffix and suffix in tool_name_set:
+                    if suffix in matched:
+                        verbose_logger.warning(
+                            "MCP suffix collision: tool '%s' (server '%s') "
+                            "collides with already-matched suffix '%s' — "
+                            "keeping first match",
+                            tool_name,
+                            server_prefix,
+                            suffix,
+                        )
+                    else:
+                        matched[suffix] = tool
 
         return [matched[name] for name in tool_names if name in matched]
 
