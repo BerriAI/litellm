@@ -588,6 +588,7 @@ class LiteLLMProxyRequestSetup:
 
         if trace_id_from_header:
             metadata_from_headers["trace_id"] = trace_id_from_header
+            data["litellm_trace_id"] = trace_id_from_header
             verbose_proxy_logger.debug(
                 f"Extracted trace_id from header: {trace_id_from_header}"
             )
