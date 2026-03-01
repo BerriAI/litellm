@@ -15,6 +15,7 @@ Fix:
    prevent duplicate alerts.
 """
 
+import atexit
 import asyncio
 import sys
 import time
@@ -26,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 _mock_proxy_module = MagicMock()
 _patcher = patch.dict(sys.modules, {"litellm.proxy.proxy_server": _mock_proxy_module})
 _patcher.start()
+atexit.register(_patcher.stop)
 
 from litellm.integrations.SlackAlerting.hanging_request_check import (  # noqa: E402
     AlertingHangingRequestCheck,
