@@ -1279,14 +1279,14 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
     return images
 
 
-def _attempt_json_repair(s: str) -> Optional[Dict[str, Any]]:
+def _attempt_json_repair(s: str) -> Optional[Any]:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
 
     Handles the most common truncation patterns where the model generates
     valid JSON that is cut short (missing closing brackets/braces).
 
-    Returns the parsed dict on success, or None if repair fails.
+    Returns the parsed value on success, or None if repair fails.
     """
     import json
 
@@ -1330,9 +1330,7 @@ def _attempt_json_repair(s: str) -> Optional[Dict[str, Any]]:
     candidate += "".join(reversed(opener_stack))
 
     try:
-        result = json.loads(candidate)
-        if isinstance(result, dict):
-            return result
+        return json.loads(candidate)
     except json.JSONDecodeError:
         pass
 
@@ -1343,7 +1341,7 @@ def parse_tool_call_arguments(
     arguments: Optional[str],
     tool_name: Optional[str] = None,
     context: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> Any:
     """
     Parse tool call arguments from a JSON string.
 
@@ -1358,7 +1356,9 @@ def parse_tool_call_arguments(
         context: Optional context string (e.g., "Anthropic Messages API").
 
     Returns:
-        Parsed arguments as a dictionary. Returns empty dict if arguments is None or empty.
+        Parsed arguments (usually a dict, but may be any JSON-deserializable
+        type such as list, str, int, float, or None).  Returns empty dict if
+        arguments is None or empty.
 
     Raises:
         ValueError: If the arguments string is not valid JSON and cannot be repaired.
@@ -1369,19 +1369,18 @@ def parse_tool_call_arguments(
         return {}
 
     try:
-        result = json.loads(arguments)
-        if isinstance(result, dict):
-            return result
-        return {"result": result}
+        return json.loads(arguments)
     except json.JSONDecodeError as original_error:
         repaired = _attempt_json_repair(arguments)
         if repaired is not None:
             verbose_logger.warning(
                 "Repaired truncated tool call arguments for tool '%s' (%s). "
-                "Original (first 200 chars): %.200s",
+                "Original (%d chars): %.200s%s",
                 tool_name or "<unknown>",
                 context or "unknown context",
+                len(arguments),
                 arguments,
+                "..." if len(arguments) > 200 else "",
             )
             return repaired
 
