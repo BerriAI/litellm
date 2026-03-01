@@ -1260,7 +1260,7 @@ class TestAvideoListProviderFallback:
     """Regression test for https://github.com/BerriAI/litellm/issues/22130.
 
     avideo_list must not raise BadRequestError when custom_llm_provider is
-    omitted. It should fall back to DEFAULT_VIDEO_ENDPOINT_MODEL instead of
+    omitted.  It should fall back to DEFAULT_VIDEO_ENDPOINT_MODEL instead of
     passing model="" to get_llm_provider.
     """
 
@@ -1277,12 +1277,18 @@ class TestAvideoListProviderFallback:
                 "created_at": 1700000000,
             }
         ]
-        from litellm.videos.main import avideo_list
+        from litellm.videos.main import avideo_list, DEFAULT_VIDEO_ENDPOINT_MODEL
 
         # Patch the sync video_list that avideo_list delegates to
-        with patch("litellm.videos.main.video_list", return_value=mock_videos):
+        with patch("litellm.videos.main.video_list", return_value=mock_videos), \
+             patch("litellm.videos.main.litellm.get_llm_provider", return_value=("openai/sora-2", "openai", None, None)) as mock_get_provider:
             result = await avideo_list(custom_llm_provider=None)
             assert result == mock_videos
+            # Verify get_llm_provider was called with DEFAULT_VIDEO_ENDPOINT_MODEL, not ""
+            mock_get_provider.assert_called_once_with(
+                model=DEFAULT_VIDEO_ENDPOINT_MODEL,
+                api_base=None,
+            )
 
 
 class TestVideoEndpointsProxyLitellmParams:
