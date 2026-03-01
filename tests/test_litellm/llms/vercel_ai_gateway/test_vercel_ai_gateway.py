@@ -236,6 +236,8 @@ def test_vercel_ai_gateway_glm46_cost_math():
     _json_path = _repo_root / "model_prices_and_context_window.json"
     with open(_json_path, "r") as f:
         litellm.model_cost = json.load(f)
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+    _invalidate_model_cost_lowercase_map()
 
     key = "vercel_ai_gateway/zai/glm-4.6"
     info = litellm.model_cost[key]
