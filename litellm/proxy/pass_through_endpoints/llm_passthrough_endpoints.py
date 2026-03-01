@@ -68,13 +68,17 @@ def create_request_copy(request: Request):
 
 
 def is_passthrough_request_using_router_model(
-    request_body: dict, llm_router: Optional[litellm.Router]
+    request_body: dict,
+    llm_router: Optional[litellm.Router],
+    query_params: Optional[dict] = None,
 ) -> bool:
     """
     Returns True if the model is in the llm_router model names
     """
     try:
         model = request_body.get("model")
+        if model is None and query_params is not None:
+            model = query_params.get("model")
         return is_known_model(model, llm_router)
     except Exception:
         return False
@@ -319,14 +323,15 @@ async def vllm_proxy_route(
 
     request_body = await get_request_body(request)
     is_router_model = is_passthrough_request_using_router_model(
-        request_body, llm_router
+        request_body, llm_router, query_params=dict(request.query_params)
     )
     is_streaming_request = is_passthrough_request_streaming(request_body)
     if is_router_model and llm_router:
+        model = request_body.get("model") or request.query_params.get("model")
         result = cast(
             httpx.Response,
             await llm_router.allm_passthrough_route(
-                model=request_body.get("model"),
+                model=model,
                 method=request.method,
                 endpoint=endpoint,
                 request_query_params=request.query_params,
