@@ -10,6 +10,9 @@ Fix applied in two layers:
 2. Bedrock _transform_request(): defensively unwrap list→str
 """
 
+from litellm.litellm_core_utils.embedding_utils import (
+    flatten_double_wrapped_embedding_input,
+)
 from litellm.llms.bedrock.embed.amazon_titan_g1_transformation import (
     AmazonTitanG1Config,
 )
@@ -39,13 +42,17 @@ class TestTitanV2TransformRequest:
         assert req["inputText"] == "first"
 
     def test_nested_list_unwrapped(self):
-        """The exact bug scenario from issue #17850."""
+        """The exact bug scenario from issue #17850: [[str]] input."""
         cfg = AmazonTitanV2Config()
         req = cfg._transform_request(
-            input=["Hello, world!"], inference_params={}
+            input=[["Hello, world!"]], inference_params={}
         )
         assert isinstance(req["inputText"], str)
-        assert req["inputText"] == "Hello, world!"
+
+    def test_empty_list_returns_empty_string(self):
+        cfg = AmazonTitanV2Config()
+        req = cfg._transform_request(input=[], inference_params={})
+        assert req["inputText"] == ""
 
     def test_inference_params_forwarded(self):
         cfg = AmazonTitanV2Config()
@@ -69,89 +76,51 @@ class TestTitanG1TransformRequest:
         req = cfg._transform_request(input=["test"], inference_params={})
         assert req["inputText"] == "test"
 
+    def test_empty_list_returns_empty_string(self):
+        cfg = AmazonTitanG1Config()
+        req = cfg._transform_request(input=[], inference_params={})
+        assert req["inputText"] == ""
+
 
 class TestProxyEmbeddingInputNormalization:
-    """Test the proxy-level input normalization logic."""
+    """Test the proxy-level input normalization via production helper."""
 
     def test_double_wrapped_flattened(self):
         """[[str]] → [str]"""
-        data = {"input": [["Hello", "World"]]}
-        if (
-            isinstance(data["input"], list)
-            and len(data["input"]) > 0
-            and isinstance(data["input"][0], list)
-            and all(isinstance(s, str) for s in data["input"][0])
-        ):
-            data["input"] = [
-                item
-                for sublist in data["input"]
-                for item in (sublist if isinstance(sublist, list) else [sublist])
-            ]
-        assert data["input"] == ["Hello", "World"]
+        result = flatten_double_wrapped_embedding_input([["Hello", "World"]])
+        assert result == ["Hello", "World"]
 
     def test_single_string_in_double_wrap(self):
         """[["Hello"]] → ["Hello"]"""
-        data = {"input": [["Hello"]]}
-        if (
-            isinstance(data["input"], list)
-            and len(data["input"]) > 0
-            and isinstance(data["input"][0], list)
-            and all(isinstance(s, str) for s in data["input"][0])
-        ):
-            data["input"] = [
-                item
-                for sublist in data["input"]
-                for item in (sublist if isinstance(sublist, list) else [sublist])
-            ]
-        assert data["input"] == ["Hello"]
+        result = flatten_double_wrapped_embedding_input([["Hello"]])
+        assert result == ["Hello"]
 
     def test_normal_list_not_changed(self):
         """["Hello", "World"] stays as-is."""
-        data = {"input": ["Hello", "World"]}
-        if (
-            isinstance(data["input"], list)
-            and len(data["input"]) > 0
-            and isinstance(data["input"][0], list)
-        ):
-            pass  # Should NOT enter this branch
-        assert data["input"] == ["Hello", "World"]
+        result = flatten_double_wrapped_embedding_input(["Hello", "World"])
+        assert result == ["Hello", "World"]
 
     def test_single_string_not_changed(self):
         """'Hello' stays as-is."""
-        data = {"input": "Hello"}
-        if isinstance(data["input"], list):
-            pass  # Should NOT enter this branch
-        assert data["input"] == "Hello"
+        result = flatten_double_wrapped_embedding_input("Hello")
+        assert result == "Hello"
 
     def test_token_array_not_affected(self):
         """[[1, 2, 3]] — integer arrays should NOT be flattened."""
-        data = {"input": [[1, 2, 3]]}
-        if (
-            isinstance(data["input"], list)
-            and len(data["input"]) > 0
-            and isinstance(data["input"][0], list)
-            and all(isinstance(s, str) for s in data["input"][0])
-        ):
-            data["input"] = [
-                item
-                for sublist in data["input"]
-                for item in (sublist if isinstance(sublist, list) else [sublist])
-            ]
-        # Integer arrays should remain unchanged
-        assert data["input"] == [[1, 2, 3]]
+        result = flatten_double_wrapped_embedding_input([[1, 2, 3]])
+        assert result == [[1, 2, 3]]
 
     def test_multiple_sublists_flattened(self):
         """[["Hello"], ["World"]] → ["Hello", "World"]"""
-        data = {"input": [["Hello"], ["World"]]}
-        if (
-            isinstance(data["input"], list)
-            and len(data["input"]) > 0
-            and isinstance(data["input"][0], list)
-            and all(isinstance(s, str) for s in data["input"][0])
-        ):
-            data["input"] = [
-                item
-                for sublist in data["input"]
-                for item in (sublist if isinstance(sublist, list) else [sublist])
-            ]
-        assert data["input"] == ["Hello", "World"]
+        result = flatten_double_wrapped_embedding_input([["Hello"], ["World"]])
+        assert result == ["Hello", "World"]
+
+    def test_mixed_sublists_not_flattened(self):
+        """[["Hello"], [1, 2]] — mixed types should NOT be flattened."""
+        result = flatten_double_wrapped_embedding_input([["Hello"], [1, 2]])
+        assert result == [["Hello"], [1, 2]]
+
+    def test_empty_list_not_changed(self):
+        """[] stays as-is."""
+        result = flatten_double_wrapped_embedding_input([])
+        assert result == []
