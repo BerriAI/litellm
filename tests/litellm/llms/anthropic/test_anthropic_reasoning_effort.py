@@ -62,13 +62,13 @@ class TestMapReasoningEffort:
 
     def test_opus_4_6_returns_adaptive_for_low(self):
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort="low", model="claude-opus-4-6"
+            reasoning_effort="low", model="claude-opus-4-6", use_adaptive=True
         )
         assert result["type"] == "adaptive"
 
     def test_opus_4_6_returns_adaptive_for_high(self):
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort="high", model="claude-opus-4-6"
+            reasoning_effort="high", model="claude-opus-4-6", use_adaptive=True
         )
         assert result["type"] == "adaptive"
 
