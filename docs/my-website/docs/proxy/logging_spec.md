@@ -114,6 +114,10 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `x_ratelimit_limit_tokens` | `int` | Rate limit for tokens |
 | `x_ratelimit_remaining_requests` | `int` | Remaining requests in rate limit |
 | `x_ratelimit_remaining_tokens` | `int` | Remaining tokens in rate limit |
+| `llm_provider_x_request_id` | `str` | LLM provider's `x-request-id` response header |
+| `llm_provider_request_id` | `str` | LLM provider's `request-id` response header |
+| `llm_provider_openai_organization` | `str` | OpenAI organization from response headers |
+| `llm_provider_openai_processing_ms` | `int` | OpenAI processing time in milliseconds from response headers |
 
 ## StandardLoggingHiddenParams
 
