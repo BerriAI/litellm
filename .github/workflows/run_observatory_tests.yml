@@ -21,6 +21,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 env:
   LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY_STAGING }}
 
@@ -93,11 +96,12 @@ jobs:
           echo "Tunnel is working"
 
       - name: Trigger observatory test run
+        id: trigger
         run: |
           OBSERVATORY_URL="${{ secrets.OBSERVATORY_URL }}"
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${OBSERVATORY_URL}/run-test" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${{ secrets.OBSERVATORY_API_KEY }}" \
+            -H "X-LiteLLM-Observatory-API-Key: ${{ secrets.OBSERVATORY_API_KEY }}" \
             -d '{
               "deployment_url": "${{ env.TUNNEL_URL }}",
               "api_key": "${{ env.LITELLM_MASTER_KEY }}",
@@ -112,30 +116,66 @@ jobs:
             exit 1
           fi
 
+          # Extract request_id for polling this specific run
+          REQUEST_ID=$(echo "$BODY" | jq -r '.results.request_id')
+          echo "Request ID: $REQUEST_ID"
+          echo "request_id=$REQUEST_ID" >> $GITHUB_OUTPUT
+
       - name: Poll for test completion
+        id: poll
         run: |
           OBSERVATORY_URL="${{ secrets.OBSERVATORY_URL }}"
+          REQUEST_ID="${{ steps.trigger.outputs.request_id }}"
           TIMEOUT=900  # 15 minutes
           INTERVAL=30
           ELAPSED=0
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            STATUS=$(curl -s "${OBSERVATORY_URL}/queue-status" \
-              -H "Authorization: Bearer ${{ secrets.OBSERVATORY_API_KEY }}")
-            echo "Queue status (${ELAPSED}s elapsed): $STATUS"
+            STATUS=$(curl -s "${OBSERVATORY_URL}/run-status/${REQUEST_ID}" \
+              -H "X-LiteLLM-Observatory-API-Key: ${{ secrets.OBSERVATORY_API_KEY }}")
+            RUN_STATUS=$(echo "$STATUS" | jq -r '.status')
+            echo "Run status (${ELAPSED}s elapsed): $RUN_STATUS"
 
-            PENDING=$(echo "$STATUS" | jq -r '.pending // 0')
-            ACTIVE=$(echo "$STATUS" | jq -r '.active // 0')
-
-            if [ "$PENDING" = "0" ] && [ "$ACTIVE" = "0" ]; then
-              echo "All tests completed"
+            if [ "$RUN_STATUS" = "completed" ] || [ "$RUN_STATUS" = "failed" ]; then
+              echo "Test finished with status: $RUN_STATUS"
+              echo "run_result=$STATUS" >> $GITHUB_OUTPUT
               exit 0
             fi
 
             sleep $INTERVAL
             ELAPSED=$((ELAPSED + INTERVAL))
           done
-          echo "Timed out waiting for tests to complete after ${TIMEOUT}s"
+          echo "Timed out waiting for test to complete after ${TIMEOUT}s"
           exit 1
+
+      - name: Verify test results
+        run: |
+          RESULT='${{ steps.poll.outputs.run_result }}'
+          echo "Full result: $RESULT"
+
+          STATUS=$(echo "$RESULT" | jq -r '.status')
+          TEST_PASSED=$(echo "$RESULT" | jq -r '.result.test_passed // false')
+          FAILURE_RATE=$(echo "$RESULT" | jq -r '.result.failure_rate // "N/A"')
+          ERROR=$(echo "$RESULT" | jq -r '.error // empty')
+
+          echo "Status: $STATUS"
+          echo "Test passed: $TEST_PASSED"
+          echo "Failure rate: $FAILURE_RATE"
+
+          if [ -n "$ERROR" ]; then
+            echo "Error: $ERROR"
+          fi
+
+          if [ "$STATUS" = "failed" ]; then
+            echo "Test run failed"
+            exit 1
+          fi
+
+          if [ "$TEST_PASSED" != "true" ]; then
+            echo "Tests did not pass (failure rate: $FAILURE_RATE)"
+            exit 1
+          fi
+
+          echo "All tests passed!"
 
       - name: Print LiteLLM logs on failure
         if: failure()
