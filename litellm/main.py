@@ -3090,7 +3090,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                api_key=None,
+                api_key=api_key,
                 logger_fn=logger_fn,
                 encoding=_get_encoding(),
                 logging_obj=logging,
