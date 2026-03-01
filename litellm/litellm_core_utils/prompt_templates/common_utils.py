@@ -1341,7 +1341,7 @@ def parse_tool_call_arguments(
     arguments: Optional[str],
     tool_name: Optional[str] = None,
     context: Optional[str] = None,
-) -> Any:
+) -> Dict[str, Any]:
     """
     Parse tool call arguments from a JSON string.
 
@@ -1356,9 +1356,9 @@ def parse_tool_call_arguments(
         context: Optional context string (e.g., "Anthropic Messages API").
 
     Returns:
-        Parsed arguments (usually a dict, but may be any JSON-deserializable
-        type such as list, str, int, float, or None).  Returns empty dict if
-        arguments is None or empty.
+        Parsed arguments as a dictionary.  Non-dict JSON values (e.g. arrays,
+        strings, numbers) are wrapped as ``{"result": value}``.  Returns empty
+        dict if arguments is None or empty.
 
     Raises:
         ValueError: If the arguments string is not valid JSON and cannot be repaired.
