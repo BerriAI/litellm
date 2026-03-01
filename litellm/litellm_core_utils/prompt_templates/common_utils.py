@@ -1369,7 +1369,12 @@ def parse_tool_call_arguments(
         return {}
 
     try:
-        return json.loads(arguments)
+        result = json.loads(arguments)
+        if isinstance(result, dict):
+            return result
+        # Wrap non-object JSON (e.g. arrays, strings, numbers) in a dict
+        # so callers always receive a dict, matching tool_call.arguments semantics.
+        return {"result": result}
     except json.JSONDecodeError as original_error:
         repaired = _attempt_json_repair(arguments)
         if repaired is not None:
