@@ -2833,7 +2833,7 @@ def test_cost_calculator_base_model_cross_provider():
         _select_model_name_for_cost_calc,
     )
 
-    # Simulate: deployed as anthropic/gemini-3-flash but base_model is gemini/gemini-2.0-flash
+    # Simulate: deployed as anthropic/random-model but base_model is gemini/gemini-2.0-flash
     base_model = "gemini/gemini-2.0-flash"
     assert _model_contains_known_llm_provider(base_model) is True
 
