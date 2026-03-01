@@ -37,7 +37,18 @@ jobs:
         with:
           ref: ${{ inputs.commit_hash || github.sha }}
 
+      - name: Validate tag input
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Invalid tag format: $TAG (expected vX.Y.Z...)"
+            exit 1
+          fi
+
       - name: Start LiteLLM container
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
           docker run -d \
             --name litellm-rc \
@@ -46,7 +57,7 @@ jobs:
             -e LITELLM_MASTER_KEY="${{ env.LITELLM_MASTER_KEY }}" \
             -e AZURE_API_KEY="${{ secrets.AZURE_API_KEY }}" \
             -e AZURE_API_BASE="${{ secrets.AZURE_API_BASE }}" \
-            litellm/litellm:${{ inputs.tag }} \
+            "litellm/litellm:${TAG}" \
             --config /app/config.yaml --port 4000
 
       - name: Wait for LiteLLM health check
@@ -189,5 +200,11 @@ jobs:
       - name: Print LiteLLM logs on failure
         if: failure()
         run: |
-          docker logs litellm-rc
+          docker logs litellm-rc 2>/dev/null || true
           cat /tmp/cloudflared.log 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kill "${{ env.CLOUDFLARED_PID }}" 2>/dev/null || true
+          docker rm -f litellm-rc 2>/dev/null || true
