@@ -291,7 +291,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         }
 
         # Build description additions from removed constraints
-        constraint_descriptions: list = []
+        constraint_descriptions: List[str] = []
         constraint_labels = {
             "minItems": "minimum number of items: {}",
             "maxItems": "maximum number of items: {}",
@@ -303,7 +303,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "maxLength": "maximum length: {}",
             "pattern": "pattern: {}",
         }
-        for field in unsupported_fields:
+        # Sort fields for deterministic iteration order
+        for field in sorted(unsupported_fields):
             if field in schema:
                 constraint_descriptions.append(
                     constraint_labels[field].format(schema[field])
@@ -352,6 +353,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     for k, v in value.items()
                 }
             elif key == "items":
+                # items can be a schema (dict) or tuple validation (list of schemas)
                 if isinstance(value, dict):
                     result[key] = AnthropicConfig.filter_anthropic_output_schema(
                         value, enforce_additional_properties
@@ -366,6 +368,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 else:
                     result[key] = value
             elif key == "prefixItems" and isinstance(value, list):
+                # prefixItems: list of schemas for tuple validation
                 result[key] = [
                     AnthropicConfig.filter_anthropic_output_schema(
                         item, enforce_additional_properties
@@ -408,7 +411,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if (
             enforce_additional_properties
             and result.get("type") == "object"
-            and "properties" in result
         ):
             result["additionalProperties"] = False
 
