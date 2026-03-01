@@ -177,6 +177,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")
         )
 
+    @staticmethod
+    def _is_opus_4_6_model(model: str) -> bool:
+        """Check if the model is specifically Claude Opus 4.6 (effort='max' is Opus 4.6 only)."""
+        model_lower = model.lower()
+        return any(
+            variant in model_lower
+            for variant in (
+                "opus-4-6",
+                "opus_4_6",
+                "opus-4.6",
+                "opus_4.6",
+            )
+        )
+
     def get_supported_openai_params(self, model: str):
         params = [
             "stream",

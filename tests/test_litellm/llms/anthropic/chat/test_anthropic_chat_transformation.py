@@ -1673,6 +1673,23 @@ def test_max_effort_rejected_for_opus_45():
         )
 
 
+def test_max_effort_rejected_for_sonnet_46():
+    """Test that effort='max' is rejected for Claude Sonnet 4.6 (Opus 4.6 only)."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
+        optional_params = {"output_config": {"effort": "max"}}
+        config.transform_request(
+            model="claude-sonnet-4-6-20260205",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+
+
 def test_effort_with_other_features():
     """Test effort works alongside other features (thinking, tools)."""
     config = AnthropicConfig()
