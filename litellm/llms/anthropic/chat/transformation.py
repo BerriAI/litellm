@@ -64,6 +64,7 @@ from litellm.utils import (
     get_max_tokens,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
+    supports_output_config_effort,
     supports_reasoning,
     token_counter,
 )
@@ -168,24 +169,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_call["caller"] = cast(Dict[str, Any], anthropic_tool_content["caller"])  # type: ignore[typeddict-item]
         return tool_call
 
-    @staticmethod
-    def _is_claude_4_6_model(model: str) -> bool:
-        """Check if the model is a Claude 4.6 model that uses adaptive thinking."""
-        model_lower = model.lower()
-        return any(
-            model_variant in model_lower
-            for model_variant in (
-                "opus-4-6",
-                "opus_4_6",
-                "opus-4.6",
-                "opus_4.6",
-                "sonnet-4-6",
-                "sonnet_4_6",
-                "sonnet-4.6",
-                "sonnet_4.6",
-            )
-        )
-
     def get_supported_openai_params(self, model: str):
         params = [
             "stream",
@@ -207,7 +190,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if (
             "claude-3-7-sonnet" in model
-            or AnthropicConfig._is_claude_4_6_model(model)
+            or supports_output_config_effort(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+            )
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
@@ -726,10 +712,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_reasoning_effort(
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
         model: str,
+        use_adaptive: bool = False,
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
-        if AnthropicConfig._is_claude_4_6_model(model):
+        if use_adaptive:
             return AnthropicThinkingParam(
                 type="adaptive",
             )
@@ -1018,14 +1005,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    reasoning_effort=value, model=model
+                _use_adaptive = supports_output_config_effort(
+                    model=model,
+                    custom_llm_provider=self.custom_llm_provider,
                 )
-                if AnthropicConfig._is_claude_4_6_model(model) and value != "none":
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    reasoning_effort=value,
+                    model=model,
+                    use_adaptive=_use_adaptive,
+                )
+                if _use_adaptive and value != "none":
                     effort = AnthropicConfig._map_reasoning_effort_to_output_config(value)
-                    if effort is not None:
-                        optional_params.setdefault("output_config", {})
-                        optional_params["output_config"]["effort"] = effort
+                    if effort is None:
+                        raise ValueError(
+                            f"Unsupported reasoning_effort value '{value}' for output_config.effort. "
+                            f"Supported values: minimal, low, medium, high, xhigh, max"
+                        )
+                    optional_params.setdefault("output_config", {})
+                    optional_params["output_config"]["effort"] = effort
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -1412,9 +1409,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     raise ValueError(
                         f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
                     )
-                if effort == "max" and not self._is_claude_4_6_model(model):
+                if effort == "max" and not supports_output_config_effort(
+                    model=model,
+                    custom_llm_provider=self.custom_llm_provider,
+                ):
                     raise ValueError(
-                        f"effort='max' is only supported by Claude 4.6 models (Opus 4.6, Sonnet 4.6). Got model: {model}"
+                        f"effort='max' is only supported by models with output_config.effort capability. Got model: {model}"
                     )
                 data["output_config"] = output_config
 
