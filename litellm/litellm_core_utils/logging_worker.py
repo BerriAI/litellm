@@ -43,6 +43,7 @@ class LoggingWorker:
         timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
         max_queue_size: int = LOGGING_WORKER_MAX_QUEUE_SIZE,
         concurrency: int = LOGGING_WORKER_CONCURRENCY,
+        _register_atexit: bool = True,
     ):
         self.timeout = timeout
         self.max_queue_size = max_queue_size
@@ -54,9 +55,26 @@ class LoggingWorker:
         self._bound_loop: Optional[asyncio.AbstractEventLoop] = None
         self._last_aggressive_clear_time: float = 0.0
         self._aggressive_clear_in_progress: bool = False
+        # Monotonically increasing epoch — bumped on every event loop change.
+        # Worker loops capture the epoch at start and exit when it changes,
+        # preventing stale workers from touching queues bound to a new loop.
+        self._epoch: int = 0
 
-        # Register cleanup handler to flush remaining events on exit
-        atexit.register(self._flush_on_exit)
+        if _register_atexit:
+            atexit.register(self._flush_on_exit)
+
+    def _reset_loop_state(self) -> None:
+        """Reset all event-loop-bound state.
+
+        Shared helper used by both ``_ensure_queue`` (on loop change) and
+        ``reset`` (for test teardown) to avoid duplicating the list of
+        fields that must be cleared when the bound loop is invalidated.
+        """
+        self._epoch += 1
+        self._queue = None
+        self._sem = None
+        self._worker_task = None
+        self._running_tasks.clear()
 
     def _ensure_queue(self) -> None:
         """Initialize the queue if it doesn't exist or if event loop has changed."""
@@ -71,11 +89,7 @@ class LoggingWorker:
             verbose_logger.debug(
                 "LoggingWorker: Event loop changed, reinitializing queue and worker"
             )
-            # Clear old state - these are bound to the old loop
-            self._queue = None
-            self._sem = None
-            self._worker_task = None
-            self._running_tasks.clear()
+            self._reset_loop_state()
 
         if self._queue is None:
             self._queue = asyncio.Queue(maxsize=self.max_queue_size)
@@ -89,51 +103,77 @@ class LoggingWorker:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker_loop())
 
-    async def _process_log_task(self, task: LoggingTask, sem: asyncio.Semaphore):
-        """Runs the logging task and handles cleanup. Releases semaphore when done."""
+    async def _process_log_task(
+        self,
+        task: LoggingTask,
+        sem: asyncio.Semaphore,
+        queue: "asyncio.Queue[LoggingTask]",
+    ):
+        """Runs the logging task and handles cleanup. Releases semaphore when done.
+
+        Accepts an explicit *queue* reference so that ``task_done()`` is
+        always called on the queue the task was dequeued from, even if
+        ``self._queue`` has been replaced by ``_ensure_queue()`` on a new
+        event loop.
+        """
         try:
-            if self._queue is not None:
-                try:
-                    # Run the coroutine in its original context
-                    await asyncio.wait_for(
-                        task["context"].run(asyncio.create_task, task["coroutine"]),
-                        timeout=self.timeout,
-                    )
-                except Exception as e:
-                    verbose_logger.exception(f"LoggingWorker error: {e}")
-                finally:
-                    self._queue.task_done()
+            try:
+                # Run the coroutine in its original context
+                await asyncio.wait_for(
+                    task["context"].run(asyncio.create_task, task["coroutine"]),
+                    timeout=self.timeout,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"LoggingWorker error: {e}")
+            finally:
+                queue.task_done()
         finally:
             # Always release semaphore, even if queue is None
             sem.release()
 
     async def _worker_loop(self) -> None:
-        """Main worker loop that gets tasks and schedules them to run concurrently."""
+        """Main worker loop that gets tasks and schedules them to run concurrently.
+
+        Captures the queue, semaphore, and epoch as locals at start.  If the
+        event loop changes (epoch is bumped), this loop exits gracefully
+        instead of touching a queue bound to a different loop.
+        """
+        # Snapshot state at start — prevents cross-loop access when
+        # _ensure_queue() replaces self._queue on a new event loop.
+        my_queue = self._queue
+        my_sem = self._sem
+        my_epoch = self._epoch
+
         try:
-            if self._queue is None or self._sem is None:
+            if my_queue is None or my_sem is None:
                 return
 
-            while True:
-                # Acquire semaphore before removing task from queue to prevent
-                # unbounded growth of waiting tasks
-                await self._sem.acquire()
+            while self._epoch == my_epoch:
+                await my_sem.acquire()
                 try:
-                    task = await self._queue.get()
+                    task = await my_queue.get()
                     # Track each spawned coroutine so we can cancel on shutdown.
                     processing_task = asyncio.create_task(
-                        self._process_log_task(task, self._sem)
+                        self._process_log_task(task, my_sem, my_queue)
                     )
                     self._running_tasks.add(processing_task)
                     processing_task.add_done_callback(self._running_tasks.discard)
                 except Exception:
                     # If task creation fails, release semaphore to prevent deadlock
-                    self._sem.release()
+                    my_sem.release()
                     raise
+
+            # Epoch changed — discard stale items from the old queue to
+            # prevent "coroutine was never awaited" warnings.
+            self._discard_queue(my_queue)
 
         except asyncio.CancelledError:
             verbose_logger.debug("LoggingWorker cancelled during shutdown")
-            # Attempt to clear remaining items to prevent "never awaited" warnings
-            await self.clear_queue()
+            # Drain the LOCAL queue we were serving, not self._queue
+            # which may already point to a different loop's queue.
+            # Use _discard_queue since we're inside a cancellation scope
+            # and cannot reliably await new coroutines.
+            self._discard_queue(my_queue)
 
     def enqueue(self, coroutine: Coroutine) -> None:
         """
@@ -369,12 +409,50 @@ class LoggingWorker:
         # Drop references to completed tasks so we can restart cleanly.
         self._running_tasks.clear()
 
+    async def reset(self) -> None:
+        """Stop the worker and discard all state so the next call to
+        ``ensure_initialized_and_enqueue`` starts fresh on the current loop.
+
+        Intended for test fixtures that create a new event loop per test::
+
+            @pytest.fixture(autouse=True)
+            async def _reset_worker():
+                yield
+                await GLOBAL_LOGGING_WORKER.reset()
+        """
+        await self.stop()
+        self._reset_loop_state()
+        self._bound_loop = None
+
     async def flush(self) -> None:
         """Flush the logging queue."""
         if self._queue is None:
             return
         while not self._queue.empty():
             await self._queue.join()
+
+    @staticmethod
+    def _discard_queue(queue: Optional["asyncio.Queue[LoggingTask]"]) -> None:
+        """Discard remaining items from *queue* synchronously.
+
+        This is used inside ``CancelledError`` handlers where we cannot
+        reliably ``await`` new coroutines.  Closing the unawaited coroutines
+        prevents "coroutine was never awaited" warnings.
+
+        Intentionally drops stale queued items: during cancellation the old
+        event loop is being torn down, so the coroutines in the queue can no
+        longer run.  Losing them is the correct behaviour — they belong to
+        the old loop's lifecycle and retaining them would leak resources.
+        """
+        if queue is None:
+            return
+        while True:
+            try:
+                task = queue.get_nowait()
+                task["coroutine"].close()
+                queue.task_done()
+            except asyncio.QueueEmpty:
+                break
 
     async def clear_queue(self):
         """
