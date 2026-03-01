@@ -101,18 +101,22 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Credentials,
         logger_fn=None,
         headers={},
+        extra_headers: Optional[dict] = None,
         client: Optional[AsyncHTTPHandler] = None,
         fake_stream: bool = False,
         json_mode: Optional[bool] = False,
         api_key: Optional[str] = None,
         stream_chunk_size: int = 1024,
     ) -> CustomStreamWrapper:
+        # Use extra_headers (original, with betas) for transform so
+        # _process_tools_and_beta() can extract beta values for the body.
+        transform_headers = extra_headers if extra_headers is not None else headers
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            headers=headers,
+            headers=transform_headers,
         )
         data = json.dumps(request_data)
 
@@ -172,15 +176,19 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Credentials,
         logger_fn=None,
         headers: dict = {},
+        extra_headers: Optional[dict] = None,
         client: Optional[AsyncHTTPHandler] = None,
         api_key: Optional[str] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
+        # Use extra_headers (original, with betas) for transform so
+        # _process_tools_and_beta() can extract beta values for the body.
+        transform_headers = extra_headers if extra_headers is not None else headers
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            headers=headers,
+            headers=transform_headers,
         )
         data = json.dumps(request_data)
         
@@ -379,6 +387,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
+                    extra_headers=extra_headers,
                     timeout=timeout,
                     client=client,
                     json_mode=json_mode,
@@ -400,6 +409,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 headers=headers,
+                extra_headers=extra_headers,
                 timeout=timeout,
                 client=client,
                 credentials=credentials,
