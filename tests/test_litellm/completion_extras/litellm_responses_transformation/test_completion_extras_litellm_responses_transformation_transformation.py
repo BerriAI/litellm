@@ -1318,3 +1318,79 @@ def test_transform_response_preserves_annotations():
     assert result.usage.total_tokens == 30
 
     print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
+
+
+def test_reasoning_auto_summary_injected_without_reasoning_effort():
+    """
+    When reasoning_auto_summary is enabled but no reasoning_effort is passed,
+    reasoning={summary: "detailed"} should be injected into the Responses API
+    request so OpenAI returns reasoning summaries by default.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/13419
+    """
+    import os
+
+    import litellm
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+    handler = LiteLLMResponsesTransformationHandler()
+    original_flag = litellm.reasoning_auto_summary
+    original_env = os.environ.pop("LITELLM_REASONING_AUTO_SUMMARY", None)
+
+    try:
+        # --- Case 1: auto_summary OFF, no reasoning_effort → no reasoning injected ---
+        litellm.reasoning_auto_summary = False
+        req1 = ResponsesAPIOptionalRequestParams()
+        handler._map_optional_params_to_responses_api_request(
+            optional_params={"max_completion_tokens": 4096},
+            responses_api_request=req1,
+        )
+        assert "reasoning" not in req1, (
+            "reasoning should NOT be injected when auto_summary is off"
+        )
+        print("✓ No reasoning injected when auto_summary is off and no reasoning_effort passed")
+
+        # --- Case 2: auto_summary ON, no reasoning_effort → reasoning injected ---
+        litellm.reasoning_auto_summary = True
+        req2 = ResponsesAPIOptionalRequestParams()
+        handler._map_optional_params_to_responses_api_request(
+            optional_params={"max_completion_tokens": 4096},
+            responses_api_request=req2,
+        )
+        assert "reasoning" in req2, (
+            "reasoning should be injected when auto_summary is on"
+        )
+        reasoning = req2["reasoning"]
+        assert reasoning.get("summary") == "detailed", (
+            f"Expected summary='detailed', got {reasoning.get('summary')}"
+        )
+        # effort should NOT be set — let the model use its default
+        assert reasoning.get("effort") is None, (
+            f"effort should not be set when no reasoning_effort passed, got {reasoning.get('effort')}"
+        )
+        print("✓ reasoning={summary: 'detailed'} injected when auto_summary is on")
+
+        # --- Case 3: auto_summary ON + explicit reasoning_effort → no double injection ---
+        litellm.reasoning_auto_summary = True
+        req3 = ResponsesAPIOptionalRequestParams()
+        handler._map_optional_params_to_responses_api_request(
+            optional_params={"reasoning_effort": "high"},
+            responses_api_request=req3,
+        )
+        reasoning3 = req3["reasoning"]
+        assert reasoning3.get("effort") == "high", (
+            f"Expected effort='high', got {reasoning3.get('effort')}"
+        )
+        assert reasoning3.get("summary") == "detailed", (
+            f"Expected summary='detailed', got {reasoning3.get('summary')}"
+        )
+        print("✓ Explicit reasoning_effort preserved with auto_summary, no double injection")
+
+        print("✓ All reasoning_auto_summary injection tests passed")
+    finally:
+        litellm.reasoning_auto_summary = original_flag
+        if original_env is not None:
+            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = original_env
