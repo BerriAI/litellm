@@ -454,8 +454,10 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 # Load local backup at import time (fast, ~12 ms, no network I/O).
 # The remote fetch is deferred to first access — no threading, no locks.
 _model_cost_url: str = model_cost_map_url
-# Check at import time to avoid any remote fetch when explicitly disabled.
-# get_model_cost_map() also checks this env var as a secondary guard.
+# Dual env-var check is intentional:
+#   1. Import-time check (here) initializes _model_cost_remote_loaded to skip lazy fetch
+#   2. Runtime check (in get_model_cost_map) ensures correctness if env var changes
+#      after import (e.g., in tests or dynamic reconfiguration)
 _model_cost_remote_loaded: bool = (
     os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true"
 )
@@ -485,6 +487,7 @@ def _ensure_remote_model_cost() -> None:
     try:
         remote = get_model_cost_map(url=_model_cost_url)
         model_cost.update(remote)  # merge remote on top of local; no clear() needed
+        add_known_models()  # repopulate provider model sets with merged data
         _model_cost_remote_loaded = True
     except Exception:
         pass  # keep using local backup; next call will retry
@@ -1270,16 +1273,6 @@ from .responses.main import *
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
 from . import interactions
-from .skills.main import (
-    create_skill,
-    acreate_skill,
-    list_skills,
-    alist_skills,
-    get_skill,
-    aget_skill,
-    delete_skill,
-    adelete_skill,
-)
 from .containers.main import *
 from .ocr.main import *
 from .rag.main import *
