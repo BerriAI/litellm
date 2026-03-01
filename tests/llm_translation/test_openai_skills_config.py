@@ -2,15 +2,11 @@
 Unit tests for OpenAI Skills API configuration and transformations
 """
 
-import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from litellm.llms.openai.skills.transformation import OpenAISkillsConfig
 from litellm.types.llms.anthropic_skills import (
     CreateSkillRequest,
@@ -18,11 +14,6 @@ from litellm.types.llms.anthropic_skills import (
     ListSkillsParams,
     ListSkillsResponse,
     Skill,
-)
-from litellm.types.llms.openai_skills import (
-    OpenAIDeletedSkill,
-    OpenAISkill,
-    OpenAISkillList,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders

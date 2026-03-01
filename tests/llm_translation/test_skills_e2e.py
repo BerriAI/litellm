@@ -6,7 +6,6 @@ to verify skills work correctly and can generate a GIF.
 """
 
 import os
-import sys
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -14,14 +13,16 @@ from typing import Optional
 
 import pytest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
 import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.caching import DualCache
+from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 from litellm.proxy._types import NewSkillRequest, UserAPIKeyAuth
+from litellm.proxy.hooks.litellm_skills import SkillsInjectionHook
+from litellm.proxy.proxy_cli import append_query_params
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.llms.anthropic_skills import ListSkillsResponse
+from litellm.types.utils import CallTypes
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -44,8 +45,6 @@ def create_skill_zip_from_folder(skill_name: str) -> bytes:
 @pytest.fixture
 def prisma_client():
     """Set up prisma client for tests."""
-    from litellm.proxy.proxy_cli import append_query_params
-
     params = {"connection_limit": 100, "pool_timeout": 60}
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -80,10 +79,6 @@ async def test_slack_gif_skill_creates_gif(prisma_client):
     
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     await litellm.proxy.proxy_server.prisma_client.connect()
-
-    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
-    from litellm.proxy.hooks.litellm_skills import SkillsInjectionHook
-    from litellm.types.utils import CallTypes
 
     # 1. Store skill in DB
     skill_name = "slack-gif-creator"
