@@ -1,5 +1,6 @@
 """Tests for deferred (lazy) model cost map loading."""
 
+import threading
 import pytest
 from unittest.mock import patch
 
@@ -131,3 +132,24 @@ class TestLazyModelCostMap:
             except Exception:
                 pass
             mock_ensure.assert_called()
+
+    def test_concurrent_ensure_fetches_only_once(self, isolate_model_cost_state):
+        """Only one thread should perform the remote fetch even under contention."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = False
+        barrier = threading.Barrier(4)
+
+        with patch("litellm.get_model_cost_map") as mock_get:
+            mock_get.return_value = {"concurrent_test": {"litellm_provider": "openai"}}
+
+            def worker():
+                barrier.wait()
+                litellm._ensure_remote_model_cost()
+
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+            mock_get.assert_called_once()
