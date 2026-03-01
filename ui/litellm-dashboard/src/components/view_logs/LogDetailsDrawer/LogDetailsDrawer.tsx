@@ -47,8 +47,8 @@ interface TraceEventRowProps {
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   const isMcp = MCP_CALL_TYPES.includes(row.call_type);
   const durationValue =
-    row.duration != null
-      ? row.duration.toFixed(3)
+    row.request_duration_ms != null
+      ? (row.request_duration_ms / 1000).toFixed(3)
       : row.startTime && row.endTime
         ? ((Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000).toFixed(3)
         : "-";
@@ -125,7 +125,7 @@ export function LogDetailsDrawer({
       return allSessionLogs
         .map((row) => ({
           ...row,
-          duration: (Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000,
+          request_duration_ms: row.request_duration_ms ?? (Date.parse(row.endTime) - Date.parse(row.startTime)),
         }))
         .sort((a, b) => {
           const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;

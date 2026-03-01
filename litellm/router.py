@@ -25,6 +25,7 @@ from typing import (
     AsyncGenerator,
     Callable,
     Dict,
+    Generator,
     List,
     Literal,
     Optional,
@@ -163,7 +164,11 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
+from litellm.types.utils import (
+    ModelResponseStream,
+    StandardLoggingPayload,
+    Usage,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -1323,6 +1328,11 @@ class Router:
         model_name = None
         deployment = None
         try:
+            # Capture kwargs before deployment selection so the streaming
+            # fallback iterator can re-dispatch with the original model group.
+            input_kwargs_for_streaming_fallback = kwargs.copy()
+            input_kwargs_for_streaming_fallback["model"] = model
+
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
                 model=model,
@@ -1393,6 +1403,15 @@ class Router:
                         model=model,
                         llm_provider="",
                     )
+
+            # Wrap streaming responses so MidStreamFallbackError (raised
+            # during iteration) triggers the Router's fallback chain.
+            if isinstance(response, CustomStreamWrapper):
+                return self._completion_streaming_iterator(
+                    model_response=response,
+                    messages=messages,
+                    initial_kwargs=input_kwargs_for_streaming_fallback,
+                )
 
             return response
         except Exception as e:
@@ -1555,6 +1574,9 @@ class Router:
                     logging_obj=model_response.logging_obj,
                 )
                 self._async_generator = async_generator
+                # Preserve hidden params (including litellm_overhead_time_ms) from original response
+                if hasattr(model_response, "_hidden_params"):
+                    self._hidden_params = model_response._hidden_params.copy()
 
             def __aiter__(self):
                 return self
@@ -1590,17 +1612,24 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    initial_kwargs["messages"] = messages + [
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
-                        },
-                        {
-                            "role": "assistant",
-                            "content": e.generated_content,
-                            "prefix": True,
-                        },
-                    ]
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        # No content was generated before the error (e.g. a
+                        # rate-limit 429 on the very first chunk).  Retry with
+                        # the original messages — adding a continuation prompt
+                        # would waste tokens and confuse the model.
+                        initial_kwargs["messages"] = messages
+                    else:
+                        initial_kwargs["messages"] = messages + [
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": e.generated_content,
+                                "prefix": True,
+                            },
+                        ]
                     self._update_kwargs_before_fallbacks(
                         model=model_group, kwargs=initial_kwargs
                     )
@@ -1688,6 +1717,164 @@ class Router:
                             )
 
         return FallbackStreamWrapper(stream_with_fallbacks())
+
+    def _completion_streaming_iterator(
+        self,
+        model_response: CustomStreamWrapper,
+        messages: List[Dict[str, str]],
+        initial_kwargs: dict,
+    ) -> CustomStreamWrapper:
+        """
+        Sync equivalent of _acompletion_streaming_iterator.
+
+        Wraps a sync streaming response so that MidStreamFallbackError
+        (raised by CustomStreamWrapper.__next__) triggers the Router's
+        fallback chain instead of surfacing directly to the caller.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        class SyncFallbackStreamWrapper(CustomStreamWrapper):
+            def __init__(self, sync_generator: Generator):
+                super().__init__(
+                    completion_stream=sync_generator,
+                    model=model_response.model,
+                    custom_llm_provider=model_response.custom_llm_provider,
+                    logging_obj=model_response.logging_obj,
+                )
+                self._sync_generator = sync_generator
+                if hasattr(model_response, "_hidden_params"):
+                    self._hidden_params = model_response._hidden_params.copy()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._sync_generator)
+
+        router_self = self
+
+        def stream_with_fallbacks():
+            fallback_response = None
+            try:
+                for item in model_response:
+                    yield item
+            except MidStreamFallbackError as e:
+                from litellm.main import stream_chunk_builder
+
+                complete_response_object = stream_chunk_builder(
+                    chunks=model_response.chunks
+                )
+                complete_response_object_usage = cast(
+                    Optional[Usage],
+                    getattr(complete_response_object, "usage", None),
+                )
+                try:
+                    model_group = cast(str, initial_kwargs.get("model"))
+                    fallbacks: Optional[List] = initial_kwargs.get(
+                        "fallbacks", router_self.fallbacks
+                    )
+                    context_window_fallbacks: Optional[List] = initial_kwargs.get(
+                        "context_window_fallbacks",
+                        router_self.context_window_fallbacks,
+                    )
+                    content_policy_fallbacks: Optional[List] = initial_kwargs.get(
+                        "content_policy_fallbacks",
+                        router_self.content_policy_fallbacks,
+                    )
+                    initial_kwargs["original_function"] = router_self._completion
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        initial_kwargs["messages"] = messages
+                    else:
+                        initial_kwargs["messages"] = messages + [
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": e.generated_content,
+                                "prefix": True,
+                            },
+                        ]
+                    router_self._update_kwargs_before_fallbacks(
+                        model=model_group, kwargs=initial_kwargs
+                    )
+                    fallback_response = (
+                        router_self.function_with_fallbacks(
+                            **initial_kwargs,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                        )
+                    )
+
+                    if hasattr(fallback_response, "__iter__"):
+                        for fallback_item in fallback_response:
+                            if (
+                                fallback_item
+                                and isinstance(fallback_item, ModelResponseStream)
+                                and hasattr(fallback_item, "usage")
+                            ):
+                                from litellm.cost_calculator import (
+                                    BaseTokenUsageProcessor,
+                                )
+
+                                usage = cast(
+                                    Optional[Usage],
+                                    getattr(fallback_item, "usage", None),
+                                )
+                                if usage is not None:
+                                    usage_objects = [usage]
+                                else:
+                                    usage_objects = []
+
+                                if (
+                                    complete_response_object_usage is not None
+                                    and hasattr(
+                                        complete_response_object_usage, "usage"
+                                    )
+                                    and complete_response_object_usage.usage is not None  # type: ignore
+                                ):
+                                    usage_objects.append(
+                                        complete_response_object_usage
+                                    )
+
+                                combined_usage = (
+                                    BaseTokenUsageProcessor.combine_usage_objects(
+                                        usage_objects=usage_objects
+                                    )
+                                )
+                                setattr(fallback_item, "usage", combined_usage)
+                            yield fallback_item
+                    else:
+                        yield None
+
+                except Exception as fallback_error:
+                    verbose_router_logger.error(
+                        f"Fallback also failed: {fallback_error}"
+                    )
+                    raise fallback_error
+            finally:
+                if hasattr(model_response, "close"):
+                    try:
+                        model_response.close()
+                    except BaseException as close_err:
+                        verbose_router_logger.debug(
+                            "stream_with_fallbacks: error closing model_response: %s",
+                            close_err,
+                        )
+                if fallback_response is not None and hasattr(
+                    fallback_response, "close"
+                ):
+                    try:
+                        fallback_response.close()
+                    except BaseException as close_err:
+                        verbose_router_logger.debug(
+                            "stream_with_fallbacks: error closing fallback_response: %s",
+                            close_err,
+                        )
+
+        return SyncFallbackStreamWrapper(stream_with_fallbacks())
 
     async def _silent_experiment_acompletion(
         self, silent_model: str, messages: List[Any], **kwargs
@@ -6416,6 +6603,7 @@ class Router:
         self.model_list = []
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
+        self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
@@ -6669,6 +6857,22 @@ class Router:
         # initialize client
         self._add_deployment(deployment=deployment)
 
+        # Register custom pricing in litellm.model_cost.
+        # Mirrors _create_deployment() logic to ensure dynamically-added deployments
+        # (e.g., loaded from DB) also have their custom pricing registered.
+        # Without this, _is_model_cost_zero() cannot detect explicitly-configured
+        # zero-cost models, causing budget checks to block free models.
+        _model_id = deployment.model_info.id
+        if _model_id is not None:
+            _model_info_dict: dict = deployment.model_info.model_dump(
+                exclude_none=True
+            )
+            for field in CustomPricingLiteLLMParams.model_fields.keys():
+                field_value = deployment.litellm_params.get(field)
+                if field_value is not None:
+                    _model_info_dict[field] = field_value
+            litellm.register_model(model_cost={_model_id: _model_info_dict})
+
         # add to model names
         self._add_model_to_list_and_index_map(
             model=_deployment, model_id=deployment.model_info.id
@@ -6726,6 +6930,7 @@ class Router:
         """
         idx = len(self.model_list)
         self.model_list.append(model)
+        self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
 
         # Update model_id index for O(1) lookup
@@ -6774,6 +6979,7 @@ class Router:
 
                     if removal_idx is not None:
                         self.model_list.pop(removal_idx)
+                        self._invalidate_model_group_info_cache()
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(
                             model_id=deployment_id, removal_idx=removal_idx
@@ -6808,6 +7014,7 @@ class Router:
             if deployment_idx is not None:
                 # Pop the item from the list first
                 item = self.model_list.pop(deployment_idx)
+                self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
@@ -6978,9 +7185,9 @@ class Router:
             raise ValueError("Deployment not found")
 
         ## GET BASE MODEL
-        base_model = deployment.get("model_info", {}).get("base_model", None)
+        base_model = (deployment.get("model_info") or {}).get("base_model", None)
         if base_model is None:
-            base_model = deployment.get("litellm_params", {}).get("base_model", None)
+            base_model = (deployment.get("litellm_params") or {}).get("base_model", None)
 
         model = base_model
 
@@ -6995,7 +7202,7 @@ class Router:
             raise ValueError(
                 f"Deployment missing valid litellm_params. "
                 f"Got: {type(litellm_params_data).__name__}, "
-                f"deployment_id: {deployment.get('model_info', {}).get('id', 'unknown')}"
+                f"deployment_id: {(deployment.get('model_info') or {}).get('id', 'unknown')}"
             )
         _model, custom_llm_provider, _, _ = litellm.get_llm_provider(
             model=litellm_params.model,
@@ -7015,10 +7222,10 @@ class Router:
                 if potential_models is not None:
                     for potential_model in potential_models:
                         try:
-                            if potential_model.get("model_info", {}).get(
+                            if (potential_model.get("model_info") or {}).get(
                                 "id"
-                            ) == deployment.get("model_info", {}).get("id"):
-                                model = potential_model.get("litellm_params", {}).get(
+                            ) == (deployment.get("model_info") or {}).get("id"):
+                                model = (potential_model.get("litellm_params") or {}).get(
                                     "model"
                                 )
                                 break
@@ -7039,9 +7246,10 @@ class Router:
         model_info = litellm.get_model_info(model=model_info_name)
 
         ## CHECK USER SET MODEL INFO
-        user_model_info = deployment.get("model_info", {})
+        user_model_info = deployment.get("model_info") or {}
 
-        model_info.update(user_model_info)
+        if model_info is not None:
+            model_info.update(cast(ModelInfo, user_model_info))
 
         return model_info
 
@@ -7568,6 +7776,7 @@ class Router:
         """
         # First populate the model_list
         self.model_list = []
+        self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         for _, model in enumerate(model_list):
             # Extract model_info from the model dict
@@ -7911,6 +8120,13 @@ class Router:
             returned_models += self.model_list
 
         return returned_models
+
+    def _invalidate_model_group_info_cache(self) -> None:
+        """Invalidate the cached model group info.
+
+        Call this whenever self.model_list is modified to ensure the cache is rebuilt.
+        """
+        self._cached_get_model_group_info.cache_clear()
 
     def _invalidate_access_groups_cache(self) -> None:
         """Invalidate the cached access groups.

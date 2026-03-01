@@ -12,6 +12,13 @@ warnings.filterwarnings(
 ### INIT VARIABLES #########################
 import threading
 import os
+
+# Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
+import dotenv as _dotenv
+
+if os.getenv("LITELLM_MODE", "DEV") == "DEV":
+    _dotenv.load_dotenv()
+
 from typing import (
     Callable,
     List,
@@ -74,12 +81,9 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
-import dotenv
 # register_async_client_cleanup is lazy-loaded and called on first access
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
-    dotenv.load_dotenv()
 
 
 ####################################################
@@ -105,6 +109,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "prometheus",
     "otel",
     "datadog",
+    "datadog_metrics",
     "datadog_llm_observability",
     "galileo",
     "braintrust",
@@ -197,6 +202,9 @@ telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+use_chat_completions_url_for_anthropic_messages: bool = bool(
+    os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
+)  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -339,6 +347,10 @@ model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
 )
+blog_posts_url: str = os.getenv(
+    "LITELLM_BLOG_POSTS_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/blog_posts.json",
+)
 anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
@@ -370,6 +382,7 @@ enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
+prometheus_emit_stream_label: bool = False
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
@@ -405,6 +418,7 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
+network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
 disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
@@ -614,8 +628,9 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def add_known_models():
-    for key, value in model_cost.items():
+def add_known_models(model_cost_map: Optional[Dict] = None):
+    _map = model_cost_map if model_cost_map is not None else model_cost
+    for key, value in _map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
         ):

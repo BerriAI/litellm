@@ -663,6 +663,119 @@ class TestProxySettingEndpoints:
         assert "UI_LOGO_PATH" in updated_config["environment_variables"]
         assert mock_proxy_config["save_call_count"]() == 1
 
+    def test_update_ui_theme_settings_with_favicon(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test updating UI theme settings with favicon_url"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.store_model_in_db", True
+        )
+
+        new_theme = {
+            "logo_url": "https://example.com/new-logo.png",
+            "favicon_url": "https://example.com/custom-favicon.ico",
+        }
+
+        response = client.patch(
+            "/update/ui_theme_settings", json=new_theme
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["status"] == "success"
+        assert (
+            data["theme_config"]["logo_url"]
+            == "https://example.com/new-logo.png"
+        )
+        assert (
+            data["theme_config"]["favicon_url"]
+            == "https://example.com/custom-favicon.ico"
+        )
+
+        updated_config = mock_proxy_config["config"]
+        assert "UI_LOGO_PATH" in updated_config["environment_variables"]
+        assert (
+            "LITELLM_FAVICON_URL"
+            in updated_config["environment_variables"]
+        )
+        assert (
+            updated_config["environment_variables"][
+                "LITELLM_FAVICON_URL"
+            ]
+            == "https://example.com/custom-favicon.ico"
+        )
+
+    def test_update_ui_theme_settings_clear_favicon(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test clearing favicon_url from UI theme settings"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.store_model_in_db", True
+        )
+
+        new_theme = {
+            "favicon_url": "https://example.com/custom-favicon.ico",
+        }
+        response = client.patch(
+            "/update/ui_theme_settings", json=new_theme
+        )
+        assert response.status_code == 200
+
+        clear_theme = {"favicon_url": None}
+        response = client.patch(
+            "/update/ui_theme_settings", json=clear_theme
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert "LITELLM_FAVICON_URL" not in os.environ
+
+    def test_get_ui_theme_settings_includes_favicon_schema(
+        self, mock_proxy_config
+    ):
+        """Test UI theme settings includes favicon_url in schema"""
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "values" in data
+        assert "field_schema" in data
+        assert "properties" in data["field_schema"]
+        assert "favicon_url" in data["field_schema"]["properties"]
+        assert (
+            "description"
+            in data["field_schema"]["properties"]["favicon_url"]
+        )
+
+    def test_get_ui_theme_settings_with_favicon_configured(
+        self, mock_proxy_config
+    ):
+        """Test getting UI theme settings when favicon is configured"""
+        mock_proxy_config["config"]["litellm_settings"][
+            "ui_theme_config"
+        ] = {
+            "logo_url": "https://example.com/logo.png",
+            "favicon_url": "https://example.com/favicon.ico",
+        }
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert (
+            data["values"]["logo_url"]
+            == "https://example.com/logo.png"
+        )
+        assert (
+            data["values"]["favicon_url"]
+            == "https://example.com/favicon.ico"
+        )
+
     def test_get_ui_settings(self, mock_auth, monkeypatch):
         """Test retrieving UI settings with allowlist sanitization"""
         from unittest.mock import AsyncMock, MagicMock

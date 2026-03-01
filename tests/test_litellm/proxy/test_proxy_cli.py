@@ -16,6 +16,7 @@ from litellm.proxy.health_endpoints.health_app_factory import build_health_app
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 
+@pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
     @patch("click.echo")
@@ -331,7 +332,8 @@ class TestProxyInitializationHelpers:
 
     @patch("uvicorn.run")
     @patch("builtins.print")
-    def test_max_requests_before_restart_flag(self, mock_print, mock_uvicorn_run):
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_max_requests_before_restart_flag(self, mock_setup_db, mock_print, mock_uvicorn_run):
         """Test that the max_requests_before_restart flag is passed to uvicorn as limit_max_requests"""
         from click.testing import CliRunner
 
@@ -344,7 +346,10 @@ class TestProxyInitializationHelpers:
         mock_key_mgmt = MagicMock()
         mock_save_worker_config = MagicMock()
 
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with patch.dict(
+            os.environ, clean_env, clear=True,
+        ), patch.dict(
             "sys.modules",
             {
                 "proxy_server": MagicMock(
@@ -367,7 +372,7 @@ class TestProxyInitializationHelpers:
                 run_server, ["--local", "--max_requests_before_restart", "123"]
             )
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
 
             # Check that uvicorn.run was called with limit_max_requests parameter

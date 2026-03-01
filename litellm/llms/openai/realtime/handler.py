@@ -98,6 +98,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
         query_params: Optional[RealtimeQueryParams] = None,
+        user_api_key_dict: Optional[Any] = None,
+        litellm_metadata: Optional[dict] = None,
+        **kwargs: Any,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -136,7 +139,11 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 ssl=ssl_config,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
-                    websocket, cast(ClientConnection, backend_ws), logging_obj
+                    websocket,
+                    cast(ClientConnection, backend_ws),
+                    logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data={"litellm_metadata": litellm_metadata or {}},
                 )
                 await realtime_streaming.bidirectional_forward()
 

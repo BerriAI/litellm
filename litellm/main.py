@@ -147,6 +147,7 @@ from litellm.utils import (
     token_counter,
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
+    validate_and_fix_thinking_param,
     validate_chat_completion_tool_choice,
     validate_openai_optional_params,
 )
@@ -1103,6 +1104,8 @@ def completion(  # type: ignore # noqa: PLR0915
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
+    # normalize camelCase thinking keys (e.g. budgetTokens -> budget_tokens)
+    thinking = validate_and_fix_thinking_param(thinking=thinking)
 
     ######### unpacking kwargs #####################
     args = locals()
@@ -4677,12 +4680,16 @@ def embedding(  # noqa: PLR0915
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
+    allowed_openai_params: Optional[List[str]] = kwargs.get(
+        "allowed_openai_params", None
+    )
     optional_params = get_optional_params_embeddings(
         model=model,
         user=user,
         dimensions=dimensions,
         encoding_format=encoding_format,
         custom_llm_provider=custom_llm_provider,
+        allowed_openai_params=allowed_openai_params,
         **non_default_params,
     )
 

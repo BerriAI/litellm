@@ -68,6 +68,7 @@ import ResponsesImageUpload from "./ResponsesImageUpload";
 import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
+import RealtimePlayground from "./RealtimePlayground";
 import { A2ATaskMetadata, MessageType } from "./types";
 import { useCodeInterpreter } from "./useCodeInterpreter";
 
@@ -1826,6 +1827,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
           {/* Main Chat Area */}
           <div className={`flex flex-col bg-white ${simplified ? "flex-1 w-full" : "w-3/4"}`}>
+            {endpointType === EndpointType.REALTIME ? (
+              <RealtimePlayground
+                accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                selectedModel={selectedModel || ""}
+                customProxyBaseUrl={customProxyBaseUrl || undefined}
+                selectedGuardrails={selectedGuardrails.length > 0 ? selectedGuardrails : undefined}
+              />
+            ) : (
+            <>
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
               <Title className="text-xl font-semibold mb-0">{simplified ? "Chat" : "Test Key"}</Title>
               <div className="flex gap-2">
@@ -2422,6 +2432,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 )}
               </div>
             </div>
+          </>
+          )}
           </div>
         </div>
       </Card>

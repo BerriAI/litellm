@@ -45,6 +45,7 @@ const sidebars = {
         "proxy/guardrails/guardrail_load_balancing",
         "proxy/guardrails/test_playground",
         "proxy/guardrails/litellm_content_filter",
+        "proxy/guardrails/realtime_guardrails",
         {
           type: "category",
           label: "Providers",
@@ -166,6 +167,7 @@ const sidebars = {
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
+        "tutorials/google_genai_sdk",
         "tutorials/litellm_qwen_code_cli",
         "tutorials/openai_codex"
       ]
@@ -180,6 +182,7 @@ const sidebars = {
         slug: "/agent_sdks"
       },
       items: [
+        "tutorials/openai_agents_sdk",
         "tutorials/claude_agent_sdk",
         "tutorials/copilotkit_sdk",
         "tutorials/google_adk",
@@ -345,6 +348,7 @@ const sidebars = {
                 "proxy/access_control",
                 "proxy/self_serve",
                 "proxy/public_teams",
+                "proxy/ui_project_management",
                 "proxy/ui/bulk_edit_users",
                 "proxy/ui/page_visibility",
               ]
@@ -419,6 +423,7 @@ const sidebars = {
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
+            "proxy/budget_reset_and_tz",
           ],
         },
         "proxy/caching",
@@ -631,6 +636,7 @@ const sidebars = {
             "pass_through/bedrock",
             "pass_through/azure_passthrough",
             "pass_through/cohere",
+            "pass_through/cursor",
             "pass_through/google_ai_studio",
             "pass_through/langfuse",
             "pass_through/mistral",
@@ -754,6 +760,7 @@ const sidebars = {
             "providers/vertex_batch",
             "providers/vertex_ocr",
             "providers/vertex_ai_agent_engine",
+            "providers/vertex_realtime",
           ]
         },
         {

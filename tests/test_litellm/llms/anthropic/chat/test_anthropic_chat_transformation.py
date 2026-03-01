@@ -2008,16 +2008,22 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
 
 def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
     """
-    Test that reasoning_effort maps to adaptive thinking type for Claude 4.6 models.
-
-    For Claude Opus 4.6 and Claude Sonnet 4.6, reasoning_effort should map to {"type": "adaptive"}
-    regardless of the effort level specified.
+    Test that reasoning_effort maps to adaptive thinking type for Claude 4.6 models,
+    and also sets output_config with the effort level.
     """
     config = AnthropicConfig()
 
+    effort_map = {
+        "low": "low",
+        "minimal": "low",
+        "medium": "medium",
+        "high": "high",
+        "max": "max",
+    }
+
     # Test with different reasoning_effort values - all should map to adaptive
     for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
-        for effort in ["low", "medium", "high", "minimal"]:
+        for effort in ["low", "medium", "high", "minimal", "max"]:
             non_default_params = {"reasoning_effort": effort}
             optional_params = {}
 
@@ -2035,6 +2041,9 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert "budget_tokens" not in result["thinking"]
             # reasoning_effort should not be in the result (it's transformed to thinking)
             assert "reasoning_effort" not in result
+            # Should set output_config with the mapped effort value
+            assert "output_config" in result, f"output_config missing for {model} with effort={effort}"
+            assert result["output_config"]["effort"] == effort_map[effort]
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
@@ -2830,69 +2839,84 @@ def test_fast_mode_usage_calculation():
 
 def test_fast_mode_cost_calculation():
     """
-    Test that fast mode correctly prepends 'fast/' to model name for pricing lookup.
+    Test that fast mode applies the 'fast' multiplier from provider_specific_entry
+    on top of the base model cost (1.1x for claude-opus-4-6).
     """
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
 
-    # Mock the generic_cost_per_token to verify correct model name is passed
-    with patch('litellm.llms.anthropic.cost_calculation.generic_cost_per_token') as mock_cost:
-        mock_cost.return_value = (0.03, 0.15)  # $30 and $150 per MTok
+    base_prompt = 0.005
+    base_completion = 0.025
 
-        # Test fast mode
+    with patch(
+        "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
+    ) as mock_cost, patch("litellm.get_model_info") as mock_info:
+        mock_cost.return_value = (base_prompt, base_completion)
+        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
+
         usage_fast = Usage(
             prompt_tokens=1000,
             completion_tokens=1000,
-            speed="fast"
+            speed="fast",
         )
 
         prompt_cost, completion_cost = cost_per_token(
             model="claude-opus-4-6",
-            usage=usage_fast
+            usage=usage_fast,
         )
 
-        # Verify that generic_cost_per_token was called with "fast/claude-opus-4-6"
+        # generic_cost_per_token called with the plain base model name
         mock_cost.assert_called_once()
-        call_args = mock_cost.call_args
-        assert call_args[1]['model'] == "fast/claude-opus-4-6"
-        assert call_args[1]['custom_llm_provider'] == "anthropic"
+        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
+        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
+
+        # 1.1x multiplier applied
+        assert abs(prompt_cost - base_prompt * 1.1) < 1e-10
+        assert abs(completion_cost - base_completion * 1.1) < 1e-10
 
 
 def test_fast_mode_with_inference_geo():
     """
-    Test that fast mode works correctly with inference_geo prefix.
-    Expected format: fast/us/claude-opus-4-6
+    Test that fast mode + inference_geo both apply their multipliers from
+    provider_specific_entry (1.1 * 1.1 = 1.21x for claude-opus-4-6).
     """
     from unittest.mock import patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
 
-    # Mock the generic_cost_per_token to verify correct model name is passed
-    with patch('litellm.llms.anthropic.cost_calculation.generic_cost_per_token') as mock_cost:
-        mock_cost.return_value = (0.03, 0.15)
+    base_prompt = 0.005
+    base_completion = 0.025
 
-        # Test with both speed and inference_geo
+    with patch(
+        "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
+    ) as mock_cost, patch("litellm.get_model_info") as mock_info:
+        mock_cost.return_value = (base_prompt, base_completion)
+        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
+
         usage = Usage(
             prompt_tokens=1000,
             completion_tokens=1000,
             speed="fast",
-            inference_geo="us"
+            inference_geo="us",
         )
 
-        # This should look up "fast/us/claude-opus-4-6" in pricing
         prompt_cost, completion_cost = cost_per_token(
             model="claude-opus-4-6",
-            usage=usage
+            usage=usage,
         )
 
-        # Verify that generic_cost_per_token was called with "fast/us/claude-opus-4-6"
+        # generic_cost_per_token called with the plain base model name
         mock_cost.assert_called_once()
-        call_args = mock_cost.call_args
-        assert call_args[1]['model'] == "fast/us/claude-opus-4-6"
-        assert call_args[1]['custom_llm_provider'] == "anthropic"
+        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
+        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
+
+        # 1.1 (fast) * 1.1 (us) = 1.21x multiplier applied
+        expected_multiplier = 1.1 * 1.1
+        assert abs(prompt_cost - base_prompt * expected_multiplier) < 1e-10
+        assert abs(completion_cost - base_completion * expected_multiplier) < 1e-10
 
 
 def test_fast_mode_parameter_in_supported_params():

@@ -31,6 +31,7 @@ class QdrantSemanticCache(BaseCache):
         quantization_config=None,
         embedding_model="text-embedding-ada-002",
         host_type=None,
+        vector_size=None,
     ):
         import os
 
@@ -53,6 +54,7 @@ class QdrantSemanticCache(BaseCache):
             raise Exception("similarity_threshold must be provided, passed None")
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
+        self.vector_size = vector_size if vector_size is not None else QDRANT_VECTOR_SIZE
         headers = {}
 
         # check if defined as os.environ/ variable
@@ -138,7 +140,7 @@ class QdrantSemanticCache(BaseCache):
             new_collection_status = self.sync_client.put(
                 url=f"{self.qdrant_api_base}/collections/{self.collection_name}",
                 json={
-                    "vectors": {"size": QDRANT_VECTOR_SIZE, "distance": "Cosine"},
+                    "vectors": {"size": self.vector_size, "distance": "Cosine"},
                     "quantization_config": quantization_params,
                 },
                 headers=self.headers,
