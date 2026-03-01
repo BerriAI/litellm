@@ -49,14 +49,16 @@ jobs:
       - name: Start LiteLLM container
         env:
           TAG: ${{ inputs.tag }}
+          AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
+          AZURE_API_BASE: ${{ secrets.AZURE_API_BASE }}
         run: |
           docker run -d \
             --name litellm-rc \
             -p 4000:4000 \
-            -v ${{ github.workspace }}/.github/observatory/litellm_config.yaml:/app/config.yaml \
-            -e LITELLM_MASTER_KEY="${{ env.LITELLM_MASTER_KEY }}" \
-            -e AZURE_API_KEY="${{ secrets.AZURE_API_KEY }}" \
-            -e AZURE_API_BASE="${{ secrets.AZURE_API_BASE }}" \
+            -v "${{ github.workspace }}/.github/observatory/litellm_config.yaml:/app/config.yaml" \
+            -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+            -e AZURE_API_KEY="${AZURE_API_KEY}" \
+            -e AZURE_API_BASE="${AZURE_API_BASE}" \
             "litellm/litellm:${TAG}" \
             --config /app/config.yaml --port 4000
 
@@ -109,11 +111,13 @@ jobs:
 
       - name: Trigger observatory test run
         id: trigger
+        env:
+          OBSERVATORY_URL: ${{ secrets.OBSERVATORY_URL }}
+          OBSERVATORY_API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
         run: |
-          OBSERVATORY_URL="${{ secrets.OBSERVATORY_URL }}"
           PAYLOAD=$(jq -n \
-            --arg url "${{ env.TUNNEL_URL }}" \
-            --arg key "${{ env.LITELLM_MASTER_KEY }}" \
+            --arg url "${TUNNEL_URL}" \
+            --arg key "${LITELLM_MASTER_KEY}" \
             '{
               deployment_url: $url,
               api_key: $key,
@@ -122,7 +126,7 @@ jobs:
             }')
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${OBSERVATORY_URL}/run-test" \
             -H "Content-Type: application/json" \
-            -H "X-LiteLLM-Observatory-API-Key: ${{ secrets.OBSERVATORY_API_KEY }}" \
+            -H "X-LiteLLM-Observatory-API-Key: ${OBSERVATORY_API_KEY}" \
             -d "$PAYLOAD")
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | head -n -1)
@@ -143,15 +147,17 @@ jobs:
 
       - name: Poll for test completion
         id: poll
+        env:
+          OBSERVATORY_URL: ${{ secrets.OBSERVATORY_URL }}
+          OBSERVATORY_API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
+          REQUEST_ID: ${{ steps.trigger.outputs.request_id }}
         run: |
-          OBSERVATORY_URL="${{ secrets.OBSERVATORY_URL }}"
-          REQUEST_ID="${{ steps.trigger.outputs.request_id }}"
           TIMEOUT=900  # 15 minutes
           INTERVAL=30
           ELAPSED=0
           while [ $ELAPSED -lt $TIMEOUT ]; do
             STATUS=$(curl -s "${OBSERVATORY_URL}/run-status/${REQUEST_ID}" \
-              -H "X-LiteLLM-Observatory-API-Key: ${{ secrets.OBSERVATORY_API_KEY }}")
+              -H "X-LiteLLM-Observatory-API-Key: ${OBSERVATORY_API_KEY}")
             RUN_STATUS=$(echo "$STATUS" | jq -r '.status')
             echo "Run status (${ELAPSED}s elapsed): $RUN_STATUS"
 
