@@ -497,10 +497,13 @@ class ProxyBaseLLMRequestProcessing:
             if logging_caching_headers:
                 headers.update(logging_caching_headers)
 
-        record_request_timing(
-            hidden_params,
-            model=(request_data or {}).get("model") or None,
-        )
+        try:
+            record_request_timing(
+                hidden_params,
+                model=(request_data or {}).get("model") or None,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(f"record_request_timing error (non-fatal): {e}")
 
         try:
             return {
