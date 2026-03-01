@@ -4,7 +4,10 @@ CRUD ENDPOINTS FOR GUARDRAILS
 
 import concurrent.futures
 import inspect
+import json
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -12,6 +15,7 @@ from pydantic import BaseModel
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
@@ -522,6 +526,451 @@ async def delete_guardrail(
     except HTTPException as e:
         raise e
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Team guardrail registration (Generic Guardrail API spec) ---
+
+GENERIC_GUARDRAIL_API = "generic_guardrail_api"
+
+
+class RegisterGuardrailRequest(BaseModel):
+    """Request body for POST /guardrails/register. Follows Generic Guardrail API config."""
+
+    guardrail_name: str
+    litellm_params: Dict[
+        str, Any
+    ]  # guardrail, mode, api_base required; api_key, headers, etc. optional
+    guardrail_info: Optional[Dict[str, Any]] = None
+
+    def get_litellm_params_dict(self) -> Dict[str, Any]:
+        return dict(self.litellm_params)
+
+
+class RegisterGuardrailResponse(BaseModel):
+    guardrail_id: str
+    guardrail_name: str
+    status: str
+    submitted_at: Optional[datetime] = None
+
+
+class GuardrailSubmissionSummary(BaseModel):
+    total: int
+    pending_review: int
+    active: int
+    rejected: int
+
+
+class GuardrailSubmissionItem(BaseModel):
+    guardrail_id: str
+    guardrail_name: str
+    status: str  # pending_review | active | rejected
+    team_id: Optional[str] = None
+    team_guardrail: bool = (
+        False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
+    )
+    litellm_params: Optional[Dict[str, Any]] = None
+    guardrail_info: Optional[Dict[str, Any]] = None
+    submitted_by_user_id: Optional[str] = None
+    submitted_by_email: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ListGuardrailSubmissionsResponse(BaseModel):
+    submissions: List[GuardrailSubmissionItem]
+    summary: GuardrailSubmissionSummary
+
+
+@router.post(
+    "/guardrails/register",
+    tags=["Guardrails"],
+    response_model=RegisterGuardrailResponse,
+)
+async def register_guardrail(
+    request: RegisterGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Register a guardrail for onboarding (team submission).
+
+    Accepts a guardrail config in the
+    [Generic Guardrail API](https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api) format.
+    The submission is stored with status `pending_review` until an admin approves it.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    if not user_api_key_dict.team_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Registration requires an API key associated with a team. Use a team-scoped key.",
+        )
+
+    params = request.get_litellm_params_dict()
+    if params.get("guardrail") != GENERIC_GUARDRAIL_API:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only guardrails with litellm_params.guardrail={GENERIC_GUARDRAIL_API!r} are accepted for registration",
+        )
+    api_base = params.get("api_base")
+    if not api_base:
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.api_base is required for generic_guardrail_api",
+        )
+    parsed = urlparse(api_base)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.api_base must use http or https scheme",
+        )
+    if not parsed.hostname:
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.api_base must contain a valid hostname",
+        )
+    mode = params.get("mode")
+    if mode is None:
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.mode is required (e.g. pre_call, post_call)",
+        )
+
+    try:
+        existing = await prisma_client.db.litellm_guardrailstable.find_unique(
+            where={"guardrail_name": request.guardrail_name}
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Guardrail with name {request.guardrail_name!r} already exists",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Error checking guardrail name uniqueness: %s", e
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+    now = datetime.now(timezone.utc)
+    litellm_params_str = safe_dumps(params)
+    guardrail_info = dict(request.guardrail_info or {})
+    guardrail_info["submitted_by_user_id"] = user_api_key_dict.user_id
+    guardrail_info["submitted_by_email"] = user_api_key_dict.user_email
+    guardrail_info["team_guardrail"] = (
+        True  # Mark as team submission for filtering/display
+    )
+    guardrail_info_str = safe_dumps(guardrail_info)
+
+    try:
+        created = await prisma_client.db.litellm_guardrailstable.create(
+            data={
+                "guardrail_name": request.guardrail_name,
+                "litellm_params": litellm_params_str,
+                "guardrail_info": guardrail_info_str,
+                "status": "pending_review",
+                "team_id": user_api_key_dict.team_id,
+                "submitted_at": now,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        return RegisterGuardrailResponse(
+            guardrail_id=created.guardrail_id,
+            guardrail_name=created.guardrail_name,
+            status=created.status,
+            submitted_at=created.submitted_at,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception("Error registering guardrail: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _parse_json_field(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return None
+    return None
+
+
+def _row_to_submission_item(row: Any) -> GuardrailSubmissionItem:
+    guardrail_info = _parse_json_field(row.guardrail_info) or {}
+    team_guardrail = row.team_id is not None
+    return GuardrailSubmissionItem(
+        guardrail_id=row.guardrail_id,
+        guardrail_name=row.guardrail_name,
+        status=row.status or "active",
+        team_id=row.team_id,
+        team_guardrail=team_guardrail,
+        litellm_params=_parse_json_field(row.litellm_params),
+        guardrail_info=guardrail_info,
+        submitted_by_user_id=guardrail_info.get("submitted_by_user_id"),
+        submitted_by_email=guardrail_info.get("submitted_by_email"),
+        submitted_at=getattr(row, "submitted_at", None),
+        reviewed_at=getattr(row, "reviewed_at", None),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.get(
+    "/guardrails/submissions",
+    tags=["Guardrails"],
+    response_model=ListGuardrailSubmissionsResponse,
+)
+async def list_guardrail_submissions(
+    status: Optional[str] = None,
+    team_id: Optional[str] = None,
+    search: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    List team guardrail submissions (admin only). Returns only guardrails with a team_id.
+
+    Status values: pending_review (team-registered, awaiting approval), active (approved), rejected.
+
+    Optional filters:
+    - status: pending_review | active | rejected
+    - team_id: filter by specific team
+    - search: name/description
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        # Single query: fetch all team guardrails (team_id is not null)
+        all_team_rows = await prisma_client.db.litellm_guardrailstable.find_many(
+            where={"team_id": {"not": None}},
+            order={"created_at": "desc"},
+        )
+
+        # Derive summary counts from the full result set
+        total = len(all_team_rows)
+        pending_review = sum(
+            1 for r in all_team_rows if (r.status or "active") == "pending_review"
+        )
+        active_count = sum(
+            1 for r in all_team_rows if (r.status or "active") == "active"
+        )
+        rejected = sum(
+            1 for r in all_team_rows if (r.status or "active") == "rejected"
+        )
+
+        # Apply filters to get the submissions list
+        rows = all_team_rows
+        if status:
+            rows = [r for r in rows if r.status == status]
+        if team_id:
+            rows = [r for r in rows if r.team_id == team_id]
+        if search:
+            search_lower = search.lower()
+            rows = [
+                r
+                for r in rows
+                if search_lower in (r.guardrail_name or "").lower()
+                or (
+                    isinstance(r.guardrail_info, dict)
+                    and search_lower
+                    in str((r.guardrail_info or {}).get("description", "")).lower()
+                )
+                or (
+                    isinstance(r.guardrail_info, str)
+                    and search_lower in r.guardrail_info.lower()
+                )
+            ]
+
+        items = [_row_to_submission_item(r) for r in rows]
+        return ListGuardrailSubmissionsResponse(
+            submissions=items,
+            summary=GuardrailSubmissionSummary(
+                total=total,
+                pending_review=pending_review,
+                active=active_count,
+                rejected=rejected,
+            ),
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception("Error listing guardrail submissions: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/guardrails/submissions/{guardrail_id}",
+    tags=["Guardrails"],
+    response_model=GuardrailSubmissionItem,
+)
+async def get_guardrail_submission(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Get a single guardrail submission by id (admin only)."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        row = await prisma_client.db.litellm_guardrailstable.find_unique(
+            where={"guardrail_id": guardrail_id}
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="Guardrail submission not found"
+            )
+        return _row_to_submission_item(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("Error getting guardrail submission: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/guardrails/submissions/{guardrail_id}/approve",
+    tags=["Guardrails"],
+)
+async def approve_guardrail_submission(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Approve a pending guardrail submission: set status to active and initialize in memory (admin only)."""
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        row = await prisma_client.db.litellm_guardrailstable.find_unique(
+            where={"guardrail_id": guardrail_id}
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="Guardrail submission not found"
+            )
+        if row.status != "pending_review":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Guardrail is not pending review (status={row.status})",
+            )
+
+        now = datetime.now(timezone.utc)
+        await prisma_client.db.litellm_guardrailstable.update(
+            where={"guardrail_id": guardrail_id},
+            data={"status": "active", "reviewed_at": now, "updated_at": now},
+        )
+
+        litellm_params = _parse_json_field(row.litellm_params)
+        guardrail_info = _parse_json_field(row.guardrail_info)
+        if not litellm_params:
+            raise HTTPException(
+                status_code=500,
+                detail="Guardrail litellm_params is missing or invalid",
+            )
+        guardrail_dict = {
+            "guardrail_id": row.guardrail_id,
+            "guardrail_name": row.guardrail_name,
+            "litellm_params": litellm_params,
+            "guardrail_info": guardrail_info or {},
+        }
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                guardrail=cast(Guardrail, guardrail_dict)
+            )
+            verbose_proxy_logger.info(
+                "Approved guardrail %s (ID: %s) and initialized in memory",
+                row.guardrail_name,
+                guardrail_id,
+            )
+        except Exception as init_err:
+            verbose_proxy_logger.warning(
+                "Failed to initialize approved guardrail %s in memory: %s",
+                guardrail_id,
+                init_err,
+            )
+            return {
+                "guardrail_id": guardrail_id,
+                "status": "active",
+                "message": "Guardrail approved",
+                "warning": f"Guardrail was marked active but failed to initialize in memory: {init_err}. "
+                "It will be picked up on the next sync cycle.",
+            }
+
+        return {
+            "guardrail_id": guardrail_id,
+            "status": "active",
+            "message": "Guardrail approved",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("Error approving guardrail submission: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/guardrails/submissions/{guardrail_id}/reject",
+    tags=["Guardrails"],
+)
+async def reject_guardrail_submission(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Reject a guardrail submission (admin only)."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        row = await prisma_client.db.litellm_guardrailstable.find_unique(
+            where={"guardrail_id": guardrail_id}
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="Guardrail submission not found"
+            )
+
+        now = datetime.now(timezone.utc)
+        await prisma_client.db.litellm_guardrailstable.update(
+            where={"guardrail_id": guardrail_id},
+            data={"status": "rejected", "reviewed_at": now, "updated_at": now},
+        )
+        return {
+            "guardrail_id": guardrail_id,
+            "status": "rejected",
+            "message": "Guardrail rejected",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("Error rejecting guardrail submission: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1356,9 +1805,9 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields[
-        "ui_friendly_name"
-    ] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    tool_permission_fields["ui_friendly_name"] = (
+        ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    )
 
     # Return the provider-specific parameters
     provider_params = {
@@ -1497,7 +1946,6 @@ async def test_custom_code_guardrail(
     ```
     """
 
-
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
@@ -1632,10 +2080,10 @@ async def apply_guardrail(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        active_guardrail: Optional[
-            CustomGuardrail
-        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-            guardrail_name=request.guardrail_name
+        active_guardrail: Optional[CustomGuardrail] = (
+            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+                guardrail_name=request.guardrail_name
+            )
         )
         if active_guardrail is None:
             raise HTTPException(
