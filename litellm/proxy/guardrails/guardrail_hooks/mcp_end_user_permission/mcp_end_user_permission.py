@@ -17,6 +17,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -238,11 +239,11 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
     def _extract_mcp_server_name(tool_name: str) -> Optional[str]:
         """
         Split "github-create_issue" → "github".
-        Returns None if the tool name has no '-' prefix (not an MCP tool).
+        Returns None if the tool name has no prefix separator (not an MCP tool).
         """
-        if not tool_name or "-" not in tool_name:
+        if not tool_name or MCP_TOOL_PREFIX_SEPARATOR not in tool_name:
             return None
-        return tool_name.split("-", 1)[0]
+        return tool_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)[0]
 
     @staticmethod
     def _get_tool_name_from_definition(tool: Any) -> Optional[str]:
