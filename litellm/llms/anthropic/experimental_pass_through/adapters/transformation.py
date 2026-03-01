@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 from typing import (
@@ -762,15 +763,6 @@ class LiteLLMAnthropicMessagesAdapter:
     ) -> Optional[Dict[str, Any]]:
         """
         Translate Anthropic's output_format to OpenAI's response_format.
-
-        Anthropic output_format: {"type": "json_schema", "schema": {...}}
-        OpenAI response_format: {"type": "json_schema", "json_schema": {"name": "...", "schema": {...}}}
-
-        Args:
-            output_format: Anthropic output_format dict with 'type' and 'schema'
-
-        Returns:
-            OpenAI-compatible response_format dict, or None if invalid
         """
         if not isinstance(output_format, dict):
             return None
@@ -783,12 +775,35 @@ class LiteLLMAnthropicMessagesAdapter:
         if not schema:
             return None
 
+        # Fix for #20997: Ensure schema is compatible with OpenAI Strict Mode
+        # Recursively adds "additionalProperties": false to all object nodes
+        def _make_strict(obj: Any):
+            if isinstance(obj, dict):
+                if obj.get("type") == "object":
+                    # Enforce additionalProperties: false
+                    obj["additionalProperties"] = False
+                    
+                    # Enforce all properties are in the 'required' array
+                    if "properties" in obj and "required" not in obj:
+                        obj["required"] = list(obj["properties"].keys())
+                
+                # Recursively traverse dictionaries
+                for value in obj.values():
+                    _make_strict(value)
+            elif isinstance(obj, list):
+                # Recursively traverse lists (handles arrays of objects)
+                for item in obj:
+                    _make_strict(item)
+
+        schema_copy = copy.deepcopy(schema)
+        _make_strict(schema_copy)
+
         # Convert to OpenAI response_format structure
         return {
             "type": "json_schema",
             "json_schema": {
                 "name": "structured_output",
-                "schema": schema,
+                "schema": schema_copy,
                 "strict": True,
             },
         }
