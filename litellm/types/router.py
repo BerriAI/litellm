@@ -866,3 +866,106 @@ class PreRoutingHookResponse(BaseModel):
 
     model: str
     messages: Optional[List[Dict[str, str]]]
+
+
+class RoutingGroupDeployment(BaseModel):
+    """A deployment reference within a routing group."""
+
+    model_id: str
+    model_name: str
+    provider: str
+    priority: Optional[int] = None
+    weight: Optional[int] = None
+    display_name: Optional[str] = None
+
+
+class RoutingGroupConfig(BaseModel):
+    """Full routing group configuration."""
+
+    routing_group_id: Optional[str] = None
+    routing_group_name: str
+    description: Optional[str] = None
+    routing_strategy: str
+    deployments: List[RoutingGroupDeployment]
+    fallback_config: Optional[dict] = None
+    retry_config: Optional[dict] = None
+    cooldown_config: Optional[dict] = None
+    settings: Optional[dict] = None
+    assigned_team_ids: Optional[List[str]] = None
+    assigned_key_ids: Optional[List[str]] = None
+    is_active: bool = True
+
+
+class RoutingGroupListResponse(BaseModel):
+    routing_groups: List[RoutingGroupConfig]
+    total: int
+    page: int
+    size: int
+
+
+class RoutingTrace(BaseModel):
+    """A single routing decision record for test/simulation."""
+
+    deployment_id: str
+    deployment_name: str
+    provider: str
+    latency_ms: float
+    was_fallback: bool
+    fallback_depth: int = 0
+    status: str  # "success" or "error"
+    error_message: Optional[str] = None
+
+
+class RoutingGroupTestResult(BaseModel):
+    """Result of a single test request through a routing group."""
+
+    success: bool
+    response_text: Optional[str] = None
+    traces: List[RoutingTrace]
+    total_latency_ms: float
+    final_deployment: str
+    final_provider: str
+
+
+class DeploymentTrafficStats(BaseModel):
+    """Per-deployment statistics from a simulation."""
+
+    deployment_id: str
+    deployment_name: str
+    provider: str
+    request_count: int
+    success_count: int
+    failure_count: int
+    avg_latency_ms: float
+    percent_of_total: float
+    priority: Optional[int] = None
+    weight: Optional[int] = None
+
+
+class FlowStep(BaseModel):
+    """For priority-failover: represents traffic flow between deployments."""
+
+    from_deployment: Optional[str] = None
+    to_deployment: str
+    request_count: int
+    reason: str  # "primary", "fallback_error", "fallback_rate_limit"
+
+
+class RoutingGroupSimulationResult(BaseModel):
+    """Result of a traffic simulation through a routing group."""
+
+    total_requests: int
+    successful_requests: int
+    failed_requests: int
+    avg_latency_ms: float
+    fallback_count: int
+    traffic_distribution: List[DeploymentTrafficStats]
+    flow_data: Optional[List[FlowStep]] = None
+
+
+class FailureInjectionConfig(BaseModel):
+    """Configuration for injecting failures during simulation."""
+
+    deployment_failure_rates: Dict[
+        str, float
+    ]  # {deployment_id: failure_probability 0.0-1.0}
