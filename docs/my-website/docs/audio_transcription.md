@@ -13,7 +13,7 @@ import TabItem from '@theme/TabItem';
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Guardrails | ✅ | Applies to output transcribed text (non-streaming only) |
-| Supported Providers | `openai`, `azure`, `vertex_ai`, `gemini`, `deepgram`, `groq`, `fireworks_ai`, `ovhcloud` | |
+| Supported Providers | `openai`, `azure`, `vertex_ai`, `gemini`, `deepgram`, `groq`, `fireworks_ai`, `ovhcloud`, `sarvam` | |
 
 ## Quick Start
 
@@ -127,6 +127,7 @@ transcript = client.audio.transcriptions.create(
 - [Groq](./providers/groq.md#speech-to-text---whisper)
 - [Deepgram](./providers/deepgram.md)
 - [OVHcloud AI Endpoints](./providers/ovhcloud.md)
+- [Sarvam](./providers/sarvam.md#audio-transcription-stt)
 
 ---
 

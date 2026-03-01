@@ -151,14 +151,12 @@ model_list:
     litellm_params:
       model: sarvam/bulbul:v3
       api_key: os.environ/SARVAM_API_KEY
-    model_info:
-      mode: audio_speech
   - model_name: sarvam/saaras:v3
     litellm_params:
       model: sarvam/saaras:v3
       api_key: os.environ/SARVAM_API_KEY
-    model_info:
-      mode: audio_transcription
+
+      
 litellm_settings:
   # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
   drop_params: True
@@ -224,7 +222,7 @@ general_settings:
   # background_health_checks: true
   # use_shared_health_check: true
   # health_check_interval: 30
-  database_url: "postgresql://postgres:postgres@localhost:5434/litellm_dev_fresh" # [OPTIONAL] use for token-based auth to proxy
+  # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>"" # [OPTIONAL] use for token-based auth to proxy
 
   pass_through_endpoints:
     - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
