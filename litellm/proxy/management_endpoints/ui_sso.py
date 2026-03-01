@@ -11,7 +11,9 @@ Has all /sso/* routes
 import asyncio
 import base64
 import hashlib
+import hmac
 import inspect
+import json
 import os
 import secrets
 from copy import deepcopy
@@ -2193,13 +2195,22 @@ class SSOAuthenticationHandler:
         )
 
     @staticmethod
-    async def get_redirect_response_from_openid(  # noqa: PLR0915
+    async def _generate_sso_jwt_token(  # noqa: PLR0915
         result: Union[OpenID, dict, CustomOpenID],
         request: Request,
         received_response: Optional[dict] = None,
         generic_client_id: Optional[str] = None,
         ui_access_mode: Optional[Dict] = None,
-    ) -> RedirectResponse:
+    ) -> Tuple[str, Optional[str]]:
+        """
+        Process the SSO provider result and generate a JWT token for UI authentication.
+
+        Shared by both the legacy redirect flow (get_redirect_response_from_openid)
+        and the new REST endpoints (/auth/sso/callback).
+
+        Returns:
+            Tuple[str, Optional[str]]: (jwt_token, user_id)
+        """
         import jwt
 
         from litellm.proxy.proxy_server import (
@@ -2328,9 +2339,6 @@ class SSOAuthenticationHandler:
         disabled_non_admin_personal_key_creation = (
             get_disabled_non_admin_personal_key_creation()
         )
-        litellm_dashboard_ui = get_custom_url(
-            request_base_url=str(request.base_url), route="ui/"
-        )
 
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
             _user_info: Optional[LiteLLM_UserTable] = None
@@ -2374,6 +2382,26 @@ class SSOAuthenticationHandler:
             cast(dict, returned_ui_token_object),
             master_key or "",
             algorithm="HS256",
+        )
+        return jwt_token, user_id
+
+    @staticmethod
+    async def get_redirect_response_from_openid(
+        result: Union[OpenID, dict, CustomOpenID],
+        request: Request,
+        received_response: Optional[dict] = None,
+        generic_client_id: Optional[str] = None,
+        ui_access_mode: Optional[Dict] = None,
+    ) -> RedirectResponse:
+        jwt_token, user_id = await SSOAuthenticationHandler._generate_sso_jwt_token(
+            result=result,
+            request=request,
+            received_response=received_response,
+            generic_client_id=generic_client_id,
+            ui_access_mode=ui_access_mode,
+        )
+        litellm_dashboard_ui = get_custom_url(
+            request_base_url=str(request.base_url), route="ui/"
         )
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"
@@ -3031,3 +3059,339 @@ async def debug_sso_callback(request: Request):
     )
 
     return HTMLResponse(content=html_content)
+
+
+# ---------------------------------------------------------------------------
+# RESTful SSO endpoints (/auth/sso/*)
+#
+# Designed for client-server separated deployments where the UI runs as a
+# standalone frontend.  These endpoints never serve HTML.
+# ---------------------------------------------------------------------------
+
+# Prefix used to identify state blobs created by these endpoints,
+# distinguishing them from CLI state (LITELLM_CLI_SESSION_TOKEN_PREFIX).
+_SSO_REST_STATE_PREFIX = "LITELLM_SSO_REST"
+
+
+def _build_signed_state(
+    post_login_redirect_uri: Optional[str],
+    master_key: str,
+) -> str:
+    """
+    Return a base64-encoded, HMAC-signed JSON blob encoding
+    post_login_redirect_uri together with a random nonce.
+
+    The signature prevents the redirect URI from being swapped between
+    the initiate and callback legs of the flow.
+    """
+    payload: Dict[str, Any] = {
+        "prefix": _SSO_REST_STATE_PREFIX,
+        "redirect_uri": post_login_redirect_uri,
+        "nonce": secrets.token_urlsafe(16),
+    }
+    # Sort keys so the serialised form is deterministic for HMAC verification.
+    payload_json = json.dumps(payload, sort_keys=True)
+    sig = hmac.new(
+        master_key.encode(), payload_json.encode(), hashlib.sha256
+    ).hexdigest()
+    state_obj = {"data": payload, "sig": sig}
+    return base64.urlsafe_b64encode(json.dumps(state_obj).encode()).decode()
+
+
+def _verify_and_decode_sso_state(state: str, master_key: str) -> Dict[str, Any]:
+    """
+    Verify the HMAC signature and return the decoded payload dict.
+
+    Raises HTTPException(400) if the state is malformed or the signature
+    does not match.
+    """
+    try:
+        state_obj = json.loads(base64.urlsafe_b64decode(state.encode()))
+        payload = state_obj["data"]
+        sig = state_obj["sig"]
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid SSO state parameter.",
+        )
+
+    payload_json = json.dumps(payload, sort_keys=True)
+    expected_sig = hmac.new(
+        master_key.encode(), payload_json.encode(), hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(sig, expected_sig):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SSO state signature verification failed.",
+        )
+
+    if payload.get("prefix") != _SSO_REST_STATE_PREFIX:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid SSO state prefix.",
+        )
+
+    return payload
+
+
+@router.get("/auth/sso/initiate", tags=["SSO"])
+async def sso_initiate(
+    request: Request,
+    post_login_redirect_uri: Optional[str] = None,
+) -> dict:
+    """
+    Initiate the SSO authentication flow.
+
+    Returns the identity provider's authorization URL as JSON. The frontend
+    should redirect the user's browser to that URL (e.g. `window.location.href`).
+
+    After the user authenticates, the SSO provider redirects the browser to
+    `/auth/sso/callback`. On success, the callback redirects to
+    `post_login_redirect_uri?token=<JWT>` where the JWT can be used as a
+    bearer token for subsequent requests.
+
+    Args:
+        post_login_redirect_uri: Where to send the user after a successful login.
+            The JWT is appended as a `token` query parameter. If omitted, the
+            callback falls back to the proxy's built-in UI.
+
+    Returns:
+        {"authorization_url": "<SSO provider URL>", "provider": "google|microsoft|generic"}
+    """
+    from litellm.proxy.proxy_server import master_key, premium_user, prisma_client
+
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID")
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+    generic_client_id = os.getenv("GENERIC_CLIENT_ID")
+
+    if not SSOAuthenticationHandler.should_use_sso_handler(
+        microsoft_client_id=microsoft_client_id,
+        google_client_id=google_client_id,
+        generic_client_id=generic_client_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "SSO is not configured. Set GOOGLE_CLIENT_ID, "
+                "MICROSOFT_CLIENT_ID, or GENERIC_CLIENT_ID in your environment."
+            ),
+        )
+
+    # Enforce premium/enterprise user limit (mirrors /sso/key/generate logic).
+    if premium_user is not True:
+        if prisma_client is not None:
+            total_users = await prisma_client.db.litellm_usertable.count()
+            if total_users and total_users > 5:
+                raise ProxyException(
+                    message=(
+                        "You must be a LiteLLM Enterprise user to use SSO for more "
+                        "than 5 users. If you have a license please set "
+                        "`LITELLM_LICENSE` in your env. If you want to obtain a "
+                        "license meet with us here: "
+                        "https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions"
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="premium_user",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
+        else:
+            raise ProxyException(
+                message=CommonProxyErrors.db_not_connected_error.value,
+                type=ProxyErrorTypes.auth_error,
+                param="premium_user",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
+    if master_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Master key not set for proxy. Set `LITELLM_MASTER_KEY` in your env "
+                "or `general_settings.master_key` in config.yaml."
+            ),
+        )
+
+    # The SSO provider will redirect the user back to /auth/sso/callback.
+    redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+        request=request,
+        sso_callback_route="auth/sso/callback",
+    )
+
+    # Encode post_login_redirect_uri in a signed state blob so it cannot be
+    # tampered with between the initiate and callback legs.
+    state = _build_signed_state(
+        post_login_redirect_uri=post_login_redirect_uri,
+        master_key=master_key,
+    )
+
+    redirect_response = await SSOAuthenticationHandler.get_sso_login_redirect(
+        redirect_url=redirect_url,
+        microsoft_client_id=microsoft_client_id,
+        google_client_id=google_client_id,
+        generic_client_id=generic_client_id,
+        state=state,
+    )
+
+    if redirect_response is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate SSO authorization URL.",
+        )
+
+    authorization_url = redirect_response.headers.get("location")
+    if not authorization_url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SSO provider did not return an authorization URL.",
+        )
+
+    provider = "generic"
+    if google_client_id:
+        provider = "google"
+    elif microsoft_client_id:
+        provider = "microsoft"
+
+    verbose_proxy_logger.info(
+        f"SSO initiate: provider={provider}, callback={redirect_url}"
+    )
+
+    return {
+        "authorization_url": authorization_url,
+        "provider": provider,
+    }
+
+
+@router.get("/auth/sso/callback", tags=["SSO"])
+async def sso_callback(
+    request: Request,
+    state: Optional[str] = None,
+) -> RedirectResponse:
+    """
+    Handle the SSO provider callback.
+
+    The identity provider redirects the user's browser here after authentication
+    with `code` and `state` query parameters. This endpoint:
+
+    1. Verifies the signed `state` and extracts `post_login_redirect_uri`.
+    2. Exchanges the authorization code for user identity via the configured
+       SSO provider (Google, Microsoft, or Generic OIDC).
+    3. Looks up or creates the user in the LiteLLM database.
+    4. Generates a signed JWT session token.
+    5. Redirects the browser to `post_login_redirect_uri?token=<JWT>`.
+
+    If no `post_login_redirect_uri` was supplied at initiation the browser is
+    redirected to the proxy's built-in UI instead.
+    """
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        jwt_handler,
+        master_key,
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CommonProxyErrors.db_not_connected_error.value,
+        )
+
+    if master_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Master key not set for proxy. Set `LITELLM_MASTER_KEY` in your env "
+                "or `general_settings.master_key` in config.yaml."
+            ),
+        )
+
+    # Decode the signed state to recover post_login_redirect_uri.
+    post_login_redirect_uri: Optional[str] = None
+    if state:
+        state_data = _verify_and_decode_sso_state(state=state, master_key=master_key)
+        post_login_redirect_uri = state_data.get("redirect_uri")
+
+    # The callback URL registered with the SSO provider must match exactly.
+    redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+        request=request,
+        sso_callback_route="auth/sso/callback",
+    )
+
+    ui_access_mode = general_settings.get("ui_access_mode", None)
+
+    # Configure JWT handler for team-based access mode if needed.
+    sso_jwt_handler: Optional[JWTHandler] = None
+    if ui_access_mode is not None and isinstance(ui_access_mode, dict):
+        sso_jwt_handler = JWTHandler()
+        sso_jwt_handler.update_environment(
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            litellm_jwtauth=LiteLLM_JWTAuth(
+                team_ids_jwt_field=ui_access_mode.get("sso_group_jwt_field"),
+            ),
+            leeway=0,
+        )
+
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID")
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+    generic_client_id = os.getenv("GENERIC_CLIENT_ID")
+
+    received_response: Optional[dict] = None
+    result = None
+
+    if google_client_id is not None:
+        result = await GoogleSSOHandler.get_google_callback_response(
+            request=request,
+            google_client_id=google_client_id,
+            redirect_url=redirect_url,
+        )
+    elif microsoft_client_id is not None:
+        result = await MicrosoftSSOHandler.get_microsoft_callback_response(
+            request=request,
+            microsoft_client_id=microsoft_client_id,
+            redirect_url=redirect_url,
+        )
+    elif generic_client_id is not None:
+        result, received_response = await get_generic_sso_response(
+            request=request,
+            jwt_handler=jwt_handler,
+            generic_client_id=generic_client_id,
+            redirect_url=redirect_url,
+            sso_jwt_handler=sso_jwt_handler,
+        )
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication result not returned by SSO provider.",
+        )
+
+    jwt_token, user_id = await SSOAuthenticationHandler._generate_sso_jwt_token(
+        result=result,
+        request=request,
+        received_response=received_response,
+        generic_client_id=generic_client_id,
+        ui_access_mode=ui_access_mode,
+    )
+
+    # Build the final redirect destination.
+    if post_login_redirect_uri:
+        separator = "&" if "?" in post_login_redirect_uri else "?"
+        destination = f"{post_login_redirect_uri}{separator}token={jwt_token}"
+        verbose_proxy_logger.info("SSO REST callback: redirecting to frontend")
+    else:
+        # Fall back to the proxy's built-in UI (same behaviour as /sso/callback).
+        destination = get_custom_url(
+            request_base_url=str(request.base_url), route="ui/"
+        )
+        if user_id is not None and isinstance(user_id, str):
+            destination += "?login=success"
+        verbose_proxy_logger.info("SSO REST callback: redirecting to built-in UI")
+
+    redirect_response = RedirectResponse(url=destination, status_code=303)
+    # Set cookie for same-origin deployments where the frontend can read it.
+    redirect_response.set_cookie(key="token", value=jwt_token)
+    return redirect_response
