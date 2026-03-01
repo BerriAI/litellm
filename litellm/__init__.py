@@ -489,8 +489,12 @@ def _ensure_remote_model_cost() -> None:
         model_cost.update(remote)  # merge remote on top of local; no clear() needed
         add_known_models()  # repopulate provider model sets with merged data
         _model_cost_remote_loaded = True
-    except Exception:
-        pass  # keep using local backup; next call will retry
+    except Exception as e:
+        verbose_logger.debug(
+            "LiteLLM: Remote model cost map fetch/merge failed: %s. "
+            "Keeping local backup; will retry on next call.",
+            str(e),
+        )
 
 
 cost_discount_config: Dict[str, float] = (
