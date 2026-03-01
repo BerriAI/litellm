@@ -4,6 +4,7 @@ Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/compl
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
@@ -34,8 +35,12 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Moonshot AI does not support content in list format.
+
+        Also validates that reasoning_content is preserved in assistant messages
+        with tool_calls for reasoning models (e.g. kimi-k2.5).
         """
         messages = handle_messages_with_content_list_to_str_conversion(messages)
+        self._validate_reasoning_content_in_messages(messages, model)
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
@@ -44,6 +49,50 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             return super()._transform_messages(
                 messages=messages, model=model, is_async=False
             )
+
+    @staticmethod
+    def _is_reasoning_model(model: str) -> bool:
+        """Check if a Moonshot model has thinking/reasoning enabled by default."""
+        reasoning_indicators = ["k2.5", "k2-5", "reasoning", "thinking"]
+        model_lower = model.lower()
+        return any(indicator in model_lower for indicator in reasoning_indicators)
+
+    def _validate_reasoning_content_in_messages(
+        self, messages: List[AllMessageValues], model: str
+    ) -> None:
+        """
+        Validate that assistant messages with tool_calls include reasoning_content
+        when using a Moonshot reasoning model.
+
+        Moonshot reasoning models (e.g. kimi-k2.5) require reasoning_content to be
+        preserved in assistant tool-call messages during multi-turn conversations.
+        See: https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart#tool-use-compatibility
+
+        Raises:
+            litellm.BadRequestError when reasoning_content is missing.
+        """
+        if not self._is_reasoning_model(model):
+            return
+
+        for i, message in enumerate(messages):
+            if (
+                message.get("role") == "assistant"
+                and message.get("tool_calls")
+                and not message.get("reasoning_content")
+            ):
+                raise litellm.BadRequestError(
+                    message=(
+                        f"Moonshot reasoning model '{model}' requires "
+                        f"'reasoning_content' in assistant messages that contain "
+                        f"tool_calls (message at index {i}). "
+                        f"When building your conversation history, preserve the "
+                        f"reasoning_content from the model's response, e.g.: "
+                        f"messages.append(response.choices[0].message.model_dump(exclude_none=True)). "
+                        f"Ref: https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart#tool-use-compatibility"
+                    ),
+                    model=model,
+                    llm_provider="moonshot",
+                )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
