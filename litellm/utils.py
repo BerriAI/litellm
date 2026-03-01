@@ -1143,6 +1143,16 @@ def function_setup(  # noqa: PLR0915
         litellm_params: Dict[str, Any] = {"api_base": ""}
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
+        if "litellm_metadata" in kwargs:
+            litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
+            # Also use litellm_metadata as metadata fallback so that
+            # model_info (injected by router for generic API calls like
+            # aimage_edit) is visible for cost calculation.
+            if "metadata" not in litellm_params:
+                litellm_metadata = kwargs["litellm_metadata"]
+                litellm_params["metadata"] = (
+                    {**litellm_metadata} if isinstance(litellm_metadata, dict) else {}
+                )
 
         logging_obj.update_environment_variables(
             model=model,

@@ -149,6 +149,47 @@ def test_use_custom_pricing_for_model():
     assert use_custom_pricing_for_model(litellm_params) == True
 
 
+def test_use_custom_pricing_for_model_litellm_metadata():
+    """
+    Verify that custom pricing is detected when model_info is stored under
+    litellm_metadata (used by generic API calls like aimage_edit routed
+    via _ageneric_api_call_with_fallbacks).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22244
+    """
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    # model_info under litellm_metadata (as set by router for generic API calls)
+    litellm_params = {
+        "litellm_metadata": {
+            "model_info": {
+                "input_cost_per_image": 0.00676128,
+            }
+        }
+    }
+    assert use_custom_pricing_for_model(litellm_params) == True
+
+    # model_info under metadata (normal case) still works
+    litellm_params_metadata = {
+        "metadata": {
+            "model_info": {
+                "input_cost_per_image": 0.00676128,
+            }
+        }
+    }
+    assert use_custom_pricing_for_model(litellm_params_metadata) == True
+
+    # No custom pricing when model_info has no pricing keys
+    litellm_params_no_pricing = {
+        "litellm_metadata": {
+            "model_info": {
+                "mode": "image_generation",
+            }
+        }
+    }
+    assert use_custom_pricing_for_model(litellm_params_no_pricing) == False
+
+
 def test_logging_prevent_double_logging(logging_obj):
     """
     When using a bridge, log only once from the underlying bridge call.

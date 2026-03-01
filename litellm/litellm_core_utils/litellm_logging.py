@@ -4451,15 +4451,18 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
         if litellm_params.get(key) is not None:
             return True
 
-    # Check model_info
-    metadata: dict = litellm_params.get("metadata", {}) or {}
-    model_info: dict = metadata.get("model_info", {}) or {}
+    # Check model_info from metadata or litellm_metadata
+    # litellm_metadata is used by generic API calls (e.g. aimage_edit)
+    # routed via _ageneric_api_call_with_fallbacks
+    for meta_key in ("metadata", "litellm_metadata"):
+        metadata: dict = litellm_params.get(meta_key, {}) or {}
+        model_info: dict = metadata.get("model_info", {}) or {}
 
-    if model_info:
-        matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
-        for key in matching_keys:
-            if model_info.get(key) is not None:
-                return True
+        if model_info:
+            matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
+            for key in matching_keys:
+                if model_info.get(key) is not None:
+                    return True
 
     return False
 

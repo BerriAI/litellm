@@ -3599,3 +3599,45 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_function_setup_litellm_metadata():
+    """
+    Test that function_setup picks up litellm_metadata (used by generic API
+    calls like aimage_edit) and includes it in litellm_params so that
+    custom pricing is correctly detected.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22244
+    """
+    import time
+
+    from litellm.utils import function_setup, Rules
+
+    rules_obj = Rules()
+    start_time = time.time()
+
+    kwargs = {
+        "model": "openai/flux-2-klein-4b",
+        "litellm_call_id": "test-call-id-123",
+        "litellm_metadata": {
+            "model_info": {
+                "input_cost_per_image": 0.00676128,
+                "mode": "image_generation",
+            },
+        },
+    }
+
+    logging_obj, result_kwargs = function_setup(
+        original_function="aimage_edit",
+        rules_obj=rules_obj,
+        start_time=start_time,
+        **kwargs,
+    )
+
+    # litellm_metadata should be included in litellm_params
+    assert "litellm_metadata" in logging_obj.litellm_params
+    assert logging_obj.litellm_params["litellm_metadata"]["model_info"]["input_cost_per_image"] == 0.00676128
+
+    # metadata should also be set (fallback from litellm_metadata)
+    assert "metadata" in logging_obj.litellm_params
+    assert logging_obj.litellm_params["metadata"]["model_info"]["input_cost_per_image"] == 0.00676128
