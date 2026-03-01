@@ -100,19 +100,25 @@ class BedrockConverseLLM(BaseAWSLLM):
         litellm_params: dict,
         credentials: Credentials,
         logger_fn=None,
-        headers={},
+        headers: Optional[dict] = None,
+        extra_headers: Optional[dict] = None,
         client: Optional[AsyncHTTPHandler] = None,
         fake_stream: bool = False,
         json_mode: Optional[bool] = False,
         api_key: Optional[str] = None,
         stream_chunk_size: int = 1024,
     ) -> CustomStreamWrapper:
+        if headers is None:
+            headers = {}
+        # Use extra_headers (original, with betas) for transform so
+        # _process_tools_and_beta() can extract beta values for the body.
+        transform_headers = extra_headers if extra_headers is not None else headers
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            headers=headers,
+            headers=transform_headers,
         )
         data = json.dumps(request_data)
 
@@ -171,16 +177,22 @@ class BedrockConverseLLM(BaseAWSLLM):
         litellm_params: dict,
         credentials: Credentials,
         logger_fn=None,
-        headers: dict = {},
+        headers: Optional[dict] = None,
+        extra_headers: Optional[dict] = None,
         client: Optional[AsyncHTTPHandler] = None,
         api_key: Optional[str] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
+        if headers is None:
+            headers = {}
+        # Use extra_headers (original, with betas) for transform so
+        # _process_tools_and_beta() can extract beta values for the body.
+        transform_headers = extra_headers if extra_headers is not None else headers
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            headers=headers,
+            headers=transform_headers,
         )
         data = json.dumps(request_data)
         
@@ -355,6 +367,13 @@ class BedrockConverseLLM(BaseAWSLLM):
         headers = update_headers_with_filtered_beta(
             headers=headers, provider="bedrock_converse"
         )
+        # Remove anthropic-beta from HTTP headers for Bedrock Converse.
+        # Beta values are extracted and placed in additionalModelRequestFields
+        # by _process_tools_and_beta(). Bedrock Converse does not process
+        # anthropic-beta as an HTTP header — only via the request body.
+        # Case-insensitive removal since HTTP headers are case-insensitive.
+        for key in [k for k in headers if k.lower() == "anthropic-beta"]:
+            del headers[key]
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
             if isinstance(client, HTTPHandler):
@@ -372,6 +391,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
+                    extra_headers=extra_headers,
                     timeout=timeout,
                     client=client,
                     json_mode=json_mode,
@@ -393,6 +413,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 headers=headers,
+                extra_headers=extra_headers,
                 timeout=timeout,
                 client=client,
                 credentials=credentials,
