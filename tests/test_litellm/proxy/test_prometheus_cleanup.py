@@ -32,14 +32,13 @@ class TestMarkWorkerExit:
                 mark_worker_exit(12345)
                 mock_mark.assert_called_once_with(12345)
 
-    def test_noop_when_env_not_set(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
-            with patch(
-                "prometheus_client.multiprocess.mark_process_dead"
-            ) as mock_mark:
-                mark_worker_exit(12345)
-                mock_mark.assert_not_called()
+    def test_noop_when_env_not_set(self, monkeypatch):
+        monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
+        with patch(
+            "prometheus_client.multiprocess.mark_process_dead"
+        ) as mock_mark:
+            mark_worker_exit(12345)
+            mock_mark.assert_not_called()
 
     def test_exception_is_caught_and_logged(self, tmp_path):
         with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
@@ -75,17 +74,16 @@ class TestMaybeSetupPrometheusMultiprocDir:
             (4, None),
         ],
     )
-    def test_noop_when_setup_not_needed(self, num_workers, litellm_settings):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
-            os.environ.pop("prometheus_multiproc_dir", None)
+    def test_noop_when_setup_not_needed(self, num_workers, litellm_settings, monkeypatch):
+        monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
+        monkeypatch.delenv("prometheus_multiproc_dir", raising=False)
 
-            ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
-                num_workers=num_workers,
-                litellm_settings=litellm_settings,
-            )
+        ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+            num_workers=num_workers,
+            litellm_settings=litellm_settings,
+        )
 
-            assert os.environ.get("PROMETHEUS_MULTIPROC_DIR") is None
+        assert os.environ.get("PROMETHEUS_MULTIPROC_DIR") is None
 
     @pytest.mark.parametrize(
         "litellm_settings",
@@ -94,20 +92,16 @@ class TestMaybeSetupPrometheusMultiprocDir:
             {"success_callback": ["prometheus"]},
         ],
     )
-    def test_auto_creates_dir_when_prometheus_configured(self, litellm_settings):
+    def test_auto_creates_dir_when_prometheus_configured(self, litellm_settings, monkeypatch):
         """When multiple workers + prometheus callback, auto-creates temp dir."""
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
-            os.environ.pop("prometheus_multiproc_dir", None)
+        monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
+        monkeypatch.delenv("prometheus_multiproc_dir", raising=False)
 
-            ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
-                num_workers=4,
-                litellm_settings=litellm_settings,
-            )
+        ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+            num_workers=4,
+            litellm_settings=litellm_settings,
+        )
 
-            result_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-            assert result_dir is not None
-            assert os.path.isdir(result_dir)
-
-            # Cleanup
-            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+        result_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+        assert result_dir is not None
+        assert os.path.isdir(result_dir)
