@@ -3692,11 +3692,12 @@ class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
     jwt_claim_name: str
     jwt_claim_value: str
     token: str
-    key_alias: Optional[str] = None
     description: Optional[str] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
 
 
 class SpecialHeaders(enum.Enum):

@@ -22,14 +22,19 @@ async def create_jwt_key_mapping(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-    try:
+        hashed_key = hash_token(data.key)
+        create_data = {
+            "jwt_claim_name": data.jwt_claim_name,
+            "jwt_claim_value": data.jwt_claim_value,
+            "token": hashed_key,
+            "created_by": user_api_key_dict.user_id,
+            "updated_by": user_api_key_dict.user_id,
+        }
+        if data.description is not None:
+            create_data["description"] = data.description
+
         new_mapping = await prisma_client.db.litellm_jwtkeymapping.create(
-            data={
-                "jwt_claim_name": data.jwt_claim_name,
-                "jwt_claim_value": data.jwt_claim_value,
-                "token": data.key,
-                "is_active": True,
-            }
+            data=create_data
         )
 
         # Invalidate cache
@@ -59,6 +64,7 @@ async def update_jwt_key_mapping(
     update_data = data.model_dump(exclude_unset=True, exclude={"id", "key"})
     if data.key is not None:
         update_data["token"] = hash_token(data.key)
+    update_data["updated_by"] = user_api_key_dict.user_id
 
     try:
         # Get old mapping for cache invalidation
