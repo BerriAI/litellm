@@ -1728,20 +1728,22 @@ async def test_spend_logs_cleanup_after_error():
     # Setup test data
     import asyncio
 
+    from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
+
     mock_client = MagicMock()
-    mock_client.spend_log_transactions = [
+    queue = SpendLogQueue(maxlen=100_000)
+    queue.extend([
         {"id": 1, "amount": 10.0},
         {"id": 2, "amount": 20.0},
         {"id": 3, "amount": 30.0},
-    ]
+    ])
+    mock_client.spend_log_transactions = queue
     # Add lock for spend_log_transactions (matches real PrismaClient)
     mock_client._spend_log_transactions_lock = asyncio.Lock()
     # Make the DB operation fail
     mock_client.db.litellm_spendlogs.create_many = AsyncMock(
         side_effect=Exception("DB Error")
     )
-
-    original_logs = mock_client.spend_log_transactions.copy()
 
     # Call function - should raise error
     with pytest.raises(Exception):
@@ -1752,10 +1754,11 @@ async def test_spend_logs_cleanup_after_error():
             proxy_logging_obj=MagicMock(),
         )
 
-    # Verify the first batch was removed from spend_log_transactions
-    assert (
-        mock_client.spend_log_transactions == original_logs[100:]
-    ), "Should remove processed logs even after error"
+    # drain() removes all 3 items before the DB write attempt, so the queue
+    # should be empty after the error (logs are consumed regardless of failure)
+    assert len(mock_client.spend_log_transactions) == 0, (
+        "drain() should have consumed all items before the DB write"
+    )
 
 
 def test_provider_specific_header():
