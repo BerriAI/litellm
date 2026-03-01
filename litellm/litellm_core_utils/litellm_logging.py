@@ -4877,7 +4877,7 @@ class StandardLoggingPayloadSetup:
                 try:
                     _value = int(_value)
                 except (ValueError, TypeError):
-                    _value = str(_value)
+                    continue
             else:
                 _value = str(_value)
 
