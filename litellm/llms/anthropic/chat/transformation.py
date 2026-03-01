@@ -77,6 +77,23 @@ if TYPE_CHECKING:
 else:
     LoggingClass = Any
 
+# String formats natively supported by Anthropic's structured output API.
+# See: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/lib/_parse/_transform.py
+_ANTHROPIC_SUPPORTED_STRING_FORMATS = frozenset(
+    {
+        "date-time",
+        "time",
+        "date",
+        "duration",
+        "email",
+        "hostname",
+        "uri",
+        "ipv4",
+        "ipv6",
+        "uuid",
+    }
+)
+
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
@@ -218,20 +235,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return params
 
-    # String formats natively supported by Anthropic's structured output API.
-    # See: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/lib/_parse/_transform.py
-    SUPPORTED_STRING_FORMATS = {
-        "date-time",
-        "time",
-        "date",
-        "duration",
-        "email",
-        "hostname",
-        "uri",
-        "ipv4",
-        "ipv6",
-        "uuid",
-    }
 
     @staticmethod
     def filter_anthropic_output_schema(
@@ -311,7 +314,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if (
             schema_format is not None
             and schema.get("type") == "string"
-            and schema_format not in AnthropicConfig.SUPPORTED_STRING_FORMATS
+            and schema_format not in _ANTHROPIC_SUPPORTED_STRING_FORMATS
         ):
             constraint_descriptions.append(f"format: {schema_format}")
 
@@ -337,7 +340,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if (
                 key == "format"
                 and schema.get("type") == "string"
-                and value not in AnthropicConfig.SUPPORTED_STRING_FORMATS
+                and value not in _ANTHROPIC_SUPPORTED_STRING_FORMATS
             ):
                 continue
 
