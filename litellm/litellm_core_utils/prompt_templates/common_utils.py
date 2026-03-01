@@ -1209,7 +1209,7 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
         details = message["reasoning_details"]
         if isinstance(details, list):
             text = "".join(
-                item.get("text", "")
+                str(item.get("text") or "")
                 for item in details
                 if isinstance(item, dict)
             )
