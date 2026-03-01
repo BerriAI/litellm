@@ -62,6 +62,19 @@ class LoggingWorker:
         # Register cleanup handler to flush remaining events on exit
         atexit.register(self._flush_on_exit)
 
+    def _reset_loop_state(self) -> None:
+        """Reset all event-loop-bound state.
+
+        Shared helper used by both ``_ensure_queue`` (on loop change) and
+        ``reset`` (for test teardown) to avoid duplicating the list of
+        fields that must be cleared when the bound loop is invalidated.
+        """
+        self._epoch += 1
+        self._queue = None
+        self._sem = None
+        self._worker_task = None
+        self._running_tasks.clear()
+
     def _ensure_queue(self) -> None:
         """Initialize the queue if it doesn't exist or if event loop has changed."""
         try:
@@ -75,13 +88,7 @@ class LoggingWorker:
             verbose_logger.debug(
                 "LoggingWorker: Event loop changed, reinitializing queue and worker"
             )
-            # Bump epoch so old worker loops exit on their next iteration
-            self._epoch += 1
-            # Clear old state - these are bound to the old loop
-            self._queue = None
-            self._sem = None
-            self._worker_task = None
-            self._running_tasks.clear()
+            self._reset_loop_state()
 
         if self._queue is None:
             self._queue = asyncio.Queue(maxsize=self.max_queue_size)
@@ -409,10 +416,8 @@ class LoggingWorker:
                 await GLOBAL_LOGGING_WORKER.reset()
         """
         await self.stop()
-        self._queue = None
-        self._sem = None
+        self._reset_loop_state()
         self._bound_loop = None
-        self._epoch += 1
 
     async def flush(self) -> None:
         """Flush the logging queue."""
@@ -428,6 +433,11 @@ class LoggingWorker:
         This is used inside ``CancelledError`` handlers where we cannot
         reliably ``await`` new coroutines.  Closing the unawaited coroutines
         prevents "coroutine was never awaited" warnings.
+
+        Intentionally drops stale queued items: during cancellation the old
+        event loop is being torn down, so the coroutines in the queue can no
+        longer run.  Losing them is the correct behaviour — they belong to
+        the old loop's lifecycle and retaining them would leak resources.
         """
         if queue is None:
             return
