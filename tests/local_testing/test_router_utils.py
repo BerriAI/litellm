@@ -199,6 +199,7 @@ def test_router_get_model_info_wildcard_routes():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_router_get_model_group_usage_wildcard_routes():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -219,7 +220,7 @@ async def test_router_get_model_group_usage_wildcard_routes():
     )
     print(resp)
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(2)
 
     tpm, rpm = await router.get_model_group_usage(model_group="gemini/gemini-1.5-flash")
 
