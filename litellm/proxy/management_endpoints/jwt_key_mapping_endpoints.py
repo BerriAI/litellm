@@ -55,7 +55,9 @@ async def update_jwt_key_mapping(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
-    update_data = data.model_dump(exclude_unset=True, exclude={"id"})
+    update_data = data.model_dump(exclude_unset=True, exclude={"id", "key"})
+    if data.key is not None:
+        update_data["token"] = hash_token(data.key)
 
     try:
         # Get old mapping for cache invalidation
