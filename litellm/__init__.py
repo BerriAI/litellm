@@ -452,7 +452,6 @@ from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
 # Load local backup at import time (fast, ~12 ms, no network I/O).
-# The remote fetch is deferred to first access — no threading, no locks.
 _model_cost_url: str = model_cost_map_url
 # Dual env-var check is intentional:
 #   1. Import-time check (here) initializes _model_cost_remote_loaded to skip lazy fetch
@@ -461,6 +460,7 @@ _model_cost_url: str = model_cost_map_url
 _model_cost_remote_loaded: bool = (
     os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true"
 )
+_model_cost_lock = threading.Lock()
 model_cost = GetModelCostMap.load_local_model_cost_map()
 
 
@@ -472,9 +472,9 @@ def _ensure_remote_model_cost() -> None:
     Other code paths use the local backup which is sufficient for model
     capabilities, context windows, etc.
 
-    Thread safety: uses update() (not clear()+update()) so concurrent readers
-    always see a non-empty dict. The worst case for a race is a redundant
-    remote fetch, which is harmless since update() is idempotent for same data.
+    Thread safety: a lock ensures only one thread performs the remote fetch.
+    update() (not clear()+update()) keeps the dict non-empty for concurrent
+    readers at all times.
 
     Note: update() merges remote keys on top of local backup. If a model is
     removed upstream but still present in the local backup, it will persist
@@ -484,17 +484,20 @@ def _ensure_remote_model_cost() -> None:
     global _model_cost_remote_loaded
     if _model_cost_remote_loaded:
         return
-    try:
-        remote = get_model_cost_map(url=_model_cost_url)
-        model_cost.update(remote)  # merge remote on top of local; no clear() needed
-        add_known_models()  # repopulate provider model sets with merged data
-        _model_cost_remote_loaded = True
-    except Exception as e:
-        verbose_logger.debug(
-            "LiteLLM: Remote model cost map fetch/merge failed: %s. "
-            "Keeping local backup; will retry on next call.",
-            str(e),
-        )
+    with _model_cost_lock:
+        if _model_cost_remote_loaded:
+            return
+        try:
+            remote = get_model_cost_map(url=_model_cost_url)
+            model_cost.update(remote)  # merge remote on top of local; no clear() needed
+            add_known_models()  # repopulate provider model sets with merged data
+            _model_cost_remote_loaded = True
+        except Exception as e:
+            verbose_logger.debug(
+                "LiteLLM: Remote model cost map fetch/merge failed: %s. "
+                "Keeping local backup; will retry on next call.",
+                str(e),
+            )
 
 
 cost_discount_config: Dict[str, float] = (
