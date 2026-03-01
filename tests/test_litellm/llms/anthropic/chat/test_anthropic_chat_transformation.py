@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 
@@ -13,7 +12,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import ServerToolUse
 
 
 def test_response_format_transformation_unit_test():
@@ -1662,7 +1661,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is only supported by Claude 4.6 models"):
+    with pytest.raises(ValueError, match="effort='max' is only supported by models with output_config\\.effort capability"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1719,6 +1718,44 @@ def test_effort_with_other_features():
     assert "tools" in result
     assert len(result["tools"]) > 0
     assert "thinking" in result
+
+
+def test_reasoning_effort_sets_output_config_for_46():
+    """Test that reasoning_effort on Claude 4.6 models sets output_config.effort."""
+    config = AnthropicConfig()
+
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.supports_output_config_effort",
+        return_value=True,
+    ):
+        for effort, expected_effort in [("low", "low"), ("medium", "medium"), ("high", "high"), ("minimal", "low"), ("xhigh", "high"), ("max", "max")]:
+            optional_params = {"reasoning_effort": effort}
+            mapped = config.map_openai_params(
+                non_default_params={"reasoning_effort": effort},
+                optional_params=optional_params,
+                model="claude-sonnet-4-6-20260514",
+                drop_params=False,
+            )
+            assert "output_config" in mapped, f"output_config missing for effort={effort}"
+            assert mapped["output_config"]["effort"] == expected_effort
+
+
+def test_reasoning_effort_no_output_config_for_45():
+    """Test that reasoning_effort on Claude 4.5 models does NOT set output_config."""
+    config = AnthropicConfig()
+
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.supports_output_config_effort",
+        return_value=False,
+    ):
+        optional_params = {"reasoning_effort": "high"}
+        mapped = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params=optional_params,
+            model="claude-opus-4-5-20251101",
+            drop_params=False,
+        )
+        assert "output_config" not in mapped
 
 
 def test_translate_system_message_skips_empty_string_content():
@@ -1964,7 +2001,7 @@ def test_calculate_usage_completion_tokens_details_always_populated():
 
     # completion_tokens_details should NOT be None
     assert usage.completion_tokens_details is not None
-    assert usage.completion_tokens_details.reasoning_tokens is 0
+    assert usage.completion_tokens_details.reasoning_tokens == 0
     assert usage.completion_tokens_details.text_tokens == 248
     assert usage.completion_tokens == 248
     assert usage.prompt_tokens == 37
@@ -2018,39 +2055,48 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
         "minimal": "low",
         "medium": "medium",
         "high": "high",
+        "xhigh": "high",
         "max": "max",
     }
 
-    # Test with different reasoning_effort values - all should map to adaptive
-    for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
-        for effort in ["low", "medium", "high", "minimal", "max"]:
-            non_default_params = {"reasoning_effort": effort}
-            optional_params = {}
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.supports_output_config_effort",
+        return_value=True,
+    ):
+        # Test with different reasoning_effort values - all should map to adaptive
+        for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
+            for effort in ["low", "medium", "high", "minimal", "xhigh", "max"]:
+                non_default_params = {"reasoning_effort": effort}
+                optional_params = {}
 
-            result = config.map_openai_params(
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                model=model,
-                drop_params=False
-            )
+                result = config.map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                    model=model,
+                    drop_params=False
+                )
 
-            # Should map to adaptive thinking type
-            assert "thinking" in result
-            assert result["thinking"]["type"] == "adaptive"
-            # Should not have budget_tokens for adaptive type
-            assert "budget_tokens" not in result["thinking"]
-            # reasoning_effort should not be in the result (it's transformed to thinking)
-            assert "reasoning_effort" not in result
-            # Should set output_config with the mapped effort value
-            assert "output_config" in result, f"output_config missing for {model} with effort={effort}"
-            assert result["output_config"]["effort"] == effort_map[effort]
+                # Should map to adaptive thinking type
+                assert "thinking" in result
+                assert result["thinking"]["type"] == "adaptive"
+                # Should not have budget_tokens for adaptive type
+                assert "budget_tokens" not in result["thinking"]
+                # reasoning_effort should not be in the result (it's transformed to thinking)
+                assert "reasoning_effort" not in result
+                # Should set output_config with the mapped effort value
+                assert "output_config" in result, f"output_config missing for {model} with effort={effort}"
+                assert result["output_config"]["effort"] == effort_map[effort]
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
     """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
     config = AnthropicConfig()
 
-    params = config.get_supported_openai_params(model="claude-sonnet-4-6-20260219")
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.supports_output_config_effort",
+        return_value=True,
+    ):
+        params = config.get_supported_openai_params(model="claude-sonnet-4-6-20260219")
 
     assert "thinking" in params
     assert "reasoning_effort" in params
@@ -2060,7 +2106,11 @@ def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias():
     """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
     config = AnthropicConfig()
 
-    params = config.get_supported_openai_params(model="claude-sonnet-4.6")
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.supports_output_config_effort",
+        return_value=True,
+    ):
+        params = config.get_supported_openai_params(model="claude-sonnet-4.6")
 
     assert "thinking" in params
     assert "reasoning_effort" in params
@@ -2073,19 +2123,23 @@ def test_sonnet_4_6_reasoning_effort_to_transform_request_payload():
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Think through this carefully."}]
 
-    mapped_optional_params = config.map_openai_params(
-        non_default_params={"reasoning_effort": "high"},
-        optional_params={},
-        model="claude-sonnet-4-6-20260219",
-        drop_params=False,
-    )
-    result = config.transform_request(
-        model="claude-sonnet-4-6-20260219",
-        messages=messages,
-        optional_params=mapped_optional_params,
-        litellm_params={},
-        headers={},
-    )
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.supports_output_config_effort",
+        return_value=True,
+    ):
+        mapped_optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="claude-sonnet-4-6-20260219",
+            drop_params=False,
+        )
+        result = config.transform_request(
+            model="claude-sonnet-4-6-20260219",
+            messages=messages,
+            optional_params=mapped_optional_params,
+            litellm_params={},
+            headers={},
+        )
 
     assert "thinking" in result
     assert result["thinking"]["type"] == "adaptive"
@@ -2109,23 +2163,27 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
         ("minimal", 128),   # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
     ]
 
-    for effort, expected_budget in test_cases:
-        non_default_params = {"reasoning_effort": effort}
-        optional_params = {}
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.supports_output_config_effort",
+        return_value=False,
+    ):
+        for effort, expected_budget in test_cases:
+            non_default_params = {"reasoning_effort": effort}
+            optional_params = {}
 
-        result = config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model="claude-sonnet-4-5-20250929",
-            drop_params=False
-        )
+            result = config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model="claude-sonnet-4-5-20250929",
+                drop_params=False
+            )
 
-        # Should map to enabled thinking type with budget_tokens
-        assert "thinking" in result
-        assert result["thinking"]["type"] == "enabled"
-        assert result["thinking"]["budget_tokens"] == expected_budget
-        # reasoning_effort should not be in the result (it's transformed to thinking)
-        assert "reasoning_effort" not in result
+            # Should map to enabled thinking type with budget_tokens
+            assert "thinking" in result
+            assert result["thinking"]["type"] == "enabled"
+            assert result["thinking"]["budget_tokens"] == expected_budget
+            # reasoning_effort should not be in the result (it's transformed to thinking)
+            assert "reasoning_effort" not in result
 
 
 def test_code_execution_tool_results_extraction():
@@ -2842,7 +2900,6 @@ def test_fast_mode_cost_calculation():
     Test that fast mode applies the 'fast' multiplier from provider_specific_entry
     on top of the base model cost (1.1x for claude-opus-4-6).
     """
-    from unittest.mock import MagicMock, patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
@@ -2882,7 +2939,6 @@ def test_fast_mode_with_inference_geo():
     Test that fast mode + inference_geo both apply their multipliers from
     provider_specific_entry (1.1 * 1.1 = 1.21x for claude-opus-4-6).
     """
-    from unittest.mock import patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
