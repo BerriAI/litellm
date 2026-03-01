@@ -299,7 +299,7 @@ class TestMoonshotConfig:
             {"role": "tool", "content": '{"temp": 25}', "tool_call_id": "call_1"},
         ]
 
-        with pytest.raises(litellm.BadRequestError) as exc_info:
+        with pytest.raises(litellm.BadRequestError, match=r"reasoning_content.*index 1"):
             config.transform_request(
                 model="kimi-k2.5",
                 messages=messages,
@@ -307,9 +307,6 @@ class TestMoonshotConfig:
                 litellm_params={},
                 headers={},
             )
-
-        assert "reasoning_content" in str(exc_info.value)
-        assert "index 1" in str(exc_info.value)
 
     def test_reasoning_content_validation_passes_when_present(self):
         """Test that reasoning_content present in messages passes validation."""
@@ -412,7 +409,7 @@ class TestMoonshotConfig:
             {"role": "tool", "content": "result", "tool_call_id": "call_1"},
         ]
 
-        with pytest.raises(litellm.BadRequestError):
+        with pytest.raises(litellm.BadRequestError, match=r"reasoning_content"):
             config.transform_request(
                 model="kimi-k2.5",
                 messages=messages,
