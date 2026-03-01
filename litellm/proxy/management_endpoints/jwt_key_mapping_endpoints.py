@@ -22,12 +22,13 @@ async def create_jwt_key_mapping(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        hashed_key = hash_token(data.key)
+    try:
         new_mapping = await prisma_client.db.litellm_jwtkeymapping.create(
             data={
                 "jwt_claim_name": data.jwt_claim_name,
                 "jwt_claim_value": data.jwt_claim_value,
-                "token": hashed_key,
+                "token": data.key,
+                "is_active": True,
             }
         )
 
