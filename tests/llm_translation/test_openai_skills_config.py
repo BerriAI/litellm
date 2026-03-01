@@ -634,3 +634,34 @@ class TestBaseSkillsConfigNotImplemented:
                 litellm_params=params,
                 headers={},
             )
+
+
+class TestOpenAIOnlyProviderValidation:
+    """Test that OpenAI-only endpoints reject non-OpenAI providers."""
+
+    def test_validate_openai_only_provider_accepts_openai(self):
+        from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+            _validate_openai_only_provider,
+        )
+        # Should not raise
+        _validate_openai_only_provider("update", "openai")
+
+    def test_validate_openai_only_provider_rejects_anthropic(self):
+        from fastapi import HTTPException
+        from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+            _validate_openai_only_provider,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_openai_only_provider("update", "anthropic")
+        assert exc_info.value.status_code == 400
+        assert "only supported by OpenAI" in str(exc_info.value.detail)
+
+    def test_validate_openai_only_provider_rejects_unknown(self):
+        from fastapi import HTTPException
+        from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+            _validate_openai_only_provider,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_openai_only_provider("content", "bedrock")
+        assert exc_info.value.status_code == 400
+        assert "content" in str(exc_info.value.detail)
