@@ -2238,7 +2238,6 @@ class ProxyConfig:
     def __init__(self) -> None:
         self.config: Dict[str, Any] = {}
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
-        self._hashicorp_config_override_initialized: bool = False
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -4436,7 +4435,7 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="semantic_filter_settings"):
             await self._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
 
-        if not self._hashicorp_config_override_initialized:
+        if self._should_load_db_object(object_type="config_overrides"):
             await self._init_hashicorp_vault_config_override(
                 prisma_client=prisma_client
             )
@@ -4554,9 +4553,9 @@ class ProxyConfig:
         self, prisma_client: PrismaClient
     ):
         """
-        Load Hashicorp Vault config override from DB on startup.
+        Load Hashicorp Vault config override from DB.
         Decrypts sensitive fields, sets HCP_VAULT_* env vars, and reinitializes the secret manager.
-        Only runs once at startup (guarded by _hashicorp_config_override_initialized flag).
+        Called periodically via _init_non_llm_objects_in_db to sync config across pods.
         """
         from litellm.proxy.management_endpoints.config_override_endpoints import (
             HASHICORP_SENSITIVE_FIELDS,
@@ -4571,7 +4570,6 @@ class ProxyConfig:
             )
 
             if db_record is None or db_record.config_value is None:
-                self._hashicorp_config_override_initialized = True
                 return
 
             config_data = _parse_config_value(db_record.config_value)
@@ -4587,10 +4585,9 @@ class ProxyConfig:
                 key_management_system="hashicorp_vault"
             )
 
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 "Hashicorp Vault config override loaded from DB"
             )
-            self._hashicorp_config_override_initialized = True
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error loading Hashicorp Vault config override from DB: %s",
