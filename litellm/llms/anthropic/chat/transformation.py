@@ -397,6 +397,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     )
                     for item in value
                 ]
+            elif key == "additionalProperties" and isinstance(value, dict):
+                # additionalProperties can be a schema (dict) — recurse into it
+                result[key] = AnthropicConfig.filter_anthropic_output_schema(
+                    value, enforce_additional_properties
+                )
             else:
                 # All other keys (including ``type``, ``default``, ``const``,
                 # ``enum``, ``$ref``, ``title``, ``required``, etc.) are
