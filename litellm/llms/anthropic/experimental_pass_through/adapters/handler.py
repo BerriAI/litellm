@@ -141,6 +141,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             )
             model_max_output = model_info.get("max_output_tokens")
             if model_max_output is not None and max_tokens > model_max_output:
+                from litellm._logging import verbose_logger
+
+                verbose_logger.debug(
+                    "Anthropic adapter: capping max_tokens from %d to %d for model=%s",
+                    max_tokens,
+                    model_max_output,
+                    model,
+                )
                 max_tokens = model_max_output
         except Exception:
             pass
