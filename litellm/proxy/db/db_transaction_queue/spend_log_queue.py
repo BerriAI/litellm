@@ -34,12 +34,12 @@ class SpendLogQueue:
     # -- mutators ----------------------------------------------------------
 
     def append(self, item: Dict[str, Any]) -> None:
-        if len(self._buf) == self._buf.maxlen:
+        # Check *before* appending: deque.append() auto-evicts the oldest
+        # element when at maxlen, so we must count the drop before it happens.
+        will_drop = len(self._buf) == self._buf.maxlen
+        self._buf.append(item)
+        if will_drop:
             self._dropped += 1
-            # Warn on every 100th drop (single-item frequency) — acceptable
-            # because appends arrive one at a time.  extend() uses a different
-            # heuristic (warn on every overflowing batch) since it can drop
-            # many items at once and per-item warnings would be too noisy.
             if self._dropped % 100 == 1:
                 verbose_proxy_logger.warning(
                     "SpendLogQueue full (maxlen=%d) — dropping oldest entry "
@@ -47,14 +47,13 @@ class SpendLogQueue:
                     self._buf.maxlen,
                     self._dropped,
                 )
-        self._buf.append(item)
 
     def extend(self, items: List[Dict[str, Any]]) -> None:
         """Append multiple items, dropping oldest when overflow occurs."""
         before = len(self._buf)
         maxlen = self._buf.maxlen or 0
         self._buf.extend(items)
-        overflow = (before + len(items)) - maxlen
+        overflow = max(0, (before + len(items)) - maxlen)
         if overflow > 0:
             self._dropped += overflow
             if self._dropped % 100 < overflow or self._dropped <= overflow:
@@ -70,10 +69,15 @@ class SpendLogQueue:
         """Remove and return up to *n* items from the front."""
         actual = min(n, len(self._buf))
         batch = [self._buf.popleft() for _ in range(actual)]
-        if batch:
-            # Reset: _dropped tracks drops since last successful drain,
-            # not total historical drops.  This keeps warning messages
-            # scoped to the current "trouble window" between drains.
+        if batch and self._dropped > 0:
+            # Log the accumulated drop count *before* resetting so operators
+            # know how many entries were lost during this trouble window.
+            verbose_proxy_logger.warning(
+                "SpendLogQueue: draining %d items; %d entries were dropped "
+                "since the last successful drain",
+                len(batch),
+                self._dropped,
+            )
             self._dropped = 0
         return batch
 

@@ -2242,6 +2242,10 @@ class PrismaClient:
         from litellm.constants import SPEND_LOG_TRANSACTIONS_MAX_SIZE
         from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
 
+        # Instance-level lock: litellm uses a single PrismaClient instance, so
+        # an instance attribute is equivalent to a class attribute here.  If
+        # multiple instances were ever created, each would get its own lock
+        # protecting its own queue — which is the correct behaviour.
         self._spend_log_transactions_lock = asyncio.Lock()
         self.spend_log_transactions: SpendLogQueue = SpendLogQueue(
             maxlen=SPEND_LOG_TRANSACTIONS_MAX_SIZE
