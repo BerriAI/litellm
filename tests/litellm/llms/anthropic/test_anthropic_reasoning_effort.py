@@ -8,6 +8,43 @@ including Claude Opus 4.6.
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 
+class TestMapReasoningEffortToOutputConfig:
+    def test_xhigh_maps_to_high(self):
+        """xhigh reasoning_effort should map to high in output_config."""
+        result = AnthropicConfig._map_reasoning_effort_to_output_config("xhigh")
+        assert result == "high"
+
+    def test_max_maps_to_max(self):
+        """max reasoning_effort should map to max in output_config."""
+        result = AnthropicConfig._map_reasoning_effort_to_output_config("max")
+        assert result == "max"
+
+    def test_unknown_value_returns_none(self):
+        """Unknown reasoning_effort values should return None."""
+        result = AnthropicConfig._map_reasoning_effort_to_output_config("unknown")
+        assert result is None
+
+    def test_low_maps_to_low(self):
+        """low reasoning_effort should map to low in output_config."""
+        result = AnthropicConfig._map_reasoning_effort_to_output_config("low")
+        assert result == "low"
+
+    def test_minimal_maps_to_low(self):
+        """minimal reasoning_effort should map to low in output_config."""
+        result = AnthropicConfig._map_reasoning_effort_to_output_config("minimal")
+        assert result == "low"
+
+    def test_medium_maps_to_medium(self):
+        """medium reasoning_effort should map to medium in output_config."""
+        result = AnthropicConfig._map_reasoning_effort_to_output_config("medium")
+        assert result == "medium"
+
+    def test_high_maps_to_high(self):
+        """high reasoning_effort should map to high in output_config."""
+        result = AnthropicConfig._map_reasoning_effort_to_output_config("high")
+        assert result == "high"
+
+
 class TestMapReasoningEffort:
     def test_none_returns_none_for_opus_4_6(self):
         """reasoning_effort=None should return None for Opus 4.6, not adaptive."""
