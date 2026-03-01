@@ -149,6 +149,38 @@ class TestFeatherlessAIConfig:
             )
         assert "Featherless AI doesn't support tools=" in str(excinfo.value)
 
+    def test_get_provider_info_with_featherless_ai_api_key(self):
+        """Test that FEATHERLESS_AI_API_KEY env var is picked up correctly"""
+        config = FeatherlessAIConfig()
+        with patch.dict(os.environ, {"FEATHERLESS_AI_API_KEY": "key-from-ai-env"}, clear=False):
+            api_base, api_key = config._get_openai_compatible_provider_info(
+                api_base=None, api_key=None
+            )
+        assert api_key == "key-from-ai-env"
+        assert api_base == "https://api.featherless.ai/v1"
+
+    def test_get_provider_info_with_legacy_featherless_api_key(self):
+        """Test that legacy FEATHERLESS_API_KEY env var still works"""
+        config = FeatherlessAIConfig()
+        with patch.dict(os.environ, {"FEATHERLESS_API_KEY": "key-from-legacy-env"}, clear=False):
+            api_base, api_key = config._get_openai_compatible_provider_info(
+                api_base=None, api_key=None
+            )
+        assert api_key == "key-from-legacy-env"
+        assert api_base == "https://api.featherless.ai/v1"
+
+    def test_get_provider_info_prefers_featherless_ai_key_over_legacy(self):
+        """Test that FEATHERLESS_AI_API_KEY takes precedence over FEATHERLESS_API_KEY"""
+        config = FeatherlessAIConfig()
+        with patch.dict(os.environ, {
+            "FEATHERLESS_AI_API_KEY": "preferred-key",
+            "FEATHERLESS_API_KEY": "legacy-key",
+        }, clear=False):
+            _, api_key = config._get_openai_compatible_provider_info(
+                api_base=None, api_key=None
+            )
+        assert api_key == "preferred-key"
+
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""
         config = FeatherlessAIConfig()
