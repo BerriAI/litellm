@@ -435,6 +435,7 @@ class LoggingWorker:
             try:
                 task = queue.get_nowait()
                 task["coroutine"].close()
+                queue.task_done()
             except asyncio.QueueEmpty:
                 break
 
