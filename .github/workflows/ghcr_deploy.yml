@@ -299,6 +299,15 @@ jobs:
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-spend_logs:main-stable', env.REGISTRY) || '' }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
+  run-observatory-tests:
+    if: github.event.inputs.release_type == 'rc' || github.event.inputs.release_type == 'stable'
+    needs: [docker-hub-deploy]
+    uses: ./.github/workflows/run_observatory_tests.yml
+    with:
+      tag: ${{ github.event.inputs.tag }}
+      commit_hash: ${{ github.event.inputs.commit_hash }}
+    secrets: inherit
+
   build-and-push-helm-chart:
     if: github.event.inputs.release_type  != 'dev'
     needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
