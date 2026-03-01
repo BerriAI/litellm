@@ -3499,6 +3499,7 @@ jobs:
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES=true \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
