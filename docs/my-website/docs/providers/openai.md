@@ -627,14 +627,56 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ## OpenAI Chat Completion to Responses API Bridge
 
-Call any Responses API model from OpenAI's `/chat/completions` endpoint. 
+LiteLLM offers a chat completion to Responses API bridge. This lets you use the completion interface while calling the Responses API under the hood.
+
+This is useful when you want to use [Responses API](https://platform.openai.com/docs/api-reference/responses) specific features (like built-in tools, web search preview, or code interpreter).
+
+### When to use the `openai/responses/` prefix
+
+Each model has a `mode` property defined in [`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) that determines which API endpoint it uses by default:
+
+- **`mode: responses`** - Model automatically uses the Responses API
+- **`mode: chat`** - Model defaults to the Chat Completions API
+
+**Models with `mode: responses`** (automatic Responses API):
+- `o3-deep-research`, `o4-mini-deep-research`
+- `o1-pro`, `o3-pro`
+- `gpt-5.1-codex`, `gpt-5.1-codex-mini`, `gpt-5.1-codex-max`
+- `codex-mini-latest`
+
+**Models with `mode: chat`** (require `openai/responses/` prefix for built-in tools):
+- `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`
+- `gpt-5`, `gpt-5-mini`
+- `o3`, `o4-mini`
+
+To use built-in tools like `web_search_preview` with `mode: chat` models, add the `openai/responses/` prefix:
+
+```python
+# This will FAIL - gpt-4o has mode: chat, uses Chat Completions API
+response = litellm.completion(
+    model="gpt-4o",
+    tools=[{"type": "web_search_preview"}],  # Not supported in Chat Completions
+    ...
+)
+
+# This will WORK - prefix forces Responses API
+response = litellm.completion(
+    model="openai/responses/gpt-4o",
+    tools=[{"type": "web_search_preview"}],  # Supported in Responses API
+    ...
+)
+```
+
+### Examples
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
+**Using a model with `mode: responses` (automatic):**
+
 ```python
 import litellm
-import os 
+import os
 
 os.environ["OPENAI_API_KEY"] = "sk-1234"
 
@@ -648,6 +690,26 @@ response = litellm.completion(
 )
 print(response)
 ```
+
+**Using a model with `mode: chat` (requires prefix):**
+
+```python
+import litellm
+import os
+
+os.environ["OPENAI_API_KEY"] = "sk-1234"
+
+# Use the openai/responses/ prefix to enable built-in tools
+response = litellm.completion(
+    model="openai/responses/gpt-4o",
+    messages=[{"role": "user", "content": "What is the weather in Paris today?"}],
+    tools=[
+        {"type": "web_search_preview"},
+    ],
+)
+print(response)
+```
+
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
@@ -655,9 +717,16 @@ print(response)
 
 ```yaml
 model_list:
-  - model_name: openai-model
+  # Model with mode: responses (automatic)
+  - model_name: o3-deep-research
     litellm_params:
       model: o3-deep-research-2025-06-26
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Model with mode: chat (use prefix for built-in tools)
+  - model_name: gpt-4o-with-tools
+    litellm_params:
+      model: openai/responses/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 ```
 
@@ -673,15 +742,14 @@ litellm --config config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--d '{ 
-    "model": "openai-model",
+-d '{
+    "model": "gpt-4o-with-tools",
     "messages": [
-        {"role": "user", "content": "What is the capital of France?"}
+        {"role": "user", "content": "What is the weather in Paris today?"}
     ],
     "tools": [
-        {"type": "web_search_preview"},
-        {"type": "code_interpreter", "container": {"type": "auto"}},
-    ],
+        {"type": "web_search_preview"}
+    ]
 }'
 ```
 
