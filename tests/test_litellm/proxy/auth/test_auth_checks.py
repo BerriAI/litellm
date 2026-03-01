@@ -108,11 +108,55 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert token_data["models"] == ["gpt-3.5-turbo"]
     assert token_data["max_budget"] == litellm.max_ui_session_budget
 
-    # Verify expiration time is set and valid
+    # Verify expiration time is set and valid (Experimental UI uses fixed 10-min expiry)
     assert "expires" in token_data
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
-    assert expires > get_utc_datetime()
-    assert expires <= get_utc_datetime() + timedelta(minutes=10)
+    now = get_utc_datetime()
+    # Allow 2 second buffer for test execution timing
+    assert expires > now
+    assert expires <= now + timedelta(minutes=10, seconds=2)
+
+
+def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
+    valid_sso_user_defined_values,
+):
+    """Test that Experimental UI token uses fixed 10-minute expiry (does not use LITELLM_UI_SESSION_DURATION)."""
+    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    now = get_utc_datetime()
+    # Should expire in ~10 minutes (allow 2 second buffer)
+    assert expires > now + timedelta(minutes=9)
+    assert expires <= now + timedelta(minutes=10, seconds=2)
+
+
+def test_experimental_ui_token_ignores_litellm_ui_session_duration(
+    valid_sso_user_defined_values,
+):
+    """Regression test: LITELLM_UI_SESSION_DURATION must NOT affect Experimental UI token expiry.
+    Experimental UI intentionally uses fixed 10-min expiry. If this test fails, the constant
+    was incorrectly wired to the experimental flow."""
+    # Default LITELLM_UI_SESSION_DURATION is "24h" - token must still expire in ~10 min
+    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    now = get_utc_datetime()
+    # Must be ~10 min, NOT 24h. If LITELLM_UI_SESSION_DURATION were incorrectly used, this would fail.
+    assert expires <= now + timedelta(minutes=11), (
+        "Experimental UI must use 10-min expiry, not LITELLM_UI_SESSION_DURATION"
+    )
 
 
 def test_get_experimental_ui_login_jwt_auth_token_invalid(

@@ -52,6 +52,7 @@ from litellm.constants import (
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
+    LITELLM_UI_SESSION_DURATION,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -10847,7 +10848,7 @@ async def onboarding(invite_link: str, request: Request):
         request_type="key",
         **{
             "user_role": user_obj.user_role,
-            "duration": "24hr",
+            "duration": LITELLM_UI_SESSION_DURATION,
             "key_max_budget": litellm.max_ui_session_budget,
             "models": [],
             "aliases": {},
