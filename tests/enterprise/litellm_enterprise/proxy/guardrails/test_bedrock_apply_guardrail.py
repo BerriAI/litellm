@@ -324,10 +324,11 @@ def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
 @pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_blocked_with_disable_exception_on_block():
     """
-    Regression test for issue #20045: when disable_exception_on_block=True,
+    Regression test for issue #22183: when disable_exception_on_block=True,
     make_bedrock_api_request raises GuardrailInterventionNormalStringError.
-    apply_guardrail must let it propagate as-is so the proxy can handle it
-    properly instead of wrapping it in a generic Exception.
+    apply_guardrail must catch it and return the guardrail's blocked output
+    text as a normal response, instead of letting the exception propagate
+    (which would cause a 500 error at the proxy level).
     """
     from litellm.exceptions import GuardrailInterventionNormalStringError
 
@@ -345,11 +346,15 @@ async def test_bedrock_apply_guardrail_blocked_with_disable_exception_on_block()
             message="Sorry, your question in its current format is unable to be answered."
         )
 
-        with pytest.raises(GuardrailInterventionNormalStringError) as exc_info:
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["harmful prompt content"]},
-                request_data={},
-                input_type="request",
-            )
+        request_data = {}
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["harmful prompt content"]},
+            request_data=request_data,
+            input_type="request",
+        )
 
-        assert "unable to be answered" in str(exc_info.value.message)
+        # The blocked text should be returned as the guardrailed output
+        assert "unable to be answered" in result["texts"][0]
+        # mock_response should be set to short-circuit the LLM call,
+        # matching the async_pre_call_hook behavior
+        assert "mock_response" in request_data
