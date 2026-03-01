@@ -1,7 +1,7 @@
 import React, { useState } from "react";
-import { Typography, Space, Upload, Card, Button } from "antd";
+import { Typography, Space, Upload, Card, Button, Select } from "antd";
 import { PlusOutlined, UploadOutlined } from "@ant-design/icons";
-import { validateBlockedWordsFile } from "../../networking";
+import { validateBlockedWordsFile, validatePatternsFile } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 import PatternModal from "./PatternModal";
 import CustomPatternModal from "./CustomPatternModal";
@@ -59,6 +59,7 @@ interface ContentFilterConfigurationProps {
   selectedPatterns: Pattern[];
   blockedWords: BlockedWord[];
   onPatternAdd: (pattern: Pattern) => void;
+  onPatternsAdd?: (patterns: Pattern[]) => void;
   onPatternRemove: (id: string) => void;
   onPatternActionChange: (id: string, action: "BLOCK" | "MASK") => void;
   onBlockedWordAdd: (word: BlockedWord) => void;
@@ -88,6 +89,7 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
   selectedPatterns,
   blockedWords,
   onPatternAdd,
+  onPatternsAdd,
   onPatternRemove,
   onPatternActionChange,
   onBlockedWordAdd,
@@ -120,6 +122,8 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
   const [newKeywordAction, setNewKeywordAction] = useState<"BLOCK" | "MASK">("BLOCK");
   const [newKeywordDescription, setNewKeywordDescription] = useState<string>("");
   const [uploadValidating, setUploadValidating] = useState(false);
+  const [patternFileAction, setPatternFileAction] = useState<"BLOCK" | "MASK">("BLOCK");
+  const [patternUploadValidating, setPatternUploadValidating] = useState(false);
 
   const handleAddPrebuiltPattern = () => {
     if (!selectedPatternName) {
@@ -206,6 +210,47 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
     return false;
   };
 
+  const handlePatternFileUpload = async (file: File) => {
+    setPatternUploadValidating(true);
+    try {
+      const content = await file.text();
+
+      if (accessToken) {
+        const result = await validatePatternsFile(accessToken, content);
+        if (result.valid && result.patterns) {
+          const newPatterns: Pattern[] = result.patterns.map(
+            (p: { name: string; pattern: string }, index: number) => ({
+              id: `file-pattern-${Date.now()}-${index}`,
+              type: "custom" as const,
+              name: p.name,
+              pattern: p.pattern,
+              action: patternFileAction,
+            })
+          );
+          if (onPatternsAdd) {
+            onPatternsAdd(newPatterns);
+          } else {
+            newPatterns.forEach((p) => onPatternAdd(p));
+          }
+          NotificationsManager.success(
+            result.message || `${newPatterns.length} patterns uploaded successfully`
+          );
+        } else {
+          const errorMessage =
+            result.error ||
+            (result.errors && result.errors.join("\n")) ||
+            "Invalid file";
+          NotificationsManager.error(`Validation failed: ${errorMessage}`);
+        }
+      }
+    } catch (error) {
+      NotificationsManager.error(`Failed to upload file: ${error}`);
+    } finally {
+      setPatternUploadValidating(false);
+    }
+    return false;
+  };
+
   const showPatterns = !showStep || showStep === "patterns";
   const showKeywords = !showStep || showStep === "keywords";
   const showCategories = !showStep || showStep === "categories";
@@ -237,13 +282,27 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
           size="small"
         >
           <div style={{ marginBottom: 16 }}>
-            <Space>
+            <Space wrap>
               <Button type="primary" onClick={() => setPatternModalVisible(true)} icon={<PlusOutlined />}>
                 Add prebuilt pattern
               </Button>
               <Button onClick={() => setCustomPatternModalVisible(true)} icon={<PlusOutlined />}>
                 Add custom regex
               </Button>
+              <Select
+                value={patternFileAction}
+                onChange={(value) => setPatternFileAction(value as "BLOCK" | "MASK")}
+                style={{ width: 100 }}
+                size="middle"
+              >
+                <Select.Option value="BLOCK">Block</Select.Option>
+                <Select.Option value="MASK">Mask</Select.Option>
+              </Select>
+              <Upload beforeUpload={handlePatternFileUpload} accept=".txt" showUploadList={false}>
+                <Button icon={<UploadOutlined />} loading={patternUploadValidating}>
+                  Upload regex file
+                </Button>
+              </Upload>
             </Space>
           </div>
           <PatternTable
