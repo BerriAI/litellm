@@ -14,6 +14,7 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
 import GuardrailsMonitorView from "@/components/GuardrailsMonitor/GuardrailsMonitorView";
+import PerformanceDashboardView from "@/components/PerformanceDashboard/PerformanceDashboardView";
 import GuardrailsPanel from "@/components/guardrails";
 import PoliciesPanel from "@/components/policies";
 import { Team } from "@/components/key_team_helpers/key_list";
@@ -552,6 +553,8 @@ function CreateKeyPageContent() {
                     <ToolPolicies accessToken={accessToken} userRole={userRole} />
                   ) : page == "guardrails-monitor" ? (
                     <GuardrailsMonitorView accessToken={accessToken} />
+                  ) : page == "performance-dashboard" ? (
+                    <PerformanceDashboardView />
                   ) : page == "new_usage" ? (
                     <NewUsagePage
                       teams={(teams as Team[]) ?? []}
