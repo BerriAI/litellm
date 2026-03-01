@@ -1718,7 +1718,7 @@ class Router:
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
-    def _completion_streaming_iterator(
+    def _completion_streaming_iterator(  # noqa: PLR0915
         self,
         model_response: CustomStreamWrapper,
         messages: List[Dict[str, str]],
