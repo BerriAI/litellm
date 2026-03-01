@@ -10546,10 +10546,10 @@ async def async_queue_request(
 
         verbose_proxy_logger.debug("receiving data: %s", data)
         data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
+            user_model  # model name passed via cli args
             or model  # for azure deployments
             or data.get("model", None)  # default passed in http request
+            or general_settings.get("completion_model", None)  # server default
         )
 
         # users can pass in 'user' param to /chat/completions. Don't override it
