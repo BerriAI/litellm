@@ -3206,6 +3206,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
+    GLM = "glm"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
 
