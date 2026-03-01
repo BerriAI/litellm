@@ -795,11 +795,14 @@ async def _apply_default_budget_to_end_user(
             f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
         )
 
-        # Persist budget_id to database so the budget-reset job can find this user
-        await _persist_end_user_budget_id(
-            prisma_client=prisma_client,
-            user_id=end_user_obj.user_id,
-            budget_id=litellm.max_end_user_budget_id,
+        # Persist budget_id to database so the budget-reset job can find this user.
+        # Fire-and-forget: don't block the auth hot path on a DB write.
+        asyncio.create_task(
+            _persist_end_user_budget_id(
+                prisma_client=prisma_client,
+                user_id=end_user_obj.user_id,
+                budget_id=litellm.max_end_user_budget_id,
+            )
         )
 
     return end_user_obj
