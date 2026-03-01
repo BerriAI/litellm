@@ -394,8 +394,7 @@ async def test_semantic_filter_hook_skips_no_tools():
 
 
 
-@pytest.mark.asyncio
-async def test_get_tools_by_names_with_prefixed_names():
+def test_get_tools_by_names_with_prefixed_names():
     """
     Test that _get_tools_by_names matches prefixed tool names.
 
@@ -436,8 +435,7 @@ async def test_get_tools_by_names_with_prefixed_names():
     assert result_names[1] == "perplexity-perplexity_ask"
 
 
-@pytest.mark.asyncio
-async def test_get_tools_by_names_exact_match_preferred():
+def test_get_tools_by_names_exact_match_preferred():
     """
     Exact name match is preferred over suffix match.
     """
