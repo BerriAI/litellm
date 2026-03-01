@@ -4,9 +4,13 @@ Utility functions for cleaning up async HTTP clients to prevent resource leaks.
 Provides two cleanup strategies:
 1. ``close_litellm_async_clients()`` — async cleanup, used when an event loop
    is available (call via ``await litellm.aclose()``).
-2. ``_close_aiohttp_sessions_sync()`` — synchronous fallback that directly
-   closes aiohttp connectors and marks sessions as closed.  Used by the
-   ``atexit`` handler where the original event loop is already shut down.
+2. ``_close_aiohttp_sessions_sync()`` — synchronous fallback that closes
+   aiohttp connectors via the public ``connector.close()`` API on a
+   throwaway event loop.  Used by the ``atexit`` handler where the original
+   event loop is already shut down.
+
+A module-level ``_cleanup_done`` flag prevents double-close when the user
+calls ``await litellm.aclose()`` explicitly and the atexit handler also fires.
 
 The atexit handler alone is NOT sufficient for ``asyncio.run()`` usage because
 ``asyncio.run()`` closes the event loop *before* atexit handlers execute,
@@ -19,6 +23,8 @@ See: https://github.com/BerriAI/litellm/issues/13251
 
 import asyncio
 from typing import Any, List
+
+_cleanup_done: bool = False
 
 
 def _collect_aiohttp_sessions() -> List[Any]:
@@ -71,38 +77,50 @@ def _extract_sessions_from_handler(handler: Any, sessions: list, session_cls: ty
 
 def _close_aiohttp_sessions_sync() -> None:
     """
-    Close aiohttp sessions **synchronously** by closing their underlying
-    TCP connectors and marking them as closed.
+    Close aiohttp sessions **synchronously** via the public ``connector.close()``
+    API when possible, falling back to the internal ``connector._close()`` when
+    a running event loop prevents ``run_until_complete()``.
 
-    ``aiohttp.BaseConnector._close()`` is synchronous and safe to call from
-    any thread or event loop state.  This avoids the need for a running
-    event loop, which is unavailable in atexit handlers after
-    ``asyncio.run()`` has returned.
-
-    NOTE: This uses aiohttp private APIs (_close(), _closed, _connector).
-    Verified against aiohttp 3.10–3.11. The fallback chain (getattr checks)
-    and blanket ``except Exception`` ensure graceful degradation if internal
-    APIs change in future versions — worst case, the sync cleanup becomes a
-    no-op and the async fallback in cleanup_wrapper handles it.
+    In the atexit handler (no running loop) the public API path succeeds.
+    Inside an already-running async context the fallback is used instead.
     """
-    for session in _collect_aiohttp_sessions():
-        try:
-            connector = getattr(session, "_connector", None)
-            if connector is not None and not getattr(connector, "closed", True):
-                # _close() is the synchronous core of connector.close().
-                # It sets _closed=True, closes transports, and clears pools.
-                # The returned waiters (for SSL shutdown) are intentionally
-                # not awaited — acceptable during process shutdown.
+    sessions = _collect_aiohttp_sessions()
+    if not sessions:
+        return
+
+    try:
+        loop = asyncio.new_event_loop()
+    except Exception:
+        loop = None
+
+    try:
+        for session in sessions:
+            try:
+                connector = session.connector
+                if connector is None or connector.closed:
+                    continue
+
+                awaitable = connector.close()
+
+                if loop is not None:
+                    try:
+                        loop.run_until_complete(awaitable)
+                        continue
+                    except RuntimeError:
+                        # Inside a running event loop; close the unawaited
+                        # coroutine to suppress the "never awaited" warning.
+                        if hasattr(awaitable, "close"):
+                            awaitable.close()
+
+                # Fallback: call the synchronous cleanup core directly.
                 _close_fn = getattr(connector, "_close", None)
                 if _close_fn is not None:
                     _close_fn()
-                else:
-                    # Fallback: directly set closed flag
-                    connector._closed = True
-            # Detach connector so session.closed returns True
-            session._connector = None
-        except Exception:
-            pass
+            except Exception:
+                pass
+    finally:
+        if loop is not None:
+            loop.close()
 
 
 async def close_litellm_async_clients():
@@ -113,6 +131,11 @@ async def close_litellm_async_clients():
     and closes any aiohttp client sessions that are still open. Also closes the
     global base_llm_aiohttp_handler instance (issue #12443).
     """
+    global _cleanup_done
+    if _cleanup_done:
+        return
+    _cleanup_done = True
+
     # Import here to avoid circular import
     import litellm
     from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -178,7 +201,13 @@ def register_async_client_cleanup():
 
         Uses synchronous connector cleanup first (reliable, no event loop needed),
         then attempts async cleanup as a fallback for non-aiohttp transports.
+        Guarded by ``_cleanup_done`` to prevent double-close when the user has
+        already called ``await litellm.aclose()``.
         """
+        global _cleanup_done
+        if _cleanup_done:
+            return
+
         # Synchronous cleanup — close aiohttp connectors directly.
         # This is the primary strategy because it works even when the
         # original event loop is already closed (the common case after
@@ -189,11 +218,10 @@ def register_async_client_cleanup():
             pass
 
         # Async fallback — catches non-aiohttp transports and httpx clients.
-        # Safe to run after sync cleanup: aiohttp's ClientSession.close() with
-        # _connector=None is a no-op, and httpx client.aclose() on an already-
-        # closed transport is also idempotent.  This double-close pattern is
-        # intentional — the sync path handles aiohttp connectors, while the
-        # async path covers httpx and other transports that need await.
+        # The sync path above closes aiohttp connectors; this path covers
+        # httpx and other transports that need ``await``.
+        # ``close_litellm_async_clients`` is guarded by ``_cleanup_done`` so
+        # already-closed resources are not touched again.
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -203,5 +231,7 @@ def register_async_client_cleanup():
                 loop.close()
         except Exception:
             pass
+
+        _cleanup_done = True
 
     atexit.register(cleanup_wrapper)

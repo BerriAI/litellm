@@ -14,6 +14,7 @@ import aiohttp
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx import async_client_cleanup as _cleanup_mod
 from litellm.llms.custom_httpx.async_client_cleanup import (
     _close_aiohttp_sessions_sync,
     _collect_aiohttp_sessions,
@@ -24,12 +25,14 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 @pytest.fixture(autouse=True)
 def _clean_cache():
-    """Ensure a fresh LLM client cache for each test."""
+    """Ensure a fresh LLM client cache and reset cleanup guard for each test."""
     from litellm.caching.llm_caching_handler import LLMClientCache
 
     original = getattr(litellm, "in_memory_llm_clients_cache", None)
     litellm.in_memory_llm_clients_cache = LLMClientCache()
+    _cleanup_mod._cleanup_done = False
     yield
+    _cleanup_mod._cleanup_done = False
     litellm.in_memory_llm_clients_cache = original or LLMClientCache()
 
 
@@ -68,8 +71,9 @@ class TestCollectAiohttpSessions:
     async def test_skips_closed_sessions(self):
         handler = _create_cached_handler()
         session = _force_session_creation(handler)
-        # session.closed checks connector state, so detach it
-        session._connector = None
+        connector = session.connector
+        if connector is not None:
+            await connector.close()
         sessions = _collect_aiohttp_sessions()
         assert session not in sessions
 
