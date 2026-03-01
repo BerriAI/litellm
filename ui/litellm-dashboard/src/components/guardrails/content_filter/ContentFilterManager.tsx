@@ -269,13 +269,18 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
               try {
                 const parsed = yaml.load(content) as Record<string, unknown>;
                 if (parsed && Array.isArray(parsed.blocked_words)) {
-                  const newWords: BlockedWord[] = parsed.blocked_words.map(
-                    (entry: { keyword?: string; action?: string }, index: number) => ({
-                      id: `file-${Date.now()}-${index}`,
-                      keyword: String(entry.keyword ?? ""),
-                      action: (entry.action === "MASK" ? "MASK" : "BLOCK") as "BLOCK" | "MASK",
-                    })
-                  );
+                  const newWords: BlockedWord[] = parsed.blocked_words
+                    .filter((entry: unknown): entry is { keyword?: string; action?: string } =>
+                      entry != null && typeof entry === "object"
+                    )
+                    .map(
+                      (entry: { keyword?: string; action?: string }, index: number) => ({
+                        id: crypto.randomUUID(),
+                        keyword: String(entry.keyword ?? ""),
+                        action: (entry.action === "MASK" ? "MASK" : "BLOCK") as "BLOCK" | "MASK",
+                      })
+                    )
+                    .filter((w: BlockedWord) => w.keyword.trim() !== "");
                   setBlockedWords(prev => [...prev, ...newWords]);
                 }
               } catch {
