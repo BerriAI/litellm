@@ -2398,7 +2398,9 @@ class PrismaClient:
             ]
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
-            pg_schema = os.getenv("DATABASE_SCHEMA", "public")
+            from litellm.proxy.db.db_schema import get_database_schema
+
+            pg_schema = get_database_schema()
             ret = await self.db.query_raw(
                 f"""
                 WITH existing_views AS (
