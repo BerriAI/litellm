@@ -4581,9 +4581,14 @@ class ProxyConfig:
             _set_env_vars(decrypted_data)
 
             # Reinitialize the secret manager
-            self.initialize_secret_manager(
-                key_management_system="hashicorp_vault"
-            )
+            try:
+                self.initialize_secret_manager(
+                    key_management_system="hashicorp_vault"
+                )
+            except Exception:
+                # Roll back env vars so the broken config doesn't affect secret lookups
+                _set_env_vars({})
+                raise
 
             verbose_proxy_logger.debug(
                 "Hashicorp Vault config override loaded from DB"

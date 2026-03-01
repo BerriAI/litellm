@@ -183,10 +183,27 @@ async def update_hashicorp_vault_config(
             },
         )
 
-    # Encrypt sensitive fields before storing in DB
-    encrypted_data = _encrypt_sensitive_fields(config_data, HASHICORP_SENSITIVE_FIELDS)
+    # Set env vars and verify the secret manager can initialize before persisting
+    _set_env_vars(config_data)
 
-    # Upsert to DB first — only mutate env vars after DB write succeeds
+    try:
+        proxy_config.initialize_secret_manager(
+            key_management_system="hashicorp_vault"
+        )
+    except Exception as e:
+        _set_env_vars({})
+        verbose_proxy_logger.exception(
+            "Error reinitializing Hashicorp Vault secret manager: %s", str(e)
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Failed to initialize secret manager: {str(e)}"
+            },
+        )
+
+    # Only persist to DB after successful init
+    encrypted_data = _encrypt_sensitive_fields(config_data, HASHICORP_SENSITIVE_FIELDS)
     await prisma_client.db.litellm_configoverrides.upsert(
         where={"config_type": "hashicorp_vault"},
         data={
@@ -199,25 +216,6 @@ async def update_hashicorp_vault_config(
             },
         },
     )
-
-    # Set environment variables after DB write succeeds
-    _set_env_vars(config_data)
-
-    # Reinitialize the secret manager on this pod
-    try:
-        proxy_config.initialize_secret_manager(
-            key_management_system="hashicorp_vault"
-        )
-    except Exception as e:
-        verbose_proxy_logger.exception(
-            "Error reinitializing Hashicorp Vault secret manager: %s", str(e)
-        )
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": f"Config saved but failed to initialize secret manager: {str(e)}"
-            },
-        )
 
     return {
         "message": "Hashicorp Vault configuration updated successfully",
