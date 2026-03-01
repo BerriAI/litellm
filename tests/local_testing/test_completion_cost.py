@@ -2853,7 +2853,12 @@ def test_cost_calculator_base_model_cross_provider():
         base_model="gemini/gemini-2.0-flash",
         mock_response="Hello",
     )
-    assert resp._hidden_params["response_cost"] > 0
+    response_cost = resp._hidden_params["response_cost"]
+    assert response_cost > 0
+    # Verify Gemini pricing was used, not Anthropic pricing.
+    # gemini-2.0-flash: input=$0.10/M, output=$0.40/M
+    # A short mock response should cost less than $0.001
+    assert response_cost < 0.001, f"Cost {response_cost} too high — likely wrong provider pricing"
 
 
 def test_cost_calculator_with_custom_pricing():
