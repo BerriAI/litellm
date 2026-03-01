@@ -240,9 +240,10 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     routing_group_id: Optional[str]       # NEW — UUID of the routing group
     routing_group_name: Optional[str]     # NEW — human-readable name
     routing_strategy: Optional[str]       # NEW — strategy used for this request
+    routing_trace: Optional[List[dict]]   # NEW — routing trace: [{deployment_id, model, provider, status, error_class, error_message, latency_ms, priority, weight}]
 ```
 
-These fields flow automatically to ALL integrations (Langfuse, DataDog, Prometheus, SpendLogs) because `StandardLoggingPayload.metadata` is typed as `StandardLoggingMetadata`. The existing `LiteLLM_SpendLogs.metadata` JSON column stores the full `StandardLoggingMetadata` dict — no schema migration needed.
+These fields flow automatically to ALL integrations (Langfuse, DataDog, Prometheus, SpendLogs) because `StandardLoggingPayload.metadata` is typed as `StandardLoggingMetadata`. The existing `LiteLLM_SpendLogs.metadata` JSON column stores the full `StandardLoggingMetadata` dict — no schema migration needed. Agent 2 populates `routing_trace` in the fallback handler. Agent 6 renders it in the Logs detail view.
 
 #### 1.4 Migration
 
@@ -617,7 +618,51 @@ Add "Routing Groups" to the sidebar (under a "Routing" section or near "Models &
 - **Route:** `/routing-groups`
 - **Page file:** `ui/litellm-dashboard/src/app/(dashboard)/routing-groups/page.tsx`
 
-#### 4.2 Routing Groups List View
+#### 4.2 Page-Level Tabs (Tremor TabGroup)
+
+The routing groups page uses **3 tabs** (following the Tremor `TabGroup` pattern from `TeamsHeaderTabs.tsx` and `ModelsAndEndpointsView.tsx`):
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Routing Groups                                      [+ Create] [Refresh]   │
+│                                                                              │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐                         │
+│  │ All Groups   │ │ Health       │ │ Live Tester  │                         │
+│  └──────────────┘ └──────────────┘ └──────────────┘                         │
+│                                                                              │
+│  ╔══════════════════════════════════════════════════════════════════════════╗ │
+│  ║  (Tab content renders here)                                             ║ │
+│  ╚══════════════════════════════════════════════════════════════════════════╝ │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Tab 1: "All Groups"** — the table of routing groups (existing spec, section 4.3 below)
+**Tab 2: "Health"** — health dashboard (section 4.8 below)
+**Tab 3: "Live Tester"** — traffic visualization (Agent 5 builds the content)
+
+Implementation (Tremor pattern):
+```tsx
+<TabGroup>
+  <TabList className="flex justify-between mt-2 w-full items-center">
+    <div className="flex">
+      <Tab>All Groups</Tab>
+      <Tab>Health</Tab>
+      <Tab>Live Tester</Tab>
+    </div>
+    <div className="flex items-center space-x-2">
+      <Button onClick={openCreateModal}>+ Create Routing Group</Button>
+      <Icon icon={RefreshIcon} onClick={onRefresh} />
+    </div>
+  </TabList>
+  <TabPanels>
+    <TabPanel><RoutingGroupsTable ... /></TabPanel>
+    <TabPanel><RoutingGroupHealthDashboard ... /></TabPanel>
+    <TabPanel><LiveTester ... /></TabPanel>
+  </TabPanels>
+</TabGroup>
+```
+
+#### 4.3 Routing Groups List View (Tab 1: "All Groups")
 
 Main page showing all routing groups in a table:
 
@@ -750,18 +795,106 @@ export const useRoutingGroupTest = () => { ... }  // useMutation
 export const useRoutingGroupSimulate = () => { ... }  // useMutation
 ```
 
+#### 4.7 Health Dashboard Tab — `RoutingGroupHealthDashboard.tsx`
+
+**Goal:** Show the configuration and live health status of all routing groups in one view. Lets users see at a glance: is everything configured correctly? Is anything in cooldown?
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Health                                                                      │
+│                                                                              │
+│  ┌─ prod-model ──────────────────────────────────────────────────────────┐   │
+│  │                                                                        │   │
+│  │  Strategy: Priority Failover          Status: Active                   │   │
+│  │  Teams: engineering, platform         Keys: 3 assigned                 │   │
+│  │                                                                        │   │
+│  │  ┌─ Deployments ───────────────────────────────────────────────────┐   │   │
+│  │  │                                                                 │   │   │
+│  │  │  # Provider      Model                   Priority Health  Avg   │   │   │
+│  │  │  ─────────────────────────────────────────────────────────────  │   │   │
+│  │  │  1 Nebius        meta-llama/Llama-3.3-70B  P1     ● OK    149ms│   │   │
+│  │  │  2 Fireworks AI  llama-v3p3-70b            P2     ● OK    225ms│   │   │
+│  │  │  3 Azure         gpt-4o                    P3     ◉ COOL  321ms│   │   │
+│  │  │                                                  DOWN 45s      │   │   │
+│  │  └────────────────────────────────────────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  │  ┌─ Routing Flow ─────────────────────────────────────────────────┐   │   │
+│  │  │                                                                 │   │   │
+│  │  │  [Request] ──▶ Nebius (P1) ──fail──▶ Fireworks (P2)            │   │   │
+│  │  │                                       ──fail──▶ Azure (P3)     │   │   │
+│  │  │                                                                 │   │   │
+│  │  └────────────────────────────────────────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  │  ┌─ Settings ─────────────────────────────────────────────────────┐   │   │
+│  │  │  Max Retries: 3  │  Cooldown: 60s  │  Max Fallbacks: 5        │   │   │
+│  │  └────────────────────────────────────────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  └────────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ┌─ staging-model ───────────────────────────────────────────────────────┐   │
+│  │                                                                        │   │
+│  │  Strategy: Weighted Round-Robin       Status: Active                   │   │
+│  │  Teams: staging-team                  Keys: 1 assigned                 │   │
+│  │                                                                        │   │
+│  │  ┌─ Deployments ───────────────────────────────────────────────────┐   │   │
+│  │  │                                                                 │   │   │
+│  │  │  # Provider      Model                 Weight  Health  Avg     │   │   │
+│  │  │  ─────────────────────────────────────────────────────────────  │   │   │
+│  │  │  1 OpenAI        gpt-4o                 60%    ● OK    200ms   │   │   │
+│  │  │  2 Anthropic     claude-sonnet-4-20250514         40%    ● OK    180ms   │   │   │
+│  │  └────────────────────────────────────────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  │  ┌─ Routing Flow ─────────────────────────────────────────────────┐   │   │
+│  │  │              ┌──▶ OpenAI     60%                                │   │   │
+│  │  │  [Request] ──┤                                                  │   │   │
+│  │  │              └──▶ Anthropic  40%                                │   │   │
+│  │  └────────────────────────────────────────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  │  ┌─ Settings ─────────────────────────────────────────────────────┐   │   │
+│  │  │  Max Retries: 2  │  Cooldown: 30s  │  Max Fallbacks: 3        │   │   │
+│  │  └────────────────────────────────────────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  └────────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Each routing group card shows:**
+
+1. **Header row** — Name (bold), Strategy badge, Active/Inactive status tag
+2. **Access info** — Assigned teams (comma-separated names), key count
+3. **Deployments table** — One row per deployment:
+   - `#` (order number)
+   - Provider logo + name
+   - Model name
+   - Priority or Weight (depending on strategy)
+   - Health status dot:
+     - `● OK` (green) — healthy
+     - `◉ COOLDOWN 45s` (yellow) — in cooldown with countdown
+     - `● DOWN` (red) — unhealthy
+   - Avg latency (from recent requests, via `/health` endpoint)
+4. **Routing Flow** — inline simplified flow diagram (reuse `RoutingFlowDiagram` from the builder)
+   - For priority-failover: linear chain with `──fail──▶` arrows
+   - For weighted: fan-out with percentages
+5. **Settings row** — Max retries, Cooldown time, Max fallbacks
+
+**Data source:** Combines `GET /v1/routing_group` (config data) + `GET /v1/routing_group/{id}/health` (live health per deployment). Polls health every 10 seconds.
+
+**Component:** `RoutingGroupHealthDashboard.tsx` — iterates over all routing groups, renders a collapsible card per group (Ant Design `Collapse` or just stacked cards).
+
 ### Files to Create/Modify
 
 | File | Action |
 |------|--------|
 | `ui/litellm-dashboard/src/app/(dashboard)/routing-groups/page.tsx` | **NEW** — Page component |
-| `ui/litellm-dashboard/src/components/routing_groups/RoutingGroupsView.tsx` | **NEW** — Main view |
-| `ui/litellm-dashboard/src/components/routing_groups/RoutingGroupsTable.tsx` | **NEW** — List table |
+| `ui/litellm-dashboard/src/components/routing_groups/RoutingGroupsView.tsx` | **NEW** — Main view with TabGroup |
+| `ui/litellm-dashboard/src/components/routing_groups/RoutingGroupsTable.tsx` | **NEW** — List table (Tab 1) |
 | `ui/litellm-dashboard/src/components/routing_groups/RoutingGroupBuilder.tsx` | **NEW** — Create/Edit form |
-| `ui/litellm-dashboard/src/components/routing_groups/RoutingFlowDiagram.tsx` | **NEW** — Visual flow |
+| `ui/litellm-dashboard/src/components/routing_groups/RoutingFlowDiagram.tsx` | **NEW** — Visual flow (shared) |
 | `ui/litellm-dashboard/src/components/routing_groups/DeploymentSelector.tsx` | **NEW** — Model picker |
 | `ui/litellm-dashboard/src/components/routing_groups/StrategySelector.tsx` | **NEW** — Strategy picker |
-| `ui/litellm-dashboard/src/components/networking.tsx` | Add CRUD + test/simulate calls |
+| `ui/litellm-dashboard/src/components/routing_groups/RoutingGroupHealthDashboard.tsx` | **NEW** — Health dashboard (Tab 2) |
+| `ui/litellm-dashboard/src/components/networking.tsx` | Add CRUD + test/simulate + health calls |
 | `ui/litellm-dashboard/src/app/(dashboard)/hooks/useRoutingGroups.ts` | **NEW** — React Query hooks |
 | `ui/litellm-dashboard/src/app/(dashboard)/components/Sidebar2.tsx` | Add "Routing Groups" menu item |
 
@@ -1058,6 +1191,224 @@ interface LiveTesterData {
 
 ---
 
+## Agent 6: UI — Logs Routing Decision Section
+
+**Goal:** Add a "Routing Decision" section to the Logs detail drawer that shows how the request was routed through a routing group — which deployments were considered, which one handled it, and whether any fallbacks fired.
+
+### Why This Matters
+
+When routing group metadata flows into spend logs (Fix 5), the Logs page already shows the final `model` and `model_id`. But users can't see:
+- That the request went through a routing group (vs. a direct model call)
+- What strategy was used
+- Whether fallbacks were triggered (and which deployments failed before the final one succeeded)
+- The full routing trace chain
+
+This section surfaces that information directly in the existing log detail view.
+
+### Design — "Routing Decision" Card
+
+This is a new card section in `LogDetailContent.tsx`, inserted **between "Request Details" and "Metrics"** (only shown when `metadata.routing_group_name` exists):
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Routing Decision                                                            │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                                                                        │  │
+│  │  Routing Group     prod-model                                          │  │
+│  │  Strategy          Priority Failover                                   │  │
+│  │  Routing Group ID  a1b2c3d4-e5f6-...          [Copy]                   │  │
+│  │                                                                        │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  ┌─ Routing Trace ────────────────────────────────────────────────────────┐  │
+│  │                                                                        │  │
+│  │  ① Nebius / meta-llama/Llama-3.3-70B                                   │  │
+│  │     Priority 1 · model_id: abc123                                      │  │
+│  │     ✗ FAILED  ──  RateLimitError: 429 Too Many Requests  ──  23ms      │  │
+│  │                                                                        │  │
+│  │     ──── fallback ────▶                                                │  │
+│  │                                                                        │  │
+│  │  ② Fireworks AI / llama-v3p3-70b                                       │  │
+│  │     Priority 2 · model_id: def456                                      │  │
+│  │     ✓ SUCCESS  ──  200 OK  ──  225ms                                   │  │
+│  │                                                                        │  │
+│  │  ────────────────────────────────────────────────────────────────────   │  │
+│  │  Azure / gpt-4o (Priority 3) was not tried                             │  │
+│  │                                                                        │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  ┌─ No Fallbacks (direct success) ────────────────────────────────────────┐  │
+│  │                                                                        │  │
+│  │  ① Nebius / meta-llama/Llama-3.3-70B                                   │  │
+│  │     Priority 1 · model_id: abc123                                      │  │
+│  │     ✓ SUCCESS  ──  200 OK  ──  149ms                                   │  │
+│  │                                                                        │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  ┌─ Weighted (no fallback chain) ─────────────────────────────────────────┐  │
+│  │                                                                        │  │
+│  │  Selected: Nebius / meta-llama/Llama-3.3-70B                           │  │
+│  │  Strategy: Weighted (83% weight) · model_id: abc123                    │  │
+│  │  ✓ SUCCESS  ──  200 OK  ──  149ms                                      │  │
+│  │                                                                        │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Three Display Modes
+
+**Mode A: Fallback triggered (priority-failover, at least one failure)**
+Shows the numbered step-by-step trace:
+- Each attempted deployment in order, with circled number
+- Failed steps: red `✗ FAILED` + error class + error message + latency
+- `──── fallback ────▶` arrow between failed and next attempt
+- Successful step: green `✓ SUCCESS` + status + latency
+- Untried deployments: grayed out "(was not tried)" at bottom
+
+**Mode B: Direct success (priority-failover, first deployment succeeded)**
+Simplified single-step view:
+- Shows the deployment that handled it
+- Green `✓ SUCCESS` + latency
+- No fallback arrows needed
+
+**Mode C: Non-ordered strategy (weighted, round-robin, cost-based, etc.)**
+Shows which deployment was selected:
+- "Selected:" label + deployment name
+- Strategy name + weight/reason
+- Success/failure status + latency
+
+### Data Source
+
+All data comes from fields already in the log entry's `metadata` object (populated by Fix 5):
+
+```typescript
+// From metadata (StandardLoggingMetadata):
+metadata.routing_group_id      // "a1b2c3d4-..."
+metadata.routing_group_name    // "prod-model"
+metadata.routing_strategy      // "priority-failover"
+
+// Already in the log entry:
+logEntry.model                 // Final model that handled it
+logEntry.model_id              // Final deployment ID
+logEntry.custom_llm_provider   // Final provider
+
+// From metadata (retries/fallbacks):
+metadata.attempted_retries     // How many retries before success
+metadata.model_map_information // Which model was mapped
+```
+
+**For the full routing trace (failed attempts before success):** The `routing_trace` data needs to be added to `StandardLoggingMetadata` (Agent 1). Add:
+
+```python
+class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
+    # ... existing fields ...
+    routing_group_id: Optional[str]
+    routing_group_name: Optional[str]
+    routing_strategy: Optional[str]
+    routing_trace: Optional[List[dict]]    # NEW — [{deployment_id, model, provider, status, error, latency_ms}]
+```
+
+Each entry in `routing_trace` is a dict:
+```python
+{
+    "deployment_id": "abc123",
+    "model": "nebius/meta-llama/Llama-3.3-70B",
+    "provider": "nebius",
+    "status": "error",           # "success" or "error"
+    "error_class": "RateLimitError",
+    "error_message": "429 Too Many Requests",
+    "latency_ms": 23,
+    "priority": 1,               # for priority-failover
+    "weight": null,              # for weighted
+}
+```
+
+Agent 2 wires this: in the Router's fallback handler (`litellm/router_utils/fallback_event_handlers.py`), append each failed attempt to `metadata["routing_trace"]` before trying the next fallback. On final success, the complete trace is in the metadata and flows to spend logs.
+
+### Tasks
+
+#### 6.1 Extend StandardLoggingMetadata (Agent 1 addition)
+
+Add `routing_trace: Optional[List[dict]]` to `StandardLoggingMetadata` in `litellm/types/utils.py`.
+
+#### 6.2 Wire routing_trace in fallback handler (Agent 2 addition)
+
+In `litellm/router_utils/fallback_event_handlers.py`, when a deployment fails and fallback is triggered:
+```python
+# Append failed attempt to routing_trace
+_metadata = kwargs.get("metadata", {})
+if "routing_trace" not in _metadata:
+    _metadata["routing_trace"] = []
+_metadata["routing_trace"].append({
+    "deployment_id": kwargs.get("model_id", ""),
+    "model": kwargs.get("model", ""),
+    "provider": kwargs.get("custom_llm_provider", ""),
+    "status": "error",
+    "error_class": type(exception).__name__,
+    "error_message": str(exception)[:200],
+    "latency_ms": round((end_time - start_time).total_seconds() * 1000),
+    "priority": metadata.get("deployment_priority"),
+    "weight": metadata.get("deployment_weight"),
+})
+```
+
+On final success, the success callback appends the final entry with `"status": "success"`.
+
+#### 6.3 RoutingDecisionSection Component
+
+Create `ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/RoutingDecisionSection.tsx`:
+
+```typescript
+interface RoutingDecisionSectionProps {
+  metadata: Record<string, any>;
+  logEntry: LogEntry;
+}
+```
+
+**Rendering logic:**
+1. Check `metadata.routing_group_name` — if missing, don't render (request didn't go through a routing group)
+2. Render header card: Routing Group name, Strategy badge, Group ID with copy
+3. Check `metadata.routing_trace`:
+   - If array with entries: render Mode A (fallback trace) or Mode B (single success)
+   - If missing/empty and strategy is not priority-failover: render Mode C (selected deployment)
+4. Style: use Ant Design `Card`, `Tag`, `Descriptions`, `Steps` (vertical) or custom layout
+   - Failed step: red border-left, `Tag color="error"` for status
+   - Success step: green border-left, `Tag color="success"` for status
+   - Fallback arrow: gray dashed divider with "fallback" label
+   - Untried deployments: grayed out text
+
+#### 6.4 Integrate into LogDetailContent
+
+Edit `ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx`:
+
+Insert between "Request Details" card and "Metrics" section:
+```tsx
+{/* Routing Decision (only for routing group requests) */}
+{metadata?.routing_group_name && (
+  <RoutingDecisionSection metadata={metadata} logEntry={logEntry} />
+)}
+
+{/* Metrics */}
+<MetricsSection logEntry={logEntry} metadata={metadata} />
+```
+
+### Files to Create/Modify
+
+| File | Action |
+|------|--------|
+| `litellm/types/utils.py` | Add `routing_trace` to `StandardLoggingMetadata` (Agent 1 scope) |
+| `litellm/router_utils/fallback_event_handlers.py` | Wire `routing_trace` on failures (Agent 2 scope) |
+| `ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/RoutingDecisionSection.tsx` | **NEW** — Routing decision card |
+| `ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx` | Insert RoutingDecisionSection |
+
+### Dependencies
+- Agent 1 (types: `routing_trace` field in StandardLoggingMetadata)
+- Agent 2 (wiring: populate `routing_trace` in fallback handler)
+- Can be built in parallel with Agents 4+5 (separate UI area)
+
+---
+
 ## Agent Dependency Graph
 
 ```
@@ -1069,9 +1420,11 @@ Agent 1 (DB & Types)
    │       │       │
    │       │       └──→ Agent 5 (Live Tester UI)
    │       │
-   │       └──→ Agent 4 (Builder UI)
-   │               │
-   │               └──→ Agent 5 (Live Tester UI)
+   │       ├──→ Agent 4 (Builder UI + Health Tab)
+   │       │       │
+   │       │       └──→ Agent 5 (Live Tester UI)
+   │       │
+   │       └──→ Agent 6 (Logs Routing Decision UI)
    │
    └──→ Agent 4 (Builder UI) [can start types/networking in parallel]
 ```
@@ -1081,6 +1434,7 @@ Agent 1 (DB & Types)
 - Agents 2 + 4 can start in parallel once Agent 1 is done (API contracts agreed upfront)
 - Agent 3 can start once Agent 2's endpoint signatures are defined
 - Agent 5 starts once Agents 3 + 4 are done
+- Agent 6 can run in parallel with Agents 4 + 5 (separate UI area — Logs page vs. Routing Groups page)
 
 ---
 
@@ -1095,6 +1449,7 @@ Agent 1 (DB & Types)
 | 3 | `tests/litellm/proxy/test_routing_group_test_engine.py` | Single request test, simulation, failure injection, trace callback |
 | 4 | `ui/litellm-dashboard/src/components/routing_groups/__tests__/` | Component rendering, form validation |
 | 5 | `ui/litellm-dashboard/src/components/routing_groups/__tests__/` | Chart rendering, simulation result display |
+| 6 | `ui/litellm-dashboard/src/components/view_logs/__tests__/` | RoutingDecisionSection rendering with/without routing data |
 
 ### Integration Tests
 
@@ -1141,25 +1496,34 @@ litellm/proxy/routing_group_utils/routing_trace_callback.py    (new)
 tests/litellm/proxy/test_routing_group_test_engine.py          (new)
 ```
 
-### Agent 4: UI Builder
+### Agent 4: UI Builder + Health Tab
 ```
 ui/litellm-dashboard/src/app/(dashboard)/routing-groups/page.tsx              (new)
-ui/litellm-dashboard/src/components/routing_groups/RoutingGroupsView.tsx      (new)
-ui/litellm-dashboard/src/components/routing_groups/RoutingGroupsTable.tsx     (new)
+ui/litellm-dashboard/src/components/routing_groups/RoutingGroupsView.tsx      (new — TabGroup with 3 tabs)
+ui/litellm-dashboard/src/components/routing_groups/RoutingGroupsTable.tsx     (new — Tab 1)
 ui/litellm-dashboard/src/components/routing_groups/RoutingGroupBuilder.tsx    (new)
 ui/litellm-dashboard/src/components/routing_groups/RoutingFlowDiagram.tsx     (new)
 ui/litellm-dashboard/src/components/routing_groups/DeploymentSelector.tsx     (new)
 ui/litellm-dashboard/src/components/routing_groups/StrategySelector.tsx       (new)
+ui/litellm-dashboard/src/components/routing_groups/RoutingGroupHealthDashboard.tsx (new — Tab 2)
 ui/litellm-dashboard/src/components/networking.tsx                            (modify)
 ui/litellm-dashboard/src/app/(dashboard)/hooks/useRoutingGroups.ts           (new)
 ui/litellm-dashboard/src/app/(dashboard)/components/Sidebar2.tsx             (modify)
 ```
 
-### Agent 5: UI Live Tester
+### Agent 5: UI Live Tester (Tab 3)
 ```
 ui/litellm-dashboard/src/components/routing_groups/LiveTester.tsx             (new)
 ui/litellm-dashboard/src/components/routing_groups/TrafficSimulator.tsx       (new)
 ui/litellm-dashboard/src/components/routing_groups/TrafficDistributionChart.tsx (new)
 ui/litellm-dashboard/src/components/routing_groups/SimulationFlowDiagram.tsx  (new)
 ui/litellm-dashboard/src/components/routing_groups/RequestFlowTrace.tsx       (new)
+```
+
+### Agent 6: UI Logs Routing Decision
+```
+ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/RoutingDecisionSection.tsx  (new)
+ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx        (modify — insert RoutingDecisionSection)
+litellm/types/utils.py                                                                     (modify — add routing_trace, Agent 1 scope)
+litellm/router_utils/fallback_event_handlers.py                                            (modify — wire routing_trace, Agent 2 scope)
 ```

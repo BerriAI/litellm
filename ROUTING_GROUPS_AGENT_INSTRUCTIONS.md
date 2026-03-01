@@ -150,11 +150,28 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     routing_group_id: Optional[str]       # NEW — UUID of the routing group
     routing_group_name: Optional[str]     # NEW — human-readable name
     routing_strategy: Optional[str]       # NEW — strategy used for this request
+    routing_trace: Optional[List[dict]]   # NEW — routing trace: [{deployment_id, model, provider, status, error_class, error_message, latency_ms, priority, weight}]
 ```
 
 These fields flow automatically to ALL integrations (Langfuse, DataDog, Prometheus, SpendLogs) because `StandardLoggingPayload.metadata` is typed as `StandardLoggingMetadata`.
 
 The existing `LiteLLM_SpendLogs.metadata` JSON column stores the full `StandardLoggingMetadata` dict — no schema migration needed. The existing `LiteLLM_SpendLogs.model_group` column already captures the routing group name automatically (since routing_group_name IS the model_group).
+
+The `routing_trace` field is a list of dicts recording each deployment attempt during routing. Each entry:
+```python
+{
+    "deployment_id": "abc123",
+    "model": "nebius/meta-llama/Llama-3.3-70B",
+    "provider": "nebius",
+    "status": "error",           # "success" or "error"
+    "error_class": "RateLimitError",
+    "error_message": "429 Too Many Requests",
+    "latency_ms": 23,
+    "priority": 1,               # for priority-failover
+    "weight": None,              # for weighted
+}
+```
+Agent 2 wires this in the fallback handler. Agent 6 renders it in the Logs UI.
 
 ### 4. Add Unit Tests
 
@@ -645,11 +662,10 @@ The UI source is at: `ui/litellm-dashboard/`
 
 ## What You're Building
 
-A new "Routing Groups" page accessible from the sidebar that lets users:
-1. View all routing groups in a table
-2. Create a new routing group (pick strategy, select deployments, set priority/weight, assign teams)
-3. Edit/delete existing routing groups
-4. Navigate to the Live Tester (Agent 5 builds the tester itself)
+A new "Routing Groups" page accessible from the sidebar with **3 tabs** (using Tremor TabGroup):
+1. **"All Groups"** tab — Table of routing groups + Create/Edit modal
+2. **"Health"** tab — Health dashboard showing config + live deployment status per group
+3. **"Live Tester"** tab — placeholder for Agent 5 (just render an empty `<TabPanel>` with "Coming soon" text)
 
 ## Your Tasks
 
@@ -683,14 +699,44 @@ export default function RoutingGroupsPage() {
 }
 ```
 
-### 3. Create RoutingGroupsView
+### 3. Create RoutingGroupsView (Tabbed Layout)
 
 Create `ui/litellm-dashboard/src/components/routing_groups/RoutingGroupsView.tsx`:
 
-Main view with:
-- Header: "Routing Groups" title + "Create Routing Group" button
-- Table of existing routing groups (RoutingGroupsTable)
-- Create/Edit modal (RoutingGroupBuilder)
+Use the Tremor TabGroup pattern (same as `TeamsHeaderTabs.tsx` and `ModelsAndEndpointsView.tsx`):
+
+```tsx
+import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Icon } from "@tremor/react";
+import { RefreshCw } from "lucide-react";
+
+// In the component:
+<TabGroup className="gap-2 h-[75vh] w-full">
+  <TabList className="flex justify-between mt-2 w-full items-center">
+    <div className="flex">
+      <Tab>All Groups</Tab>
+      <Tab>Health</Tab>
+      <Tab>Live Tester</Tab>
+    </div>
+    <div className="flex items-center space-x-2">
+      <Button onClick={openCreateModal}>+ Create Routing Group</Button>
+      <Icon icon={RefreshCw} onClick={handleRefresh} />
+    </div>
+  </TabList>
+  <TabPanels>
+    <TabPanel>
+      <RoutingGroupsTable ... />
+    </TabPanel>
+    <TabPanel>
+      <RoutingGroupHealthDashboard ... />
+    </TabPanel>
+    <TabPanel>
+      {/* Agent 5 will build LiveTester component */}
+      <div className="text-center text-gray-400 py-12">Live Tester — coming soon</div>
+    </TabPanel>
+  </TabPanels>
+</TabGroup>
+```
 
 ### 4. Create RoutingGroupsTable
 
@@ -1005,8 +1051,64 @@ export const useRoutingGroup = (id: string) => {
 };
 ```
 
+### 10. Create RoutingGroupHealthDashboard (Tab 2: "Health")
+
+Create `ui/litellm-dashboard/src/components/routing_groups/RoutingGroupHealthDashboard.tsx`:
+
+This is the "Health" tab content. It shows **one card per routing group** with full config and live deployment health.
+
+**For each routing group, render a card with:**
+
+1. **Header row** — Group name (bold), Strategy badge (Ant Design `Tag`), Active/Inactive status tag
+2. **Access info** — "Teams: engineering, platform" + "Keys: 3 assigned"
+3. **Deployments table** (Ant Design `Table` or `Descriptions`):
+   - Row per deployment:
+     - `#` (order number)
+     - Provider name
+     - Model name (monospace)
+     - Priority or Weight (depending on strategy)
+     - Health dot: green `● OK`, yellow `◉ COOLDOWN 45s`, red `● DOWN`
+     - Avg latency (ms)
+4. **Routing Flow** — reuse `RoutingFlowDiagram` component from the builder
+   - For priority-failover: `[Request] ──▶ Nebius (P1) ──fail──▶ Fireworks (P2) ──fail──▶ Azure (P3)`
+   - For weighted: fan-out with percentages
+5. **Settings row** — Max retries, Cooldown time, Max fallbacks (from `retry_config`/`cooldown_config`/`settings`)
+
+**Data fetching:**
+- Use `routingGroupListCall()` to get all routing groups (config data)
+- For each group, call `routingGroupHealthCall()` to get live deployment health
+- Poll health every 10 seconds using `useQuery` with `refetchInterval: 10000`
+- Add a `useRoutingGroupHealth` hook:
+  ```typescript
+  export const useRoutingGroupHealth = (id: string) => {
+    const { accessToken } = useAuthorized();
+    return useQuery({
+      queryKey: ["routingGroupHealth", id],
+      queryFn: () => routingGroupHealthCall(accessToken!, id),
+      enabled: !!accessToken && !!id,
+      refetchInterval: 10000,
+    });
+  };
+  ```
+
+**Health status rendering:**
+```tsx
+// For each deployment:
+{deployment.in_cooldown ? (
+  <Tag color="warning">◉ COOLDOWN {deployment.cooldown_remaining_seconds}s</Tag>
+) : deployment.is_healthy ? (
+  <Tag color="success">● OK</Tag>
+) : (
+  <Tag color="error">● DOWN</Tag>
+)}
+```
+
+**Layout:** Stacked cards, each using Ant Design `Card` with `title` showing the group name. Use `Collapse` to allow users to expand/collapse individual groups if there are many.
+
 ### Reference Files (READ THESE FIRST for patterns):
 - `ui/litellm-dashboard/src/app/(dashboard)/teams/page.tsx` — page pattern
+- `ui/litellm-dashboard/src/app/(dashboard)/teams/components/TeamsHeaderTabs.tsx` — Tremor TabGroup pattern
+- `ui/litellm-dashboard/src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx` — complex TabGroup with multiple tabs
 - `ui/litellm-dashboard/src/app/(dashboard)/teams/components/modals/CreateTeamModal.tsx` — create modal pattern
 - `ui/litellm-dashboard/src/app/(dashboard)/components/Sidebar2.tsx` — sidebar pattern
 - `ui/litellm-dashboard/src/components/networking.tsx` — API call pattern
@@ -1015,7 +1117,7 @@ export const useRoutingGroup = (id: string) => {
 - `ui/litellm-dashboard/src/components/common_components/team_dropdown.tsx` — dropdown pattern
 
 ### What NOT to do:
-- Don't build the Live Tester / Traffic Simulator visualizations (Agent 5 does that)
+- Don't build the Live Tester / Traffic Simulator visualizations (Agent 5 does that — just render a placeholder `<TabPanel>`)
 - Don't build backend endpoints (Agent 2)
 - Don't modify Python files
 - Do NOT add any new npm dependencies — use only existing libraries (antd, @tremor/react, @tanstack/react-query, @tanstack/react-table, lucide-react, @ant-design/icons)
@@ -1335,12 +1437,211 @@ const getProviderColor = (provider: string): string => {
 
 ---
 
+## AGENT 6: UI — Logs Routing Decision Section
+
+### Instructions to paste:
+
+```
+You are implementing the "Routing Groups" feature for LiteLLM. Your job is Agent 6: Logs Routing Decision Section.
+
+Read the full plan at ROUTING_GROUPS_PLAN.md for context (specifically the "Agent 6" section).
+
+This is a Next.js + React + TypeScript + Ant Design application. UI source: `ui/litellm-dashboard/`
+
+**Prerequisite:** Agent 1 has added `routing_group_id`, `routing_group_name`, `routing_strategy`, and `routing_trace` fields to `StandardLoggingMetadata` in `litellm/types/utils.py`. Agent 2 has wired these fields so they flow into `LiteLLM_SpendLogs.metadata` for every request that goes through a routing group.
+
+## What You're Building
+
+A new "Routing Decision" card section in the Logs detail drawer. When a user clicks on a log entry that went through a routing group, they see:
+- Which routing group handled it
+- What routing strategy was used
+- The full routing trace (which deployments were tried, in what order, which failed, which succeeded)
+
+This section is ONLY shown when `metadata.routing_group_name` exists in the log entry's metadata (meaning the request went through a routing group).
+
+## Your Tasks
+
+### 1. Create RoutingDecisionSection Component
+
+Create `ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/RoutingDecisionSection.tsx`:
+
+```tsx
+interface RoutingDecisionSectionProps {
+  metadata: Record<string, any>;
+  logEntry: LogEntry;
+}
+```
+
+**Header info (always shown when routing_group_name exists):**
+- Routing Group name (bold)
+- Strategy badge (Ant Design Tag)
+- Routing Group ID (monospace, with copy button)
+
+**Routing Trace section (the main visual):**
+
+There are three display modes:
+
+**Mode A: Fallback triggered** (routing_trace has entries with mixed success/error)
+Show numbered steps, each with a colored left border:
+
+```
+  ① Nebius / meta-llama/Llama-3.3-70B
+     Priority 1 · model_id: abc123
+     ✗ FAILED  ──  RateLimitError: 429 Too Many Requests  ──  23ms
+
+     ──── fallback ────▶
+
+  ② Fireworks AI / llama-v3p3-70b
+     Priority 2 · model_id: def456
+     ✓ SUCCESS  ──  200 OK  ──  225ms
+
+  ────────────────────────────────────────
+  Azure / gpt-4o (Priority 3) was not tried
+```
+
+Each step:
+- Circled number (① ② ③)
+- Provider + model name (bold)
+- Priority/weight + model_id (gray subtitle)
+- Status: red `✗ FAILED` with error class + message + latency, or green `✓ SUCCESS` + latency
+- Between failed and next: gray dashed `──── fallback ────▶` divider
+- Untried deployments listed at bottom in gray italic
+
+**Mode B: Direct success** (routing_trace has single success entry or is empty with priority-failover strategy)
+Simplified single deployment:
+
+```
+  ① Nebius / meta-llama/Llama-3.3-70B
+     Priority 1 · model_id: abc123
+     ✓ SUCCESS  ──  200 OK  ──  149ms
+```
+
+**Mode C: Non-ordered strategy** (strategy is weighted, round-robin, cost-based, etc.)
+
+```
+  Selected: Nebius / meta-llama/Llama-3.3-70B
+  Strategy: Weighted (83% weight) · model_id: abc123
+  ✓ SUCCESS  ──  200 OK  ──  149ms
+```
+
+**Implementation details:**
+
+Use Ant Design components:
+- `Card` for the outer container (same style as "Request Details" card in LogDetailContent)
+- `Descriptions` for the header info (Routing Group, Strategy, ID)
+- `Tag color="success"` for SUCCESS, `Tag color="error"` for FAILED
+- `Tag color="blue"` for strategy badge
+- `Typography.Text copyable` for the routing group ID
+- Custom styled divs for each trace step (left border colored red/green)
+
+```tsx
+// Trace step styling:
+<div style={{
+  borderLeft: `3px solid ${step.status === 'success' ? '#52c41a' : '#ff4d4f'}`,
+  paddingLeft: 16,
+  marginBottom: 12,
+}}>
+  <Text strong>{step.provider} / {step.model}</Text>
+  <br />
+  <Text type="secondary" style={{ fontSize: 12 }}>
+    {step.priority ? `Priority ${step.priority}` : `Weight ${step.weight}%`} · model_id: {step.deployment_id}
+  </Text>
+  <br />
+  {step.status === 'success' ? (
+    <Tag color="success">✓ SUCCESS</Tag>
+  ) : (
+    <Tag color="error">✗ FAILED</Tag>
+  )}
+  <Text type="secondary"> {step.error_class}: {step.error_message}</Text>
+  <Text type="secondary"> · {step.latency_ms}ms</Text>
+</div>
+
+// Fallback arrow between steps:
+<div style={{ textAlign: 'center', color: '#999', margin: '8px 0' }}>
+  ──── fallback ────▶
+</div>
+```
+
+### 2. Integrate into LogDetailContent
+
+Edit `ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx`:
+
+Add import at top:
+```tsx
+import { RoutingDecisionSection } from "./RoutingDecisionSection";
+```
+
+Insert between the "Request Details" card and the "Metrics" section (around line 134):
+```tsx
+      {/* Request Details */}
+      <div className="bg-white rounded-lg shadow ...">
+        <Card title="Request Details" ...>
+          ...
+        </Card>
+      </div>
+
+      {/* NEW: Routing Decision (only for routing group requests) */}
+      {metadata?.routing_group_name && (
+        <RoutingDecisionSection metadata={metadata} logEntry={logEntry} />
+      )}
+
+      {/* Metrics */}
+      <MetricsSection logEntry={logEntry} metadata={metadata} />
+```
+
+### 3. Data Shape
+
+The component reads these fields from `metadata`:
+
+```typescript
+// Available in metadata (populated by Fix 5 + routing_trace wiring):
+metadata.routing_group_id       // "a1b2c3d4-e5f6-..."
+metadata.routing_group_name     // "prod-model"
+metadata.routing_strategy       // "priority-failover" | "weighted" | ...
+
+// The routing trace (array of attempts):
+metadata.routing_trace          // Array of:
+// {
+//   deployment_id: "abc123",
+//   model: "nebius/meta-llama/Llama-3.3-70B",
+//   provider: "nebius",
+//   status: "error" | "success",
+//   error_class: "RateLimitError",       // only if status=error
+//   error_message: "429 Too Many...",    // only if status=error
+//   latency_ms: 23,
+//   priority: 1,                          // for priority-failover
+//   weight: null,                         // for weighted
+// }
+
+// Already in logEntry (the final successful deployment):
+logEntry.model                  // "nebius/meta-llama/Llama-3.3-70B"
+logEntry.model_id               // "abc123"
+logEntry.custom_llm_provider    // "nebius"
+```
+
+### Reference Files (READ FIRST):
+- `ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx` — the file you'll edit (understand the section order: Error → Tags → Request Details → [YOUR SECTION] → Metrics → Cost Breakdown → ...)
+- `ui/litellm-dashboard/src/components/view_logs/columns.tsx` — LogEntry type definition
+- `ui/litellm-dashboard/src/components/view_logs/LogDetailsDrawer/constants.ts` — styling constants
+- `ui/litellm-dashboard/src/components/view_logs/GuardrailViewer/` — reference for a conditional detail section pattern
+
+### What NOT to do:
+- Don't modify Python files (Agent 1 & 2 handle the backend wiring)
+- Don't modify the routing groups page or components (Agents 4 & 5)
+- Don't add new npm dependencies
+- Don't add imports inside functions
+- Don't change the order of existing sections in LogDetailContent — only INSERT between Request Details and Metrics
+```
+
+---
+
 ## Summary: Agent Assignment Order
 
 | Order | Agent | Can start when | Duration estimate |
 |-------|-------|----------------|-------------------|
 | 1 | Agent 1 (DB & Types) | Immediately | Small |
 | 2a | Agent 2 (API Endpoints) | After Agent 1 | Medium |
-| 2b | Agent 4 (UI Builder) | After Agent 1 (parallel with Agent 2) | Medium |
+| 2b | Agent 4 (UI Builder + Health Tab) | After Agent 1 (parallel with Agent 2) | Medium |
 | 3 | Agent 3 (Test Engine) | After Agent 2 | Medium |
 | 4 | Agent 5 (Live Tester UI) | After Agents 3 + 4 | Medium-Large |
+| 2c | Agent 6 (Logs Routing Decision) | After Agent 2 (parallel with Agents 4+5) | Small |
