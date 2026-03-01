@@ -239,11 +239,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def _get_initiator(self, input_param: Union[str, ResponseInputParam]) -> str:
         """
-        Determine X-Initiator header value based on input analysis.
+        Determine X-Initiator header value based on the *last* input item.
 
-        Based on copilot-api's hasAgentInitiator logic:
-        - Returns "agent" if input contains assistant role or items without role
-        - Returns "user" otherwise
+        Only the last item determines the initiator:
+        - "user" when the final item is a user message (premium request)
+        - "agent" when the final item is an assistant continuation or tool
+          result (free follow-up)
+
+        Ref: https://github.com/sst/opencode-copilot-auth (index.mjs)
 
         Args:
             input_param: The input parameter (string or list of input items)
@@ -251,26 +254,18 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Returns:
             "agent" or "user"
         """
-        # If input is a string, it's user-initiated
         if isinstance(input_param, str):
             return "user"
 
-        # If input is a list, analyze items
-        if isinstance(input_param, list):
-            for item in input_param:
-                if not isinstance(item, dict):
-                    continue
-
-                # Check if item has no role (agent-initiated)
-                if "role" not in item or not item.get("role"):
+        if isinstance(input_param, list) and input_param:
+            last_item = input_param[-1]
+            if isinstance(last_item, dict):
+                if "role" not in last_item or not last_item.get("role"):
                     return "agent"
-
-                # Check if role is assistant (agent-initiated)
-                role = item.get("role")
+                role = last_item.get("role")
                 if isinstance(role, str) and role.lower() == "assistant":
                     return "agent"
 
-        # Default to user-initiated
         return "user"
 
     def _has_vision_input(self, input_param: Union[str, ResponseInputParam]) -> bool:
