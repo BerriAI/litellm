@@ -105,12 +105,14 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
     }
 
     if (guardrailData?.litellm_params?.blocked_words) {
-      const words = guardrailData.litellm_params.blocked_words.map((w: any, index: number) => ({
-        id: `word-${index}`,
-        keyword: w.keyword,
-        action: w.action || "BLOCK",
-        description: w.description,
-      }));
+      const words = guardrailData.litellm_params.blocked_words
+        .filter((w: unknown) => w != null && typeof w === "object")
+        .map((w: any, index: number) => ({
+          id: `word-${index}`,
+          keyword: w.keyword,
+          action: w.action || "BLOCK",
+          description: w.description,
+        }));
       setBlockedWords(words);
       setOriginalBlockedWords(words);
     } else {
@@ -267,9 +269,9 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
             }
             onFileUpload={(content: string) => {
               try {
-                const parsed = yaml.load(content) as Record<string, unknown>;
-                if (parsed && Array.isArray(parsed.blocked_words)) {
-                  const newWords: BlockedWord[] = parsed.blocked_words
+                const parsed = yaml.load(content);
+                if (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).blocked_words)) {
+                  const newWords: BlockedWord[] = ((parsed as Record<string, unknown>).blocked_words as unknown[])
                     .filter((entry: unknown): entry is { keyword?: string; action?: string; description?: string } =>
                       entry != null && typeof entry === "object"
                     )
