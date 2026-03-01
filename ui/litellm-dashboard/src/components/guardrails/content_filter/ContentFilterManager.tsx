@@ -1,5 +1,6 @@
 import { Alert, Divider, Typography } from "antd";
 import React, { useEffect, useState } from "react";
+import yaml from "js-yaml";
 import ContentFilterConfiguration from "./ContentFilterConfiguration";
 import ContentFilterDisplay from "./ContentFilterDisplay";
 import type { CompetitorIntentConfig } from "./CompetitorIntentConfiguration";
@@ -104,12 +105,14 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
     }
 
     if (guardrailData?.litellm_params?.blocked_words) {
-      const words = guardrailData.litellm_params.blocked_words.map((w: any, index: number) => ({
-        id: `word-${index}`,
-        keyword: w.keyword,
-        action: w.action || "BLOCK",
-        description: w.description,
-      }));
+      const words = guardrailData.litellm_params.blocked_words
+        .filter((w: unknown) => w != null && typeof w === "object")
+        .map((w: any, index: number) => ({
+          id: `word-${index}`,
+          keyword: w.keyword,
+          action: w.action || "BLOCK",
+          description: w.description,
+        }));
       setBlockedWords(words);
       setOriginalBlockedWords(words);
     } else {
@@ -265,7 +268,27 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
               setBlockedWords(blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w)))
             }
             onFileUpload={(content: string) => {
-              console.log("File uploaded:", content);
+              try {
+                const parsed = yaml.load(content);
+                if (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).blocked_words)) {
+                  const newWords: BlockedWord[] = ((parsed as Record<string, unknown>).blocked_words as unknown[])
+                    .filter((entry: unknown): entry is { keyword?: string; action?: string; description?: string } =>
+                      entry != null && typeof entry === "object"
+                    )
+                    .map(
+                      (entry: { keyword?: string; action?: string; description?: string }, index: number) => ({
+                        id: crypto.randomUUID(),
+                        keyword: String(entry.keyword ?? ""),
+                        action: (entry.action === "MASK" ? "MASK" : "BLOCK") as "BLOCK" | "MASK",
+                        description: String(entry.description ?? ""),
+                      })
+                    )
+                    .filter((w: BlockedWord) => w.keyword.trim() !== "");
+                  setBlockedWords(prev => [...prev, ...newWords]);
+                }
+              } catch (err) {
+                console.error("Failed to parse YAML blocked-words file:", err);
+              }
             }}
             accessToken={accessToken}
             contentCategories={guardrailSettings.content_filter_settings.content_categories || []}

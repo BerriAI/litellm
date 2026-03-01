@@ -388,6 +388,42 @@ describe("ContentFilterManager", () => {
     });
   });
 
+  it("should skip null entries in blocked_words from guardrailData", async () => {
+    const guardrailData = {
+      litellm_params: {
+        guardrail: "litellm_content_filter",
+        blocked_words: [
+          null,
+          { keyword: "valid", action: "BLOCK", description: "keep me" },
+          undefined,
+          "scalar-string",
+          { keyword: "also-valid", action: "MASK" },
+        ],
+      },
+    };
+    const mockOnDataChange = vi.fn();
+
+    render(
+      <ContentFilterManager
+        guardrailData={guardrailData}
+        guardrailSettings={GUARDRAIL_SETTINGS}
+        isEditing={true}
+        accessToken="test-token"
+        onDataChange={mockOnDataChange}
+      />
+    );
+
+    await waitFor(() => {
+      expect(mockOnDataChange).toHaveBeenCalled();
+    });
+
+    const lastCall = mockOnDataChange.mock.calls[mockOnDataChange.mock.calls.length - 1];
+    const blockedWords = lastCall[1];
+    expect(blockedWords).toHaveLength(2);
+    expect(blockedWords[0]).toMatchObject({ keyword: "valid", action: "BLOCK", description: "keep me" });
+    expect(blockedWords[1]).toMatchObject({ keyword: "also-valid", action: "MASK" });
+  });
+
   it("should not render ContentFilterConfiguration when guardrailSettings has no content_filter_settings", async () => {
     render(
       <ContentFilterManager
