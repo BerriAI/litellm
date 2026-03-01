@@ -1,0 +1,216 @@
+name: Run Observatory Tests
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Docker image tag to test (e.g. v1.61.0.rc1)"
+        required: true
+        type: string
+      commit_hash:
+        description: "Commit hash (defaults to HEAD of current branch)"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: "Docker image tag to test"
+        required: true
+        type: string
+      commit_hash:
+        description: "Commit hash of the release"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY_STAGING }}
+
+jobs:
+  observatory-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_hash || github.sha }}
+
+      - name: Validate tag input
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Invalid tag format: $TAG (expected vX.Y.Z...)"
+            exit 1
+          fi
+
+      - name: Start LiteLLM container
+        env:
+          TAG: ${{ inputs.tag }}
+          AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
+          AZURE_API_BASE: ${{ secrets.AZURE_API_BASE }}
+        run: |
+          docker run -d \
+            --name litellm-rc \
+            -p 4000:4000 \
+            -v "${{ github.workspace }}/.github/observatory/litellm_config.yaml:/app/config.yaml" \
+            -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+            -e AZURE_API_KEY="${AZURE_API_KEY}" \
+            -e AZURE_API_BASE="${AZURE_API_BASE}" \
+            "litellm/litellm:${TAG}" \
+            --config /app/config.yaml --port 4000
+
+      - name: Wait for LiteLLM health check
+        run: |
+          echo "Waiting for LiteLLM to be ready..."
+          for i in $(seq 1 30); do
+            if curl -s -f http://localhost:4000/health/liveliness > /dev/null 2>&1; then
+              echo "LiteLLM is healthy"
+              exit 0
+            fi
+            echo "Attempt $i/30 - not ready yet, waiting 10s..."
+            sleep 10
+          done
+          echo "LiteLLM failed to start within 5 minutes"
+          docker logs litellm-rc
+          exit 1
+
+      - name: Start cloudflared tunnel
+        run: |
+          # Install cloudflared
+          curl -sL https://github.com/cloudflare/cloudflared/releases/download/2025.2.1/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+          chmod +x /usr/local/bin/cloudflared
+
+          # Start a quick tunnel (no account needed) and capture the URL
+          cloudflared tunnel --url http://localhost:4000 --no-autoupdate > /tmp/cloudflared.log 2>&1 &
+          CLOUDFLARED_PID=$!
+          echo "CLOUDFLARED_PID=$CLOUDFLARED_PID" >> $GITHUB_ENV
+
+          # Wait for tunnel URL to appear in logs
+          echo "Waiting for tunnel URL..."
+          for i in $(seq 1 30); do
+            TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cloudflared.log | head -1 || true)
+            if [ -n "$TUNNEL_URL" ]; then
+              echo "Tunnel URL: $TUNNEL_URL"
+              echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Failed to get tunnel URL"
+          cat /tmp/cloudflared.log
+          exit 1
+
+      - name: Verify tunnel connectivity
+        run: |
+          echo "Testing tunnel at ${{ env.TUNNEL_URL }}..."
+          curl -sf "${{ env.TUNNEL_URL }}/health/liveliness"
+          echo "Tunnel is working"
+
+      - name: Trigger observatory test run
+        id: trigger
+        env:
+          OBSERVATORY_URL: ${{ secrets.OBSERVATORY_URL }}
+          OBSERVATORY_API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg url "${TUNNEL_URL}" \
+            --arg key "${LITELLM_MASTER_KEY}" \
+            '{
+              deployment_url: $url,
+              api_key: $key,
+              test_suite: "TestOAIAzureRelease",
+              models: ["gpt-4o-mini", "gpt-4o"]
+            }')
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${OBSERVATORY_URL}/run-test" \
+            -H "Content-Type: application/json" \
+            -H "X-LiteLLM-Observatory-API-Key: ${OBSERVATORY_API_KEY}" \
+            -d "$PAYLOAD")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          echo "Response ($HTTP_CODE): $BODY"
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "Failed to trigger test run"
+            exit 1
+          fi
+
+          # Extract request_id for polling this specific run
+          REQUEST_ID=$(echo "$BODY" | jq -r '.results.request_id')
+          if [ -z "$REQUEST_ID" ] || [ "$REQUEST_ID" = "null" ]; then
+            echo "Failed to extract request_id from response"
+            exit 1
+          fi
+          echo "Request ID: $REQUEST_ID"
+          echo "request_id=$REQUEST_ID" >> $GITHUB_OUTPUT
+
+      - name: Poll for test completion
+        id: poll
+        env:
+          OBSERVATORY_URL: ${{ secrets.OBSERVATORY_URL }}
+          OBSERVATORY_API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
+          REQUEST_ID: ${{ steps.trigger.outputs.request_id }}
+        run: |
+          TIMEOUT=900  # 15 minutes
+          INTERVAL=30
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATUS=$(curl -s "${OBSERVATORY_URL}/run-status/${REQUEST_ID}" \
+              -H "X-LiteLLM-Observatory-API-Key: ${OBSERVATORY_API_KEY}")
+            RUN_STATUS=$(echo "$STATUS" | jq -r '.status')
+            echo "Run status (${ELAPSED}s elapsed): $RUN_STATUS"
+
+            if [ "$RUN_STATUS" = "completed" ] || [ "$RUN_STATUS" = "failed" ]; then
+              echo "Test finished with status: $RUN_STATUS"
+              echo "$STATUS" > /tmp/observatory_result.json
+              exit 0
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+          echo "Timed out waiting for test to complete after ${TIMEOUT}s"
+          exit 1
+
+      - name: Verify test results
+        run: |
+          RESULT=$(cat /tmp/observatory_result.json)
+          echo "Full result: $RESULT"
+
+          STATUS=$(echo "$RESULT" | jq -r '.status')
+          TEST_PASSED=$(echo "$RESULT" | jq -r '.result.test_passed // false')
+          FAILURE_RATE=$(echo "$RESULT" | jq -r '.result.failure_rate // "N/A"')
+          ERROR=$(echo "$RESULT" | jq -r '.error // empty')
+
+          echo "Status: $STATUS"
+          echo "Test passed: $TEST_PASSED"
+          echo "Failure rate: $FAILURE_RATE"
+
+          if [ -n "$ERROR" ]; then
+            echo "Error: $ERROR"
+          fi
+
+          if [ "$STATUS" = "failed" ]; then
+            echo "Test run failed"
+            exit 1
+          fi
+
+          if [ "$TEST_PASSED" != "true" ]; then
+            echo "Tests did not pass (failure rate: $FAILURE_RATE)"
+            exit 1
+          fi
+
+          echo "All tests passed!"
+
+      - name: Print LiteLLM logs on failure
+        if: failure()
+        run: |
+          docker logs litellm-rc 2>/dev/null || true
+          cat /tmp/cloudflared.log 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kill "${{ env.CLOUDFLARED_PID }}" 2>/dev/null || true
+          docker rm -f litellm-rc 2>/dev/null || true
