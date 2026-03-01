@@ -751,6 +751,46 @@ def _convert_to_json_serializable_dict(
             visited.remove(obj_id)
 
 
+def _transform_anthropic_request_to_openai_format(request_body: dict) -> dict:
+    """
+    Transform Anthropic API request format to OpenAI-compatible format.
+
+    Anthropic uses a different format for system messages and tool definitions:
+    - System messages: separate 'system' field -> converted to system message in messages array
+    - Tools: Anthropic's input_schema -> OpenAI's function parameters
+
+    Args:
+        request_body: The request body from Anthropic /messages endpoint
+
+    Returns:
+        Transformed request body in OpenAI-compatible format
+    """
+    # Transform system message if present
+    request_body = dict(request_body)
+    system_content = request_body.pop("system", None)
+    if system_content:
+        request_body["messages"] = [
+            {"role": "system", "content": system_content}
+        ] + request_body.get("messages", [])
+
+    # Transform tools if present
+    if "tools" in request_body and request_body["tools"]:
+        request_body["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema", {})  # Anthropic-specific tools (e.g., computer_20241022) lack input_schema
+                }
+            }
+            for t in request_body.get("tools", [])
+            if "name" in t  # Valid tools should have a name
+        ]
+
+    return request_body
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
@@ -788,12 +828,17 @@ def _get_proxy_server_request_for_spend_logs_payload(
                         "standard_callback_dynamic_params"
                     ),
                 }
-                
+
                 # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
                     _request_body = _convert_to_json_serializable_dict(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
-            
+
+            # Transform Anthropic format to OpenAI format if this is an Anthropic request
+            _request_uri = _proxy_server_request.get("url") or ""
+            if "/v1/messages" in _request_uri:
+                _request_body = _transform_anthropic_request_to_openai_format(_request_body)
+
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
             return _request_body_json_str
