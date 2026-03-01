@@ -6,6 +6,7 @@ from typing import Optional
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import Response as FastAPIResponse
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -180,7 +181,13 @@ async def list_skills(
 
     # Read request body
     body = await request.body()
-    data = orjson.loads(body) if body else {}
+    try:
+        data = orjson.loads(body) if body else {}
+    except orjson.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
+        )
     
     # Use query params if not in body
     if "limit" not in data and limit is not None:
@@ -286,7 +293,13 @@ async def get_skill(
 
     # Read request body
     body = await request.body()
-    data = orjson.loads(body) if body else {}
+    try:
+        data = orjson.loads(body) if body else {}
+    except orjson.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
+        )
     
     # Set skill_id from path parameter
     data["skill_id"] = skill_id
@@ -389,7 +402,13 @@ async def delete_skill(
 
     # Read request body
     body = await request.body()
-    data = orjson.loads(body) if body else {}
+    try:
+        data = orjson.loads(body) if body else {}
+    except orjson.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
+        )
     
     # Set skill_id from path parameter
     data["skill_id"] = skill_id
@@ -543,7 +562,13 @@ async def get_skill_content_endpoint(
     )
 
     body = await request.body()
-    data = orjson.loads(body) if body else {}
+    try:
+        data = orjson.loads(body) if body else {}
+    except orjson.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
+        )
 
     data["skill_id"] = skill_id
 
@@ -560,7 +585,7 @@ async def get_skill_content_endpoint(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        result = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -578,6 +603,14 @@ async def get_skill_content_endpoint(
             user_api_base=user_api_base,
             version=version,
         )
+        # Handle binary content (e.g., zip files)
+        if isinstance(result, dict) and isinstance(result.get("content"), bytes):
+            return FastAPIResponse(
+                content=result["content"],
+                media_type=result.get("content_type", "application/octet-stream"),
+                status_code=result.get("status_code", 200),
+            )
+        return result
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -690,7 +723,13 @@ async def list_skill_versions_endpoint(
     )
 
     body = await request.body()
-    data = orjson.loads(body) if body else {}
+    try:
+        data = orjson.loads(body) if body else {}
+    except orjson.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
+        )
 
     data["skill_id"] = skill_id
     if "limit" not in data and limit is not None:
@@ -770,7 +809,13 @@ async def get_skill_version_endpoint(
     )
 
     body = await request.body()
-    data = orjson.loads(body) if body else {}
+    try:
+        data = orjson.loads(body) if body else {}
+    except orjson.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
+        )
 
     data["skill_id"] = skill_id
     data["version"] = skill_version
@@ -845,7 +890,13 @@ async def delete_skill_version_endpoint(
     )
 
     body = await request.body()
-    data = orjson.loads(body) if body else {}
+    try:
+        data = orjson.loads(body) if body else {}
+    except orjson.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
+        )
 
     data["skill_id"] = skill_id
     data["version"] = skill_version
@@ -920,7 +971,13 @@ async def get_skill_version_content_endpoint(
     )
 
     body = await request.body()
-    data = orjson.loads(body) if body else {}
+    try:
+        data = orjson.loads(body) if body else {}
+    except orjson.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
+        )
 
     data["skill_id"] = skill_id
     data["version"] = skill_version
@@ -938,7 +995,7 @@ async def get_skill_version_content_endpoint(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        result = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -956,6 +1013,14 @@ async def get_skill_version_content_endpoint(
             user_api_base=user_api_base,
             version=version,
         )
+        # Handle binary content (e.g., zip files)
+        if isinstance(result, dict) and isinstance(result.get("content"), bytes):
+            return FastAPIResponse(
+                content=result["content"],
+                media_type=result.get("content_type", "application/octet-stream"),
+                status_code=result.get("status_code", 200),
+            )
+        return result
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,

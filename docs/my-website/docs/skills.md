@@ -472,8 +472,8 @@ OpenAI's Skills API supports additional endpoints beyond the basic CRUD operatio
 import litellm
 
 # Create a skill (same as Anthropic, just change provider)
+# Note: OpenAI ignores display_title — the skill name is derived from SKILL.md frontmatter
 response = litellm.create_skill(
-    display_title="My OpenAI Skill",
     files=[open("skill.zip", "rb")],
     custom_llm_provider="openai",
     api_key="sk-..."

@@ -2,10 +2,10 @@
 Type definitions for Anthropic Skills API
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-from typing_extensions import Required, TypedDict
+from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 # Skills API Request Types
