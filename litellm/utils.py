@@ -2092,7 +2092,7 @@ _STREAMING_CALL_TYPES = frozenset({
 # Providers that use a gateway/<sub-provider>/<model> naming scheme.
 # Used by get_model_info() to try stripping the sub-provider prefix when
 # the full key is not found in model_cost.
-_GATEWAY_PROVIDERS = frozenset({"vercel_ai_gateway", "github"})
+_GATEWAY_PROVIDERS = frozenset({"vercel_ai_gateway"})
 
 
 def _is_streaming_request(
