@@ -784,7 +784,12 @@ def run_server(  # noqa: PLR0915
             )
             db_connection_idle_lifetime = general_settings.get(
                 "database_connection_idle_lifetime",
-                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+                int(
+                    os.getenv(
+                        "LITELLM_DB_IDLE_LIFETIME",
+                        LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+                    )
+                ),
             )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
@@ -817,8 +822,11 @@ def run_server(  # noqa: PLR0915
             db_connection_timeout = (
                 LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
             )
-            db_connection_idle_lifetime = (
-                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value
+            db_connection_idle_lifetime = int(
+                os.getenv(
+                    "LITELLM_DB_IDLE_LIFETIME",
+                    LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+                )
             )
 
         if (
