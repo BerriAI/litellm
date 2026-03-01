@@ -5,7 +5,6 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
-
 import traceback
 import uuid
 from datetime import datetime
@@ -859,6 +858,7 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -869,6 +869,7 @@ if MCP_AVAILABLE:
             mcp_servers: Optional list of server names/aliases to filter by
             mcp_server_auth_headers: Optional dict of server-specific auth headers
             oauth2_headers: Optional dict of oauth2 headers
+            timeout: Optional timeout in seconds for each server's tool listing (default 30.0)
 
         Returns:
             List[MCPTool]: Combined list of tools from filtered servers
@@ -971,6 +972,7 @@ if MCP_AVAILABLE:
                         extra_headers=extra_headers,
                         add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
+                        timeout=timeout,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
@@ -1287,6 +1289,7 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> List[MCPTool]:
         """
         List all available MCP tools.
@@ -1296,6 +1299,7 @@ if MCP_AVAILABLE:
             mcp_auth_header: Optional auth header for MCP server (deprecated)
             mcp_servers: Optional list of server names/aliases to filter by
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            timeout: Optional timeout in seconds for each server's tool listing (default 30.0)
 
         Returns:
             List[MCPTool]: Combined list of tools from all accessible servers
@@ -1314,6 +1318,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
                 list_tools_log_source=list_tools_log_source,
+                timeout=timeout,
             )
             verbose_logger.debug(
                 f"Successfully fetched {len(managed_tools)} tools from managed MCP servers"
