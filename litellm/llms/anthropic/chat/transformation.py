@@ -64,6 +64,7 @@ from litellm.utils import (
     get_max_tokens,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
+    supports_max_effort,
     supports_reasoning,
     token_counter,
 )
@@ -1404,9 +1405,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     raise ValueError(
                         f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
                     )
-                if effort == "max" and not self._is_claude_4_6_model(model):
+                if effort == "max" and not supports_max_effort(
+                    model=model,
+                    custom_llm_provider=self.custom_llm_provider,
+                ):
                     raise ValueError(
-                        f"effort='max' is only supported by Claude 4.6 models (Opus 4.6, Sonnet 4.6). Got model: {model}"
+                        f"effort='max' is only supported by models with supports_max_effort capability. Got model: {model}"
                     )
                 data["output_config"] = output_config
 
