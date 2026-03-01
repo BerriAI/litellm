@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from typing_extensions import TypedDict
 
@@ -14,3 +14,4 @@ class UsagePerChunk(TypedDict):
     web_search_requests: Optional[int]
     completion_tokens_details: Optional[CompletionTokensDetails]
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper]
+    cost: Optional[float]
