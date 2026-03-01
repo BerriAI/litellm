@@ -40,6 +40,8 @@ def _validate_openai_only_provider(
     operation: str, custom_llm_provider: str
 ) -> None:
     """Raise 400 if a non-OpenAI provider is used on an OpenAI-only endpoint."""
+    if operation not in _OPENAI_ONLY_OPERATIONS:
+        raise ValueError(f"Unknown OpenAI-only operation: '{operation}'")
     if custom_llm_provider != "openai":
         raise HTTPException(
             status_code=400,
