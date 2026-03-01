@@ -729,6 +729,32 @@ async def get_default_end_user_budget(
         return None
 
 
+async def _persist_end_user_budget_id(
+    prisma_client: PrismaClient,
+    user_id: str,
+    budget_id: str,
+) -> None:
+    """
+    Persist budget_id for an end user so the budget-reset job picks them up.
+
+    Runs as a fire-and-forget background task to avoid blocking the auth
+    hot path.  A unique-constraint or race-condition failure is harmless
+    because the in-memory budget is already applied for the current request.
+    """
+    try:
+        await prisma_client.db.litellm_endusertable.update(
+            where={"user_id": user_id},
+            data={"budget_id": budget_id},
+        )
+        verbose_proxy_logger.debug(
+            f"Persisted budget_id={budget_id} for end user {user_id}"
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to persist budget_id for end user {user_id}: {e}"
+        )
+
+
 async def _apply_default_budget_to_end_user(
     end_user_obj: LiteLLM_EndUserTable,
     prisma_client: PrismaClient,
@@ -763,10 +789,19 @@ async def _apply_default_budget_to_end_user(
     )
 
     if default_budget is not None:
-        # Apply default budget to end user object
+        # Apply default budget to end user object (in-memory)
         end_user_obj.litellm_budget_table = default_budget
         verbose_proxy_logger.debug(
             f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
+        )
+
+        # Persist budget_id to database so the budget-reset job can find this user
+        asyncio.create_task(
+            _persist_end_user_budget_id(
+                prisma_client=prisma_client,
+                user_id=end_user_obj.user_id,
+                budget_id=litellm.max_end_user_budget_id,
+            )
         )
 
     return end_user_obj
