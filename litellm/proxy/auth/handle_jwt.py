@@ -831,6 +831,7 @@ class JWTAuthManager:
         user_id: Optional[str],
         org_id: Optional[str],
         api_key: str,
+        jwt_valid_token: Optional[dict] = None,
     ) -> Optional[JWTAuthBuilderResult]:
         """Check admin status and route access permissions"""
         if not jwt_handler.is_admin(scopes=scopes):
@@ -860,7 +861,7 @@ class JWTAuthManager:
             end_user_id=None,
             org_id=org_id,
             team_membership=None,
-            jwt_claims={},
+            jwt_claims=jwt_valid_token or {},
         )
 
     @staticmethod
@@ -1368,7 +1369,7 @@ class JWTAuthManager:
 
         # Check admin access
         admin_result = await JWTAuthManager.check_admin_access(
-            jwt_handler, scopes, route, user_id, org_id, api_key
+            jwt_handler, scopes, route, user_id, org_id, api_key, jwt_valid_token
         )
         if admin_result:
             return admin_result
