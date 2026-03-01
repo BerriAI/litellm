@@ -279,9 +279,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         ] = deque(mcp_events)  # Pre-generated MCP discovery events
         self.tool_execution_events: deque[ResponsesAPIStreamingResponse] = deque()
         self.mcp_discovery_generated = True  # Events are already generated
-        self.mcp_events = deque(
-            mcp_events  # Store the initial MCP events for backward compatibility
-        )
+        self.mcp_events = self.mcp_discovery_events  # Shared reference for backward compat
         self.tool_server_map = tool_server_map
 
         # Iterator references
