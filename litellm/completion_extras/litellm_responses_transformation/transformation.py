@@ -481,7 +481,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         thinking_blocks = []
                     block: Dict[str, Any] = {
                         "type": "thinking",
-                        "thinking": reasoning_content,
+                        "thinking": item_text,
                         "encrypted_content": encrypted,
                     }
                     item_id = getattr(item, "id", None)
