@@ -737,9 +737,9 @@ async def _persist_end_user_budget_id(
     """
     Persist budget_id for an end user so the budget-reset job picks them up.
 
-    Runs as a fire-and-forget background task to avoid blocking the auth
-    hot path.  A unique-constraint or race-condition failure is harmless
-    because the in-memory budget is already applied for the current request.
+    Called from the async auth path (always has a running event loop).
+    A DB failure is logged but does not propagate — the in-memory budget
+    is already applied for the current request.
     """
     try:
         await prisma_client.db.litellm_endusertable.update(
@@ -796,12 +796,10 @@ async def _apply_default_budget_to_end_user(
         )
 
         # Persist budget_id to database so the budget-reset job can find this user
-        asyncio.create_task(
-            _persist_end_user_budget_id(
-                prisma_client=prisma_client,
-                user_id=end_user_obj.user_id,
-                budget_id=litellm.max_end_user_budget_id,
-            )
+        await _persist_end_user_budget_id(
+            prisma_client=prisma_client,
+            user_id=end_user_obj.user_id,
+            budget_id=litellm.max_end_user_budget_id,
         )
 
     return end_user_obj
