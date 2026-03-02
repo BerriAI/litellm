@@ -488,6 +488,43 @@ async def test_route_request_user_config_router_cache_expires_by_ttl(monkeypatch
     assert state["discard_count"] == 1
 
 
+def test_user_config_router_cache_discards_new_router_on_cache_block_exception(
+    monkeypatch,
+):
+    import litellm
+
+    state = {"init_count": 0, "discard_count": 0}
+    call_count = {"n": 0}
+
+    class _FakeRouter:
+        def __init__(self, **kwargs):
+            state["init_count"] += 1
+
+        def discard(self):
+            state["discard_count"] += 1
+
+    def _failing_prune(now: float):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("cache prune failed")
+
+    monkeypatch.setattr(litellm, "Router", _FakeRouter)
+    monkeypatch.setattr(
+        route_llm_request_module,
+        "_prune_expired_user_config_routers",
+        _failing_prune,
+    )
+
+    with pytest.raises(RuntimeError, match="cache prune failed"):
+        route_llm_request_module._get_or_create_user_config_router(
+            {"model_list": [{"model_name": "x"}]}
+        )
+
+    assert state["init_count"] == 1
+    assert state["discard_count"] == 1
+    assert len(route_llm_request_module._USER_CONFIG_ROUTER_CACHE) == 0
+
+
 @pytest.mark.asyncio
 async def test_route_request_batch_with_router_does_not_forward_model_kwarg():
     data = {

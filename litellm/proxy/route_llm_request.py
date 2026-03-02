@@ -84,30 +84,41 @@ def _get_or_create_user_config_router(filtered_config: dict) -> LitellmRouter:
             _discard_router_safely(router)
 
     new_router = litellm.Router(**filtered_config)
-    now = time.monotonic()
-    with _USER_CONFIG_ROUTER_CACHE_LOCK:
-        _prune_expired_user_config_routers(now)
-        cached_entry = _USER_CONFIG_ROUTER_CACHE.get(cache_key)
-        if cached_entry is not None and cached_entry[1] > now:
+    inserted_into_cache = False
+    try:
+        now = time.monotonic()
+        with _USER_CONFIG_ROUTER_CACHE_LOCK:
+            _prune_expired_user_config_routers(now)
+            cached_entry = _USER_CONFIG_ROUTER_CACHE.get(cache_key)
+            if cached_entry is not None and cached_entry[1] > now:
+                _USER_CONFIG_ROUTER_CACHE[cache_key] = (
+                    cached_entry[0],
+                    now + _USER_CONFIG_ROUTER_CACHE_TTL_SECONDS,
+                )
+                _USER_CONFIG_ROUTER_CACHE.move_to_end(cache_key)
+                _discard_router_safely(new_router)
+                return cached_entry[0]
+
             _USER_CONFIG_ROUTER_CACHE[cache_key] = (
-                cached_entry[0],
+                new_router,
                 now + _USER_CONFIG_ROUTER_CACHE_TTL_SECONDS,
             )
+            inserted_into_cache = True
             _USER_CONFIG_ROUTER_CACHE.move_to_end(cache_key)
-            _discard_router_safely(new_router)
-            return cached_entry[0]
 
-        _USER_CONFIG_ROUTER_CACHE[cache_key] = (
-            new_router,
-            now + _USER_CONFIG_ROUTER_CACHE_TTL_SECONDS,
-        )
-        _USER_CONFIG_ROUTER_CACHE.move_to_end(cache_key)
+            while len(_USER_CONFIG_ROUTER_CACHE) > _USER_CONFIG_ROUTER_CACHE_MAX_SIZE:
+                _, (evicted_router, _) = _USER_CONFIG_ROUTER_CACHE.popitem(last=False)
+                _discard_router_safely(evicted_router)
 
-        while len(_USER_CONFIG_ROUTER_CACHE) > _USER_CONFIG_ROUTER_CACHE_MAX_SIZE:
-            _, (evicted_router, _) = _USER_CONFIG_ROUTER_CACHE.popitem(last=False)
-            _discard_router_safely(evicted_router)
-
-        return new_router
+            return new_router
+    except Exception:
+        with _USER_CONFIG_ROUTER_CACHE_LOCK:
+            if inserted_into_cache:
+                cached_entry = _USER_CONFIG_ROUTER_CACHE.get(cache_key)
+                if cached_entry is not None and cached_entry[0] is new_router:
+                    _USER_CONFIG_ROUTER_CACHE.pop(cache_key, None)
+        _discard_router_safely(new_router)
+        raise
 
 
 async def _route_user_config_request(data: dict, route_type: str):

@@ -558,14 +558,91 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     ]
                     replace_items_sorted = sorted(replace_items, key=lambda i: i["start"])
                     analyze_spans_sorted = sorted(analyze_spans, key=lambda r: r["start"])
-                    if len(replace_items_sorted) != len(analyze_spans_sorted):
-                        verbose_proxy_logger.warning(
-                            "Presidio output_parse_pii fallback: replace item count (%s) "
-                            "does not match analyze span count (%s); returning redacted_text.",
-                            len(replace_items_sorted),
-                            len(analyze_spans_sorted),
+
+                    # Remove exact duplicate spans from analyze results. The analyzer can
+                    # return duplicate detections for the same text span across recognizers.
+                    deduped_analyze_spans: List[Dict[str, Any]] = []
+                    seen_spans = set()
+                    for span in analyze_spans_sorted:
+                        span_key = (
+                            cast(int, span["start"]),
+                            cast(int, span["end"]),
                         )
-                        return redacted_text["text"]
+                        if span_key in seen_spans:
+                            continue
+                        seen_spans.add(span_key)
+                        deduped_analyze_spans.append(span)
+                    analyze_spans_sorted = deduped_analyze_spans
+
+                    if len(replace_items_sorted) != len(analyze_spans_sorted):
+                        # Best-effort mapping: preserve left-to-right order and prefer
+                        # matching entity_type before falling back to next available span.
+                        if len(analyze_spans_sorted) >= len(replace_items_sorted):
+                            best_effort_spans: List[Dict[str, Any]] = []
+                            used_span_indices = set()
+                            last_used_index = -1
+                            for replace_item in replace_items_sorted:
+                                replace_entity = replace_item.get("entity_type")
+                                replace_entity_str = (
+                                    str(getattr(replace_entity, "value", replace_entity))
+                                    if replace_entity is not None
+                                    else None
+                                )
+                                selected_index: Optional[int] = None
+
+                                for idx, span in enumerate(analyze_spans_sorted):
+                                    if idx in used_span_indices or idx <= last_used_index:
+                                        continue
+                                    span_entity = span.get("entity_type")
+                                    span_entity_str = (
+                                        str(getattr(span_entity, "value", span_entity))
+                                        if span_entity is not None
+                                        else None
+                                    )
+                                    if span_entity_str == replace_entity_str:
+                                        selected_index = idx
+                                        break
+
+                                if selected_index is None:
+                                    for idx, _ in enumerate(analyze_spans_sorted):
+                                        if idx in used_span_indices or idx <= last_used_index:
+                                            continue
+                                        selected_index = idx
+                                        break
+
+                                if selected_index is None:
+                                    break
+
+                                used_span_indices.add(selected_index)
+                                last_used_index = selected_index
+                                best_effort_spans.append(
+                                    analyze_spans_sorted[selected_index]
+                                )
+
+                            if len(best_effort_spans) == len(replace_items_sorted):
+                                verbose_proxy_logger.warning(
+                                    "Presidio output_parse_pii best-effort mapping: replace item count (%s) "
+                                    "does not match analyze span count (%s); using ordered span pairing.",
+                                    len(replace_items_sorted),
+                                    len(analyze_spans_sorted),
+                                )
+                                analyze_spans_sorted = best_effort_spans
+                            else:
+                                verbose_proxy_logger.warning(
+                                    "Presidio output_parse_pii fallback: replace item count (%s) "
+                                    "does not match analyze span count (%s); returning redacted_text.",
+                                    len(replace_items_sorted),
+                                    len(analyze_spans_sorted),
+                                )
+                                return redacted_text["text"]
+                        else:
+                            verbose_proxy_logger.warning(
+                                "Presidio output_parse_pii fallback: replace item count (%s) "
+                                "does not match analyze span count (%s); returning redacted_text.",
+                                len(replace_items_sorted),
+                                len(analyze_spans_sorted),
+                            )
+                            return redacted_text["text"]
 
                     # Build unique placeholders in original-text coordinates (from
                     # analyze results) so replacement offsets stay stable.

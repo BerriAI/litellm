@@ -1889,6 +1889,97 @@ async def test_anonymize_output_parse_pii_mixed_operators_falls_back_to_redacted
 
 
 @pytest.mark.asyncio
+async def test_anonymize_output_parse_pii_best_effort_when_analyze_has_extra_spans():
+    """
+    If analyzer returns more spans than anonymizer replace items (e.g. overlap/duplicate
+    detections), output_parse_pii should still do best-effort mapping instead of
+    dropping unmask metadata entirely.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail.presidio_anonymizer_api_base = "http://mock-presidio/"
+    guardrail._get_session_iterator = _make_mock_session_iterator(
+        {
+            "text": "Hello <PERSON>",
+            "items": [
+                {
+                    "start": 6,
+                    "end": 14,
+                    "text": "<PERSON>",
+                    "operator": "replace",
+                    "entity_type": "PERSON",
+                }
+            ],
+        }
+    )
+    pii_tokens = {}
+    masked_entity_count = {}
+
+    result = await guardrail.anonymize_text(
+        text="Hello John Smith",
+        analyze_results=[
+            {"entity_type": "PERSON", "score": 0.99, "start": 6, "end": 16},
+            # overlapping extra detection
+            {"entity_type": "PERSON", "score": 0.98, "start": 11, "end": 16},
+        ],
+        output_parse_pii=True,
+        masked_entity_count=masked_entity_count,
+        pii_tokens=pii_tokens,
+    )
+
+    assert "John Smith" not in result
+    assert re.match(r"^Hello <PERSON>[0-9a-fA-F]{8}-", result)
+    assert set(pii_tokens.values()) == {"John Smith"}
+    assert masked_entity_count == {"PERSON": 1}
+
+
+@pytest.mark.asyncio
+async def test_anonymize_output_parse_pii_falls_back_when_replace_exceeds_analyze_spans():
+    """
+    If there are fewer analyze spans than replace items, fallback to redacted text
+    (cannot build a complete unmask mapping safely).
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail.presidio_anonymizer_api_base = "http://mock-presidio/"
+    guardrail._get_session_iterator = _make_mock_session_iterator(
+        {
+            "text": "<PERSON> and <PERSON>",
+            "items": [
+                {
+                    "start": 0,
+                    "end": 8,
+                    "text": "<PERSON>",
+                    "operator": "replace",
+                    "entity_type": "PERSON",
+                },
+                {
+                    "start": 13,
+                    "end": 21,
+                    "text": "<PERSON>",
+                    "operator": "replace",
+                    "entity_type": "PERSON",
+                },
+            ],
+        }
+    )
+    pii_tokens = {}
+    masked_entity_count = {}
+
+    result = await guardrail.anonymize_text(
+        text="Alice and Bob",
+        analyze_results=[
+            {"entity_type": "PERSON", "score": 0.99, "start": 0, "end": 5},
+        ],
+        output_parse_pii=True,
+        masked_entity_count=masked_entity_count,
+        pii_tokens=pii_tokens,
+    )
+
+    assert result == "<PERSON> and <PERSON>"
+    assert pii_tokens == {}
+    assert masked_entity_count == {"PERSON": 2}
+
+
+@pytest.mark.asyncio
 async def test_anonymize_output_parse_pii_multiple_replace_items_offset_safe():
     """
     Multiple replacements should be offset-safe when output_parse_pii=True.
