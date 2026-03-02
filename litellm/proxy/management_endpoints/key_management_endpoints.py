@@ -582,6 +582,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     if "budget_duration" in data_json:
         data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
+    if "initial_budget_reset_at" in data_json:
+        data_json["budget_reset_at"] = data_json.pop("initial_budget_reset_at", None)
+
     if user_api_key_dict.user_id is not None:
         data_json["created_by"] = user_api_key_dict.user_id
         data_json["updated_by"] = user_api_key_dict.user_id

@@ -1,5 +1,5 @@
 """
-Test cases for budget_reset_at feature in user management endpoints.
+Test cases for initial_budget_reset_at feature in user management endpoints.
 """
 
 import os
@@ -19,20 +19,20 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 
 
 class TestBudgetResetAtValidation:
-    """Test Pydantic validation for budget_reset_at field"""
+    """Test Pydantic validation for initial_budget_reset_at field"""
 
     def test_past_date_rejection_user_request(self):
-        """Test that NewUserRequest rejects past dates for budget_reset_at"""
+        """Test that NewUserRequest rejects past dates for initial_budget_reset_at"""
         past_date = datetime.now(timezone.utc) - timedelta(days=1)
 
         with pytest.raises(ValueError) as exc_info:
             NewUserRequest(
                 user_id="test_user",
                 budget_duration="10m",
-                budget_reset_at=past_date,
+                initial_budget_reset_at=past_date,
             )
 
-        assert "budget_reset_at cannot be in the past" in str(exc_info.value)
+        assert "initial_budget_reset_at cannot be in the past" in str(exc_info.value)
 
     def test_future_date_accepted(self):
         """Test that future dates are accepted"""
@@ -41,18 +41,18 @@ class TestBudgetResetAtValidation:
         user_request = NewUserRequest(
             user_id="test_user",
             budget_duration="10m",
-            budget_reset_at=future_date,
+            initial_budget_reset_at=future_date,
         )
 
-        assert user_request.budget_reset_at == future_date
+        assert user_request.initial_budget_reset_at == future_date
 
 
 class TestUserCreationWithBudgetResetAt:
-    """Integration test for creating users with budget_reset_at"""
+    """Integration test for creating users with initial_budget_reset_at"""
 
     @pytest.mark.asyncio
     async def test_create_user_explicit_budget_reset_at_takes_precedence(self):
-        """Test that explicit budget_reset_at is honored and takes precedence over duration-based computation"""
+        """Test that explicit initial_budget_reset_at is honored and takes precedence over duration-based computation"""
         mock_prisma_client = MagicMock()
         mock_prisma_client.insert_data = AsyncMock(
             return_value=MagicMock(user_id="new_user", spend=0.0, models=[])
@@ -64,7 +64,7 @@ class TestUserCreationWithBudgetResetAt:
         user_request = NewUserRequest(
             user_id="new_user",
             budget_duration="10m",
-            budget_reset_at=explicit_date,
+            initial_budget_reset_at=explicit_date,
             max_budget=100.0,
         )
 

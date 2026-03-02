@@ -98,6 +98,10 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
     data_json.pop("teams", None)  # handled separately
+
+    if "initial_budget_reset_at" in data_json:
+        data_json["budget_reset_at"] = data_json.pop("initial_budget_reset_at")
+
     return data_json
 
 
@@ -306,7 +310,7 @@ async def new_user(
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
-    - budget_reset_at: Optional[datetime] - Specify the exact datetime when the budget should first reset (ISO 8601 format, e.g., "2025-11-15T00:00:00Z"). If provided along with budget_duration, this value takes precedence for the initial reset; subsequent resets will follow the budget_duration interval.
+    - initial_budget_reset_at: Optional[datetime] - Specify the exact datetime when the budget should first reset (ISO 8601 format, e.g., "2025-11-15T00:00:00Z"). If provided along with budget_duration, this value takes precedence for the initial reset; subsequent resets will follow the budget_duration interval.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
     - rpm_limit: Optional[int] - Specify rpm limit for a given user (Requests per minute)
@@ -422,6 +426,9 @@ async def new_user(
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
+
+        if data.initial_budget_reset_at is not None:
+            response_dict["initial_budget_reset_at"] = data.initial_budget_reset_at
 
         new_user_response = NewUserResponse(**response_dict)
 
@@ -764,8 +771,8 @@ def _update_internal_user_params(
     if data.user_role == LitellmUserRoles.INTERNAL_USER:
         is_internal_user = True
 
-    if "budget_reset_at" in non_default_values and non_default_values["budget_reset_at"] is not None:
-        _reset_at = non_default_values["budget_reset_at"]
+    if "initial_budget_reset_at" in non_default_values and non_default_values["initial_budget_reset_at"] is not None:
+        _reset_at = non_default_values.pop("initial_budget_reset_at")
         try:
             # convert to datetime if not already
             if not isinstance(_reset_at, datetime):
@@ -776,6 +783,8 @@ def _update_internal_user_params(
         except Exception:
             _reset_at = None
         non_default_values["budget_reset_at"] = _reset_at
+    elif "initial_budget_reset_at" in non_default_values:
+        non_default_values.pop("initial_budget_reset_at")
 
     if "budget_duration" in non_default_values:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
@@ -1003,6 +1012,7 @@ async def user_update(
         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
         - max_budget: Optional[float] - Specify max budget for a given user.
         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
+        - initial_budget_reset_at: Optional[datetime] - Specify the exact datetime when the budget should first reset (ISO 8601 format, e.g., "2025-11-15T00:00:00Z"). If provided along with budget_duration, this value takes precedence for the initial reset; subsequent resets will follow the budget_duration interval.
         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
         - rpm_limit: Optional[int] - Specify rpm limit for a given user (Requests per minute)

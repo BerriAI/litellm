@@ -786,7 +786,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
 
     budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
+    initial_budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
@@ -804,18 +804,18 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
     @model_validator(mode="after")
-    def validate_budget_reset_at(self) -> "GenerateRequestBase":
-        """Validate that budget_reset_at is not in the past"""
-        if self.budget_reset_at is not None:
+    def validate_initial_budget_reset_at(self) -> "GenerateRequestBase":
+        """Validate that initial_budget_reset_at is not in the past"""
+        if self.initial_budget_reset_at is not None:
             # Ensure timezone-aware for comparison
-            reset_at = self.budget_reset_at
+            reset_at = self.initial_budget_reset_at
             if reset_at.tzinfo is None:
                 reset_at = reset_at.replace(tzinfo=timezone.utc)
 
             current_time = datetime.now(timezone.utc)
             if reset_at < current_time:
                 raise ValueError(
-                    f"budget_reset_at cannot be in the past. "
+                    f"initial_budget_reset_at cannot be in the past. "
                     f"Provided: {reset_at.isoformat()}, Current time: {current_time.isoformat()}"
                 )
         return self
@@ -874,6 +874,7 @@ class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
     expires: Optional[datetime] = None
+    budget_reset_at: Optional[datetime] = None  # computed/stored value from DB
     user_id: Optional[str] = None
     token_id: Optional[str] = None
     organization_id: Optional[str] = None
