@@ -23240,6 +23240,7 @@
         "source": "https://mistral.ai/pricing",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -23254,6 +23255,7 @@
         "source": "https://mistral.ai/pricing",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -23268,6 +23270,7 @@
         "source": "https://mistral.ai/pricing",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
