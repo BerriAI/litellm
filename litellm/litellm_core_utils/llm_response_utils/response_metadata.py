@@ -25,7 +25,7 @@ class ResponseMetadata:
                 result.get("_hidden_params", {}) or {}
             )
         else:
-            self._hidden_params: Union[HiddenParams, dict] = (
+            self._hidden_params = (
                 getattr(result, "_hidden_params", {}) or {}
             )
 
