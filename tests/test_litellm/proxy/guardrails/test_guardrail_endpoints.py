@@ -1376,6 +1376,21 @@ async def test_reject_guardrail_submission_success(mocker):
     assert call_data["status"] == "rejected"
 
 
+@pytest.mark.asyncio
+async def test_reject_guardrail_submission_not_pending(mocker):
+    """Reject returns 400 when status is not pending_review (e.g. already active)."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(guardrail_id="already-active", guardrail_name="g", status="active")
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await reject_guardrail_submission("already-active", user)
+    assert exc_info.value.status_code == 400
+    assert "not pending review" in exc_info.value.detail.lower()
+
+
 # --- Tests for review fixes ---
 
 

@@ -956,6 +956,11 @@ async def reject_guardrail_submission(
             raise HTTPException(
                 status_code=404, detail="Guardrail submission not found"
             )
+        if row.status != "pending_review":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Guardrail is not pending review (status={row.status})",
+            )
 
         now = datetime.now(timezone.utc)
         await prisma_client.db.litellm_guardrailstable.update(
