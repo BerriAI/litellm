@@ -31,6 +31,7 @@ def is_anthropic_oauth_key(value: Optional[str]) -> bool:
         value = value[7:]
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
+
 def optionally_handle_anthropic_oauth(
     headers: dict, api_key: Optional[str]
 ) -> tuple[dict, Optional[str]]:
@@ -52,16 +53,29 @@ def optionally_handle_anthropic_oauth(
     if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
         api_key = auth_header.replace("Bearer ", "")
         headers.pop("x-api-key", None)
-        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers["anthropic-beta"] = _merge_anthropic_beta(
+            headers.get("anthropic-beta", ""), ANTHROPIC_OAUTH_BETA_HEADER
+        )
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
         headers.pop("x-api-key", None)
         headers["authorization"] = f"Bearer {api_key}"
-        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers["anthropic-beta"] = _merge_anthropic_beta(
+            headers.get("anthropic-beta", ""), ANTHROPIC_OAUTH_BETA_HEADER
+        )
         headers["anthropic-dangerous-direct-browser-access"] = "true"
     return headers, api_key
+
+
+def _merge_anthropic_beta(existing: str, new_value: str) -> str:
+    """Merge a new beta header value with existing ones, deduplicating."""
+    if not existing:
+        return new_value
+    betas = {b.strip() for b in existing.split(",") if b.strip()}
+    betas.add(new_value)
+    return ",".join(sorted(betas))
 
 
 class AnthropicError(BaseLLMException):
@@ -425,9 +439,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             if web_search_tool_used:
                 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
-                headers[
-                    "anthropic-beta"
-                ] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                headers["anthropic-beta"] = (
+                    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                )
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 

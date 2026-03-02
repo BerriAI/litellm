@@ -433,14 +433,18 @@ class TestProxyOAuthHeaderForwarding:
                 (b"content-type", b"application/json"),
             ]
         )
-        
+
         # Should preserve OAuth even with flag=False
-        cleaned_without_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
+        cleaned_without_flag = clean_headers(
+            raw_headers, forward_llm_provider_auth_headers=False
+        )
         assert "authorization" in cleaned_without_flag
         assert cleaned_without_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
-        
+
         # Should also preserve OAuth with flag=True
-        cleaned_with_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
+        cleaned_with_flag = clean_headers(
+            raw_headers, forward_llm_provider_auth_headers=True
+        )
         assert "authorization" in cleaned_with_flag
         assert cleaned_with_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
@@ -503,3 +507,57 @@ class TestProxyOAuthHeaderForwarding:
         psh = data["provider_specific_header"]
         assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
         assert psh["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
+
+
+class TestOAuthBetaHeaderMerging:
+    """Test that OAuth handler merges beta headers instead of overwriting."""
+
+    def test_oauth_preserves_existing_beta_via_auth_header(self):
+        """OAuth via Authorization header should merge with existing beta headers."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {
+            "authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+            "anthropic-beta": "prompt-caching-scope-2026-01-05,interleaved-thinking-2025-05-14",
+        }
+        updated_headers, _ = optionally_handle_anthropic_oauth(headers, None)
+
+        beta = updated_headers["anthropic-beta"]
+        assert "oauth-2025-04-20" in beta
+        assert "prompt-caching-scope-2026-01-05" in beta
+        assert "interleaved-thinking-2025-05-14" in beta
+
+    def test_oauth_preserves_existing_beta_via_api_key(self):
+        """OAuth via api_key should merge with existing beta headers."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {
+            "anthropic-beta": "prompt-caching-scope-2026-01-05",
+        }
+        updated_headers, _ = optionally_handle_anthropic_oauth(
+            headers, FAKE_OAUTH_TOKEN
+        )
+
+        beta = updated_headers["anthropic-beta"]
+        assert "oauth-2025-04-20" in beta
+        assert "prompt-caching-scope-2026-01-05" in beta
+
+    def test_oauth_no_duplicate_beta_headers(self):
+        """If oauth beta is already present, it should not be duplicated."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {
+            "authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+            "anthropic-beta": "oauth-2025-04-20,some-other-beta",
+        }
+        updated_headers, _ = optionally_handle_anthropic_oauth(headers, None)
+
+        beta = updated_headers["anthropic-beta"]
+        assert beta.count("oauth-2025-04-20") == 1
+        assert "some-other-beta" in beta
