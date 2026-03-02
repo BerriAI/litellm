@@ -120,37 +120,49 @@ else:
     LitellmLoggingObject = Any
 
 # Pre-resolved CallTypes enum values for fast membership checks
-_A2A_CALL_TYPES = frozenset({
-    CallTypes.asend_message.value,
-    CallTypes.send_message.value,
-})
+_A2A_CALL_TYPES = frozenset(
+    {
+        CallTypes.asend_message.value,
+        CallTypes.send_message.value,
+    }
+)
 
-_VIDEO_CALL_TYPES = frozenset({
-    CallTypes.create_video.value,
-    CallTypes.acreate_video.value,
-    CallTypes.video_remix.value,
-    CallTypes.avideo_remix.value,
-})
+_VIDEO_CALL_TYPES = frozenset(
+    {
+        CallTypes.create_video.value,
+        CallTypes.acreate_video.value,
+        CallTypes.video_remix.value,
+        CallTypes.avideo_remix.value,
+    }
+)
 
-_SPEECH_CALL_TYPES = frozenset({
-    CallTypes.speech.value,
-    CallTypes.aspeech.value,
-})
+_SPEECH_CALL_TYPES = frozenset(
+    {
+        CallTypes.speech.value,
+        CallTypes.aspeech.value,
+    }
+)
 
-_TRANSCRIPTION_CALL_TYPES = frozenset({
-    CallTypes.atranscription.value,
-    CallTypes.transcription.value,
-})
+_TRANSCRIPTION_CALL_TYPES = frozenset(
+    {
+        CallTypes.atranscription.value,
+        CallTypes.transcription.value,
+    }
+)
 
-_RERANK_CALL_TYPES = frozenset({
-    CallTypes.rerank.value,
-    CallTypes.arerank.value,
-})
+_RERANK_CALL_TYPES = frozenset(
+    {
+        CallTypes.rerank.value,
+        CallTypes.arerank.value,
+    }
+)
 
-_SEARCH_CALL_TYPES = frozenset({
-    CallTypes.search.value,
-    CallTypes.asearch.value,
-})
+_SEARCH_CALL_TYPES = frozenset(
+    {
+        CallTypes.search.value,
+        CallTypes.asearch.value,
+    }
+)
 
 _AREALTIME_CALL_TYPE = CallTypes.arealtime.value
 _MCP_CALL_TYPE = CallTypes.call_mcp_tool.value
@@ -1093,6 +1105,21 @@ def completion_cost(  # noqa: PLR0915
             router_model_id=router_model_id,
         )
 
+        # When base_model was used and its provider differs from the
+        # deployment provider, update custom_llm_provider so cost_per_token
+        # dispatches to the correct provider-specific cost function.
+        if (
+            base_model is not None
+            and selected_model == base_model
+            and "/" in base_model
+        ):
+            _base_provider = base_model.split("/")[0]
+            if (
+                _base_provider in LlmProvidersSet
+                and _base_provider != custom_llm_provider
+            ):
+                custom_llm_provider = _base_provider
+
         potential_model_names = [
             selected_model,
             _get_response_model(completion_response),
@@ -1173,10 +1200,17 @@ def completion_cost(  # noqa: PLR0915
                     total_time = getattr(completion_response, "_response_ms", 0)
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
+                    _base_model_provider_used = (
+                        base_model is not None and selected_model == base_model
+                    )
                     if hidden_params is not None:
-                        custom_llm_provider = hidden_params.get(
-                            "custom_llm_provider", custom_llm_provider or None
-                        )
+                        # Don't let hidden_params override the provider when
+                        # base_model was used — the base_model provider is
+                        # the correct one for cost lookup.
+                        if not _base_model_provider_used:
+                            custom_llm_provider = hidden_params.get(
+                                "custom_llm_provider", custom_llm_provider or None
+                            )
                         region_name = hidden_params.get("region_name", region_name)
 
                         # For Gemini/Vertex AI responses, trafficType is stored in
@@ -1487,7 +1521,6 @@ def completion_cost(  # noqa: PLR0915
                 else:
                     additional_costs = None
 
-
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
@@ -1505,9 +1538,11 @@ def completion_cost(  # noqa: PLR0915
                 # Apply discount from module-level config if configured
                 original_cost = _final_cost
                 if litellm.cost_discount_config:
-                    _final_cost, discount_percent, discount_amount = _apply_cost_discount(
-                        base_cost=_final_cost,
-                        custom_llm_provider=custom_llm_provider,
+                    _final_cost, discount_percent, discount_amount = (
+                        _apply_cost_discount(
+                            base_cost=_final_cost,
+                            custom_llm_provider=custom_llm_provider,
+                        )
                     )
                 else:
                     discount_percent = 0.0
@@ -1962,9 +1997,7 @@ def default_video_cost_calculator(
                 cost_info = litellm.model_cost[prefixed_model]
 
     if cost_info is None:
-        raise Exception(
-            f"Model not found in cost map for model={model}"
-        )
+        raise Exception(f"Model not found in cost map for model={model}")
 
     # Check for video-specific cost per second first
     video_cost_per_second = cost_info.get("output_cost_per_video_per_second")
@@ -2236,4 +2269,3 @@ def handle_realtime_stream_cost_calculation(
     total_cost = input_cost_per_token + output_cost_per_token
 
     return total_cost
-
