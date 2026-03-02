@@ -220,6 +220,38 @@ class TestFilterAnthropicOutputSchema:
         assert result["properties"]["version"]["const"] == "v1"
         assert result["properties"]["count"]["default"] == 0
 
+    def test_preserves_none_for_const_and_default(self):
+        """const/default with explicit None values should be preserved."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "optional_name": {"type": "string", "default": None},
+                "optional_value": {"type": "string", "const": None},
+            },
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "default" in result["properties"]["optional_name"]
+        assert result["properties"]["optional_name"]["default"] is None
+        assert "const" in result["properties"]["optional_value"]
+        assert result["properties"]["optional_value"]["const"] is None
+
+    def test_type_is_omitted_when_anyof_exists(self):
+        """Top-level type is intentionally omitted when anyOf is present."""
+        schema = {
+            "type": "object",
+            "anyOf": [{"type": "string"}, {"type": "integer"}],
+            "properties": {"x": {"type": "string", "minLength": 1}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "type" not in result
+        assert "anyOf" in result
+        assert "properties" in result
+        assert "minLength" not in result["properties"]["x"]
+
     def test_filters_string_formats(self):
         """Only supported string formats are kept; others go to description."""
         schema = {

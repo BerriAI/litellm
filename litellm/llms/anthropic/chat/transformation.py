@@ -332,6 +332,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         one_of = remaining.pop("oneOf", None)
         all_of = remaining.pop("allOf", None)
 
+        # Keep composition keyword precedence aligned with Anthropic SDK behavior.
+        # When anyOf/oneOf/allOf is present, top-level `type` is intentionally omitted.
         if isinstance(any_of, list):
             strict_schema["anyOf"] = [
                 AnthropicConfig.filter_anthropic_output_schema(v) for v in any_of
@@ -356,9 +358,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             strict_schema["title"] = title
 
         # Preserve enum, const, default (see docstring)
+        _sentinel = object()
         for preserved_key in ("enum", "const", "default"):
-            val = remaining.pop(preserved_key, None)
-            if val is not None:
+            val = remaining.pop(preserved_key, _sentinel)
+            if val is not _sentinel:
                 strict_schema[preserved_key] = val
 
         AnthropicConfig._filter_type_specific_fields(type_, remaining, strict_schema)
