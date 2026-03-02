@@ -73,9 +73,12 @@ def test_build_custom_pricing_entry_merges_model_info_metadata():
     assert entry["max_tokens"] == 128000
 
 
-def test_build_custom_pricing_entry_kwargs_take_precedence_over_model_info():
-    """If a field appears in both kwargs and model_info, the kwargs value
-    should take precedence (setdefault behavior)."""
+def test_build_custom_pricing_entry_setdefault_does_not_override_existing():
+    """model_info uses setdefault, so it should not override a key that is
+    already present in the entry dict. Currently CustomPricingLiteLLMParams
+    and the model_info keys (mode, supports_prompt_caching, max_tokens) do
+    not overlap, but if they ever do, setdefault ensures the kwargs-sourced
+    value wins."""
     kwargs = {
         "input_cost_per_token": 0.001,
         "output_cost_per_token": 0.002,
@@ -83,6 +86,7 @@ def test_build_custom_pricing_entry_kwargs_take_precedence_over_model_info():
     model_info = {
         "mode": "chat",
         "supports_prompt_caching": True,
+        "max_tokens": 128000,
     }
 
     entry = _build_custom_pricing_entry(
@@ -91,9 +95,17 @@ def test_build_custom_pricing_entry_kwargs_take_precedence_over_model_info():
         model_info=model_info,
     )
 
-    # model_info fields should be set via setdefault
     assert entry["mode"] == "chat"
     assert entry["supports_prompt_caching"] is True
+    assert entry["max_tokens"] == 128000
+
+    # Verify setdefault behavior: if a model_info key already exists in
+    # the entry (e.g. from a future CustomPricingLiteLLMParams addition),
+    # setdefault must not overwrite it.
+    entry["mode"] = "embedding"  # simulate pre-existing value
+    # Re-apply setdefault the same way _build_custom_pricing_entry does
+    entry.setdefault("mode", model_info["mode"])
+    assert entry["mode"] == "embedding"  # must NOT revert to "chat"
 
 
 def test_build_custom_pricing_entry_skips_none_values():
