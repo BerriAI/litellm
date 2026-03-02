@@ -13,7 +13,6 @@
     "completion_tokens",
     "model",
     "messages",
-    "response",
     "hidden_params"
   ],
   "properties": {

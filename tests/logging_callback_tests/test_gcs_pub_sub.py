@@ -18,7 +18,6 @@ import httpx
 import jsonschema
 import pytest
 
-import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.gcs_pubsub.pub_sub import *
@@ -379,38 +378,42 @@ async def test_pubsub_openai_chat_completion_messages_is_array(_mock_premium):
     - prompt_tokens and completion_tokens are > 0
     """
     logger, mock_post = create_pubsub_logger()
+    original_callbacks = litellm.callbacks
     litellm.callbacks = [logger]
 
-    await litellm.acompletion(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        mock_response="hi",
-    )
+    try:
+        await litellm.acompletion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="hi",
+        )
 
-    await asyncio.sleep(3)
+        await asyncio.sleep(3)
 
-    mock_post.assert_called_once()
-    payload = extract_pubsub_payload(mock_post)
+        mock_post.assert_called_once()
+        payload = extract_pubsub_payload(mock_post)
 
-    # Core assertion: messages must be a list
-    assert isinstance(payload["messages"], list), (
-        f"messages should be a list, got {type(payload['messages']).__name__}: {payload['messages']}"
-    )
-    assert len(payload["messages"]) > 0, "messages list should not be empty"
-    assert payload["messages"][0]["role"] == "user"
-    assert payload["messages"][0]["content"] == "Hello, world!"
+        # Core assertion: messages must be a list
+        assert isinstance(payload["messages"], list), (
+            f"messages should be a list, got {type(payload['messages']).__name__}: {payload['messages']}"
+        )
+        assert len(payload["messages"]) > 0, "messages list should not be empty"
+        assert payload["messages"][0]["role"] == "user"
+        assert payload["messages"][0]["content"] == "Hello, world!"
 
-    # Cost and tokens
-    assert isinstance(payload["response_cost"], (int, float))
-    assert payload["response_cost"] >= 0
-    assert payload["prompt_tokens"] > 0, f"prompt_tokens should be > 0, got {payload['prompt_tokens']}"
-    assert payload["completion_tokens"] > 0, f"completion_tokens should be > 0, got {payload['completion_tokens']}"
-    assert payload["total_tokens"] > 0
+        # Cost and tokens
+        assert isinstance(payload["response_cost"], (int, float))
+        assert payload["response_cost"] >= 0
+        assert payload["prompt_tokens"] > 0, f"prompt_tokens should be > 0, got {payload['prompt_tokens']}"
+        assert payload["completion_tokens"] > 0, f"completion_tokens should be > 0, got {payload['completion_tokens']}"
+        assert payload["total_tokens"] > 0
 
-    # Schema validation
-    schema = _load_schema()
-    errors = validate_standard_logging_payload(payload, schema)
-    assert errors == [], f"Schema validation errors: {errors}"
+        # Schema validation
+        schema = _load_schema()
+        errors = validate_standard_logging_payload(payload, schema)
+        assert errors == [], f"Schema validation errors: {errors}"
+    finally:
+        litellm.callbacks = original_callbacks
 
 
 # ---------------------------------------------------------------------------
@@ -427,41 +430,45 @@ async def test_pubsub_openai_embedding_response_cost_exists(_mock_premium):
     - call_type is 'aembedding'
     """
     logger, mock_post = create_pubsub_logger()
+    original_callbacks = litellm.callbacks
     litellm.callbacks = [logger]
 
-    await litellm.aembedding(
-        model="text-embedding-ada-002",
-        input=["Hello, world!"],
-        mock_response=[0.1, 0.2, 0.3],
-    )
+    try:
+        await litellm.aembedding(
+            model="text-embedding-ada-002",
+            input=["Hello, world!"],
+            mock_response=[0.1, 0.2, 0.3],
+        )
 
-    await asyncio.sleep(3)
+        await asyncio.sleep(3)
 
-    mock_post.assert_called_once()
-    payload = extract_pubsub_payload(mock_post)
+        mock_post.assert_called_once()
+        payload = extract_pubsub_payload(mock_post)
 
-    # response_cost must exist and be a number
-    assert "response_cost" in payload, "response_cost is a required property"
-    assert isinstance(payload["response_cost"], (int, float)), (
-        f"response_cost should be a number, got {type(payload['response_cost']).__name__}"
-    )
-    assert payload["response_cost"] >= 0
+        # response_cost must exist and be a number
+        assert "response_cost" in payload, "response_cost is a required property"
+        assert isinstance(payload["response_cost"], (int, float)), (
+            f"response_cost should be a number, got {type(payload['response_cost']).__name__}"
+        )
+        assert payload["response_cost"] >= 0
 
-    # call_type
-    assert payload["call_type"] == "aembedding"
+        # call_type
+        assert payload["call_type"] == "aembedding"
 
-    # messages should still be a list (the input)
-    assert isinstance(payload["messages"], list), (
-        f"messages should be a list, got {type(payload['messages']).__name__}: {payload['messages']}"
-    )
+        # messages should still be a list (the input)
+        assert isinstance(payload["messages"], list), (
+            f"messages should be a list, got {type(payload['messages']).__name__}: {payload['messages']}"
+        )
 
-    # prompt_tokens should be > 0 for embeddings
-    assert payload["prompt_tokens"] >= 0
+        # prompt_tokens should be > 0 for embeddings
+        assert payload["prompt_tokens"] >= 0
 
-    # model and provider
-    assert payload["model"] is not None
-    assert payload["custom_llm_provider"] is not None
-    assert len(payload["custom_llm_provider"]) > 0
+        # model and provider
+        assert payload["model"] is not None
+        assert payload["custom_llm_provider"] is not None
+        assert len(payload["custom_llm_provider"]) > 0
+    finally:
+        litellm.callbacks = original_callbacks
 
 
 # ---------------------------------------------------------------------------
@@ -540,14 +547,6 @@ async def test_pubsub_anthropic_passthrough_tokens_and_response(_mock_premium):
 
     litellm_model_response = result["result"]
     kwargs = result["kwargs"]
-
-    # Now simulate the full logging flow through GcsPubSubLogger
-    logger, mock_post = create_pubsub_logger()
-    litellm.callbacks = [logger]
-
-    # Build kwargs as the logging framework would
-    kwargs["standard_logging_object"] = None  # Will be built by the logging framework
-    kwargs["litellm_params"] = kwargs.get("litellm_params", {})
 
     # The key assertion is on the transformed response
     assert litellm_model_response is not None
@@ -783,46 +782,50 @@ async def test_pubsub_streaming_chat_completion(_mock_premium):
     - tokens and response_cost are populated
     """
     logger, mock_post = create_pubsub_logger()
+    original_callbacks = litellm.callbacks
     litellm.callbacks = [logger]
 
-    response = await litellm.acompletion(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        mock_response="hi",
-        stream=True,
-    )
+    try:
+        response = await litellm.acompletion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="hi",
+            stream=True,
+        )
 
-    # Consume the stream
-    async for chunk in response:
-        pass
+        # Consume the stream
+        async for chunk in response:
+            pass
 
-    await asyncio.sleep(3)
+        await asyncio.sleep(3)
 
-    mock_post.assert_called_once()
-    payload = extract_pubsub_payload(mock_post)
+        mock_post.assert_called_once()
+        payload = extract_pubsub_payload(mock_post)
 
-    # messages must be a list
-    assert isinstance(payload["messages"], list), (
-        f"messages should be a list, got {type(payload['messages']).__name__}: {payload['messages']}"
-    )
-    assert len(payload["messages"]) > 0
+        # messages must be a list
+        assert isinstance(payload["messages"], list), (
+            f"messages should be a list, got {type(payload['messages']).__name__}: {payload['messages']}"
+        )
+        assert len(payload["messages"]) > 0
 
-    # stream should be True
-    assert payload["stream"] is True
+        # stream should be True
+        assert payload["stream"] is True
 
-    # Tokens should be populated
-    assert payload["total_tokens"] > 0, f"total_tokens should be > 0 for streaming, got {payload['total_tokens']}"
-    assert payload["prompt_tokens"] > 0
-    assert payload["completion_tokens"] > 0
+        # Tokens should be populated
+        assert payload["total_tokens"] > 0, f"total_tokens should be > 0 for streaming, got {payload['total_tokens']}"
+        assert payload["prompt_tokens"] > 0
+        assert payload["completion_tokens"] > 0
 
-    # response_cost should be set
-    assert isinstance(payload["response_cost"], (int, float))
-    assert payload["response_cost"] >= 0
+        # response_cost should be set
+        assert isinstance(payload["response_cost"], (int, float))
+        assert payload["response_cost"] >= 0
 
-    # Schema validation
-    schema = _load_schema()
-    errors = validate_standard_logging_payload(payload, schema)
-    assert errors == [], f"Schema validation errors: {errors}"
+        # Schema validation
+        schema = _load_schema()
+        errors = validate_standard_logging_payload(payload, schema)
+        assert errors == [], f"Schema validation errors: {errors}"
+    finally:
+        litellm.callbacks = original_callbacks
 
 
 # ---------------------------------------------------------------------------
@@ -847,35 +850,39 @@ async def test_pubsub_payload_validates_against_schema(
     for multiple models and call types.
     """
     logger, mock_post = create_pubsub_logger()
+    original_callbacks = litellm.callbacks
     litellm.callbacks = [logger]
 
-    if call_type == "acompletion":
-        await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "test message"}],
-            mock_response="test response",
+    try:
+        if call_type == "acompletion":
+            await litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": "test message"}],
+                mock_response="test response",
+            )
+        elif call_type == "aembedding":
+            await litellm.aembedding(
+                model=model,
+                input=["test input"],
+                mock_response=[0.1, 0.2, 0.3],
+            )
+
+        await asyncio.sleep(3)
+
+        mock_post.assert_called_once()
+        payload = extract_pubsub_payload(mock_post)
+
+        # Validate against JSON Schema
+        schema = _load_schema()
+        errors = validate_standard_logging_payload(payload, schema)
+        assert errors == [], (
+            f"Schema validation errors for model={model}, call_type={call_type}:\n"
+            + "\n".join(errors)
         )
-    elif call_type == "aembedding":
-        await litellm.aembedding(
-            model=model,
-            input=["test input"],
-            mock_response=[0.1, 0.2, 0.3],
+
+        # Check provider
+        assert payload.get("custom_llm_provider") == expected_provider, (
+            f"Expected provider '{expected_provider}', got '{payload.get('custom_llm_provider')}'"
         )
-
-    await asyncio.sleep(3)
-
-    mock_post.assert_called_once()
-    payload = extract_pubsub_payload(mock_post)
-
-    # Validate against JSON Schema
-    schema = _load_schema()
-    errors = validate_standard_logging_payload(payload, schema)
-    assert errors == [], (
-        f"Schema validation errors for model={model}, call_type={call_type}:\n"
-        + "\n".join(errors)
-    )
-
-    # Check provider
-    assert payload.get("custom_llm_provider") == expected_provider, (
-        f"Expected provider '{expected_provider}', got '{payload.get('custom_llm_provider')}'"
-    )
+    finally:
+        litellm.callbacks = original_callbacks
