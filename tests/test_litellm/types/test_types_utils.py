@@ -80,50 +80,50 @@ def test_usage_completion_tokens_details_text_tokens():
 
     # Test data from the reported issue
     usage_data = {
-        'completion_tokens': 77,
-        'prompt_tokens': 11937,
-        'total_tokens': 12014,
-        'completion_tokens_details': {
-            'accepted_prediction_tokens': None,
-            'audio_tokens': None,
-            'reasoning_tokens': 65,
-            'rejected_prediction_tokens': None,
-            'text_tokens': 12
+        "completion_tokens": 77,
+        "prompt_tokens": 11937,
+        "total_tokens": 12014,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": None,
+            "audio_tokens": None,
+            "reasoning_tokens": 65,
+            "rejected_prediction_tokens": None,
+            "text_tokens": 12,
         },
-        'prompt_tokens_details': {
-            'audio_tokens': None,
-            'cached_tokens': None,
-            'text_tokens': 11937,
-            'image_tokens': None
-        }
+        "prompt_tokens_details": {
+            "audio_tokens": None,
+            "cached_tokens": None,
+            "text_tokens": 11937,
+            "image_tokens": None,
+        },
     }
 
     # Create Usage object
     u = Usage(**usage_data)
-    
+
     # Verify the object has the text_tokens field
-    assert hasattr(u.completion_tokens_details, 'text_tokens')
+    assert hasattr(u.completion_tokens_details, "text_tokens")
     assert u.completion_tokens_details.text_tokens == 12
-    
+
     # Get model_dump output
     dump_result = u.model_dump()
-    
+
     # Verify text_tokens is present in the model_dump output
-    assert 'completion_tokens_details' in dump_result
-    assert 'text_tokens' in dump_result['completion_tokens_details']
-    assert dump_result['completion_tokens_details']['text_tokens'] == 12
-    
+    assert "completion_tokens_details" in dump_result
+    assert "text_tokens" in dump_result["completion_tokens_details"]
+    assert dump_result["completion_tokens_details"]["text_tokens"] == 12
+
     # Verify the full completion_tokens_details structure
     expected_completion_details = {
-        'accepted_prediction_tokens': None,
-        'audio_tokens': None,
-        'reasoning_tokens': 65,
-        'rejected_prediction_tokens': None,
-        'text_tokens': 12,
-        'image_tokens': None
+        "accepted_prediction_tokens": None,
+        "audio_tokens": None,
+        "reasoning_tokens": 65,
+        "rejected_prediction_tokens": None,
+        "text_tokens": 12,
+        "image_tokens": None,
     }
-    assert dump_result['completion_tokens_details'] == expected_completion_details
-    
+    assert dump_result["completion_tokens_details"] == expected_completion_details
+
     # Verify round-trip serialization works
     new_usage = Usage(**dump_result)
     assert new_usage.completion_tokens_details.text_tokens == 12
@@ -222,3 +222,64 @@ def test_chat_completion_token_logprob_invalid_top_logprobs_rejected():
             logprob=-0.31725305,
             top_logprobs="invalid_string",
         )
+
+
+class TestDeltaReasoningMapping:
+    """
+    Tests for Delta class handling of 'reasoning' -> 'reasoning_content' mapping.
+
+    vLLM and some other OpenAI-compatible providers return 'reasoning' in streaming
+    deltas instead of 'reasoning_content'. Delta.__init__ must normalize this.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/20246
+    """
+
+    def test_delta_maps_reasoning_to_reasoning_content(self):
+        """Delta created with reasoning= kwarg should expose it as reasoning_content."""
+        from litellm.types.utils import Delta
+
+        delta = Delta(content=None, reasoning="Let me think about this...")
+        assert delta.reasoning_content == "Let me think about this..."
+
+    def test_delta_reasoning_content_takes_precedence(self):
+        """When both reasoning_content and reasoning are given, reasoning_content wins."""
+        from litellm.types.utils import Delta
+
+        delta = Delta(
+            content=None,
+            reasoning_content="from reasoning_content",
+            reasoning="from reasoning",
+        )
+        assert delta.reasoning_content == "from reasoning_content"
+
+    def test_delta_without_reasoning_has_no_reasoning_content(self):
+        """Delta without reasoning or reasoning_content should not have the attribute."""
+        from litellm.types.utils import Delta
+
+        delta = Delta(content="Hello")
+        assert not hasattr(delta, "reasoning_content")
+
+    def test_delta_reasoning_content_kwarg_works(self):
+        """Standard reasoning_content kwarg should still work as before."""
+        from litellm.types.utils import Delta
+
+        delta = Delta(content=None, reasoning_content="thinking...")
+        assert delta.reasoning_content == "thinking..."
+
+    def test_streaming_choices_with_reasoning_delta_dict(self):
+        """
+        StreamingChoices with a delta dict containing 'reasoning' (as from
+        OpenAI SDK's dict(ChoiceDelta)) should produce Delta with reasoning_content.
+        """
+        from litellm.types.utils import StreamingChoices
+
+        # This simulates dict(openai_sdk_choice_delta) from vLLM
+        delta_dict = {
+            "content": None,
+            "role": None,
+            "function_call": None,
+            "tool_calls": None,
+            "reasoning": "step by step...",
+        }
+        choice = StreamingChoices(index=0, delta=delta_dict)
+        assert choice.delta.reasoning_content == "step by step..."

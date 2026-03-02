@@ -1224,6 +1224,11 @@ class Delta(SafeAttributeModel, OpenAIObject):
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
+        # Map 'reasoning' -> 'reasoning_content' for providers like vLLM
+        # that use 'reasoning' instead of 'reasoning_content' in streaming deltas
+        if reasoning_content is None and "reasoning" in params:
+            reasoning_content = params.pop("reasoning")
+
         super(Delta, self).__init__(**params)
         add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
@@ -2730,9 +2735,7 @@ class CostBreakdown(TypedDict, total=False):
     """
 
     input_cost: float  # Cost of input/prompt tokens
-    output_cost: (
-        float  # Cost of output/completion tokens (includes reasoning if applicable)
-    )
+    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
     additional_costs: Dict[

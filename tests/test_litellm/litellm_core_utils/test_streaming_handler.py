@@ -158,6 +158,41 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
     )
 
 
+def test_is_chunk_non_empty_with_vllm_reasoning_field(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    vLLM returns 'reasoning' instead of 'reasoning_content' in streaming deltas.
+    Chunks with 'reasoning' should be treated as non-empty after Delta normalizes
+    the field name to 'reasoning_content'.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/20246
+    """
+    chunk = {
+        "id": "chatcmpl-abc123",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "Qwen3-35B",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": None, "reasoning": "Let me think..."},
+                "logprobs": None,
+                "finish_reason": None,
+            }
+        ],
+    }
+    model_response = ModelResponseStream(**chunk)
+    # Verify Delta mapped reasoning -> reasoning_content
+    assert model_response.choices[0].delta.reasoning_content == "Let me think..."
+    # Verify is_chunk_non_empty sees the reasoning_content
+    assert initialized_custom_stream_wrapper.is_chunk_non_empty(
+        completion_obj={"content": ""},
+        model_response=model_response,
+        response_obj={},
+    )
+
+
 def test_is_chunk_non_empty_with_annotations(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -390,12 +425,12 @@ def test_multi_chunk_reasoning_and_content(
         # Check content
         assert (
             response.choices[0].delta.content == expected_content
-        ), f"Chunk {i+1}: content mismatch"
+        ), f"Chunk {i + 1}: content mismatch"
 
         # Check reasoning_content was removed
         assert not hasattr(
             response.choices[0].delta, "reasoning_content"
-        ), f"Chunk {i+1}: reasoning_content should be removed"
+        ), f"Chunk {i + 1}: reasoning_content should be removed"
 
     # Verify final state
     assert initialized_custom_stream_wrapper.sent_first_thinking_block is True
@@ -539,15 +574,16 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
         cache_read_input_tokens=1796,
     )
 
-    with patch.object(
-        mock_callback, "log_success_event"
-    ) as mock_log_success_event, patch.object(
-        mock_callback, "log_stream_event"
-    ) as mock_log_stream_event, patch.object(
-        mock_callback, "async_log_success_event"
-    ) as mock_async_log_success_event, patch.object(
-        mock_callback, "async_log_stream_event"
-    ) as mock_async_log_stream_event:
+    with (
+        patch.object(mock_callback, "log_success_event") as mock_log_success_event,
+        patch.object(mock_callback, "log_stream_event") as mock_log_stream_event,
+        patch.object(
+            mock_callback, "async_log_success_event"
+        ) as mock_async_log_success_event,
+        patch.object(
+            mock_callback, "async_log_stream_event"
+        ) as mock_async_log_stream_event,
+    ):
         await test_streaming_handler_with_usage(
             sync_mode=sync_mode, final_usage_block=final_usage_block
         )
@@ -697,7 +733,9 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_bad_request(**kwargs):
-        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+        raise VertexAIError(
+            status_code=400, message="invalid maxOutputTokens", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -715,7 +753,9 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
 
 
 @pytest.mark.asyncio
-async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(
+    logging_obj: Logging,
+):
     """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
 
     Regression test for https://github.com/BerriAI/litellm/issues/20870
@@ -724,7 +764,9 @@ async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_o
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_rate_limit(**kwargs):
-        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        raise VertexAIError(
+            status_code=429, message="Resource exhausted.", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -752,7 +794,9 @@ def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logg
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_rate_limit(**kwargs):
-        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        raise VertexAIError(
+            status_code=429, message="Resource exhausted.", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -777,7 +821,9 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_bad_request(**kwargs):
-        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+        raise VertexAIError(
+            status_code=400, message="invalid maxOutputTokens", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
