@@ -120,37 +120,49 @@ else:
     LitellmLoggingObject = Any
 
 # Pre-resolved CallTypes enum values for fast membership checks
-_A2A_CALL_TYPES = frozenset({
-    CallTypes.asend_message.value,
-    CallTypes.send_message.value,
-})
+_A2A_CALL_TYPES = frozenset(
+    {
+        CallTypes.asend_message.value,
+        CallTypes.send_message.value,
+    }
+)
 
-_VIDEO_CALL_TYPES = frozenset({
-    CallTypes.create_video.value,
-    CallTypes.acreate_video.value,
-    CallTypes.video_remix.value,
-    CallTypes.avideo_remix.value,
-})
+_VIDEO_CALL_TYPES = frozenset(
+    {
+        CallTypes.create_video.value,
+        CallTypes.acreate_video.value,
+        CallTypes.video_remix.value,
+        CallTypes.avideo_remix.value,
+    }
+)
 
-_SPEECH_CALL_TYPES = frozenset({
-    CallTypes.speech.value,
-    CallTypes.aspeech.value,
-})
+_SPEECH_CALL_TYPES = frozenset(
+    {
+        CallTypes.speech.value,
+        CallTypes.aspeech.value,
+    }
+)
 
-_TRANSCRIPTION_CALL_TYPES = frozenset({
-    CallTypes.atranscription.value,
-    CallTypes.transcription.value,
-})
+_TRANSCRIPTION_CALL_TYPES = frozenset(
+    {
+        CallTypes.atranscription.value,
+        CallTypes.transcription.value,
+    }
+)
 
-_RERANK_CALL_TYPES = frozenset({
-    CallTypes.rerank.value,
-    CallTypes.arerank.value,
-})
+_RERANK_CALL_TYPES = frozenset(
+    {
+        CallTypes.rerank.value,
+        CallTypes.arerank.value,
+    }
+)
 
-_SEARCH_CALL_TYPES = frozenset({
-    CallTypes.search.value,
-    CallTypes.asearch.value,
-})
+_SEARCH_CALL_TYPES = frozenset(
+    {
+        CallTypes.search.value,
+        CallTypes.asearch.value,
+    }
+)
 
 _AREALTIME_CALL_TYPE = CallTypes.arealtime.value
 _MCP_CALL_TYPE = CallTypes.call_mcp_tool.value
@@ -1100,6 +1112,16 @@ def completion_cost(  # noqa: PLR0915
         if model is not None:
             potential_model_names.append(model)
 
+        # Add litellm_model_name from hidden_params as fallback — this
+        # contains the original provider-prefixed model name (e.g.
+        # "vertex_ai/gemini-2.5-flash") which is needed when the
+        # response.model only has a proxy alias (e.g. "gemini").
+        _hp = getattr(completion_response, "_hidden_params", None)
+        if _hp is not None:
+            _litellm_model = _hp.get("litellm_model_name")
+            if _litellm_model is not None:
+                potential_model_names.append(_litellm_model)
+
         for idx, model in enumerate(potential_model_names):
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
@@ -1487,7 +1509,6 @@ def completion_cost(  # noqa: PLR0915
                 else:
                     additional_costs = None
 
-
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
@@ -1505,9 +1526,11 @@ def completion_cost(  # noqa: PLR0915
                 # Apply discount from module-level config if configured
                 original_cost = _final_cost
                 if litellm.cost_discount_config:
-                    _final_cost, discount_percent, discount_amount = _apply_cost_discount(
-                        base_cost=_final_cost,
-                        custom_llm_provider=custom_llm_provider,
+                    _final_cost, discount_percent, discount_amount = (
+                        _apply_cost_discount(
+                            base_cost=_final_cost,
+                            custom_llm_provider=custom_llm_provider,
+                        )
                     )
                 else:
                     discount_percent = 0.0
@@ -1962,9 +1985,7 @@ def default_video_cost_calculator(
                 cost_info = litellm.model_cost[prefixed_model]
 
     if cost_info is None:
-        raise Exception(
-            f"Model not found in cost map for model={model}"
-        )
+        raise Exception(f"Model not found in cost map for model={model}")
 
     # Check for video-specific cost per second first
     video_cost_per_second = cost_info.get("output_cost_per_video_per_second")
@@ -2236,4 +2257,3 @@ def handle_realtime_stream_cost_calculation(
     total_cost = input_cost_per_token + output_cost_per_token
 
     return total_cost
-

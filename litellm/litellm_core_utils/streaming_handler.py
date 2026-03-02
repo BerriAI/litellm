@@ -111,9 +111,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[
-            str
-        ] = None  # finish reasons that show up mid-stream
+        self.intermittent_finish_reason: Optional[str] = (
+            None  # finish reasons that show up mid-stream
+        )
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -698,6 +698,7 @@ class CustomStreamWrapper:
         if hidden_params is not None:
             model_response._hidden_params = hidden_params
         model_response._hidden_params["custom_llm_provider"] = _logging_obj_llm_provider
+        model_response._hidden_params["litellm_model_name"] = self.model
         model_response._hidden_params["created_at"] = time.time()
         model_response._hidden_params = {
             **model_response._hidden_params,
@@ -1348,7 +1349,10 @@ class CustomStreamWrapper:
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             else:  # openai / azure chat model
-                if self.custom_llm_provider in [LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value]:
+                if self.custom_llm_provider in [
+                    LlmProviders.AZURE.value,
+                    LlmProviders.AZURE_AI.value,
+                ]:
                     if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
                         # for azure, we need to pass the model from the original chunk
                         self.model = getattr(chunk, "model", self.model)
@@ -1476,9 +1480,9 @@ class CustomStreamWrapper:
                                                 t.function.arguments = ""
                             _json_delta = delta.model_dump()
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta[
-                                    "role"
-                                ] = "assistant"  # mistral's api returns role as None
+                                _json_delta["role"] = (
+                                    "assistant"  # mistral's api returns role as None
+                                )
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -1604,10 +1608,12 @@ class CustomStreamWrapper:
             )
             return chunk
 
-    def _add_mcp_list_tools_to_first_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
+    def _add_mcp_list_tools_to_first_chunk(
+        self, chunk: ModelResponseStream
+    ) -> ModelResponseStream:
         """
         Add mcp_list_tools from _hidden_params to the first chunk's delta.provider_specific_fields.
-        
+
         This method checks if MCP metadata with mcp_list_tools is stored in _hidden_params
         and adds it to the first chunk's delta.provider_specific_fields.
         """
@@ -1615,43 +1621,53 @@ class CustomStreamWrapper:
             # Check if MCP metadata should be added to first chunk
             if not hasattr(self, "_hidden_params") or not self._hidden_params:
                 return chunk
-            
+
             mcp_metadata = self._hidden_params.get("mcp_metadata")
             if not mcp_metadata or not isinstance(mcp_metadata, dict):
                 return chunk
-            
+
             # Only add mcp_list_tools to first chunk (not tool_calls or tool_results)
             mcp_list_tools = mcp_metadata.get("mcp_list_tools")
             if not mcp_list_tools:
                 return chunk
-            
+
             # Add mcp_list_tools to delta.provider_specific_fields
             if hasattr(chunk, "choices") and chunk.choices:
                 for choice in chunk.choices:
-                    if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
+                    if (
+                        isinstance(choice, StreamingChoices)
+                        and hasattr(choice, "delta")
+                        and choice.delta
+                    ):
                         # Get existing provider_specific_fields or create new dict
                         provider_fields = (
-                            getattr(choice.delta, "provider_specific_fields", None) or {}
+                            getattr(choice.delta, "provider_specific_fields", None)
+                            or {}
                         )
-                        
+
                         # Add only mcp_list_tools to first chunk
                         provider_fields["mcp_list_tools"] = mcp_list_tools
-                        
+
                         # Set the provider_specific_fields
-                        setattr(choice.delta, "provider_specific_fields", provider_fields)
-        
+                        setattr(
+                            choice.delta, "provider_specific_fields", provider_fields
+                        )
+
         except Exception as e:
             from litellm._logging import verbose_logger
+
             verbose_logger.exception(
                 f"Error adding MCP list tools to first chunk: {str(e)}"
             )
-        
+
         return chunk
 
-    def _add_mcp_metadata_to_final_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
+    def _add_mcp_metadata_to_final_chunk(
+        self, chunk: ModelResponseStream
+    ) -> ModelResponseStream:
         """
         Add MCP metadata from _hidden_params to the final chunk's delta.provider_specific_fields.
-        
+
         This method checks if MCP metadata is stored in _hidden_params and adds it to
         the chunk's delta.provider_specific_fields, similar to how RAG adds search results.
         """
@@ -1659,33 +1675,41 @@ class CustomStreamWrapper:
             # Check if MCP metadata should be added to final chunk
             if not hasattr(self, "_hidden_params") or not self._hidden_params:
                 return chunk
-            
+
             mcp_metadata = self._hidden_params.get("mcp_metadata")
             if not mcp_metadata:
                 return chunk
-            
+
             # Add MCP metadata to delta.provider_specific_fields
             if hasattr(chunk, "choices") and chunk.choices:
                 for choice in chunk.choices:
-                    if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
+                    if (
+                        isinstance(choice, StreamingChoices)
+                        and hasattr(choice, "delta")
+                        and choice.delta
+                    ):
                         # Get existing provider_specific_fields or create new dict
                         provider_fields = (
-                            getattr(choice.delta, "provider_specific_fields", None) or {}
+                            getattr(choice.delta, "provider_specific_fields", None)
+                            or {}
                         )
-                        
+
                         # Add MCP metadata
                         if isinstance(mcp_metadata, dict):
                             provider_fields.update(mcp_metadata)
-                        
+
                         # Set the provider_specific_fields
-                        setattr(choice.delta, "provider_specific_fields", provider_fields)
-        
+                        setattr(
+                            choice.delta, "provider_specific_fields", provider_fields
+                        )
+
         except Exception as e:
             from litellm._logging import verbose_logger
+
             verbose_logger.exception(
                 f"Error adding MCP metadata to final chunk: {str(e)}"
             )
-        
+
         return chunk
 
     def cache_streaming_response(self, processed_chunk, cache_hit: bool):
@@ -1805,12 +1829,12 @@ class CustomStreamWrapper:
                     )
                     # HANDLE STREAM OPTIONS
                     self.chunks.append(response)
-                    
+
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         response = self._add_mcp_list_tools_to_first_chunk(response)
                         self.sent_first_chunk = True
-                    
+
                     if hasattr(
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
@@ -1964,7 +1988,9 @@ class CustomStreamWrapper:
                     )
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
-                        processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
+                        processed_chunk = self._add_mcp_list_tools_to_first_chunk(
+                            processed_chunk
+                        )
                         self.sent_first_chunk = True
 
                     _has_usage = (
@@ -2173,9 +2199,17 @@ class CustomStreamWrapper:
         # Raise non-retriable client errors directly (skip fallback).
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
-        if mapped_status_code is not None and 400 <= mapped_status_code < 500 and mapped_status_code != 429:
+        if (
+            mapped_status_code is not None
+            and 400 <= mapped_status_code < 500
+            and mapped_status_code != 429
+        ):
             raise mapped_exception
-        if original_status_code is not None and 400 <= original_status_code < 500 and original_status_code != 429:
+        if (
+            original_status_code is not None
+            and 400 <= original_status_code < 500
+            and original_status_code != 429
+        ):
             raise mapped_exception
 
         raise MidStreamFallbackError(
