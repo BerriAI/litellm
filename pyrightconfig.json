@@ -2,6 +2,8 @@
     "ignore": [],
     "exclude": ["**/node_modules", "**/__pycache__", "litellm/types/utils.py", "litellm/proxy/_types.py"],
     "reportMissingImports": false,
-    "reportPrivateImportUsage": false
+    "reportPrivateImportUsage": false,
+    "venvPath": "/Users/sameerkankute/miniconda3/envs",
+    "venv": "litellm-dev"
 }
   
