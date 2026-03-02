@@ -184,7 +184,9 @@ def test_extract_response_content_with_citations():
         },
     }
 
-    _, citations, _, _, _, _, _, _ = config.extract_response_content(completion_response)
+    _, citations, _, _, _, _, _, _ = config.extract_response_content(
+        completion_response
+    )
     assert citations == [
         [
             {
@@ -306,7 +308,7 @@ def test_web_search_tool_result_extraction():
                 "type": "server_tool_use",
                 "id": "srvtoolu_01ABC123",
                 "name": "web_search",
-                "input": {"query": "average weight african elephant kg"}
+                "input": {"query": "average weight african elephant kg"},
             },
             {
                 "type": "web_search_tool_result",
@@ -318,32 +320,39 @@ def test_web_search_tool_result_extraction():
                         "title": "African Elephant Facts",
                         "encrypted_content": "encrypted_data_here",
                         "page_age": "2024-01-15",
-                        "snippet": "Adult African elephants weigh between 4,000-6,000 kg..."
+                        "snippet": "Adult African elephants weigh between 4,000-6,000 kg...",
                     }
-                ]
+                ],
             },
             {
                 "type": "text",
-                "text": "Based on my search, African elephants weigh around 5,000 kg."
+                "text": "Based on my search, African elephants weigh around 5,000 kg.",
             },
             {
                 "type": "tool_use",
                 "id": "toolu_01XYZ789",
                 "name": "add_numbers",
-                "input": {"a": 5000, "b": 100}
-            }
+                "input": {"a": 5000, "b": 100},
+            },
         ],
         "stop_reason": "tool_use",
         "usage": {
             "input_tokens": 100,
             "output_tokens": 50,
-            "server_tool_use": {"web_search_requests": 1}
-        }
+            "server_tool_use": {"web_search_requests": 1},
+        },
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
-        completion_response
-    )
+    (
+        text,
+        citations,
+        thinking_blocks,
+        reasoning_content,
+        tool_calls,
+        web_search_results,
+        tool_results,
+        compaction_blocks,
+    ) = config.extract_response_content(completion_response)
 
     # Verify text extraction
     assert "Based on my search" in text
@@ -389,7 +398,7 @@ def test_web_search_tool_result_in_provider_specific_fields():
                 "type": "server_tool_use",
                 "id": "srvtoolu_provider_test",
                 "name": "web_search",
-                "input": {"query": "test query"}
+                "input": {"query": "test query"},
             },
             {
                 "type": "web_search_tool_result",
@@ -399,21 +408,18 @@ def test_web_search_tool_result_in_provider_specific_fields():
                         "type": "web_search_result",
                         "url": "https://example.com/test",
                         "title": "Test Result",
-                        "snippet": "Test snippet content"
+                        "snippet": "Test snippet content",
                     }
-                ]
+                ],
             },
-            {
-                "type": "text",
-                "text": "Here is the result."
-            }
+            {"type": "text", "text": "Here is the result."},
         ],
         "stop_reason": "end_turn",
         "usage": {
             "input_tokens": 50,
             "output_tokens": 25,
-            "server_tool_use": {"web_search_requests": 1}
-        }
+            "server_tool_use": {"web_search_requests": 1},
+        },
     }
 
     raw_response = httpx.Response(status_code=200, headers={})
@@ -433,7 +439,10 @@ def test_web_search_tool_result_in_provider_specific_fields():
     assert "web_search_results" in provider_fields
     assert len(provider_fields["web_search_results"]) == 1
     assert provider_fields["web_search_results"][0]["type"] == "web_search_tool_result"
-    assert provider_fields["web_search_results"][0]["tool_use_id"] == "srvtoolu_provider_test"
+    assert (
+        provider_fields["web_search_results"][0]["tool_use_id"]
+        == "srvtoolu_provider_test"
+    )
 
 
 def test_multiple_web_search_tool_results():
@@ -448,34 +457,52 @@ def test_multiple_web_search_tool_results():
                 "type": "server_tool_use",
                 "id": "srvtoolu_search1",
                 "name": "web_search",
-                "input": {"query": "african elephant weight"}
+                "input": {"query": "african elephant weight"},
             },
             {
                 "type": "web_search_tool_result",
                 "tool_use_id": "srvtoolu_search1",
-                "content": [{"type": "web_search_result", "url": "https://example1.com", "title": "Result 1", "snippet": "First result"}]
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example1.com",
+                        "title": "Result 1",
+                        "snippet": "First result",
+                    }
+                ],
             },
             {
                 "type": "server_tool_use",
                 "id": "srvtoolu_search2",
                 "name": "web_search",
-                "input": {"query": "asian elephant weight"}
+                "input": {"query": "asian elephant weight"},
             },
             {
                 "type": "web_search_tool_result",
                 "tool_use_id": "srvtoolu_search2",
-                "content": [{"type": "web_search_result", "url": "https://example2.com", "title": "Result 2", "snippet": "Second result"}]
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example2.com",
+                        "title": "Result 2",
+                        "snippet": "Second result",
+                    }
+                ],
             },
-            {
-                "type": "text",
-                "text": "Found information about both elephants."
-            }
+            {"type": "text", "text": "Found information about both elephants."},
         ]
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
-        completion_response
-    )
+    (
+        text,
+        citations,
+        thinking_blocks,
+        reasoning_content,
+        tool_calls,
+        web_search_results,
+        tool_results,
+        compaction_blocks,
+    ) = config.extract_response_content(completion_response)
 
     # Verify both web_search_tool_results are extracted
     assert web_search_results is not None
@@ -752,7 +779,7 @@ def test_anthropic_beta_header_merging_with_output_format():
     optional_params = {
         "output_format": {
             "type": "json_schema",
-            "schema": {"type": "object", "properties": {}}
+            "schema": {"type": "object", "properties": {}},
         }
     }
 
@@ -762,10 +789,12 @@ def test_anthropic_beta_header_merging_with_output_format():
 
     # Both beta headers should be present
     beta_value = result_headers["anthropic-beta"]
-    assert "context-1m-2025-08-07" in beta_value, \
-        f"User's context-1m beta header missing from: {beta_value}"
-    assert "structured-outputs-2025-11-13" in beta_value, \
-        f"Structured output beta header missing from: {beta_value}"
+    assert (
+        "context-1m-2025-08-07" in beta_value
+    ), f"User's context-1m beta header missing from: {beta_value}"
+    assert (
+        "structured-outputs-2025-11-13" in beta_value
+    ), f"Structured output beta header missing from: {beta_value}"
 
 
 def test_anthropic_beta_header_merging_with_multiple_features():
@@ -781,10 +810,10 @@ def test_anthropic_beta_header_merging_with_multiple_features():
     optional_params = {
         "output_format": {
             "type": "json_schema",
-            "schema": {"type": "object", "properties": {}}
+            "schema": {"type": "object", "properties": {}},
         },
         "context_management": _sample_context_management_payload(),
-        "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]
+        "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}],
     }
 
     result_headers = config.update_headers_with_optional_anthropic_beta(
@@ -951,20 +980,12 @@ def test_tool_search_regex_detection():
 
     # Test with tool search regex tool
     tools = [
-        {
-            "type": "tool_search_tool_regex_20251119",
-            "name": "tool_search_tool_regex"
-        }
+        {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
     ]
     assert config.is_tool_search_used(tools) is True
 
     # Test without tool search
-    tools = [
-        {
-            "type": "function",
-            "function": {"name": "get_weather"}
-        }
-    ]
+    tools = [{"type": "function", "function": {"name": "get_weather"}}]
     assert config.is_tool_search_used(tools) is False
 
 
@@ -976,10 +997,7 @@ def test_tool_search_bm25_detection():
 
     # Test with tool search BM25 tool
     tools = [
-        {
-            "type": "tool_search_tool_bm25_20251119",
-            "name": "tool_search_tool_bm25"
-        }
+        {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
     ]
     assert config.is_tool_search_used(tools) is True
 
@@ -1003,10 +1021,7 @@ def test_tool_search_regex_mapping():
     """Test that tool search regex tools are properly mapped"""
     config = AnthropicConfig()
 
-    tool = {
-        "type": "tool_search_tool_regex_20251119",
-        "name": "tool_search_tool_regex"
-    }
+    tool = {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
 
     mapped_tool, mcp_server = config._map_tool_helper(tool)
 
@@ -1020,10 +1035,7 @@ def test_tool_search_bm25_mapping():
     """Test that tool search BM25 tools are properly mapped"""
     config = AnthropicConfig()
 
-    tool = {
-        "type": "tool_search_tool_bm25_20251119",
-        "name": "tool_search_tool_bm25"
-    }
+    tool = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
 
     mapped_tool, mcp_server = config._map_tool_helper(tool)
 
@@ -1038,20 +1050,17 @@ def test_deferred_tools_separation():
     config = AnthropicConfig()
 
     tools = [
-        {
-            "type": "tool_search_tool_regex_20251119",
-            "name": "tool_search_tool_regex"
-        },
+        {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
         {
             "type": "function",
             "function": {"name": "get_weather"},
-            "defer_loading": True
+            "defer_loading": True,
         },
         {
             "type": "function",
             "function": {"name": "search_files"},
-            "defer_loading": False
-        }
+            "defer_loading": False,
+        },
     ]
 
     non_deferred, deferred = config._separate_deferred_tools(tools)
@@ -1070,14 +1079,21 @@ def test_server_tool_use_in_response():
                 "type": "server_tool_use",
                 "id": "srvtoolu_01ABC123",
                 "name": "tool_search_tool_regex",
-                "input": {"query": "weather"}
+                "input": {"query": "weather"},
             }
         ]
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
-        completion_response
-    )
+    (
+        text,
+        citations,
+        thinking_blocks,
+        reasoning_content,
+        tool_calls,
+        web_search_results,
+        tool_results,
+        compaction_blocks,
+    ) = config.extract_response_content(completion_response)
 
     assert len(tool_calls) == 1
     assert tool_calls[0]["id"] == "srvtoolu_01ABC123"
@@ -1092,9 +1108,7 @@ def test_tool_search_usage_tracking():
     usage_object = {
         "input_tokens": 100,
         "output_tokens": 50,
-        "server_tool_use": {
-            "tool_search_requests": 2
-        }
+        "server_tool_use": {"tool_search_requests": 2},
     }
 
     usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
@@ -1110,16 +1124,13 @@ def test_tool_reference_expansion():
     deferred_tools = [
         {
             "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather"
-            }
+            "function": {"name": "get_weather", "description": "Get weather"},
         }
     ]
 
     content = [
         {"type": "text", "text": "I'll search for tools"},
-        {"type": "tool_reference", "tool_name": "get_weather"}
+        {"type": "tool_reference", "tool_name": "get_weather"},
     ]
 
     expanded = config._expand_tool_references(content, deferred_tools)
@@ -1141,13 +1152,11 @@ def test_defer_loading_preserved_in_transformation():
             "description": "Get weather information",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "location": {"type": "string"}
-                },
-                "required": ["location"]
-            }
+                "properties": {"location": {"type": "string"}},
+                "required": ["location"],
+            },
         },
-        "defer_loading": True
+        "defer_loading": True,
     }
 
     mapped_tool, mcp_server = config._map_tool_helper(tool)
@@ -1167,45 +1176,51 @@ def test_tool_search_complete_response_parsing():
         "content": [
             {
                 "type": "text",
-                "text": "I'll search for weather-related tools that can help you."
+                "text": "I'll search for weather-related tools that can help you.",
             },
             {
                 "type": "server_tool_use",
                 "id": "srvtoolu_015i6aVA2niwzv4RG4DtnxDJ",
                 "name": "tool_search_tool_regex",
                 "input": {"pattern": "weather", "limit": 5},
-                "caller": {"type": "direct"}
+                "caller": {"type": "direct"},
             },
             {
                 "type": "tool_search_tool_result",
                 "tool_use_id": "srvtoolu_015i6aVA2niwzv4RG4DtnxDJ",
                 "content": {
                     "type": "tool_search_tool_search_result",
-                    "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}]
-                }
+                    "tool_references": [
+                        {"type": "tool_reference", "tool_name": "get_weather"}
+                    ],
+                },
             },
-            {
-                "type": "text",
-                "text": "Great! I found a weather tool."
-            },
+            {"type": "text", "text": "Great! I found a weather tool."},
             {
                 "type": "tool_use",
                 "id": "toolu_01CrCNx4ntSaeeV9iArT4JfQ",
                 "name": "get_weather",
-                "input": {"location": "San Francisco"}
-            }
+                "input": {"location": "San Francisco"},
+            },
         ],
         "usage": {
             "input_tokens": 1639,
             "output_tokens": 170,
-            "server_tool_use": {"web_search_requests": 0}
-        }
+            "server_tool_use": {"web_search_requests": 0},
+        },
     }
 
     # Extract content
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
-        completion_response
-    )
+    (
+        text,
+        citations,
+        thinking_blocks,
+        reasoning_content,
+        tool_calls,
+        web_search_results,
+        tool_results,
+        compaction_blocks,
+    ) = config.extract_response_content(completion_response)
 
     # Verify text extraction (should concatenate both text blocks)
     assert "I'll search for weather-related tools" in text
@@ -1223,12 +1238,14 @@ def test_tool_search_complete_response_parsing():
     usage = config.calculate_usage(
         usage_object=completion_response["usage"],
         reasoning_content=None,
-        completion_response=completion_response
+        completion_response=completion_response,
     )
 
     assert usage.server_tool_use is not None
     assert usage.server_tool_use.web_search_requests == 0
-    assert usage.server_tool_use.tool_search_requests == 1  # Counted from server_tool_use blocks
+    assert (
+        usage.server_tool_use.tool_search_requests == 1
+    )  # Counted from server_tool_use blocks
 
 
 def test_allowed_callers_field_preservation():
@@ -1243,13 +1260,11 @@ def test_allowed_callers_field_preservation():
             "description": "Execute a SQL query",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "sql": {"type": "string"}
-                },
-                "required": ["sql"]
-            }
+                "properties": {"sql": {"type": "string"}},
+                "required": ["sql"],
+            },
         },
-        "allowed_callers": ["code_execution_20250825"]
+        "allowed_callers": ["code_execution_20250825"],
     }
 
     transformed_tool, _ = config._map_tool_helper(tool_with_allowed_callers)
@@ -1266,19 +1281,16 @@ def test_programmatic_tool_calling_beta_header():
 
     # Test detection with allowed_callers
     tools = [
-        {
-            "type": "code_execution_20250825",
-            "name": "code_execution"
-        },
+        {"type": "code_execution_20250825", "name": "code_execution"},
         {
             "type": "function",
             "function": {
                 "name": "query_database",
                 "description": "Execute a SQL query",
-                "parameters": {"type": "object", "properties": {}}
+                "parameters": {"type": "object", "properties": {}},
             },
-            "allowed_callers": ["code_execution_20250825"]
-        }
+            "allowed_callers": ["code_execution_20250825"],
+        },
     ]
 
     is_programmatic = model_info.is_programmatic_tool_calling_used(tools)
@@ -1286,8 +1298,7 @@ def test_programmatic_tool_calling_beta_header():
 
     # Test header generation
     headers = model_info.get_anthropic_headers(
-        api_key="test-key",
-        programmatic_tool_calling_used=True
+        api_key="test-key", programmatic_tool_calling_used=True
     )
 
     assert "anthropic-beta" in headers
@@ -1304,10 +1315,7 @@ def test_caller_field_in_response():
         "type": "message",
         "role": "assistant",
         "content": [
-            {
-                "type": "text",
-                "text": "I'll query the database."
-            },
+            {"type": "text", "text": "I'll query the database."},
             {
                 "type": "tool_use",
                 "id": "toolu_123",
@@ -1315,15 +1323,24 @@ def test_caller_field_in_response():
                 "input": {"sql": "SELECT * FROM users"},
                 "caller": {
                     "type": "code_execution_20250825",
-                    "tool_id": "srvtoolu_abc"
-                }
-            }
+                    "tool_id": "srvtoolu_abc",
+                },
+            },
         ],
         "stop_reason": "tool_use",
-        "usage": {"input_tokens": 100, "output_tokens": 50}
+        "usage": {"input_tokens": 100, "output_tokens": 50},
     }
 
-    text, citations, thinking, reasoning, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(completion_response)
+    (
+        text,
+        citations,
+        thinking,
+        reasoning,
+        tool_calls,
+        web_search_results,
+        tool_results,
+        compaction_blocks,
+    ) = config.extract_response_content(completion_response)
 
     assert len(tool_calls) == 1
     assert tool_calls[0]["id"] == "toolu_123"
@@ -1338,10 +1355,7 @@ def test_code_execution_20250825_tool_type():
     """Test that code_execution_20250825 tool type is handled correctly."""
     config = AnthropicConfig()
 
-    tool = {
-        "type": "code_execution_20250825",
-        "name": "code_execution"
-    }
+    tool = {"type": "code_execution_20250825", "name": "code_execution"}
 
     transformed_tool, _ = config._map_tool_helper(tool)
     assert transformed_tool is not None
@@ -1361,13 +1375,11 @@ def test_allowed_callers_in_function_field():
             "description": "Execute a SQL query",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "sql": {"type": "string"}
-                },
-                "required": ["sql"]
+                "properties": {"sql": {"type": "string"}},
+                "required": ["sql"],
             },
-            "allowed_callers": ["code_execution_20250825"]
-        }
+            "allowed_callers": ["code_execution_20250825"],
+        },
     }
 
     transformed_tool, _ = config._map_tool_helper(tool)
@@ -1390,15 +1402,15 @@ def test_input_examples_field_preservation():
                 "type": "object",
                 "properties": {
                     "location": {"type": "string"},
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
                 },
-                "required": ["location"]
-            }
+                "required": ["location"],
+            },
         },
         "input_examples": [
             {"location": "San Francisco, CA", "unit": "fahrenheit"},
-            {"location": "Tokyo, Japan", "unit": "celsius"}
-        ]
+            {"location": "Tokyo, Japan", "unit": "celsius"},
+        ],
     }
 
     transformed_tool, _ = config._map_tool_helper(tool_with_examples)
@@ -1421,11 +1433,9 @@ def test_input_examples_beta_header():
             "function": {
                 "name": "get_weather",
                 "description": "Get weather information",
-                "parameters": {"type": "object", "properties": {}}
+                "parameters": {"type": "object", "properties": {}},
             },
-            "input_examples": [
-                {"location": "San Francisco, CA"}
-            ]
+            "input_examples": [{"location": "San Francisco, CA"}],
         }
     ]
 
@@ -1434,8 +1444,7 @@ def test_input_examples_beta_header():
 
     # Test header generation
     headers = model_info.get_anthropic_headers(
-        api_key="test-key",
-        input_examples_used=True
+        api_key="test-key", input_examples_used=True
     )
 
     assert "anthropic-beta" in headers
@@ -1454,16 +1463,14 @@ def test_input_examples_in_function_field():
             "description": "Get weather information",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "location": {"type": "string"}
-                },
-                "required": ["location"]
+                "properties": {"location": {"type": "string"}},
+                "required": ["location"],
             },
             "input_examples": [
                 {"location": "Paris, France"},
-                {"location": "London, UK"}
-            ]
-        }
+                {"location": "London, UK"},
+            ],
+        },
     }
 
     transformed_tool, _ = config._map_tool_helper(tool)
@@ -1484,17 +1491,13 @@ def test_input_examples_with_other_features():
             "description": "Execute a SQL query",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "sql": {"type": "string"}
-                },
-                "required": ["sql"]
-            }
+                "properties": {"sql": {"type": "string"}},
+                "required": ["sql"],
+            },
         },
-        "input_examples": [
-            {"sql": "SELECT * FROM users WHERE id = 1"}
-        ],
+        "input_examples": [{"sql": "SELECT * FROM users WHERE id = 1"}],
         "defer_loading": True,
-        "allowed_callers": ["code_execution_20250825"]
+        "allowed_callers": ["code_execution_20250825"],
     }
 
     transformed_tool, _ = config._map_tool_helper(tool)
@@ -1518,19 +1521,20 @@ def test_input_examples_empty_list_not_added():
             "description": "Get weather information",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "location": {"type": "string"}
-                },
-                "required": ["location"]
-            }
+                "properties": {"location": {"type": "string"}},
+                "required": ["location"],
+            },
         },
-        "input_examples": []
+        "input_examples": [],
     }
 
     transformed_tool, _ = config._map_tool_helper(tool)
     assert transformed_tool is not None
     # Empty list should not be added
-    assert "input_examples" not in transformed_tool or len(transformed_tool.get("input_examples", [])) == 0
+    assert (
+        "input_examples" not in transformed_tool
+        or len(transformed_tool.get("input_examples", [])) == 0
+    )
 
 
 # ============ Effort Parameter Tests ============
@@ -1541,45 +1545,48 @@ def test_effort_output_config_preservation():
     config = AnthropicConfig()
 
     messages = [{"role": "user", "content": "Analyze this code"}]
-    optional_params = {
-        "output_config": {
-            "effort": "medium"
-        }
-    }
+    optional_params = {"output_config": {"effort": "medium"}}
 
     result = config.transform_request(
         model="claude-opus-4-5-20251101",
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     assert "output_config" in result
     assert result["output_config"]["effort"] == "medium"
 
 
-def test_effort_beta_header_injection():
-    """Test that effort beta header is automatically added when output_config is detected."""
+def test_effort_beta_header_not_injected_for_46_output_config():
+    """Test that effort beta header is NOT added for 4.6 output_config.
+
+    The effort-2025-11-24 beta header is only needed for Opus 4.5
+    reasoning_effort. Claude 4.6 models use output_config natively.
+    """
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     model_info = AnthropicModelInfo()
 
-    # Test with effort parameter
-    optional_params = {
-        "output_config": {
-            "effort": "low"
-        }
-    }
+    # output_config with effort on a 4.6 model should NOT trigger beta header
+    optional_params = {"output_config": {"effort": "low"}}
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params)
+    effort_used = model_info.is_effort_used(
+        optional_params=optional_params, model="claude-sonnet-4-6"
+    )
+    assert effort_used is False
+
+    # Opus 4.5 reasoning_effort SHOULD trigger the beta header
+    opus45_params = {"reasoning_effort": "high"}
+    effort_used = model_info.is_effort_used(
+        optional_params=opus45_params, model="claude-opus-4-5-20251101"
+    )
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
-        api_key="test-key",
-        effort_used=effort_used
+        api_key="test-key", effort_used=effort_used
     )
-
     assert "anthropic-beta" in headers
     assert "effort-2025-11-24" in headers["anthropic-beta"]
 
@@ -1598,7 +1605,7 @@ def test_effort_validation():
             messages=messages,
             optional_params=optional_params,
             litellm_params={},
-            headers={}
+            headers={},
         )
         assert result["output_config"]["effort"] == effort
 
@@ -1610,7 +1617,7 @@ def test_effort_validation():
             messages=messages,
             optional_params=optional_params,
             litellm_params={},
-            headers={}
+            headers={},
         )
 
 
@@ -1619,18 +1626,14 @@ def test_effort_with_claude_opus_45():
     config = AnthropicConfig()
 
     messages = [{"role": "user", "content": "Complex analysis task"}]
-    optional_params = {
-        "output_config": {
-            "effort": "high"
-        }
-    }
+    optional_params = {"output_config": {"effort": "high"}}
 
     result = config.transform_request(
         model="claude-opus-4-5-20251101",
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     assert "output_config" in result
@@ -1640,18 +1643,24 @@ def test_effort_with_claude_opus_45():
 
 def test_effort_validation_with_opus_46():
     """Test that all four effort levels are accepted for Claude Opus 4.6."""
-    config = AnthropicConfig()
+    import litellm
 
+    config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
+    model = "claude-opus-4-6-20260205"
+
+    # Ensure supports_max_effort is set in model cost map
+    if model in litellm.model_cost:
+        litellm.model_cost[model]["supports_max_effort"] = True
 
     for effort in ["high", "medium", "low", "max"]:
         optional_params = {"output_config": {"effort": effort}}
         result = config.transform_request(
-            model="claude-opus-4-6-20260205",
+            model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params={},
-            headers={}
+            headers={},
         )
         assert result["output_config"]["effort"] == effort
 
@@ -1662,14 +1671,36 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is only supported by Claude 4.6 models"):
+    with pytest.raises(
+        ValueError, match="effort='max' is not supported for model"
+    ):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
             messages=messages,
             optional_params=optional_params,
             litellm_params={},
-            headers={}
+            headers={},
+        )
+
+
+def test_max_effort_rejected_for_sonnet_46():
+    """Test that effort='max' is rejected for Sonnet 4.6 (Opus 4.6 only)."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    with pytest.raises(
+        ValueError, match="effort='max' is not supported for model"
+    ):
+    ):
+        optional_params = {"output_config": {"effort": "max"}}
+        config.transform_request(
+            model="claude-sonnet-4-6-20260219",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
         )
 
 
@@ -1686,23 +1717,16 @@ def test_effort_with_other_features():
                 "description": "Get data",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "query": {"type": "string"}
-                    },
-                    "required": ["query"]
-                }
-            }
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
         }
     ]
     optional_params = {
-        "output_config": {
-            "effort": "low"
-        },
+        "output_config": {"effort": "low"},
         "tools": tools,
-        "thinking": {
-            "type": "enabled",
-            "budget_tokens": 1000
-        }
+        "thinking": {"type": "enabled", "budget_tokens": 1000},
     }
 
     result = config.transform_request(
@@ -1710,7 +1734,7 @@ def test_effort_with_other_features():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify all features are present
@@ -1753,11 +1777,14 @@ def test_translate_system_message_skips_empty_list_content():
 
     # Test list content with empty text block
     messages = [
-        {"role": "system", "content": [
-            {"type": "text", "text": ""},
-            {"type": "text", "text": "Valid content"},
-            {"type": "text", "text": ""},
-        ]},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": ""},
+                {"type": "text", "text": "Valid content"},
+                {"type": "text", "text": ""},
+            ],
+        },
         {"role": "user", "content": "Hello"},
     ]
 
@@ -1795,9 +1822,16 @@ def test_translate_system_message_preserves_cache_control():
 
     # Test list content with cache_control
     messages = [
-        {"role": "system", "content": [
-            {"type": "text", "text": "Cached content", "cache_control": {"type": "ephemeral"}},
-        ]},
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Cached content",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
         {"role": "user", "content": "Hello"},
     ]
 
@@ -1918,7 +1952,7 @@ def test_transform_request_uses_dynamic_max_tokens():
         messages=messages,
         optional_params={},  # No max_tokens provided
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     assert result["max_tokens"] == 8192
@@ -1939,7 +1973,7 @@ def test_transform_request_respects_user_max_tokens():
         messages=messages,
         optional_params={"max_tokens": 1000},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     assert result["max_tokens"] == 1000
@@ -1986,11 +2020,12 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
         "output_tokens": 500,
     }
     # Simulating reasoning content that would count as ~50 tokens
-    reasoning_content = "Let me think about this step by step. " * 10  # Roughly 50 tokens
+    reasoning_content = (
+        "Let me think about this step by step. " * 10
+    )  # Roughly 50 tokens
 
     usage = config.calculate_usage(
-        usage_object=usage_object,
-        reasoning_content=reasoning_content
+        usage_object=usage_object, reasoning_content=reasoning_content
     )
 
     # completion_tokens_details should be populated with both reasoning and text tokens
@@ -2031,7 +2066,7 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
-                drop_params=False
+                drop_params=False,
             )
 
             # Should map to adaptive thinking type
@@ -2042,7 +2077,9 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             # reasoning_effort should not be in the result (it's transformed to thinking)
             assert "reasoning_effort" not in result
             # Should set output_config with the mapped effort value
-            assert "output_config" in result, f"output_config missing for {model} with effort={effort}"
+            assert (
+                "output_config" in result
+            ), f"output_config missing for {model} with effort={effort}"
             assert result["output_config"]["effort"] == effort_map[effort]
 
 
@@ -2103,10 +2140,10 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
 
     # Test with Claude Sonnet 4.5 (non-Opus 4.6 model)
     test_cases = [
-        ("low", 1024),      # DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
-        ("medium", 2048),   # DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
-        ("high", 4096),     # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
-        ("minimal", 128),   # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+        ("low", 1024),  # DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+        ("medium", 2048),  # DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+        ("high", 4096),  # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+        ("minimal", 128),  # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
     ]
 
     for effort, expected_budget in test_cases:
@@ -2117,7 +2154,7 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="claude-sonnet-4-5-20250929",
-            drop_params=False
+            drop_params=False,
         )
 
         # Should map to enabled thinking type with budget_tokens
@@ -2149,17 +2186,12 @@ def test_code_execution_tool_results_extraction():
         "role": "assistant",
         "model": "claude-sonnet-4-5-20250929",
         "content": [
-            {
-                "type": "text",
-                "text": "I'll calculate that for you."
-            },
+            {"type": "text", "text": "I'll calculate that for you."},
             {
                 "type": "server_tool_use",
                 "id": "srvtoolu_01ABC",
                 "name": "bash_code_execution",
-                "input": {
-                    "command": "python3 << 'EOF'\nprint(2 + 2)\nEOF\n"
-                }
+                "input": {"command": "python3 << 'EOF'\nprint(2 + 2)\nEOF\n"},
             },
             {
                 "type": "bash_code_execution_tool_result",
@@ -2168,8 +2200,8 @@ def test_code_execution_tool_results_extraction():
                     "type": "bash_code_execution_result",
                     "stdout": "4\n",
                     "stderr": "",
-                    "return_code": 0
-                }
+                    "return_code": 0,
+                },
             },
             {
                 "type": "server_tool_use",
@@ -2178,28 +2210,22 @@ def test_code_execution_tool_results_extraction():
                 "input": {
                     "command": "create",
                     "path": "test.txt",
-                    "file_text": "Hello"
-                }
+                    "file_text": "Hello",
+                },
             },
             {
                 "type": "text_editor_code_execution_tool_result",
                 "tool_use_id": "srvtoolu_01DEF",
                 "content": {
                     "type": "text_editor_code_execution_result",
-                    "is_file_update": False
-                }
+                    "is_file_update": False,
+                },
             },
-            {
-                "type": "text",
-                "text": "Done!"
-            }
+            {"type": "text", "text": "Done!"},
         ],
         "stop_reason": "stop",
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": 100,
-            "output_tokens": 50
-        }
+        "usage": {"input_tokens": 100, "output_tokens": 50},
     }
 
     # Create mock HTTP response
@@ -2224,11 +2250,17 @@ def test_code_execution_tool_results_extraction():
 
     # Verify first tool call
     assert transformed_response.choices[0].message.tool_calls[0].id == "srvtoolu_01ABC"
-    assert transformed_response.choices[0].message.tool_calls[0].function.name == "bash_code_execution"
+    assert (
+        transformed_response.choices[0].message.tool_calls[0].function.name
+        == "bash_code_execution"
+    )
 
     # Verify second tool call
     assert transformed_response.choices[0].message.tool_calls[1].id == "srvtoolu_01DEF"
-    assert transformed_response.choices[0].message.tool_calls[1].function.name == "text_editor_code_execution"
+    assert (
+        transformed_response.choices[0].message.tool_calls[1].function.name
+        == "text_editor_code_execution"
+    )
 
     # Verify tool results are in provider_specific_fields
     provider_fields = transformed_response.choices[0].message.provider_specific_fields
@@ -2251,7 +2283,10 @@ def test_code_execution_tool_results_extraction():
     assert editor_result["content"]["is_file_update"] is False
 
     # Verify text content is properly concatenated
-    assert "I'll calculate that for you." in transformed_response.choices[0].message.content
+    assert (
+        "I'll calculate that for you."
+        in transformed_response.choices[0].message.content
+    )
     assert "Done!" in transformed_response.choices[0].message.content
 
 
@@ -2272,21 +2307,12 @@ def test_tool_search_tool_result_not_in_tool_results():
         "role": "assistant",
         "model": "claude-sonnet-4-5-20250929",
         "content": [
-            {
-                "type": "text",
-                "text": "Found tools."
-            },
-            {
-                "type": "tool_search_tool_result",
-                "tool_references": ["tool1", "tool2"]
-            }
+            {"type": "text", "text": "Found tools."},
+            {"type": "tool_search_tool_result", "tool_references": ["tool1", "tool2"]},
         ],
         "stop_reason": "stop",
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": 100,
-            "output_tokens": 50
-        }
+        "usage": {"input_tokens": 100, "output_tokens": 50},
     }
 
     mock_raw_response = MagicMock(spec=httpx.Response)
@@ -2326,22 +2352,16 @@ def test_web_search_tool_result_backwards_compatibility():
         "role": "assistant",
         "model": "claude-sonnet-4-5-20250929",
         "content": [
-            {
-                "type": "text",
-                "text": "Here are the results."
-            },
+            {"type": "text", "text": "Here are the results."},
             {
                 "type": "web_search_tool_result",
                 "search_query": "test query",
-                "results": [{"title": "Result 1", "url": "https://example.com"}]
-            }
+                "results": [{"title": "Result 1", "url": "https://example.com"}],
+            },
         ],
         "stop_reason": "stop",
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": 100,
-            "output_tokens": 50
-        }
+        "usage": {"input_tokens": 100, "output_tokens": 50},
     }
 
     mock_raw_response = MagicMock(spec=httpx.Response)
@@ -2387,24 +2407,28 @@ def test_compaction_block_extraction():
         "content": [
             {
                 "type": "compaction",
-                "content": "Summary of the conversation: The user requested help building a web scraper..."
+                "content": "Summary of the conversation: The user requested help building a web scraper...",
             },
             {
                 "type": "text",
-                "text": "I don't have access to real-time data, so I can't provide the current weather in San Francisco."
-            }
+                "text": "I don't have access to real-time data, so I can't provide the current weather in San Francisco.",
+            },
         ],
         "stop_reason": "max_tokens",
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": 86,
-            "output_tokens": 100
-        }
+        "usage": {"input_tokens": 86, "output_tokens": 100},
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
-        completion_response
-    )
+    (
+        text,
+        citations,
+        thinking_blocks,
+        reasoning_content,
+        tool_calls,
+        web_search_results,
+        tool_results,
+        compaction_blocks,
+    ) = config.extract_response_content(completion_response)
 
     # Verify compaction blocks are extracted
     assert compaction_blocks is not None
@@ -2434,18 +2458,12 @@ def test_compaction_block_in_provider_specific_fields():
         "content": [
             {
                 "type": "compaction",
-                "content": "Summary of the conversation: The user requested help building a web scraper..."
+                "content": "Summary of the conversation: The user requested help building a web scraper...",
             },
-            {
-                "type": "text",
-                "text": "Here is the response."
-            }
+            {"type": "text", "text": "Here is the response."},
         ],
         "stop_reason": "end_turn",
-        "usage": {
-            "input_tokens": 50,
-            "output_tokens": 25
-        }
+        "usage": {"input_tokens": 50, "output_tokens": 25},
     }
 
     raw_response = httpx.Response(status_code=200, headers={})
@@ -2465,7 +2483,10 @@ def test_compaction_block_in_provider_specific_fields():
     assert "compaction_blocks" in provider_fields
     assert len(provider_fields["compaction_blocks"]) == 1
     assert provider_fields["compaction_blocks"][0]["type"] == "compaction"
-    assert "Summary of the conversation" in provider_fields["compaction_blocks"][0]["content"]
+    assert (
+        "Summary of the conversation"
+        in provider_fields["compaction_blocks"][0]["content"]
+    )
 
 
 def test_multiple_compaction_blocks():
@@ -2476,24 +2497,22 @@ def test_multiple_compaction_blocks():
 
     completion_response = {
         "content": [
-            {
-                "type": "compaction",
-                "content": "First summary..."
-            },
-            {
-                "type": "text",
-                "text": "Some text."
-            },
-            {
-                "type": "compaction",
-                "content": "Second summary..."
-            }
+            {"type": "compaction", "content": "First summary..."},
+            {"type": "text", "text": "Some text."},
+            {"type": "compaction", "content": "Second summary..."},
         ]
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
-        completion_response
-    )
+    (
+        text,
+        citations,
+        thinking_blocks,
+        reasoning_content,
+        tool_calls,
+        web_search_results,
+        tool_results,
+        compaction_blocks,
+    ) = config.extract_response_content(completion_response)
 
     # Verify both compaction blocks are extracted
     assert compaction_blocks is not None
@@ -2512,37 +2531,26 @@ def test_compaction_block_request_transformation():
     )
 
     messages = [
-        {
-            "role": "user",
-            "content": "What is the weather in San Francisco?"
-        },
+        {"role": "user", "content": "What is the weather in San Francisco?"},
         {
             "role": "assistant",
             "content": [
-                {
-                    "type": "text",
-                    "text": "I don't have access to real-time data."
-                }
+                {"type": "text", "text": "I don't have access to real-time data."}
             ],
             "provider_specific_fields": {
                 "compaction_blocks": [
                     {
                         "type": "compaction",
-                        "content": "Summary of the conversation: The user requested help building a web scraper..."
+                        "content": "Summary of the conversation: The user requested help building a web scraper...",
                     }
                 ]
-            }
+            },
         },
-        {
-            "role": "user",
-            "content": "What about New York?"
-        }
+        {"role": "user", "content": "What about New York?"},
     ]
 
     result = anthropic_messages_pt(
-        messages=messages,
-        model="claude-opus-4-6",
-        llm_provider="anthropic"
+        messages=messages, model="claude-opus-4-6", llm_provider="anthropic"
     )
 
     # Find the assistant message
@@ -2574,14 +2582,8 @@ def test_compaction_with_context_management():
 
     messages = [{"role": "user", "content": "Hello"}]
     optional_params = {
-        "context_management": {
-            "edits": [
-                {
-                    "type": "compact_20260112"
-                }
-            ]
-        },
-        "max_tokens": 100
+        "context_management": {"edits": [{"type": "compact_20260112"}]},
+        "max_tokens": 100,
     }
 
     result = config.transform_request(
@@ -2589,7 +2591,7 @@ def test_compaction_with_context_management():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify context_management is included
@@ -2605,30 +2607,28 @@ def test_compaction_block_with_other_content_types():
 
     completion_response = {
         "content": [
-            {
-                "type": "compaction",
-                "content": "Summary of previous conversation..."
-            },
-            {
-                "type": "thinking",
-                "thinking": "Let me think about this..."
-            },
-            {
-                "type": "text",
-                "text": "Based on my analysis..."
-            },
+            {"type": "compaction", "content": "Summary of previous conversation..."},
+            {"type": "thinking", "thinking": "Let me think about this..."},
+            {"type": "text", "text": "Based on my analysis..."},
             {
                 "type": "tool_use",
                 "id": "toolu_123",
                 "name": "get_weather",
-                "input": {"location": "San Francisco"}
-            }
+                "input": {"location": "San Francisco"},
+            },
         ]
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
-        completion_response
-    )
+    (
+        text,
+        citations,
+        thinking_blocks,
+        reasoning_content,
+        tool_calls,
+        web_search_results,
+        tool_results,
+        compaction_blocks,
+    ) = config.extract_response_content(completion_response)
 
     # Verify all content types are extracted
     assert compaction_blocks is not None
@@ -2645,11 +2645,11 @@ def test_map_openai_context_management_to_anthropic():
     Test mapping OpenAI Responses API context_management format to Anthropic format.
     """
     config = AnthropicConfig()
-    
+
     # Test OpenAI list format with compaction
     openai_format = [{"type": "compaction", "compact_threshold": 200000}]
     result = config.map_openai_context_management_to_anthropic(openai_format)
-    
+
     assert result is not None
     assert "edits" in result
     assert len(result["edits"]) == 1
@@ -2658,26 +2658,32 @@ def test_map_openai_context_management_to_anthropic():
     assert result["edits"][0]["trigger"]["value"] == 200000
 
     # Test OpenAI format with instructions
-    openai_format_with_instructions = [{
-        "type": "compaction",
-        "compact_threshold": 150000,
-        "instructions": "Focus on preserving code snippets"
-    }]
-    result = config.map_openai_context_management_to_anthropic(openai_format_with_instructions)
-    
+    openai_format_with_instructions = [
+        {
+            "type": "compaction",
+            "compact_threshold": 150000,
+            "instructions": "Focus on preserving code snippets",
+        }
+    ]
+    result = config.map_openai_context_management_to_anthropic(
+        openai_format_with_instructions
+    )
+
     assert result is not None
     assert result["edits"][0]["trigger"]["value"] == 150000
     assert result["edits"][0]["instructions"] == "Focus on preserving code snippets"
-    
+
     # Test Anthropic format (should pass through)
     anthropic_format = {
-        "edits": [{
-            "type": "compact_20260112",
-            "trigger": {"type": "input_tokens", "value": 150000}
-        }]
+        "edits": [
+            {
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 150000},
+            }
+        ]
     }
     result = config.map_openai_context_management_to_anthropic(anthropic_format)
-    
+
     assert result == anthropic_format
 
 
@@ -2686,46 +2692,51 @@ def test_map_openai_params_with_context_management():
     Test that map_openai_params correctly transforms context_management from OpenAI to Anthropic format.
     """
     config = AnthropicConfig()
-    
+
     # Test with OpenAI list format
     non_default_params = {
         "context_management": [{"type": "compaction", "compact_threshold": 200000}]
     }
     optional_params = {}
-    
+
     result = config.map_openai_params(
         non_default_params=non_default_params,
         optional_params=optional_params,
         model="claude-opus-4-6",
-        drop_params=False
+        drop_params=False,
     )
-    
+
     assert "context_management" in result
     assert "edits" in result["context_management"]
     assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
     assert result["context_management"]["edits"][0]["trigger"]["value"] == 200000
-    
+
     # Test with Anthropic dict format (should pass through)
     non_default_params_anthropic = {
         "context_management": {
-            "edits": [{
-                "type": "compact_20260112",
-                "trigger": {"type": "input_tokens", "value": 150000},
-                "instructions": "Focus on preserving code"
-            }]
+            "edits": [
+                {
+                    "type": "compact_20260112",
+                    "trigger": {"type": "input_tokens", "value": 150000},
+                    "instructions": "Focus on preserving code",
+                }
+            ]
         }
     }
     optional_params = {}
-    
+
     result = config.map_openai_params(
         non_default_params=non_default_params_anthropic,
         optional_params=optional_params,
         model="claude-opus-4-6",
-        drop_params=False
+        drop_params=False,
     )
-    
+
     assert "context_management" in result
-    assert result["context_management"] == non_default_params_anthropic["context_management"]
+    assert (
+        result["context_management"]
+        == non_default_params_anthropic["context_management"]
+    )
 
 
 def test_compaction_block_empty_list_not_added():
@@ -2744,17 +2755,9 @@ def test_compaction_block_empty_list_not_added():
         "type": "message",
         "role": "assistant",
         "model": "claude-opus-4-6",
-        "content": [
-            {
-                "type": "text",
-                "text": "Just a regular response."
-            }
-        ],
+        "content": [{"type": "text", "text": "Just a regular response."}],
         "stop_reason": "end_turn",
-        "usage": {
-            "input_tokens": 10,
-            "output_tokens": 5
-        }
+        "usage": {"input_tokens": 10, "output_tokens": 5},
     }
 
     raw_response = httpx.Response(status_code=200, headers={})
@@ -2771,7 +2774,10 @@ def test_compaction_block_empty_list_not_added():
     # Verify compaction_blocks is not in provider_specific_fields when there are none
     provider_fields = result.choices[0].message.provider_specific_fields
     if provider_fields:
-        assert "compaction_blocks" not in provider_fields or provider_fields.get("compaction_blocks") is None
+        assert (
+            "compaction_blocks" not in provider_fields
+            or provider_fields.get("compaction_blocks") is None
+        )
 
 
 def test_fast_mode_beta_header():
@@ -2784,8 +2790,7 @@ def test_fast_mode_beta_header():
     optional_params = {"speed": "fast"}
 
     result_headers = config.update_headers_with_optional_anthropic_beta(
-        headers=headers,
-        optional_params=optional_params
+        headers=headers, optional_params=optional_params
     )
 
     assert "anthropic-beta" in result_headers
@@ -2799,14 +2804,10 @@ def test_fast_mode_with_other_beta_headers():
     config = AnthropicConfig()
 
     headers = {}
-    optional_params = {
-        "speed": "fast",
-        "output_format": {"type": "json_object"}
-    }
+    optional_params = {"speed": "fast", "output_format": {"type": "json_object"}}
 
     result_headers = config.update_headers_with_optional_anthropic_beta(
-        headers=headers,
-        optional_params=optional_params
+        headers=headers, optional_params=optional_params
     )
 
     assert "anthropic-beta" in result_headers
@@ -2826,9 +2827,7 @@ def test_fast_mode_usage_calculation():
     }
 
     usage = config.calculate_usage(
-        usage_object=usage_object,
-        reasoning_content=None,
-        speed="fast"
+        usage_object=usage_object, reasoning_content=None, speed="fast"
     )
 
     assert usage.prompt_tokens == 1000
@@ -2943,7 +2942,7 @@ def test_fast_mode_parameter_mapping():
         non_default_params=non_default_params,
         optional_params=optional_params,
         model="claude-opus-4-6",
-        drop_params=False
+        drop_params=False,
     )
 
     assert "speed" in result

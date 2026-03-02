@@ -31,6 +31,7 @@ def is_anthropic_oauth_key(value: Optional[str]) -> bool:
         value = value[7:]
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
+
 def _merge_beta_headers(existing: Optional[str], new_beta: str) -> str:
     """Merge a new beta value into an existing comma-separated anthropic-beta header."""
     if not existing:
@@ -241,24 +242,21 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         self, optional_params: Optional[dict], model: Optional[str] = None
     ) -> bool:
         """
-        Check if effort parameter is being used.
+        Check if the effort beta header is needed.
 
-        Returns True if effort-related parameters are present.
+        The effort-2025-11-24 beta header is only required for Claude Opus 4.5
+        reasoning_effort. Claude 4.6 models use output_config/effort natively
+        without any beta header.
+
+        Returns True only when the beta header should be injected.
         """
         if not optional_params:
             return False
 
-        # Check if reasoning_effort is provided for Claude Opus 4.5
+        # Only Opus 4.5 reasoning_effort path needs the beta header
         if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
             reasoning_effort = optional_params.get("reasoning_effort")
             if reasoning_effort and isinstance(reasoning_effort, str):
-                return True
-
-        # Check if output_config is directly provided
-        output_config = optional_params.get("output_config")
-        if output_config and isinstance(output_config, dict):
-            effort = output_config.get("effort")
-            if effort and isinstance(effort, str):
                 return True
 
         return False
@@ -438,9 +436,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             if web_search_tool_used:
                 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
-                headers[
-                    "anthropic-beta"
-                ] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                headers["anthropic-beta"] = (
+                    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                )
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 
