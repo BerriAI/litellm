@@ -12,6 +12,7 @@ import asyncio
 import json
 import threading
 import re
+from functools import lru_cache
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import (
@@ -73,6 +74,15 @@ _UUID_SUFFIX_PLACEHOLDER_RE = re.compile(
 )
 
 
+@lru_cache(maxsize=2048)
+def _get_corrupted_placeholder_pattern(key: str) -> re.Pattern:
+    return re.compile(
+        re.escape(key)
+        + rf"[a-zA-Z]{{1,{_MAX_TRAILING_CHARS_CORRUPTED_PLACEHOLDER}}}"
+        + r"(?![a-zA-Z])"
+    )
+
+
 def _replace_pii_tokens_in_text(text: str, pii_tokens: Dict[str, str]) -> str:
     """
     Replace PII placeholders in text with original values. Handles LLM corruption
@@ -85,12 +95,7 @@ def _replace_pii_tokens_in_text(text: str, pii_tokens: Dict[str, str]) -> str:
     # If we did exact replace first, we'd replace the key and leave trailing chars (e.g. "Jane Doeen").
     for key, value in pii_tokens.items():
         if _UUID_SUFFIX_PLACEHOLDER_RE.match(key) is not None:
-            pattern = (
-                re.escape(key)
-                + rf"[a-zA-Z]{{1,{_MAX_TRAILING_CHARS_CORRUPTED_PLACEHOLDER}}}"
-                + r"(?![a-zA-Z])"
-            )
-            text = re.sub(pattern, value, text)
+            text = _get_corrupted_placeholder_pattern(key).sub(value, text)
     # Replace longer keys first so "<PERSON>uuid" is replaced before "<PERSON>"
     for key, value in sorted(pii_tokens.items(), key=lambda x: -len(x[0])):
         text = text.replace(key, value)
