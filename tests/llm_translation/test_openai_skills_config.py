@@ -10,7 +10,7 @@ import pytest
 from litellm.llms.openai.skills.transformation import OpenAISkillsConfig
 from litellm.types.llms.anthropic_skills import (
     CreateSkillRequest,
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+    DeleteSkillResponse,
     ListSkillsParams,
     ListSkillsResponse,
     Skill,
