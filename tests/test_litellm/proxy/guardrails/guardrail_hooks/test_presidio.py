@@ -1890,6 +1890,52 @@ async def test_anonymize_output_parse_pii_multiple_replace_items_offset_safe():
     assert masked_entity_count == {"PERSON": 2}
 
 
+@pytest.mark.asyncio
+async def test_anonymize_output_parse_pii_without_pii_tokens_logs_warning():
+    """
+    output_parse_pii=True without pii_tokens should emit a warning, since token
+    mappings cannot be retained for post-call unmasking.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail.presidio_anonymizer_api_base = "http://mock-presidio/"
+    guardrail._get_session_iterator = _make_mock_session_iterator(
+        {
+            "text": "Call me at <PHONE_NUMBER>",
+            "items": [
+                {
+                    "start": 11,
+                    "end": 23,
+                    "text": "<PHONE_NUMBER>",
+                    "operator": "replace",
+                    "entity_type": "PHONE_NUMBER",
+                }
+            ],
+        }
+    )
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger.warning"
+    ) as mock_warning:
+        result = await guardrail.anonymize_text(
+            text="Call me at 555-123-4567",
+            analyze_results=[
+                {
+                    "entity_type": "PHONE_NUMBER",
+                    "score": 0.99,
+                    "start": 11,
+                    "end": 23,
+                }
+            ],
+            output_parse_pii=True,
+            masked_entity_count={},
+            pii_tokens=None,
+        )
+
+    assert result.startswith("Call me at <PHONE_NUMBER>_")
+    assert mock_warning.called is True
+    assert "pii_tokens is None" in mock_warning.call_args[0][0]
+
+
 def test_blocking_respects_threshold_filter():
     """
     Entities filtered out by score should not trigger blocking, but high-score detections should.
