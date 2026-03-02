@@ -206,23 +206,57 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         optional_params.pop("deployment_url", None)
-        model_version = optional_params.pop("model_version", "latest")
+
+        def _build_prompt_module(
+            *,
+            model_name: str,
+            template_messages: List[Dict[str, str]],
+            params: dict,
+        ) -> dict:
+            model_version = params.pop("model_version", "latest")
+
+            tools_ = params.pop("tools", [])
+            tools = {"tools": tools_} if tools_ else {}
+
+            response_format = params.pop("response_format", {})
+            resp_type = response_format.get("type", None)
+            if resp_type:
+                if resp_type == "json_schema":
+                    response_format = validate_dict(response_format, ResponseFormatJSONSchema)
+                else:
+                    response_format = validate_dict(response_format, ResponseFormat)
+                response_format = {"response_format": response_format}
+            else:
+                response_format = {}
+
+            placeholder_defaults = params.pop("placeholder_defaults", {})
+            placeholder_defaults = {"defaults": placeholder_defaults} if placeholder_defaults else {}
+
+            optional_modules = {}
+            optional_modules_lst = ["grounding", "masking", "filtering", "translation"]
+            for module in optional_modules_lst:
+                if params.get(module, None):
+                    optional_modules[module] = params.pop(module)
+
+            return {
+                "prompt_templating": {
+                    "prompt": {
+                        "template": template_messages,
+                        **placeholder_defaults,
+                        **tools,
+                        **response_format,
+                    },
+                    "model": {
+                        "name": model_name,
+                        "params": params,
+                        "version": model_version,
+                    },
+                },
+                **optional_modules,
+            }
+
         template = messages
 
-        tools_ = optional_params.pop("tools", [])
-        if tools_ != []:
-            tools = {"tools": tools_}
-        else:
-            tools = {}
-
-        response_format = optional_params.pop("response_format", {})
-        resp_type = response_format.get("type", None)
-        if resp_type:
-            if resp_type== "json_schema":
-                response_format = validate_dict(response_format, ResponseFormatJSONSchema)
-            else:
-                response_format = validate_dict(response_format, ResponseFormat)
-            response_format = {"response_format": response_format}
         optional_params.pop("stream", False)
         stream_config = {}
         if "stream_options" in optional_params:
@@ -231,87 +265,32 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             if "delimiters" in stream_options:
                 stream_config["delimiters"] = stream_options.get("delimiters")
 
-        placeholder_defaults = optional_params.pop("placeholder_defaults", {})
-        if placeholder_defaults:
-            placeholder_defaults = {"defaults": placeholder_defaults}
-
         placeholder_values = optional_params.pop("placeholder_values", {})
-        if placeholder_values:
-            placeholder_values = {"placeholder_values": placeholder_values}
-
-        optional_modules = {}
-        optional_modules_lst = ["grounding", "masking", "filtering", "translation"]
-        for module in optional_modules_lst:
-            if optional_params.get(module, None):
-                optional_modules[module] = optional_params.pop(module)
+        placeholder_values = {"placeholder_values": placeholder_values} if placeholder_values else {}
 
         fallback_modules = optional_params.pop("fallback_modules", [])
+
         modules = [
-                    {
-                    "prompt_templating": {
-                        "prompt": {
-                            "template": template,
-                            **placeholder_defaults,
-                            **tools,
-                            **response_format
-                        },
-                        "model": {
-                            "name": model,
-                            "params": optional_params,
-                            "version": model_version,
-                        },
-                    },
-                    **optional_modules
-                }
-                ]
+            _build_prompt_module(
+                model_name=model,
+                template_messages=template,
+                params=optional_params,
+            )
+        ]
+
         for modules_dict in fallback_modules:
             fallback_model = modules_dict.pop("model")
-            fallback_model_version = modules_dict.pop("model_version", "latest")
+            if fallback_model.startswith("sap"):
+                fallback_model = fallback_model[4:]
             fallback_template = modules_dict.pop("messages", [])
-            fallback_tools_ = modules_dict.pop("tools", [])
-            if fallback_tools_ != []:
-                fallback_tools = {"tools": fallback_tools_}
-            else:
-                fallback_tools = {}
-
-            fallback_response_format = modules_dict.pop("response_format", {})
-            fallback_resp_type = fallback_response_format.get("type", None)
-            if fallback_resp_type:
-                if fallback_resp_type == "json_schema":
-                    fallback_response_format = validate_dict(response_format, ResponseFormatJSONSchema)
-                else:
-                    fallback_response_format = validate_dict(response_format, ResponseFormat)
-                fallback_response_format = {"response_format": fallback_response_format}
-
-            fallback_placeholder_defaults = modules_dict.pop("placeholder_defaults", {})
-            if fallback_placeholder_defaults:
-                fallback_placeholder_defaults = {"placeholder_defaults": fallback_placeholder_defaults}
-
-            fallback_optional_modules = {}
-            for module in optional_modules_lst:
-                if modules_dict.get(module, None):
-                    fallback_optional_modules[module] = modules_dict.pop(module)
 
             modules.append(
-                {
-                    "prompt_templating": {
-                        "prompt": {
-                            "template": fallback_template,
-                            **fallback_placeholder_defaults,
-                            **fallback_tools,
-                            **fallback_response_format
-                        },
-                        "model": {
-                            "name": fallback_model,
-                            "params": modules_dict,
-                            "version": fallback_model_version,
-                        },
-                    },
-                    **fallback_optional_modules
-                }
+                _build_prompt_module(
+                    model_name=fallback_model,
+                    template_messages=fallback_template,
+                    params=modules_dict,
+                )
             )
-
-
 
         request_body = {
             "config": {
@@ -322,7 +301,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         }
 
         validate_dict(request_body, OrchestrationRequest)
-        print(request_body)
 
         return request_body
 
