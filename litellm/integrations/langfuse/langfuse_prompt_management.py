@@ -341,8 +341,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             status_message = str(kwargs.get("exception", "Unknown error"))
             if standard_logging_object is not None:
                 status_message = standard_logging_object.get(
-                    "error_str", status_message
-                )
+                    "error_str", None
+                ) or status_message
             langfuse_logger_to_use.log_event_on_langfuse(
                 start_time=start_time,
                 end_time=end_time,
