@@ -177,6 +177,13 @@ class ModelsLabTextToSpeechConfig(BaseTextToSpeechConfig):
 
         if status == "processing":
             response_data = self._poll_tts_sync(request_id)
+            # Re-check status from polled response
+            if response_data.get("status") == "error":
+                raise BaseLLMException(
+                    status_code=500,
+                    message=response_data.get("message", "ModelsLab TTS failed"),
+                    headers={},
+                )
 
         audio_url = response_data.get("output", "")
         if not audio_url:
