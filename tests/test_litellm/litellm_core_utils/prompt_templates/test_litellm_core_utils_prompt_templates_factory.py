@@ -549,6 +549,99 @@ def test_convert_gemini_tool_call_result_with_image_url():
     assert isinstance(result2, list) and any("inline_data" in p for p in result2)
 
 
+def test_convert_gemini_tool_call_result_parallel_tool_calls():
+    """
+    Test that parallel tool calls from separate assistant messages are all
+    matched correctly when converting to Gemini format.
+
+    Reproduces the bug where the Responses API creates one assistant message
+    per function_call input item.  The Gemini transformation merges consecutive
+    assistant messages but previously only kept the *last* message's tool_calls
+    in ``last_message_with_tool_calls``, so the first tool result could never
+    find its corresponding tool call.
+
+    See: https://github.com/BerriAI/litellm/issues/XXXXX
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    # Simulate what the Responses API transformation produces for two parallel
+    # tool calls: two consecutive assistant messages each with one tool_call,
+    # followed by two tool result messages.
+    messages = [
+        {"role": "user", "content": "Summarise the data from both databases."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_aaa",
+                    "type": "function",
+                    "index": 0,
+                    "function": {
+                        "name": "get_postgres_schema",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_bbb",
+                    "type": "function",
+                    "index": 0,
+                    "function": {
+                        "name": "get_memgraph_schema",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_aaa",
+            "content": '{"schema": "postgres schema data"}',
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_bbb",
+            "content": '{"schema": "memgraph schema data"}',
+        },
+    ]
+
+    # This should NOT raise "Missing corresponding tool call for tool response
+    # message" — both tool results must find their matching tool call.
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Verify structure: user, model (merged assistants), user (tool results)
+    assert len(contents) >= 3
+    # The model turn should contain both function_call parts
+    model_turn = [c for c in contents if c["role"] == "model"]
+    assert len(model_turn) >= 1
+    function_call_parts = [
+        p for p in model_turn[0]["parts"] if "function_call" in p
+    ]
+    assert len(function_call_parts) == 2
+
+    # The tool results turn should contain both function_response parts
+    tool_turn = [
+        c for c in contents if c["role"] == "user" and any(
+            "function_response" in p for p in c["parts"]
+        )
+    ]
+    assert len(tool_turn) >= 1
+    function_response_parts = [
+        p for p in tool_turn[0]["parts"] if "function_response" in p
+    ]
+    assert len(function_response_parts) == 2
+
+
 def test_bedrock_tools_unpack_defs():
     """
     Test that the unpack_defs method handles nested $ref inside anyOf items correctly
