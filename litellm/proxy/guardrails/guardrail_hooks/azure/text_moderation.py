@@ -113,20 +113,27 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
     ) -> "AzureTextModerationGuardrailResponse":
         """
         Make a request to the Azure Text Moderation API.
+
+        Long texts are automatically split at word boundaries into chunks
+        that respect the Azure Content Safety 10 000-character limit.  Each
+        chunk is analysed independently; a severity-threshold violation in
+        *any* chunk raises an HTTPException immediately.
         """
+        from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
             AzureTextModerationGuardrailRequestBody,
             AzureTextModerationGuardrailResponse,
         )
 
-        # Azure Text Moderation has a 10000 character limit
-        # Split the text into chunks if it exceeds this limit
-        MAX_TEXT_LENGTH = 10000
-        
-        if len(text) <= MAX_TEXT_LENGTH:
-            # Text is within limits, send as-is
+        chunks = self.split_text_by_words(
+            text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
+        )
+
+        last_response: Optional[AzureTextModerationGuardrailResponse] = None
+
+        for chunk in chunks:
             request_body = AzureTextModerationGuardrailRequestBody(
-                text=text,
+                text=chunk,
                 **self.optional_params_request_body,
             )
             verbose_proxy_logger.debug(
@@ -140,49 +147,25 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 },
                 json=cast(dict, request_body),
             )
-        else:
-            # Text exceeds limit, split into chunks at word boundaries
-            text_chunks = self._split_text_by_words(text, MAX_TEXT_LENGTH)
-            
-            # Process each chunk and check for violations
-            for chunk in text_chunks:
-                request_body = AzureTextModerationGuardrailRequestBody(
-                    text=chunk,
-                    **self.optional_params_request_body,
-                )
-                verbose_proxy_logger.debug(
-                    "Azure Text Moderation guard request (chunk): %s", request_body
-                )
-                response = await self.async_handler.post(
-                    url=f"{self.api_base}/contentsafety/text:analyze?api-version={self.api_version}",
-                    headers={
-                        "Ocp-Apim-Subscription-Key": self.api_key,
-                        "Content-Type": "application/json",
-                    },
-                    json=cast(dict, request_body),
-                )
-                
-                chunk_response = AzureTextModerationGuardrailResponse(**response.json())
-                
-                # If any chunk violates thresholds, raise exception immediately
-                try:
-                    self.check_severity_threshold(response=chunk_response)
-                except HTTPException:
-                    verbose_proxy_logger.warning(
-                        "Azure Text Moderation: Violation detected in chunk of length %d", len(chunk)
-                    )
-                    raise
-            
-            # If no violations were detected in any chunk, return the last chunk response
             verbose_proxy_logger.debug(
-                "Azure Text Moderation: No violations detected in %d chunks", len(text_chunks)
+                "Azure Text Moderation guard response: %s", response.json()
             )
-            return chunk_response  # type: ignore
 
-        verbose_proxy_logger.debug(
-            "Azure Text Moderation guard response: %s", response.json()
-        )
-        return AzureTextModerationGuardrailResponse(**response.json())  # type: ignore
+            last_response = AzureTextModerationGuardrailResponse(**response.json())
+
+            # If any chunk violates thresholds, raise immediately
+            try:
+                self.check_severity_threshold(response=last_response)
+            except HTTPException:
+                verbose_proxy_logger.warning(
+                    "Azure Text Moderation: Violation detected in chunk of length %d",
+                    len(chunk),
+                )
+                raise
+
+        # All chunks safe – return the last response
+        assert last_response is not None  # chunks is always non-empty
+        return last_response
 
     def check_severity_threshold(
         self, response: "AzureTextModerationGuardrailResponse"
@@ -244,49 +227,6 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                         },
                     )
         return True
-
-    def _split_text_by_words(self, text: str, max_length: int) -> List[str]:
-        """
-        Split text into chunks at word boundaries without breaking words.
-        
-        Args:
-            text: The text to split
-            max_length: Maximum length of each chunk
-            
-        Returns:
-            List of text chunks, each not exceeding max_length
-        """
-        if len(text) <= max_length:
-            return [text]
-        
-        chunks = []
-        current_chunk = ""
-        words = text.split()
-        
-        for word in words:
-            # Check if adding this word would exceed the limit
-            test_chunk = current_chunk + (" " if current_chunk else "") + word
-            
-            if len(test_chunk) <= max_length:
-                current_chunk = test_chunk
-            else:
-                # Save current chunk if it's not empty
-                if current_chunk:
-                    chunks.append(current_chunk)
-                    current_chunk = word
-                else:
-                    # Single word is longer than max_length, split it
-                    # This is rare but should be handled
-                    while len(word) > max_length:
-                        chunks.append(word[:max_length])
-                        word = word[max_length:]
-                    current_chunk = word
-        
-        # Add the last chunk
-        if current_chunk:
-            chunks.append(current_chunk)
-        
-        return chunks
 
     @log_guardrail_information
     async def async_pre_call_hook(

@@ -182,7 +182,7 @@ async def test_azure_prompt_shield_attack_detected_in_chunk():
         assert "Violated Azure Prompt Shield guardrail policy" in str(exc_info.value.detail)
 
 
-def test_split_prompt_by_words():
+def test_split_text_by_words():
     """Test the word-based text splitting functionality."""
     guardrail = AzureContentSafetyPromptShieldGuardrail(
         guardrail_name="test",
@@ -192,13 +192,13 @@ def test_split_prompt_by_words():
     
     # Test short text (no splitting needed)
     short_text = "Hello world"
-    chunks = guardrail._split_prompt_by_words(short_text, 100)
+    chunks = guardrail.split_text_by_words(short_text, 100)
     assert len(chunks) == 1
     assert chunks[0] == short_text
     
     # Test text that needs splitting
     text = "word1 word2 word3 word4 word5"
-    chunks = guardrail._split_prompt_by_words(text, 20)
+    chunks = guardrail.split_text_by_words(text, 20)
     assert len(chunks) > 1
     # Verify no word is broken
     for chunk in chunks:
@@ -208,19 +208,19 @@ def test_split_prompt_by_words():
     
     # Test with very long single word (edge case)
     long_word = "supercalifragilisticexpialidocious" * 10
-    chunks = guardrail._split_prompt_by_words(long_word, 50)
+    chunks = guardrail.split_text_by_words(long_word, 50)
     assert len(chunks) > 1
     # Each chunk should be exactly 50 chars except possibly the last
     for i, chunk in enumerate(chunks[:-1]):
         assert len(chunk) == 50
     
     # Test empty string
-    chunks = guardrail._split_prompt_by_words("", 100)
+    chunks = guardrail.split_text_by_words("", 100)
     assert chunks == [""]
     
     # Test with punctuation and special characters
     text_with_punctuation = "Hello, world! How are you? I'm fine."
-    chunks = guardrail._split_prompt_by_words(text_with_punctuation, 30)
+    chunks = guardrail.split_text_by_words(text_with_punctuation, 30)
     # Verify chunks don't break words with punctuation attached
     for chunk in chunks:
         # Check that no punctuation is separated from its word
@@ -237,7 +237,7 @@ def test_split_prompt_preserves_content():
     )
     
     original_text = "The quick brown fox jumps over the lazy dog. " * 100
-    chunks = guardrail._split_prompt_by_words(original_text, 1000)
+    chunks = guardrail.split_text_by_words(original_text, 1000)
     
     # Recombine with spaces
     recombined = " ".join(chunks)
