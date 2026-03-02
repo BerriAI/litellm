@@ -507,6 +507,45 @@ class TestTeamModelAliasConsistency:
             "old-public": "internal-1"
         }
 
+    @pytest.mark.asyncio
+    async def test_update_existing_team_model_assignment_preserves_all_model_access(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_state = {
+            "model_id": 1,
+            "models": [],  # empty => all-model access
+            "aliases": json.dumps({"old-public": "internal-1"}),
+        }
+        prisma_client = MagicMock()
+        prisma_client.db = MockTransactionalDB(state=db_state)
+
+        db_model = Deployment(
+            model_name="internal-1",
+            litellm_params=LiteLLM_Params(model="gpt-4o"),
+            model_info=ModelInfo(team_id="team-1", team_public_model_name="old-public"),
+        )
+        patch_data = updateDeployment(model_name="new-public")
+
+        await _update_existing_team_model_assignment(
+            team_id="team-1",
+            public_model_name="new-public",
+            db_model=db_model,
+            patch_data=patch_data,
+            user_api_key_dict=UserAPIKeyAuth(user_id="test_user"),
+            prisma_client=prisma_client,
+        )
+
+        # Keep unrestricted team access unchanged.
+        assert prisma_client.db.state["models"] == []
+        # Alias should still track the renamed public model.
+        assert json.loads(prisma_client.db.state["aliases"]) == {
+            "new-public": "internal-1"
+        }
+        assert patch_data.model_name is None
+
 
 class TestDeleteTeamModelAlias:
     @pytest.mark.asyncio

@@ -591,16 +591,22 @@ async def _update_existing_team_model_assignment(
                 )
 
             existing_models = list(team_row.models or [])
-            updated_models = existing_models
-            if old_public_name:
-                updated_models = [model for model in updated_models if model != old_public_name]
-            if public_model_name not in updated_models:
-                updated_models.append(public_model_name)
-            if updated_models != existing_models:
-                await tx.litellm_teamtable.update(
-                    where={"team_id": team_id},
-                    data={"models": updated_models},
-                )
+            # Empty team.models means unrestricted access. Do not convert this to
+            # a single-model allowlist on rename.
+            team_has_all_model_access = len(existing_models) == 0
+            if not team_has_all_model_access:
+                updated_models = existing_models
+                if old_public_name:
+                    updated_models = [
+                        model for model in updated_models if model != old_public_name
+                    ]
+                if public_model_name not in updated_models:
+                    updated_models.append(public_model_name)
+                if updated_models != existing_models:
+                    await tx.litellm_teamtable.update(
+                        where={"team_id": team_id},
+                        data={"models": updated_models},
+                    )
 
             existing_aliases: Dict[str, str] = {}
             if team_row.model_id is not None:
