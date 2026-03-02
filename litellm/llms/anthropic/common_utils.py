@@ -55,6 +55,21 @@ def optionally_handle_anthropic_oauth(
     return headers, api_key
 
 
+def _apply_anthropic_auth(headers: dict, api_key: Optional[str]) -> None:
+    """Apply Anthropic authentication headers, supporting both API key and OAuth token."""
+    if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
+        headers["Authorization"] = f"Bearer {api_key}"
+        existing = headers.get("anthropic-beta", "")
+        if ANTHROPIC_OAUTH_BETA_HEADER not in existing:
+            headers["anthropic-beta"] = (
+                f"{existing},{ANTHROPIC_OAUTH_BETA_HEADER}"
+                if existing
+                else ANTHROPIC_OAUTH_BETA_HEADER
+            )
+    else:
+        headers["x-api-key"] = api_key
+
+
 class AnthropicError(BaseLLMException):
     def __init__(
         self,
@@ -518,9 +533,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             raise ValueError(
                 "ANTHROPIC_API_BASE or ANTHROPIC_API_KEY is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
             )
+        _model_headers: Dict[str, str] = {"anthropic-version": "2023-06-01"}
+        _apply_anthropic_auth(_model_headers, api_key)
         response = litellm.module_level_client.get(
             url=f"{api_base}/v1/models",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            headers=_model_headers,
         )
 
         try:

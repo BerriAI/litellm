@@ -94,11 +94,13 @@ class AnthropicFilesHandler:
         results_url = f"{api_base.rstrip('/')}/v1/messages/batches/{batch_id}/results"
 
         # Prepare headers
+        from litellm.llms.anthropic.common_utils import _apply_anthropic_auth
+
         headers = {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
-            "x-api-key": api_key,
         }
+        _apply_anthropic_auth(headers, api_key)
 
         # Make the request to Anthropic
         async_client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)

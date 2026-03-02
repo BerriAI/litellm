@@ -120,7 +120,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             api_key = os.getenv("ANTHROPIC_API_KEY")
 
         if "x-api-key" not in headers and "authorization" not in headers and api_key:
-            headers["x-api-key"] = api_key
+            from litellm.llms.anthropic.common_utils import _apply_anthropic_auth
+
+            _apply_anthropic_auth(headers, api_key)
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:

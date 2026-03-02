@@ -63,12 +63,15 @@ class AnthropicCountTokensConfig:
         Returns:
             Dictionary of required headers
         """
-        return {
+        from litellm.llms.anthropic.common_utils import _apply_anthropic_auth
+
+        _headers = {
             "Content-Type": "application/json",
-            "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
             "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
         }
+        _apply_anthropic_auth(_headers, api_key)
+        return _headers
 
     def validate_request(
         self, model: str, messages: List[Dict[str, Any]]

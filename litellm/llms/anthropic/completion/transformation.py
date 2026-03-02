@@ -95,12 +95,14 @@ class AnthropicTextConfig(BaseConfig):
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
+        from litellm.llms.anthropic.common_utils import _apply_anthropic_auth
+
         _headers = {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
-            "x-api-key": api_key,
         }
+        _apply_anthropic_auth(_headers, api_key)
         headers.update(_headers)
         return headers
 

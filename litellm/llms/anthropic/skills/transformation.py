@@ -45,7 +45,9 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             raise ValueError("ANTHROPIC_API_KEY is required for Skills API")
 
         # Add required headers
-        headers["x-api-key"] = api_key
+        from litellm.llms.anthropic.common_utils import _apply_anthropic_auth
+
+        _apply_anthropic_auth(headers, api_key)
         headers["anthropic-version"] = "2023-06-01"
         
         # Add beta header for skills API
