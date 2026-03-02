@@ -6984,6 +6984,7 @@ async def moderations(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -7541,6 +7542,7 @@ async def get_assistants(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -7640,6 +7642,7 @@ async def create_assistant(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -7737,6 +7740,7 @@ async def delete_assistant(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -7834,6 +7838,7 @@ async def create_threads(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -7929,6 +7934,7 @@ async def get_thread(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -8028,6 +8034,7 @@ async def add_messages(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -8123,6 +8130,7 @@ async def get_messages(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -8233,6 +8241,7 @@ async def run_thread(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
