@@ -71,7 +71,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr, field_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr, field_serializer, field_validator
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -1259,6 +1259,36 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         if isinstance(value, dict):
             return ResponseAPIUsage(**value)
         return value
+
+    @field_serializer("output", mode="wrap")
+    @classmethod
+    def _serialize_output_filter_reasoning_nulls(cls, value, handler, _info):
+        """
+        Filter null status/content/encrypted_content from reasoning output items.
+
+        Mirrors the request-side filtering in
+        OpenAIResponsesAPIConfig._handle_reasoning_item() which filters these
+        same fields before sending requests to providers.
+
+        Without this, reasoning items include null fields that cause SDK errors
+        (e.g., the OpenAI C# SDK crashes on status=null).
+
+        Issue: https://github.com/BerriAI/litellm/issues/16824
+        """
+        serialized = handler(value)
+        if not isinstance(serialized, list):
+            return serialized
+        return [
+            {
+                k: v
+                for k, v in item.items()
+                if v is not None
+                or k not in ("status", "content", "encrypted_content")
+            }
+            if isinstance(item, dict) and item.get("type") == "reasoning"
+            else item
+            for item in serialized
+        ]
 
     @property
     def output_text(self) -> str:

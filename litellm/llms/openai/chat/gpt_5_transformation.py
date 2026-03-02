@@ -40,11 +40,16 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         
         gpt-5.1/5.2 support temperature when reasoning_effort="none",
         unlike base gpt-5 which only supports temperature=1. Excludes
-        pro variants which keep stricter knobs.
+        pro variants which keep stricter knobs and gpt-5.2-chat variants
+        which only support temperature=1.
         """
         model_name = model.split("/")[-1]
         is_gpt_5_1 = model_name.startswith("gpt-5.1")
-        is_gpt_5_2 = model_name.startswith("gpt-5.2") and "pro" not in model_name
+        is_gpt_5_2 = (
+            model_name.startswith("gpt-5.2")
+            and "pro" not in model_name
+            and not model_name.startswith("gpt-5.2-chat")
+        )
         return is_gpt_5_1 or is_gpt_5_2
 
     @classmethod
