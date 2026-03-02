@@ -634,6 +634,13 @@ async def get_skill_content_endpoint(
             user_api_base=user_api_base,
             version=version,
         )
+        # Binary content: return raw bytes with proper media type
+        if isinstance(result, dict) and "content_type" in result and "json" not in result.get("content_type", ""):
+            import base64
+            return Response(
+                content=base64.b64decode(result["content"]),
+                media_type=result["content_type"],
+            )
         return result
     except Exception as e:
         raise await processor._handle_llm_api_exception(
@@ -1042,6 +1049,13 @@ async def get_skill_version_content_endpoint(
             user_api_base=user_api_base,
             version=version,
         )
+        # Binary content: return raw bytes with proper media type
+        if isinstance(result, dict) and "content_type" in result and "json" not in result.get("content_type", ""):
+            import base64
+            return Response(
+                content=base64.b64decode(result["content"]),
+                media_type=result["content_type"],
+            )
         return result
     except Exception as e:
         raise await processor._handle_llm_api_exception(
