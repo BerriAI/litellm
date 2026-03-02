@@ -1,4 +1,10 @@
-from typing import TYPE_CHECKING, Any, Literal, Optional
+import hashlib
+import json
+import os
+import threading
+import time
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
 
 from fastapi import HTTPException, status
 
@@ -10,6 +16,98 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+
+_USER_CONFIG_ROUTER_CACHE_MAX_SIZE = max(
+    1, int(os.getenv("LITELLM_USER_CONFIG_ROUTER_CACHE_MAX_SIZE", "64"))
+)
+_USER_CONFIG_ROUTER_CACHE_TTL_SECONDS = max(
+    1, int(os.getenv("LITELLM_USER_CONFIG_ROUTER_CACHE_TTL_SECONDS", "300"))
+)
+_USER_CONFIG_ROUTER_CACHE: "OrderedDict[str, Tuple[LitellmRouter, float]]" = (
+    OrderedDict()
+)
+_USER_CONFIG_ROUTER_CACHE_LOCK = threading.Lock()
+
+
+def _discard_router_safely(router: LitellmRouter) -> None:
+    try:
+        router.discard()
+    except Exception:
+        pass
+
+
+def _get_user_config_router_cache_key(filtered_config: dict) -> str:
+    serialized = json.dumps(
+        filtered_config,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _prune_expired_user_config_routers(now: float) -> None:
+    expired_keys = [
+        key
+        for key, (_, expires_at) in _USER_CONFIG_ROUTER_CACHE.items()
+        if expires_at <= now
+    ]
+    for key in expired_keys:
+        router, _ = _USER_CONFIG_ROUTER_CACHE.pop(key)
+        _discard_router_safely(router)
+
+
+def _clear_user_config_router_cache() -> None:
+    with _USER_CONFIG_ROUTER_CACHE_LOCK:
+        while _USER_CONFIG_ROUTER_CACHE:
+            _, (router, _) = _USER_CONFIG_ROUTER_CACHE.popitem(last=False)
+            _discard_router_safely(router)
+
+
+def _get_or_create_user_config_router(filtered_config: dict) -> LitellmRouter:
+    cache_key = _get_user_config_router_cache_key(filtered_config)
+    now = time.monotonic()
+    with _USER_CONFIG_ROUTER_CACHE_LOCK:
+        _prune_expired_user_config_routers(now)
+        cached_entry = _USER_CONFIG_ROUTER_CACHE.get(cache_key)
+        if cached_entry is not None:
+            router, expires_at = cached_entry
+            if expires_at > now:
+                _USER_CONFIG_ROUTER_CACHE[cache_key] = (
+                    router,
+                    now + _USER_CONFIG_ROUTER_CACHE_TTL_SECONDS,
+                )
+                _USER_CONFIG_ROUTER_CACHE.move_to_end(cache_key)
+                return router
+            _USER_CONFIG_ROUTER_CACHE.pop(cache_key, None)
+            _discard_router_safely(router)
+
+    new_router = litellm.Router(**filtered_config)
+    now = time.monotonic()
+    with _USER_CONFIG_ROUTER_CACHE_LOCK:
+        _prune_expired_user_config_routers(now)
+        cached_entry = _USER_CONFIG_ROUTER_CACHE.get(cache_key)
+        if cached_entry is not None and cached_entry[1] > now:
+            _USER_CONFIG_ROUTER_CACHE[cache_key] = (
+                cached_entry[0],
+                now + _USER_CONFIG_ROUTER_CACHE_TTL_SECONDS,
+            )
+            _USER_CONFIG_ROUTER_CACHE.move_to_end(cache_key)
+            _discard_router_safely(new_router)
+            return cached_entry[0]
+
+        _USER_CONFIG_ROUTER_CACHE[cache_key] = (
+            new_router,
+            now + _USER_CONFIG_ROUTER_CACHE_TTL_SECONDS,
+        )
+        _USER_CONFIG_ROUTER_CACHE.move_to_end(cache_key)
+
+        while len(_USER_CONFIG_ROUTER_CACHE) > _USER_CONFIG_ROUTER_CACHE_MAX_SIZE:
+            _, (evicted_router, _) = _USER_CONFIG_ROUTER_CACHE.popitem(last=False)
+            _discard_router_safely(evicted_router)
+
+        return new_router
 
 
 async def _route_user_config_request(data: dict, route_type: str):
@@ -27,27 +125,25 @@ async def _route_user_config_request(data: dict, route_type: str):
     valid_args = litellm.Router.get_valid_args()
     filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
 
-    user_router = litellm.Router(**filtered_config)
-    try:
-        # Handle batch completions with comma-separated models for user-provided routers
-        if (
-            route_type == "acompletion"
-            and data.get("model", "") is not None
-            and "," in data.get("model", "")
-        ):
-            if data.get("fastest_response", False):
-                return await user_router.abatch_completion_fastest_response(
-                    **_kwargs_for_llm(data)
-                )
+    user_router = _get_or_create_user_config_router(filtered_config)
 
-            models = [m.strip() for m in str(data.get("model", "")).split(",")]
-            kwargs = _kwargs_for_llm(data)
-            kwargs.pop("model", None)
-            return await user_router.abatch_completion(models=models, **kwargs)
+    # Handle batch completions with comma-separated models for user-provided routers
+    if (
+        route_type == "acompletion"
+        and data.get("model", "") is not None
+        and "," in data.get("model", "")
+    ):
+        if data.get("fastest_response", False):
+            return await user_router.abatch_completion_fastest_response(
+                **_kwargs_for_llm(data)
+            )
 
-        return await getattr(user_router, f"{route_type}")(**_kwargs_for_llm(data))
-    finally:
-        user_router.discard()
+        models = [m.strip() for m in str(data.get("model", "")).split(",")]
+        kwargs = _kwargs_for_llm(data)
+        kwargs.pop("model", None)
+        return await user_router.abatch_completion(models=models, **kwargs)
+
+    return await getattr(user_router, f"{route_type}")(**_kwargs_for_llm(data))
 
 
 def _is_a2a_agent_model(model_name: Any) -> bool:
