@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.utils import CallTypesLiteral
 
 from .base import AzureGuardrailBase
 
@@ -88,9 +89,58 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             AzurePromptShieldGuardrailResponse,
         )
 
-        request_body = AzurePromptShieldGuardrailRequestBody(
-            documents=[], userPrompt=user_prompt
-        )
+        # Azure Prompt Shield has a 10000 character limit
+        # Split the prompt into chunks if it exceeds this limit
+        MAX_PROMPT_LENGTH = 10000
+        
+        if len(user_prompt) <= MAX_PROMPT_LENGTH:
+            # Prompt is within limits, send as-is
+            request_body = AzurePromptShieldGuardrailRequestBody(
+                documents=[], userPrompt=user_prompt
+            )
+        else:
+            # Prompt exceeds limit, split into chunks at word boundaries
+            prompt_chunks = self._split_prompt_by_words(user_prompt, MAX_PROMPT_LENGTH)
+            
+            # Process each chunk and check for attacks
+            for chunk in prompt_chunks:
+                request_body = AzurePromptShieldGuardrailRequestBody(
+                    documents=[], userPrompt=chunk
+                )
+                verbose_proxy_logger.debug(
+                    "Azure Prompt Shield guard request (chunk): %s", request_body
+                )
+                response = await self.async_handler.post(
+                    url=f"{self.api_base}/contentsafety/text:shieldPrompt?api-version={self.api_version}",
+                    headers={
+                        "Ocp-Apim-Subscription-Key": self.api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=cast(dict, request_body),
+                )
+                
+                chunk_response = AzurePromptShieldGuardrailResponse(**response.json())
+                
+                # If any chunk has an attack detected, return that response immediately
+                if chunk_response["userPromptAnalysis"].get("attackDetected"):
+                    verbose_proxy_logger.warning(
+                        "Azure Prompt Shield: Attack detected in chunk of length %d", len(chunk)
+                    )
+                    return chunk_response
+            
+            # If no attacks were detected in any chunk, return a safe response
+            # Create a safe response for the entire prompt
+            from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
+                AzurePromptShieldGuardrailResponse,
+            )
+            verbose_proxy_logger.debug(
+                "Azure Prompt Shield: No attacks detected in %d chunks", len(prompt_chunks)
+            )
+            return AzurePromptShieldGuardrailResponse(
+                userPromptAnalysis={"attackDetected": False},
+                documentsAnalysis=[]
+            )
+
         verbose_proxy_logger.debug(
             "Azure Prompt Shield guard request: %s", request_body
         )
@@ -108,23 +158,56 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         )
         return AzurePromptShieldGuardrailResponse(**response.json())  # type: ignore
 
+    def _split_prompt_by_words(self, text: str, max_length: int) -> List[str]:
+        """
+        Split text into chunks at word boundaries without breaking words.
+        
+        Args:
+            text: The text to split
+            max_length: Maximum length of each chunk
+            
+        Returns:
+            List of text chunks, each not exceeding max_length
+        """
+        if len(text) <= max_length:
+            return [text]
+        
+        chunks = []
+        current_chunk = ""
+        words = text.split()
+        
+        for word in words:
+            # Check if adding this word would exceed the limit
+            test_chunk = current_chunk + (" " if current_chunk else "") + word
+            
+            if len(test_chunk) <= max_length:
+                current_chunk = test_chunk
+            else:
+                # Save current chunk if it's not empty
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = word
+                else:
+                    # Single word is longer than max_length, split it
+                    # This is rare but should be handled
+                    while len(word) > max_length:
+                        chunks.append(word[:max_length])
+                        word = word[max_length:]
+                    current_chunk = word
+        
+        # Add the last chunk
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        return chunks
+
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: Any,
         data: Dict[str, Any],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Dict[str, Any]]:
         """
         Pre-call hook to scan user prompts before sending to LLM.

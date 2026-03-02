@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import CallTypesLiteral
 
 from .base import AzureGuardrailBase
 
@@ -111,29 +112,72 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         self, text: str
     ) -> "AzureTextModerationGuardrailResponse":
         """
-        Make a request to the Azure Prompt Shield API.
+        Make a request to the Azure Text Moderation API.
         """
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
             AzureTextModerationGuardrailRequestBody,
             AzureTextModerationGuardrailResponse,
         )
 
-        request_body = AzureTextModerationGuardrailRequestBody(
-            text=text,
-            **self.optional_params_request_body,
-        )
-        verbose_proxy_logger.debug(
-            "Azure Text Moderation guard request: %s", request_body
-        )
-
-        response = await self.async_handler.post(
-            url=f"{self.api_base}/contentsafety/text:analyze?api-version={self.api_version}",
-            headers={
-                "Ocp-Apim-Subscription-Key": self.api_key,
-                "Content-Type": "application/json",
-            },
-            json=cast(dict, request_body),
-        )
+        # Azure Text Moderation has a 10000 character limit
+        # Split the text into chunks if it exceeds this limit
+        MAX_TEXT_LENGTH = 10000
+        
+        if len(text) <= MAX_TEXT_LENGTH:
+            # Text is within limits, send as-is
+            request_body = AzureTextModerationGuardrailRequestBody(
+                text=text,
+                **self.optional_params_request_body,
+            )
+            verbose_proxy_logger.debug(
+                "Azure Text Moderation guard request: %s", request_body
+            )
+            response = await self.async_handler.post(
+                url=f"{self.api_base}/contentsafety/text:analyze?api-version={self.api_version}",
+                headers={
+                    "Ocp-Apim-Subscription-Key": self.api_key,
+                    "Content-Type": "application/json",
+                },
+                json=cast(dict, request_body),
+            )
+        else:
+            # Text exceeds limit, split into chunks at word boundaries
+            text_chunks = self._split_text_by_words(text, MAX_TEXT_LENGTH)
+            
+            # Process each chunk and check for violations
+            for chunk in text_chunks:
+                request_body = AzureTextModerationGuardrailRequestBody(
+                    text=chunk,
+                    **self.optional_params_request_body,
+                )
+                verbose_proxy_logger.debug(
+                    "Azure Text Moderation guard request (chunk): %s", request_body
+                )
+                response = await self.async_handler.post(
+                    url=f"{self.api_base}/contentsafety/text:analyze?api-version={self.api_version}",
+                    headers={
+                        "Ocp-Apim-Subscription-Key": self.api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=cast(dict, request_body),
+                )
+                
+                chunk_response = AzureTextModerationGuardrailResponse(**response.json())
+                
+                # If any chunk violates thresholds, raise exception immediately
+                try:
+                    self.check_severity_threshold(response=chunk_response)
+                except HTTPException:
+                    verbose_proxy_logger.warning(
+                        "Azure Text Moderation: Violation detected in chunk of length %d", len(chunk)
+                    )
+                    raise
+            
+            # If no violations were detected in any chunk, return the last chunk response
+            verbose_proxy_logger.debug(
+                "Azure Text Moderation: No violations detected in %d chunks", len(text_chunks)
+            )
+            return chunk_response  # type: ignore
 
         verbose_proxy_logger.debug(
             "Azure Text Moderation guard response: %s", response.json()
@@ -201,23 +245,56 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                     )
         return True
 
+    def _split_text_by_words(self, text: str, max_length: int) -> List[str]:
+        """
+        Split text into chunks at word boundaries without breaking words.
+        
+        Args:
+            text: The text to split
+            max_length: Maximum length of each chunk
+            
+        Returns:
+            List of text chunks, each not exceeding max_length
+        """
+        if len(text) <= max_length:
+            return [text]
+        
+        chunks = []
+        current_chunk = ""
+        words = text.split()
+        
+        for word in words:
+            # Check if adding this word would exceed the limit
+            test_chunk = current_chunk + (" " if current_chunk else "") + word
+            
+            if len(test_chunk) <= max_length:
+                current_chunk = test_chunk
+            else:
+                # Save current chunk if it's not empty
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = word
+                else:
+                    # Single word is longer than max_length, split it
+                    # This is rare but should be handled
+                    while len(word) > max_length:
+                        chunks.append(word[:max_length])
+                        word = word[max_length:]
+                    current_chunk = word
+        
+        # Add the last chunk
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        return chunks
+
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: Any,
         data: Dict[str, Any],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Dict[str, Any]]:
         """
         Pre-call hook to scan user prompts before sending to LLM.
