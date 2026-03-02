@@ -1674,7 +1674,6 @@ def test_max_effort_rejected_for_opus_45():
     with pytest.raises(
         ValueError, match="effort='max' is not supported for model"
     ):
-    ):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
