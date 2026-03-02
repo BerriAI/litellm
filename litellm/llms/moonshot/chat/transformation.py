@@ -4,7 +4,7 @@ Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/compl
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
-import litellm
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
@@ -91,10 +91,14 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             return
 
         for i, message in enumerate(messages):
+            reasoning_content = message.get("reasoning_content")
             if (
                 message.get("role") == "assistant"
                 and message.get("tool_calls")
-                and message.get("reasoning_content") is None
+                and (
+                    reasoning_content is None
+                    or (isinstance(reasoning_content, str) and not reasoning_content.strip())
+                )
             ):
                 raise litellm.BadRequestError(
                     message=(
