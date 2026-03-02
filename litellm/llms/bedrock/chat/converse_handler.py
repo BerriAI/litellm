@@ -18,6 +18,7 @@ from litellm.anthropic_beta_headers_manager import (
         )
 from ..base_aws_llm import BaseAWSLLM, Credentials
 from ..common_utils import BedrockError
+from ..constants import DEFAULT_STREAM_CHUNK_SIZE
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
@@ -31,7 +32,7 @@ def make_sync_call(
     logging_obj: LiteLLMLoggingObject,
     json_mode: Optional[bool] = False,
     fake_stream: bool = False,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE,
 ):
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
@@ -105,7 +106,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         fake_stream: bool = False,
         json_mode: Optional[bool] = False,
         api_key: Optional[str] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE,
     ) -> CustomStreamWrapper:
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
@@ -265,7 +266,7 @@ class BedrockConverseLLM(BaseAWSLLM):
     ):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
+        stream_chunk_size = optional_params.pop("stream_chunk_size", DEFAULT_STREAM_CHUNK_SIZE)
         unencoded_model_id = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
         json_mode = optional_params.get("json_mode", False)
