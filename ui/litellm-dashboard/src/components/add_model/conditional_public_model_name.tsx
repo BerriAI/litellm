@@ -44,7 +44,7 @@ const ConditionalPublicModelName: React.FC = () => {
         !selectedModels.every((model) =>
           currentMappings.some((mapping: { public_name: string; litellm_model: string }) => {
             if (model === "custom") {
-              return mapping.litellm_model === "custom" || mapping.litellm_model === customModelName;
+              return mapping.litellm_model === "custom" || mapping.litellm_model === prefixWithProvider(selectedProvider, customModelName);
             }
             return mapping.litellm_model === prefixWithProvider(selectedProvider, model);
           }),
