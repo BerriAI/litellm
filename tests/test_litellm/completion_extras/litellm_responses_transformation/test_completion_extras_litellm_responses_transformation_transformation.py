@@ -1471,4 +1471,4 @@ def test_multi_tool_call_stream_no_premature_finish():
                 f"— only response.completed should terminate the stream"
             )
 
-    print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
+    print("✓ Multi-tool-call stream completes without premature finish_reason termination")
