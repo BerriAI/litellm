@@ -1274,6 +1274,7 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     assert hidden_usage.completion_tokens == 135, (
         f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
     )
+
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_aclose():
     """Test that aclose() delegates to the underlying completion_stream's aclose()"""
