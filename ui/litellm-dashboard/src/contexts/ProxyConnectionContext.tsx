@@ -160,7 +160,8 @@ export const ProxyConnectionProvider: React.FC<ProxyConnectionProviderProps> = (
       const defaultConn = connections.find((c) => c.isDefault);
       if (defaultConn) {
         saveActiveId(defaultConn.id);
-        setProxyBaseUrl(defaultConn.url);
+        // Clear the override so getProxyBaseUrl() falls back to window.location.origin
+        setProxyBaseUrl(null);
         window.location.reload();
       }
     }
