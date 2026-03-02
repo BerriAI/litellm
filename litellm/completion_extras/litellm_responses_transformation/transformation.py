@@ -464,14 +464,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         tool_call_index = 0
 
         for item in output_items:
-            if isinstance(item, ResponseReasoningItem):
-                item_text = "".join(
+                reasoning_content = (reasoning_content or "") + "".join(
                     getattr(s, "text", "") for s in item.summary
                 )
                 if reasoning_content is None:
                     reasoning_content = item_text
-                else:
-                    reasoning_content += item_text
+                    "thinking": reasoning_content or "",
 
                 # Capture encrypted_content for thinking_blocks passthrough
                 encrypted = getattr(item, "encrypted_content", None)
