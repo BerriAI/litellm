@@ -1171,16 +1171,18 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     ]
                 )
             elif output_item.get("type") == "reasoning":
-                # Capture encrypted_content for thinking_blocks passthrough in streaming
+                # Capture reasoning summary text for streaming deltas.
+                summary_texts = output_item.get("summary", [])
+                thinking_text = ""
+                if isinstance(summary_texts, list):
+                    thinking_text = "".join(
+                        s.get("text", "") if isinstance(s, dict) else getattr(s, "text", "")
+                        for s in summary_texts
+                    )
+
+                # Capture encrypted_content for thinking_blocks passthrough in streaming.
                 encrypted = output_item.get("encrypted_content")
                 if encrypted:
-                    summary_texts = output_item.get("summary", [])
-                    thinking_text = ""
-                    if isinstance(summary_texts, list):
-                        thinking_text = "".join(
-                            s.get("text", "") if isinstance(s, dict) else getattr(s, "text", "")
-                            for s in summary_texts
-                        )
                     block = {
                         "type": "thinking",
                         "thinking": thinking_text,
@@ -1194,6 +1196,16 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                             StreamingChoices(
                                 index=0,
                                 delta=Delta(thinking_blocks=[block]),
+                                finish_reason=None,
+                            )
+                        ]
+                    )
+                if thinking_text:
+                    return ModelResponseStream(
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(reasoning_content=thinking_text),
                                 finish_reason=None,
                             )
                         ]
