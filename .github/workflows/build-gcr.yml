@@ -3,8 +3,8 @@ name: Build and Push to GCR
 on:
   push:
     branches:
-      - release/prod
-      - release/sandbox
+      - main
+      - hotfix/**
       - sync/v*
   workflow_dispatch:  # allows manual trigger for testing
 
@@ -14,7 +14,16 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    name: "Build & Push to GCR"
+    name: "Build & Push to GCR (${{ matrix.environment }})"
+    strategy:
+      matrix:
+        include:
+          - environment: prod
+            project: xyne-prod
+            secret_key: SERVICE_ACCOUNT_KEY
+          - environment: sandbox
+            project: xyne-dev-461113
+            secret_key: SERVICE_ACCOUNT_KEY_SANDBOX
 
     steps:
       - name: Checkout
@@ -24,33 +33,17 @@ jobs:
         id: commit
         run: echo "sha=$(git rev-parse --short=6 HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Select environment
-        id: envselect
-        run: |
-          if [[ "${{ github.ref_name }}" == "release/prod" ]]; then
-            echo "project=xyne-prod" >> $GITHUB_OUTPUT
-          else
-            echo "project=xyne-dev-461113" >> $GITHUB_OUTPUT
-          fi
-
       - name: Set image tag
         id: image
         run: |
-          IMAGE_TAG="gcr.io/${{ steps.envselect.outputs.project }}/${{ env.IMAGE_NAME }}:${{ steps.commit.outputs.sha }}-juspay-build-v${{ github.run_number }}"
+          IMAGE_TAG="gcr.io/${{ matrix.project }}/${{ env.IMAGE_NAME }}:${{ steps.commit.outputs.sha }}-juspay-build-v${{ github.run_number }}"
           echo "tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "Image tag: ${IMAGE_TAG}"
 
-      - name: Authenticate to Google Cloud (prod)
-        if: github.ref_name == 'release/prod'
+      - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
-
-      - name: Authenticate to Google Cloud (sandbox)
-        if: github.ref_name != 'release/prod'
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY_SANDBOX }}
+          credentials_json: ${{ secrets[matrix.secret_key] }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -74,10 +67,11 @@ jobs:
 
       - name: Build Summary
         run: |
-          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Summary (${{ matrix.environment }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ matrix.environment }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Commit SHA | \`${{ steps.commit.outputs.sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Build Number | \`${{ github.run_number }}\` |" >> $GITHUB_STEP_SUMMARY
