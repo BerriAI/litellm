@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    extra = litellm_params.get("additional_provider_specific_params") or {}
+    extra = getattr(litellm_params, "additional_provider_specific_params", None) or {}
 
     _fiddler_callback = FiddlerGuardrail(
         api_key=litellm_params.api_key,
