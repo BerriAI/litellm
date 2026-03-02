@@ -159,6 +159,23 @@ LATENCY_BUCKETS = (
     float("inf"),
 )
 
+# Batch jobs can run for minutes to hours; buckets span 1 min → 24 h.
+BATCH_DURATION_BUCKETS = (
+    60.0,
+    120.0,
+    300.0,
+    600.0,
+    900.0,
+    1800.0,
+    3600.0,
+    7200.0,
+    14400.0,
+    28800.0,
+    43200.0,
+    86400.0,
+    float("inf"),
+)
+
 
 class UserAPIKeyLabelNames(Enum):
     END_USER = "end_user"
