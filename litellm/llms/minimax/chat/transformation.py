@@ -14,14 +14,42 @@ from litellm.llms.openai.chat.gpt_transformation import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import ModelResponse
+    """Concatenate reasoning_details (list/dict/string) into a single string.
 
+    This helper is intended to be the canonical way of turning MiniMax
+    `reasoning_details` structures into a flat string. It is defensive
+    against unexpected shapes:
+    - `str` is returned as-is.
+    - `list` entries that are dicts contribute their `"text"` value (if str).
+      List entries that are plain strings are also included.
+    - A bare `dict` contributes its `"text"` value (if str).
+    - All other values are ignored, and an empty string is returned if no
+      usable text fragments are found.
+    """
+    fragments: List[str] = []
 
-class MinimaxChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
-    """Streaming handler that maps MiniMax reasoning_details to reasoning_content."""
+    # Fast path: already a string
+    if isinstance(details, str):
+        return details
 
-    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
-        for choice in choices:
-            delta = choice.get("delta", {})
+    # List of fragments: dicts with "text" and/or plain strings
+    if isinstance(details, list):
+        for item in details:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    fragments.append(text)
+            elif isinstance(item, str):
+                fragments.append(item)
+
+    # Single dict with "text"
+    elif isinstance(details, dict):
+        text = details.get("text")
+        if isinstance(text, str):
+            fragments.append(text)
+
+    # Join all collected fragments; empty list -> empty string
+    return "".join(fragments)
             if "reasoning_details" in delta:
                 text = _concat_reasoning_details(delta.pop("reasoning_details"))
                 # Only set if reasoning_content not already present
@@ -108,8 +136,8 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         """
         # MiniMax supports cache_control, so return messages and tools unchanged
         return messages, tools
-
-    def get_supported_openai_params(self, model: str) -> list:
+        json_mode: bool = False,
+    ) -> MinimaxChatCompletionStreamingHandler:
         """
         Get supported OpenAI parameters for MiniMax.
         Adds reasoning_split and thinking to the list of supported params.
