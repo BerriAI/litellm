@@ -158,6 +158,14 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
+        # Native OpenRouter models have IDs like "openrouter/free" where the
+        # "openrouter/" prefix is part of the actual model name on the API.
+        # When called from a bridge (e.g. anthropic_messages adapter),
+        # custom_llm_provider is already resolved, so return early to prevent
+        # the provider-list stripping below from removing the prefix.
+        if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
+            return model, custom_llm_provider, dynamic_api_key, api_base
+
         if api_key and api_key.startswith("os.environ/"):
             dynamic_api_key = get_secret_str(api_key)
 
@@ -503,15 +511,6 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
 
     custom_llm_provider = model.split("/", 1)[0]
     model = model.split("/", 1)[1]
-
-    # If the provider is openrouter and the remaining model name still starts
-    # with "openrouter/", that inner prefix is part of the actual model ID on
-    # the OpenRouter API (e.g. openrouter/openrouter/aurora-alpha →
-    # model="openrouter/aurora-alpha").  Return immediately so the prefix is
-    # not stripped a second time.
-    if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
-        dynamic_api_key = api_key or get_secret_str("OPENROUTER_API_KEY")
-        return model, custom_llm_provider, dynamic_api_key, api_base
 
     # Check JSON providers FIRST (before hardcoded ones)
     from litellm.llms.openai_like.dynamic_config import create_config_class

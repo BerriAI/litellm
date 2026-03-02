@@ -44,31 +44,37 @@ class TestOpenRouterNativeModelRouting:
         assert result_model == expected_model
 
     @pytest.mark.parametrize(
-        "input_model,expected_first,expected_second",
+        "input_model",
         [
-            # After the first call strips outer prefix: openrouter/openrouter/aurora-alpha
-            # → openrouter/aurora-alpha.  A second call on that result splits at the
-            # first "/" giving provider=openrouter, model=aurora-alpha — which is the
-            # correct model ID to send to the OpenRouter API.
-            ("openrouter/openrouter/aurora-alpha", "openrouter/aurora-alpha", "aurora-alpha"),
-            ("openrouter/openrouter/auto", "openrouter/auto", "auto"),
+            "openrouter/openrouter/aurora-alpha",
+            "openrouter/openrouter/auto",
+            "openrouter/openrouter/free",
+            "openrouter/openrouter/some-future-model",
         ],
     )
-    def test_no_double_strip_on_second_call(self, input_model, expected_first, expected_second):
+    def test_bridge_double_call_preserves_native_model(self, input_model):
         """Simulates two consecutive get_llm_provider calls (bridge → completion).
 
-        The first call (bridge) converts openrouter/openrouter/<model> to
-        openrouter/<model>.  The second call (completion) further strips the
-        remaining openrouter/ provider prefix and returns <model> — the bare
-        model ID that should be sent to the OpenRouter API.
+        The first call (bridge) strips the outer prefix:
+            openrouter/openrouter/<model> → openrouter/<model>
+
+        The second call (completion) receives custom_llm_provider="openrouter"
+        from the bridge, detects the native model, and preserves it:
+            openrouter/<model> → openrouter/<model>  (no further stripping)
         """
+        # First call: bridge resolves provider
         model_first, provider, _, _ = litellm.get_llm_provider(model=input_model)
         assert provider == "openrouter"
-        assert model_first == expected_first
+        expected_model = input_model.split("/", 1)[1]  # openrouter/<model>
+        assert model_first == expected_model
 
-        model_second, provider2, _, _ = litellm.get_llm_provider(model=model_first)
+        # Second call: completion receives model + custom_llm_provider from bridge
+        model_second, provider2, _, _ = litellm.get_llm_provider(
+            model=model_first,
+            custom_llm_provider="openrouter",
+        )
         assert provider2 == "openrouter"
-        assert model_second == expected_second
+        assert model_second == expected_model  # preserved, not stripped further
 
     @pytest.mark.parametrize(
         "input_model,expected_model",
