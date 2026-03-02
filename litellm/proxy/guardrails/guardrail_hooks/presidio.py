@@ -12,7 +12,6 @@ import asyncio
 import json
 import threading
 import re
-from functools import lru_cache
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import (
@@ -31,6 +30,7 @@ from typing import (
 import aiohttp
 
 import litellm  # noqa: E401
+from litellm._uuid import uuid
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -48,6 +48,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
+    Mode,
     PiiAction,
     PiiEntityType,
     PresidioPerRequestConfig,
@@ -69,37 +70,198 @@ from litellm.utils import (
 # (e.g. LLM outputs "<PERSON>...fa9den" instead of "<PERSON>...fa9d"). Tune down (e.g. 3–5)
 # if LLM rarely adds more than a few chars to reduce false matches.
 _MAX_TRAILING_CHARS_CORRUPTED_PLACEHOLDER = 15
+# Matches placeholders generated in anonymize_text as "<ENTITY_TYPE>" + str(uuid.uuid4()),
+# i.e. no underscore and a full UUID4 suffix. str(uuid.uuid4()) currently produces
+# lowercase hex only; uppercase [A-F] is accepted here for robustness if the UUID
+# generator changes or a caller normalizes case differently. Keep this in sync with
+# the placeholder generator in anonymize_text.
 _UUID_SUFFIX_PLACEHOLDER_RE = re.compile(
     r"^<[^>]+>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
 
-@lru_cache(maxsize=2048)
+def _ensure_event_hook_includes_post_call(
+    event_hook: Optional[Union[GuardrailEventHooks, List[Any], Mode, str]],
+    include_pre_call_on_none: bool = False,
+) -> Optional[Union[Mode, List[str], str]]:
+    post_call = GuardrailEventHooks.post_call.value
+
+    def _hook_value(hook: Any) -> str:
+        if isinstance(hook, GuardrailEventHooks):
+            return hook.value
+        return str(hook)
+
+    def _normalize_hook_list(hooks: List[Any]) -> List[str]:
+        normalized: List[str] = []
+        for hook in hooks:
+            hook_value = _hook_value(hook)
+            if hook_value not in normalized:
+                normalized.append(hook_value)
+        if post_call not in normalized:
+            normalized.append(post_call)
+        return normalized
+
+    if event_hook is None:
+        if include_pre_call_on_none:
+            return [GuardrailEventHooks.pre_call.value, post_call]
+        return post_call
+    if isinstance(event_hook, Mode):
+        mode_copy = event_hook.model_copy(deep=True)
+        mode_copy.tags = {
+            tag: _normalize_hook_list(values if isinstance(values, list) else [values])
+            for tag, values in mode_copy.tags.items()
+        }
+        # Preserve tag-only Mode semantics: if default is None, untagged requests do
+        # not run the guardrail. We only expand post_call for explicitly configured
+        # tag/default hooks, rather than turning an absent default into a new one.
+        if mode_copy.default is not None:
+            mode_copy.default = _normalize_hook_list(
+                mode_copy.default
+                if isinstance(mode_copy.default, list)
+                else [mode_copy.default]
+            )
+        return mode_copy
+    if isinstance(event_hook, list):
+        return _normalize_hook_list(event_hook)
+
+    hook_value = _hook_value(event_hook)
+    if hook_value == post_call:
+        return hook_value
+    return [hook_value, post_call]
+
+
 def _get_corrupted_placeholder_pattern(key: str) -> re.Pattern:
     return re.compile(
         re.escape(key)
-        + rf"[a-zA-Z]{{1,{_MAX_TRAILING_CHARS_CORRUPTED_PLACEHOLDER}}}"
-        + r"(?![a-zA-Z])"
+        + rf"[a-zA-Z0-9]{{1,{_MAX_TRAILING_CHARS_CORRUPTED_PLACEHOLDER}}}"
+        + r"(?![a-zA-Z0-9])"
     )
 
 
 def _replace_pii_tokens_in_text(text: str, pii_tokens: Dict[str, str]) -> str:
     """
     Replace PII placeholders in text with original values. Handles LLM corruption
-    of uuid-style placeholders (e.g. <PERSON>uuid becomes <PERSON>uiden) by
-    matching key + optional trailing alphabetic chars.
+    of uuid-style placeholders (e.g. <PERSON>uuid becomes <PERSON>uiden or
+    <PERSON>uuid2) by matching key + trailing alphanumeric chars.
     """
     if not pii_tokens:
         return text
+    corrupted_placeholder_patterns = {
+        key: _get_corrupted_placeholder_pattern(key)
+        for key in pii_tokens
+        if _UUID_SUFFIX_PLACEHOLDER_RE.match(key) is not None
+    }
+    consumed_tokens = set()
     # Do regex pass first for uuid-style keys so "key+trailing" is replaced in one go.
     # If we did exact replace first, we'd replace the key and leave trailing chars (e.g. "Jane Doeen").
-    for key, value in pii_tokens.items():
-        if _UUID_SUFFIX_PLACEHOLDER_RE.match(key) is not None:
-            text = _get_corrupted_placeholder_pattern(key).sub(value, text)
+    for key, pattern in corrupted_placeholder_patterns.items():
+        text, replacement_count = pattern.subn(pii_tokens[key], text)
+        if replacement_count > 0:
+            consumed_tokens.add(key)
     # Replace longer keys first so "<PERSON>uuid" is replaced before "<PERSON>"
     for key, value in sorted(pii_tokens.items(), key=lambda x: -len(x[0])):
+        if key in text:
+            consumed_tokens.add(key)
         text = text.replace(key, value)
+    # Fallback for tokens truncated by max_tokens: if the end of the text is a
+    # sufficiently long prefix of a placeholder, replace that suffix with the
+    # original value so standard and Anthropic response paths behave the same.
+    for token, original_text in pii_tokens.items():
+        if token in consumed_tokens:
+            continue
+        if token in text:
+            continue
+        min_overlap = max(1, min(20, len(token) // 2))
+        # Re-capture the latest text on each outer iteration. If a prior token
+        # replacement shortened or lengthened the response, the next token's
+        # suffix scan must use the updated string length and tail positions.
+        current_text = text
+        current_len = len(current_text)
+        scan_start = max(0, current_len - len(token))
+        for i in range(scan_start, current_len):
+            sub = current_text[i:]
+            if token.startswith(sub) and len(sub) >= min_overlap:
+                # Safe to break: at most one suffix of `current_text` can be the
+                # active truncated match for this token, and the next outer-loop
+                # iteration will re-snapshot `text` after this replacement.
+                text = current_text[:i] + original_text
+                break
     return text
+
+
+def _score_analyze_span_for_unmask_pairing(
+    span: Dict[str, Any]
+) -> Tuple[int, float, int]:
+    """Score span quality for replace-token pairing: prefer longer, then higher-score, then earlier span."""
+    start = cast(int, span["start"])
+    end = cast(int, span["end"])
+    raw_score = span.get("score")
+    score = (
+        float(raw_score)
+        if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool)
+        else -1.0
+    )
+    return (end - start, score, -start)
+
+
+def _to_int_offset(value: Any) -> Optional[int]:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _dedupe_overlapping_analyze_spans_for_unmask(
+    analyze_spans_sorted: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Collapse exact-duplicate and overlapping analyze spans for output_parse_pii mapping.
+    Overlap clusters keep the most representative span to reduce mismatched pairing
+    when analyzer returns nested/overlapping entities for the same text region.
+    """
+    if not analyze_spans_sorted:
+        return []
+
+    deduped_exact_spans: List[Dict[str, Any]] = []
+    seen_spans = set()
+    for span in analyze_spans_sorted:
+        span_key = (cast(int, span["start"]), cast(int, span["end"]))
+        if span_key in seen_spans:
+            continue
+        seen_spans.add(span_key)
+        deduped_exact_spans.append(span)
+
+    collapsed_spans: List[Dict[str, Any]] = []
+    overlap_cluster: List[Dict[str, Any]] = []
+    cluster_end = -1
+
+    for span in deduped_exact_spans:
+        span_start = cast(int, span["start"])
+        span_end = cast(int, span["end"])
+        if not overlap_cluster:
+            overlap_cluster = [span]
+            cluster_end = span_end
+            continue
+
+        # Overlap only when current start is inside the previous cluster.
+        if span_start < cluster_end:
+            overlap_cluster.append(span)
+            cluster_end = max(cluster_end, span_end)
+            continue
+
+        collapsed_spans.append(
+            max(overlap_cluster, key=_score_analyze_span_for_unmask_pairing)
+        )
+        overlap_cluster = [span]
+        cluster_end = span_end
+
+    if overlap_cluster:
+        collapsed_spans.append(
+            max(overlap_cluster, key=_score_analyze_span_for_unmask_pairing)
+        )
+
+    return collapsed_spans
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -143,15 +305,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # also run on post_call to unmask/mask the response.  Expand the event_hook
         # so should_run_guardrail returns True for both pre_call and post_call.
         if (self.output_parse_pii or self.apply_to_output) and not logging_only:
-            current_hook = self.event_hook
-            if isinstance(current_hook, str) and current_hook != "post_call":
-                self.event_hook = cast(
-                    List[GuardrailEventHooks], [current_hook, "post_call"]
-                )
-            elif isinstance(current_hook, list) and "post_call" not in current_hook:
-                self.event_hook = cast(
-                    List[GuardrailEventHooks], current_hook + ["post_call"]
-                )
+            self.event_hook = _ensure_event_hook_includes_post_call(
+                self.event_hook,
+                include_pre_call_on_none=self.output_parse_pii,
+            )
         self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
             pii_entities_config or {}
         )
@@ -545,12 +702,24 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 # to avoid incorrect offset arithmetic on mixed operator outputs.
                 if output_parse_pii:
                     replace_items = [i for i in items if i.get("operator") == "replace"]
-                    non_replace_items = [i for i in items if i.get("operator") != "replace"]
+                    non_replace_items = [
+                        i for i in items if i.get("operator") != "replace"
+                    ]
                     if non_replace_items:
+                        replace_entity_types = [
+                            str(entity_type)
+                            for entity_type in (
+                                i.get("entity_type") for i in replace_items
+                            )
+                            if entity_type is not None
+                        ]
                         verbose_proxy_logger.warning(
                             "Presidio output_parse_pii fallback: detected non-replace "
-                            "operators (%s); returning redacted_text without unmask mapping.",
+                            "operators (%s); %d replace-operator entities (%s) will also "
+                            "NOT be unmasked; returning redacted_text without unmask mapping.",
                             sorted({str(i.get("operator")) for i in non_replace_items}),
+                            len(replace_items),
+                            replace_entity_types,
                         )
                         return redacted_text["text"]
 
@@ -561,15 +730,34 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                         return redacted_text["text"]
 
-                    analyze_spans = [
-                        r
-                        for r in analyze_results
-                        if isinstance(r, dict)
-                        and isinstance(r.get("start"), int)
-                        and isinstance(r.get("end"), int)
-                    ]
-                    replace_items_sorted = sorted(replace_items, key=lambda i: i["start"])
-                    analyze_spans_sorted = sorted(analyze_spans, key=lambda r: r["start"])
+                    analyze_spans = []
+                    for r in analyze_results:
+                        if not isinstance(r, dict):
+                            continue
+                        start_v = _to_int_offset(r.get("start"))
+                        end_v = _to_int_offset(r.get("end"))
+                        if start_v is None or end_v is None:
+                            continue
+                        analyze_spans.append(
+                            {
+                                "start": cast(int, start_v),
+                                "end": cast(int, end_v),
+                                "entity_type": r.get("entity_type"),
+                                "score": r.get("score"),
+                            }
+                        )
+                    # `replace_items` starts are in anonymized-output coordinates, while
+                    # `analyze_spans` starts are in original-input coordinates. We still
+                    # sort both lists left-to-right and pair them positionally, relying on
+                    # Presidio preserving entity order across analyze/anonymize results.
+                    # If that ordering ever changes, this logic would need stronger
+                    # placeholder-to-span matching than simple positional pairing.
+                    replace_items_sorted = sorted(
+                        replace_items, key=lambda i: i["start"]
+                    )
+                    analyze_spans_sorted = sorted(
+                        analyze_spans, key=lambda r: r["start"]
+                    )
                     analyze_spans_sorted = _dedupe_overlapping_analyze_spans_for_unmask(
                         analyze_spans_sorted
                     )
@@ -584,14 +772,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             for replace_item in replace_items_sorted:
                                 replace_entity = replace_item.get("entity_type")
                                 replace_entity_str = (
-                                    str(getattr(replace_entity, "value", replace_entity))
+                                    str(
+                                        getattr(replace_entity, "value", replace_entity)
+                                    )
                                     if replace_entity is not None
                                     else None
                                 )
                                 selected_index: Optional[int] = None
 
                                 for idx, span in enumerate(analyze_spans_sorted):
-                                    if idx in used_span_indices or idx <= last_used_index:
+                                    if (
+                                        idx in used_span_indices
+                                        or idx <= last_used_index
+                                    ):
                                         continue
                                     span_entity = span.get("entity_type")
                                     span_entity_str = (
@@ -605,7 +798,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
                                 if selected_index is None:
                                     for idx, _ in enumerate(analyze_spans_sorted):
-                                        if idx in used_span_indices or idx <= last_used_index:
+                                        if (
+                                            idx in used_span_indices
+                                            or idx <= last_used_index
+                                        ):
                                             continue
                                         selected_index = idx
                                         break
@@ -647,14 +843,33 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     # Build unique placeholders in original-text coordinates (from
                     # analyze results) so replacement offsets stay stable.
                     new_text = text
+                    # Both lists are already sorted left-to-right in their own
+                    # coordinate systems (analyze: original input, anonymize:
+                    # anonymized output). Positional zipping is still valid
+                    # because Presidio preserves entity order across both
+                    # endpoints even when anonymized-output offsets shift.
                     for analyze_span, replace_item in zip(
                         reversed(analyze_spans_sorted), reversed(replace_items_sorted)
                     ):
                         start = cast(int, analyze_span["start"])
                         end = cast(int, analyze_span["end"])
+                        if not (isinstance(start, int) and isinstance(end, int)):
+                            raise RuntimeError(
+                                "Presidio output_parse_pii: unexpected non-int span offsets "
+                                f"start={start!r} end={end!r}"
+                            )
                         replacement = cast(str, replace_item["text"])
                         replacement = f"{replacement}{str(uuid.uuid4())}"
                         token_store[replacement] = text[start:end]
+                        verbose_proxy_logger.debug(
+                            "Presidio output_parse_pii pair: placeholder=%s entity=%s original=%r",
+                            replacement,
+                            analyze_span.get("entity_type"),
+                            text[start:end],
+                        )
+                        # Safe to splice against `new_text` using original-text offsets:
+                        # upstream span dedupe removes overlaps, and right-to-left
+                        # replacement keeps positions to the left of `start` stable.
                         new_text = new_text[:start] + replacement + new_text[end:]
                     return new_text
 
@@ -911,9 +1126,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Store pii_tokens in request data so post_call can unmask using the same
             # request's mappings (guardrail instance is shared across requests).
             if self.output_parse_pii and request_pii_tokens:
-                data.setdefault("_presidio_pii_tokens", {})[
-                    self.guardrail_name
-                ] = dict(request_pii_tokens)
+                data.setdefault("_presidio_pii_tokens", {})[self.guardrail_name] = dict(
+                    request_pii_tokens
+                )
             return data
         except Exception as e:
             raise e
@@ -1052,24 +1267,34 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # Use only request-scoped pii_tokens; do not fall back to self.pii_tokens
         # or we may use stale mappings from a previous request (e.g. wrong name).
-        pii_tokens = data.get("_presidio_pii_tokens", {}).get(
-            self.guardrail_name, {}
-        )
+        pii_tokens = data.get("_presidio_pii_tokens", {}).get(self.guardrail_name, {})
         if not pii_tokens:
             return response
 
-        if isinstance(response, ModelResponse) and not isinstance(
-            response.choices[0], StreamingChoices
-        ):  # /chat/completions requests
-            await self._process_response_for_pii(
-                response=response,
-                request_data=data,
-                mode="unmask",
-            )
-        elif self._is_anthropic_message_response(response):
-            await self._process_anthropic_response_for_pii(
-                response=cast(dict, response), request_data=data, mode="unmask"
-            )
+        attempted_non_streaming_unmask = False
+        defer_cleanup_to_streaming_hook = isinstance(response, ModelResponseStream) or (
+            isinstance(response, ModelResponse)
+            and len(response.choices) > 0
+            and isinstance(response.choices[0], StreamingChoices)
+        )
+        try:
+            if isinstance(response, ModelResponse) and not isinstance(
+                response.choices[0], StreamingChoices
+            ):  # /chat/completions requests
+                attempted_non_streaming_unmask = True
+                await self._process_response_for_pii(
+                    response=response,
+                    request_data=data,
+                    mode="unmask",
+                )
+            elif self._is_anthropic_message_response(response):
+                attempted_non_streaming_unmask = True
+                await self._process_anthropic_response_for_pii(
+                    response=cast(dict, response), request_data=data, mode="unmask"
+                )
+        finally:
+            if attempted_non_streaming_unmask or not defer_cleanup_to_streaming_hook:
+                self._clear_request_scoped_pii_tokens(data)
         return response
 
     @staticmethod
@@ -1084,19 +1309,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ``min(20, len(token) // 2)`` to reduce the risk of false positives
         when multiple tokens share a common prefix.
         """
-        for token, original_text in pii_tokens.items():
-            if token in text:
-                text = text.replace(token, original_text)
-            else:
-                # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
-                # Only check at the very end of the text.
-                min_overlap = min(20, len(token) // 2)
-                for i in range(max(0, len(text) - len(token)), len(text)):
-                    sub = text[i:]
-                    if token.startswith(sub) and len(sub) >= min_overlap:
-                        text = text[:i] + original_text
-                        break
-        return text
+        return _replace_pii_tokens_in_text(text, pii_tokens)
 
     @staticmethod
     def _is_anthropic_message_response(response: Any) -> bool:
@@ -1151,6 +1364,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
 
         return response
+
     async def _process_response_for_pii(
         self,
         response: ModelResponse,
@@ -1376,6 +1590,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
             for chunk in remaining_chunks:
                 yield chunk
+        finally:
+            self._clear_request_scoped_pii_tokens(request_data)
 
     async def async_post_call_streaming_iterator_hook(  # type: ignore[override]
         self,
@@ -1447,6 +1663,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception:
             pass
 
+    def _clear_request_scoped_pii_tokens(self, data: dict) -> None:
+        pii_token_map = data.get("_presidio_pii_tokens")
+        if not isinstance(pii_token_map, dict):
+            return
+        pii_token_map.pop(self.guardrail_name, None)
+        if not pii_token_map:
+            data.pop("_presidio_pii_tokens", None)
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -1472,6 +1696,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if input_type == "response" and response_pii_tokens:
             for text in texts:
                 new_texts.append(_replace_pii_tokens_in_text(text, response_pii_tokens))
+            if request_data is not None:
+                self._clear_request_scoped_pii_tokens(request_data)
         else:
             for text in texts:
                 modified_text = await self.check_pii(

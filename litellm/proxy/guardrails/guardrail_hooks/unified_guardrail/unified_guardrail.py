@@ -202,9 +202,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
         from litellm.types.guardrails import GuardrailEventHooks
 
-        guardrail_to_apply: Optional[CustomGuardrail] = data.get("guardrail_to_apply", None)
-        if guardrail_to_apply is not None:
-            data.pop("guardrail_to_apply", None)
+        guardrail_to_apply: Optional[CustomGuardrail] = data.pop(
+            "guardrail_to_apply", None
+        )
 
         if guardrail_to_apply is None:
             return
@@ -226,18 +226,25 @@ class UnifiedLLMGuardrails(CustomLogger):
         # with full data; process_output_response would mask output again.
         if getattr(guardrail_to_apply, "output_parse_pii", False):
             if hasattr(guardrail_to_apply, "async_post_call_success_hook"):
-                response = await guardrail_to_apply.async_post_call_success_hook(
+                hook_result = await guardrail_to_apply.async_post_call_success_hook(
                     data=data,
                     user_api_key_dict=user_api_key_dict,
                     response=response,
                 )
-                if response is not None:
-                    add_guardrail_to_applied_guardrails_header(
-                        request_data=data,
-                        guardrail_name=guardrail_to_apply.guardrail_name,
-                    )
-                    return response
-            # fall through if hook returned None
+                if hook_result is not None:
+                    response = hook_result
+                add_guardrail_to_applied_guardrails_header(
+                    request_data=data,
+                    guardrail_name=guardrail_to_apply.guardrail_name,
+                )
+                return response
+            verbose_proxy_logger.warning(
+                "Guardrail %s has output_parse_pii=True but no "
+                "async_post_call_success_hook; preserving original response "
+                "without falling back to process_output_response.",
+                getattr(guardrail_to_apply, "guardrail_name", repr(guardrail_to_apply)),
+            )
+            return response
 
         call_type: Optional[CallTypesLiteral] = None
         if user_api_key_dict.request_route is not None:

@@ -293,6 +293,14 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         # extra param to let the ui know this is a boolean
         json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
     )
+    presidio_mask_residual_output_pii: Optional[bool] = Field(
+        default=False,
+        description=(
+            "When True and output_parse_pii is enabled, also run a separate "
+            "post-call output-masking pass for new PII introduced by the model."
+        ),
+        json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
+    )
     presidio_language: Optional[str] = Field(
         default="en",
         description="Language code for Presidio PII analysis (e.g., 'en', 'de', 'es', 'fr')",

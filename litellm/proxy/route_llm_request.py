@@ -298,6 +298,24 @@ def _get_shared_session_lock() -> asyncio.Lock:
         _shared_session_lock = asyncio.Lock()
     return _shared_session_lock
 
+# Keys that are only for proxy/guardrail use and must not be sent to the LLM API
+_INTERNAL_REQUEST_KEYS = frozenset(
+    {"_presidio_pii_tokens", "fastest_response", "user_config"}
+)
+
+
+def _kwargs_for_llm(data: dict) -> dict:
+    """
+    Strip internal proxy keys so they are not sent to the LLM provider.
+
+    NOTE: Returns `data` by reference on the fast path when no internal keys are
+    present. Callers that need to mutate the result (for example `pop("model")`)
+    must wrap it in `dict(...)` first.
+    """
+    if _INTERNAL_REQUEST_KEYS.isdisjoint(data):
+        return data
+    return {k: v for k, v in data.items() if k not in _INTERNAL_REQUEST_KEYS}
+
 
 async def add_shared_session_to_data(data: dict) -> None:
     """
