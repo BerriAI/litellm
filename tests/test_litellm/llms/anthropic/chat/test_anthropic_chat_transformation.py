@@ -1692,7 +1692,8 @@ def test_max_effort_rejected_for_sonnet_46():
     messages = [{"role": "user", "content": "Test"}]
 
     with pytest.raises(
-        ValueError, match="effort='max' is only supported by Claude Opus 4.6"
+        ValueError, match="effort='max' is not supported for model"
+    ):
     ):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
