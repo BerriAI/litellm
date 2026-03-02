@@ -4,6 +4,7 @@ import {
   getPlaceholder,
   getProviderLogoAndName,
   getProviderModels,
+  prefixWithProvider,
   providerLogoMap,
   provider_map,
 } from "./provider_info_helpers";
@@ -162,6 +163,24 @@ describe("provider_info_helpers", () => {
 
     it("should return default gpt-3.5-turbo placeholder for OpenAI provider", () => {
       expect(getPlaceholder(Providers.OpenAI)).toBe("gpt-3.5-turbo");
+    });
+  });
+
+  describe("prefixWithProvider", () => {
+    it("should prefix Azure models with azure/", () => {
+      expect(prefixWithProvider("Azure", "my-deployment")).toBe("azure/my-deployment");
+    });
+
+    it("should prefix OpenAI_Compatible models with openai/", () => {
+      expect(prefixWithProvider("OpenAI_Compatible", "my-model")).toBe("openai/my-model");
+    });
+
+    it("should prefix OpenAI_Text_Compatible models with text-completion-openai/", () => {
+      expect(prefixWithProvider("OpenAI_Text_Compatible", "my-model")).toBe("text-completion-openai/my-model");
+    });
+
+    it("should not prefix providers that don't require it", () => {
+      expect(prefixWithProvider("Anthropic", "claude-3-opus")).toBe("claude-3-opus");
     });
   });
 
