@@ -119,8 +119,11 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             return self.aembedding(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, headers=headers)  # type: ignore
         if client is None or isinstance(client, AsyncHTTPHandler):
             self.client = HTTPHandler(timeout=timeout)  # type: ignore
-        else:
+        elif isinstance(client, HTTPHandler): # Ensure HTTPHandler is used directly
             self.client = client
+        else:
+            # Handle other client types or raise an error if unsupported
+            raise ValueError("Unsupported client type provided to embedding handler.")
 
         ## EMBEDDING CALL
         try:
