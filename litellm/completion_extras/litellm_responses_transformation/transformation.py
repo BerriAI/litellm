@@ -464,8 +464,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         tool_call_index = 0
 
         for item in output_items:
-            if isinstance(item, ResponseReasoningItem):
-                item_reasoning = "".join(
+                reasoning_content = (reasoning_content or "") + "".join(
                     getattr(s, "text", "") for s in item.summary
                 )
                 reasoning_content = (reasoning_content or "") + item_reasoning
