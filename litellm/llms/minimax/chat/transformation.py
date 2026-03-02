@@ -17,13 +17,16 @@ from litellm.types.utils import ModelResponse
     """Concatenate reasoning_details (list/dict/string) into a single string.
 
     This helper is intended to be the canonical way of turning MiniMax
-    `reasoning_details` structures into a flat string. It is defensive
-    against unexpected shapes:
-    - `str` is returned as-is.
-    - `list` entries that are dicts contribute their `"text"` value (if str).
-      List entries that are plain strings are also included.
-    - A bare `dict` contributes its `"text"` value (if str).
-    - All other values are ignored, and an empty string is returned if no
+            str(item.get("text")) if item.get("text") is not None else ""
+            for item in details
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning_details" in delta:
+                text = _concat_reasoning_details(delta.pop("reasoning_details"))
+                if text and "reasoning_content" not in delta:
+                    delta["reasoning_content"] = text
+        return super()._map_reasoning_to_reasoning_content(choices)
       usable text fragments are found.
     """
     fragments: List[str] = []
