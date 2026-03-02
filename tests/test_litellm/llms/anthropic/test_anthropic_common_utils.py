@@ -285,6 +285,76 @@ class TestPassthroughOAuth:
         assert "authorization" not in updated_headers
 
 
+class TestMergeBetaHeader:
+    """Tests for _merge_beta_header helper function."""
+
+    def test_merge_into_empty(self):
+        """Adding a beta header when none exists should set it directly."""
+        from litellm.llms.anthropic.common_utils import _merge_beta_header
+
+        headers = {}
+        _merge_beta_header(headers, "oauth-2025-04-20")
+        assert headers["anthropic-beta"] == "oauth-2025-04-20"
+
+    def test_merge_preserves_existing(self):
+        """Adding a beta header should preserve existing beta headers."""
+        from litellm.llms.anthropic.common_utils import _merge_beta_header
+
+        headers = {"anthropic-beta": "prompt-caching-scope-2026-01-05"}
+        _merge_beta_header(headers, "oauth-2025-04-20")
+        betas = set(headers["anthropic-beta"].split(","))
+        assert betas == {"oauth-2025-04-20", "prompt-caching-scope-2026-01-05"}
+
+    def test_merge_no_duplicate(self):
+        """Adding an already-present beta header should not create duplicates."""
+        from litellm.llms.anthropic.common_utils import _merge_beta_header
+
+        headers = {"anthropic-beta": "oauth-2025-04-20"}
+        _merge_beta_header(headers, "oauth-2025-04-20")
+        assert headers["anthropic-beta"] == "oauth-2025-04-20"
+
+    def test_merge_multiple_existing(self):
+        """Should correctly merge into a header with multiple existing values."""
+        from litellm.llms.anthropic.common_utils import _merge_beta_header
+
+        headers = {"anthropic-beta": "prompt-caching-scope-2026-01-05,computer-use-2024-10-22"}
+        _merge_beta_header(headers, "oauth-2025-04-20")
+        betas = set(headers["anthropic-beta"].split(","))
+        assert betas == {"oauth-2025-04-20", "prompt-caching-scope-2026-01-05", "computer-use-2024-10-22"}
+
+
+class TestOAuthPreservesExistingBetaHeaders:
+    """Tests that OAuth handling preserves existing anthropic-beta headers."""
+
+    def test_oauth_in_auth_header_preserves_beta(self):
+        """OAuth via Authorization header should merge with existing beta headers."""
+        from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+
+        headers = {
+            "authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+            "anthropic-beta": "prompt-caching-scope-2026-01-05",
+        }
+        updated_headers, _ = optionally_handle_anthropic_oauth(headers, None)
+
+        betas = set(updated_headers["anthropic-beta"].split(","))
+        assert "oauth-2025-04-20" in betas
+        assert "prompt-caching-scope-2026-01-05" in betas
+
+    def test_oauth_in_api_key_preserves_beta(self):
+        """OAuth via api_key should merge with existing beta headers."""
+        from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+
+        headers = {
+            "anthropic-beta": "prompt-caching-scope-2026-01-05,computer-use-2024-10-22",
+        }
+        updated_headers, _ = optionally_handle_anthropic_oauth(headers, FAKE_OAUTH_TOKEN)
+
+        betas = set(updated_headers["anthropic-beta"].split(","))
+        assert "oauth-2025-04-20" in betas
+        assert "prompt-caching-scope-2026-01-05" in betas
+        assert "computer-use-2024-10-22" in betas
+
+
 class TestIsAnthropicOAuthKey:
     """Tests for is_anthropic_oauth_key helper function."""
 
