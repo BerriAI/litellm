@@ -38,9 +38,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy._experimental.mcp_server.utils import (
-    get_server_prefix,
-)
+from litellm.proxy._experimental.mcp_server.utils import get_server_prefix
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
@@ -430,6 +428,10 @@ if MCP_AVAILABLE:
     )
     async def get_mcp_tools(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        timeout: Optional[float] = Query(
+            None,
+            description="Timeout in seconds for listing tools from each MCP server. Default is 30 seconds.",
+        ),
     ):
         """
         Get all MCP tools available for the current key, including those from access groups
@@ -441,6 +443,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
+            timeout=timeout,
         )
         dumped_tools = [dict(tool) for tool in tools]
 

@@ -71,9 +71,7 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import (
-        SEP_986_URL,
-    )
+    from mcp.shared.tool_name_validation import SEP_986_URL
 except ImportError:
     from pydantic import BaseModel
 
@@ -966,6 +964,7 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -973,6 +972,7 @@ class MCPServerManager:
         Args:
             server (MCPServer): The server to query tools from
             mcp_auth_header: Optional auth header for MCP server
+            timeout: Optional timeout in seconds for tool listing (default 30.0)
 
         Returns:
             List[MCPTool]: List of tools available on the server with prefixed names
@@ -1008,7 +1008,9 @@ class MCPServerManager:
                     _tools
                 )
             else:
-                tools = await self._fetch_tools_with_timeout(client, server.name)
+                tools = await self._fetch_tools_with_timeout(
+                    client, server.name, timeout=timeout
+                )
 
             prefixed_or_original_tools = self._create_prefixed_tools(
                 tools, server, add_prefix=add_prefix
@@ -1473,7 +1475,10 @@ class MCPServerManager:
         return None
 
     async def _fetch_tools_with_timeout(
-        self, client: MCPClient, server_name: str
+        self,
+        client: MCPClient,
+        server_name: str,
+        timeout: Optional[float] = None,
     ) -> List[MCPTool]:
         """
         Fetch tools from MCP client with timeout and error handling.
@@ -1484,12 +1489,14 @@ class MCPServerManager:
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
+            timeout: Optional timeout in seconds (default 30.0)
 
         Returns:
             List of tools from the server
         """
+        _timeout = timeout or 30.0
         try:
-            with anyio.fail_after(30.0):
+            with anyio.fail_after(_timeout):
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
