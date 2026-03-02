@@ -5,6 +5,7 @@ Tests PII detection and masking for different message formats
 
 import asyncio
 import os
+import re
 import sys
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
@@ -1931,7 +1932,10 @@ async def test_anonymize_output_parse_pii_without_pii_tokens_logs_warning():
             pii_tokens=None,
         )
 
-    assert result.startswith("Call me at <PHONE_NUMBER>_")
+    assert re.match(
+        r"^Call me at <PHONE_NUMBER>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-",
+        result,
+    )
     assert mock_warning.called is True
     assert "pii_tokens is None" in mock_warning.call_args[0][0]
 
