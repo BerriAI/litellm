@@ -10,14 +10,6 @@ from .base import GuardrailConfigModel
 class AktoConfigModel(GuardrailConfigModel):
     """Configuration model for Akto Guardrail integration."""
 
-    api_key: Optional[str] = Field(
-        default=None,
-        description=(
-            "API key for Akto authentication. "
-            "If not provided, falls back to AKTO_API_KEY environment variable."
-        ),
-    )
-
     api_base: Optional[str] = Field(
         default=None,
         description=(

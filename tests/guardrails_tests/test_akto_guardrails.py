@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from litellm.exceptions import GuardrailRaisedException
+from fastapi import HTTPException
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -50,6 +50,7 @@ def akto_sync():
 
     return AktoGuardrail(
         api_base="http://localhost:9090",
+        api_token="test-token",
         sync_mode=True,
         akto_account_id="1000000",
         akto_vxlan_id="test-vxlan-id",
@@ -66,6 +67,7 @@ def akto_async():
 
     return AktoGuardrail(
         api_base="http://localhost:9090",
+        api_token="test-token",
         sync_mode=False,
         unreachable_fallback="fail_open",
         guardrail_name="test-akto-async",
@@ -125,6 +127,20 @@ def test_init_requires_api_base():
         with pytest.raises(ValueError, match="api_base is required"):
             AktoGuardrail(
                 api_base="",
+                api_token="test-token",
+                guardrail_name="test",
+                event_hook="pre_call",
+            )
+
+
+def test_init_requires_api_token():
+    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
+
+    with patch.dict(os.environ, {}, clear=True):
+        with pytest.raises(ValueError, match="api_token is required"):
+            AktoGuardrail(
+                api_base="http://localhost:9090",
+                api_token="",
                 guardrail_name="test",
                 event_hook="pre_call",
             )
@@ -137,6 +153,7 @@ def test_init_from_env():
         os.environ,
         {
             "AKTO_DATA_INGESTION_URL": "http://env-host:9090",
+            "AKTO_API_TOKEN": "env-token",
             "AKTO_SYNC_MODE": "false",
             "AKTO_ACCOUNT_ID": "2000000",
             "AKTO_VXLAN_ID": "env-vxlan",
@@ -144,6 +161,7 @@ def test_init_from_env():
     ):
         g = AktoGuardrail(guardrail_name="env-test", event_hook="post_call")
         assert g.api_base == "http://env-host:9090"
+        assert g.api_token == "env-token"
         assert g.sync_mode is False
         assert g.akto_account_id == "2000000"
         assert g.akto_vxlan_id == "env-vxlan"
@@ -154,6 +172,7 @@ def test_sync_mode_default_true():
 
     g = AktoGuardrail(
         api_base="http://localhost:9090",
+        api_token="test-token",
         guardrail_name="default-test",
         event_hook="pre_call",
     )
@@ -296,12 +315,15 @@ async def test_sync_pre_call_blocked(akto_sync, sample_inputs, sample_request_da
         ]
     )
 
-    with pytest.raises(GuardrailRaisedException):
+    with pytest.raises(HTTPException) as exc_info:
         await akto_sync.apply_guardrail(
             inputs=sample_inputs,
             request_data=sample_request_data,
             input_type="request",
         )
+
+    # Blocked requests should return 400 (not 500) so clients don't retry
+    assert exc_info.value.status_code == 400
 
     # 2 calls: guardrails check + ingest blocked request
     assert akto_sync.async_handler.post.call_count == 2
@@ -420,6 +442,7 @@ async def test_fail_open_on_unreachable():
 
     g = AktoGuardrail(
         api_base="http://localhost:9090",
+        api_token="test-token",
         sync_mode=True,
         unreachable_fallback="fail_open",
         guardrail_name="fail-open-test",
@@ -443,6 +466,7 @@ async def test_fail_closed_on_unreachable():
 
     g = AktoGuardrail(
         api_base="http://localhost:9090",
+        api_token="test-token",
         sync_mode=True,
         unreachable_fallback="fail_closed",
         guardrail_name="fail-closed-test",

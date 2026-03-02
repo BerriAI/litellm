@@ -11,7 +11,7 @@ Akto supports two operating modes:
 
 Set up your Akto Data Ingestion Service and obtain:
 - `AKTO_DATA_INGESTION_URL` — Your Akto Data Ingestion Service endpoint
-- `AKTO_API_KEY` — Your API key (optional, depends on your setup)
+- `AKTO_API_TOKEN` — Your API token (**required** for authentication)
 
 ## 2. Define Akto Guardrail in `config.yaml`
 
@@ -26,7 +26,7 @@ guardrails:
       guardrail: akto
       mode: "pre_call"
       api_base: os.environ/AKTO_DATA_INGESTION_URL
-      api_key: os.environ/AKTO_API_KEY                # optional
+      api_token: os.environ/AKTO_API_TOKEN              # required
       sync_mode: true                                  # default: true
       akto_account_id: os.environ/AKTO_ACCOUNT_ID      # optional, default: 1000000
       akto_vxlan_id: os.environ/AKTO_VXLAN_ID           # optional
@@ -44,7 +44,7 @@ guardrails:
       guardrail: akto
       mode: "post_call"
       api_base: os.environ/AKTO_DATA_INGESTION_URL
-      api_key: os.environ/AKTO_API_KEY
+      api_token: os.environ/AKTO_API_TOKEN
       sync_mode: false
 ```
 
@@ -104,7 +104,7 @@ User Request → LiteLLM Proxy → forward to LLM → get response
 | Parameter | Environment Variable | Default | Description |
 |-----------|---------------------|---------|-------------|
 | `api_base` | `AKTO_DATA_INGESTION_URL` | *required* | Akto Data Ingestion Service URL |
-| `api_key` | `AKTO_API_KEY` | `None` | API key for authentication |
+| `api_token` | `AKTO_API_TOKEN` | *required* | API token for authentication (sent as `Authorization: Bearer` header) |
 | `sync_mode` | `AKTO_SYNC_MODE` | `true` | `true`: blocking pre-call + post-call ingest. `false`: single post-call |
 | `akto_account_id` | `AKTO_ACCOUNT_ID` | `1000000` | Akto account ID |
 | `akto_vxlan_id` | `AKTO_VXLAN_ID` | `0` | VXLAN ID for traffic identification |

@@ -26,12 +26,13 @@ import json
 import os
 import time
 from datetime import datetime
+from fastapi import HTTPException
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Type
 
 import httpx
 
 from litellm._logging import verbose_proxy_logger
-from litellm.exceptions import GuardrailRaisedException, Timeout
+from litellm.exceptions import Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -71,7 +72,7 @@ class AktoGuardrail(CustomGuardrail):
               guardrail: akto
               mode: "pre_call"
               api_base: os.environ/AKTO_DATA_INGESTION_URL
-              api_key: os.environ/AKTO_API_KEY           # optional
+              api_key: os.environ/AKTO_API_KEY           # required
               sync_mode: true                            # optional, default true
               akto_account_id: os.environ/AKTO_ACCOUNT_ID # optional
               akto_vxlan_id: os.environ/AKTO_VXLAN_ID     # optional
@@ -109,7 +110,14 @@ class AktoGuardrail(CustomGuardrail):
                 "Set AKTO_DATA_INGESTION_URL environment variable or pass it in litellm_params."
             )
 
-        self.api_key = api_key or os.environ.get("AKTO_API_KEY")
+        self.api_key = (
+            api_key or os.environ.get("AKTO_API_KEY") or os.environ.get("AKTO_API_TOKEN", "")
+        )
+        if not self.api_key:
+            raise ValueError(
+                "api_key is required for Akto guardrail. "
+                "Set AKTO_API_KEY environment variable or pass api_key in litellm_params."
+            )
         self.akto_account_id = akto_account_id or os.environ.get(
             "AKTO_ACCOUNT_ID", "1000000"
         )
@@ -204,9 +212,10 @@ class AktoGuardrail(CustomGuardrail):
 
     def _prepare_headers(self) -> Dict[str, str]:
         """Build request headers for the Akto HTTP proxy endpoint."""
-        headers: Dict[str, str] = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        headers: Dict[str, str] = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
         return headers
 
     # ------------------------------------------------------------------ #
@@ -547,7 +556,7 @@ class AktoGuardrail(CustomGuardrail):
                         request_data=request_data,
                     )
                 return inputs
-        except GuardrailRaisedException:
+        except HTTPException:
             guardrail_status = "guardrail_intervened"
             raise
         except Exception as e:
@@ -596,15 +605,14 @@ class AktoGuardrail(CustomGuardrail):
                     request_data=request_data,
                     reason=reason,
                 )
-                raise GuardrailRaisedException(
-                    guardrail_name=GUARDRAIL_NAME,
-                    message=reason or "Blocked by Akto Guardrails",
-                    should_wrap_with_default_message=False,
+                raise HTTPException(
+                    status_code=400,
+                    detail=reason or "Blocked by Akto Guardrails",
                 )
 
             return inputs
 
-        except GuardrailRaisedException:
+        except HTTPException:
             raise
         except (Timeout, httpx.RequestError) as e:
             return self._handle_unreachable(
