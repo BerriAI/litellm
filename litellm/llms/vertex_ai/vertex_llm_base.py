@@ -651,7 +651,7 @@ class VertexBase:
         """
         Async version of _ensure_access_token
         """
-        if custom_llm_provider == "gemini":
+        if custom_llm_provider == "gemini" or credentials is None:
             return "", ""
         else:
             try:
