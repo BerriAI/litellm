@@ -209,10 +209,24 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
+        # Preserve existing litellm_params to maintain metadata
+        # (user_api_key_hash, user_api_key_alias, team_id, etc.)
+        existing_litellm_params = litellm_logging_obj.model_call_details.get(
+            "litellm_params", {}
+        ) or {}
+        initial_kwargs: dict = {
+            "litellm_params": existing_litellm_params.copy(),
+        }
+        passthrough_logging_payload = litellm_logging_obj.model_call_details.get(
+            "passthrough_logging_payload"
+        )
+        if passthrough_logging_payload is not None:
+            initial_kwargs["passthrough_logging_payload"] = passthrough_logging_payload
+
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
-            kwargs={},
+            kwargs=initial_kwargs,
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,

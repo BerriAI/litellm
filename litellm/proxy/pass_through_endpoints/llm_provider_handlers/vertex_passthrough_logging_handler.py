@@ -341,7 +341,14 @@ class VertexPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: Dict[str, Any] = {}
+        # Preserve existing litellm_params to maintain metadata
+        # (user_api_key_hash, user_api_key_alias, team_id, etc.)
+        existing_litellm_params = litellm_logging_obj.model_call_details.get(
+            "litellm_params", {}
+        ) or {}
+        kwargs: Dict[str, Any] = {
+            "litellm_params": existing_litellm_params.copy(),
+        }
         model = model or VertexPassthroughLoggingHandler.extract_model_from_url(
             url_route
         )
