@@ -3,12 +3,15 @@ import json
 import time
 import traceback
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import httpx
 
 import litellm
-from litellm.constants import LITELLM_MAX_STREAMING_DURATION_SECONDS, STREAM_SSE_DONE_STRING
+from litellm.constants import (
+    LITELLM_MAX_STREAMING_DURATION_SECONDS,
+    STREAM_SSE_DONE_STRING,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -654,3 +657,185 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 for c in getattr(out_item, "content", []):
                     out += c.text
         return out
+
+
+# ---------------------------------------------------------------------------
+# WebSocket mode streaming (bidirectional forwarding)
+# ---------------------------------------------------------------------------
+
+if TYPE_CHECKING:
+    from websockets.asyncio.client import ClientConnection as _WsClientConnection
+
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.thread_pool_executor import executor as _ws_executor
+
+RESPONSES_WS_LOGGED_EVENT_TYPES = [
+    "response.created",
+    "response.completed",
+    "response.failed",
+    "response.incomplete",
+    "error",
+]
+
+
+class ResponsesWebSocketStreaming:
+    """
+    Manages bidirectional WebSocket forwarding for the Responses API
+    WebSocket mode (wss://.../v1/responses).
+
+    Unlike the Realtime API, the Responses API WebSocket mode:
+    - Uses response.create as the client-to-server event
+    - Streams back the same events as the HTTP streaming Responses API
+    - Supports previous_response_id for incremental continuation
+    - Supports generate: false for warmup
+    - One response at a time per connection (sequential, no multiplexing)
+    """
+
+    def __init__(
+        self,
+        websocket: Any,
+        backend_ws: Any,
+        logging_obj: LiteLLMLoggingObj,
+        user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[Dict] = None,
+    ):
+        self.websocket = websocket
+        self.backend_ws = backend_ws
+        self.logging_obj = logging_obj
+        self.user_api_key_dict = user_api_key_dict
+        self.request_data: Dict = request_data or {}
+        self.messages: list[Dict] = []
+        self.input_messages: list[Dict[str, str]] = []
+
+    def _should_store_event(self, event_obj: dict) -> bool:
+        return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
+
+    def _store_event(self, event: Any) -> None:
+        if isinstance(event, bytes):
+            event = event.decode("utf-8")
+        if isinstance(event, str):
+            try:
+                event_obj = json.loads(event)
+            except (json.JSONDecodeError, TypeError):
+                return
+        else:
+            event_obj = event
+
+        if self._should_store_event(event_obj):
+            self.messages.append(event_obj)
+
+    def _collect_input_from_client_event(self, message: Any) -> None:
+        """Extract user input content from response.create for logging."""
+        try:
+            if isinstance(message, str):
+                msg_obj = json.loads(message)
+            elif isinstance(message, dict):
+                msg_obj = message
+            else:
+                return
+
+            if msg_obj.get("type") != "response.create":
+                return
+
+            input_items = msg_obj.get("input", [])
+            if isinstance(input_items, str):
+                self.input_messages.append({"role": "user", "content": input_items})
+                return
+
+            if isinstance(input_items, list):
+                for item in input_items:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("type") == "message" and item.get("role") == "user":
+                        content = item.get("content", [])
+                        if isinstance(content, str):
+                            self.input_messages.append(
+                                {"role": "user", "content": content}
+                            )
+                        elif isinstance(content, list):
+                            for c in content:
+                                if (
+                                    isinstance(c, dict)
+                                    and c.get("type") == "input_text"
+                                ):
+                                    text = c.get("text", "")
+                                    if text:
+                                        self.input_messages.append(
+                                            {"role": "user", "content": text}
+                                        )
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            pass
+
+    def _store_input(self, message: Any) -> None:
+        self._collect_input_from_client_event(message)
+        if self.logging_obj:
+            self.logging_obj.pre_call(input=message, api_key="")
+
+    async def _log_messages(self) -> None:
+        if not self.logging_obj:
+            return
+        if self.input_messages:
+            self.logging_obj.model_call_details["messages"] = self.input_messages
+        if self.messages:
+            asyncio.create_task(
+                self.logging_obj.async_success_handler(self.messages)
+            )
+            _ws_executor.submit(self.logging_obj.success_handler, self.messages)
+
+    async def backend_to_client(self) -> None:
+        """Forward events from backend WebSocket to the client."""
+        import websockets
+
+        try:
+            while True:
+                try:
+                    raw_response = await self.backend_ws.recv(decode=False)  # type: ignore[union-attr]
+                except TypeError:
+                    raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
+
+                if isinstance(raw_response, bytes):
+                    response_str = raw_response.decode("utf-8")
+                else:
+                    response_str = raw_response
+
+                self._store_event(response_str)
+                await self.websocket.send_text(response_str)
+
+        except websockets.exceptions.ConnectionClosed as e:  # type: ignore
+            verbose_logger.debug(
+                "Responses WS backend connection closed: %s", e
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                "Error in responses WS backend_to_client: %s", e
+            )
+        finally:
+            await self._log_messages()
+
+    async def client_to_backend(self) -> None:
+        """Forward response.create events from client to backend."""
+        try:
+            while True:
+                message = await self.websocket.receive_text()
+
+                self._store_input(message)
+                self._store_event(message)
+                await self.backend_ws.send(message)  # type: ignore[union-attr]
+
+        except Exception as e:
+            verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
+
+    async def bidirectional_forward(self) -> None:
+        """Run both forwarding directions concurrently."""
+        forward_task = asyncio.create_task(self.backend_to_client())
+        try:
+            await self.client_to_backend()
+        except Exception:
+            pass
+        finally:
+            if not forward_task.done():
+                forward_task.cancel()
+                try:
+                    await forward_task
+                except asyncio.CancelledError:
+                    pass
