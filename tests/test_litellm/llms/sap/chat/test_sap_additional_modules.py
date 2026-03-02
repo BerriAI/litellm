@@ -12,8 +12,8 @@ def test_sap_placeholder_defaults():
         headers={}
     )
 
-    assert config["config"]["modules"]["prompt_templating"]["prompt"]["defaults"] == {"user_query": "default value"}
-    assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
+    assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["defaults"] == {"user_query": "default value"}
+    assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
 
 def test_sap_placeholder_values():
     placeholder_values = {"user_query": "Some text"}
@@ -29,7 +29,7 @@ def test_sap_placeholder_values():
     )
 
     assert config["placeholder_values"] == placeholder_values
-    assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
+    assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
 
 def test_sap_grounding():
     grounding_config = {
@@ -58,9 +58,9 @@ def test_sap_grounding():
         litellm_params={},
         headers={}
     )
-    assert config["config"]["modules"]["grounding"] == grounding_config
+    assert config["config"]["modules"][0]["grounding"] == grounding_config
     assert config["placeholder_values"] == placeholder_values
-    assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
+    assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
 
 def test_sap_filtering():
     filtering_config_azure = {
@@ -123,8 +123,8 @@ def test_sap_filtering():
         litellm_params={},
         headers={}
     )
-    assert config["config"]["modules"]["filtering"] == filtering_config_azure
-    assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
+    assert config["config"]["modules"][0]["filtering"] == filtering_config_azure
+    assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
 
     config = GenAIHubOrchestrationConfig().transform_request(
         model="gpt-4o",
@@ -134,8 +134,8 @@ def test_sap_filtering():
         litellm_params={},
         headers={}
     )
-    assert config["config"]["modules"]["filtering"] == filtering_config_llama
-    assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
+    assert config["config"]["modules"][0]["filtering"] == filtering_config_llama
+    assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
 
 def test_sap_masking():
     masking_config = {
@@ -163,8 +163,8 @@ def test_sap_masking():
         litellm_params={},
         headers={}
     )
-    assert config["config"]["modules"]["masking"] == masking_config
-    assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
+    assert config["config"]["modules"][0]["masking"] == masking_config
+    assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
 
 def test_sap_translation():
     translation_config = {
@@ -190,5 +190,42 @@ def test_sap_translation():
         litellm_params={},
         headers={}
     )
-    assert config["config"]["modules"]["translation"] == translation_config
-    assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
+    assert config["config"]["modules"][0]["translation"] == translation_config
+    assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+
+def test_sap_multiple_modules():
+    translation_config = {
+        'input':
+            {'type': 'sap_document_translation',
+             'config':
+                 {'source_language': 'en-US',
+                  'target_language': 'de-DE'}
+             },
+        'output':
+            {'type': 'sap_document_translation',
+             'config':
+                 {'source_language': 'de-DE',
+                  'target_language': 'fr-FR'}
+             }
+    }
+
+    config = GenAIHubOrchestrationConfig().transform_request(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello."}],
+        optional_params={'deployment_url': "shouldn't be in results",
+                         "fallback_modules":[{"model": "sap/gpt-5",
+                                              "messages": [{"role": "user", "content": "Hello world!"}],
+                                              "translation": translation_config
+                                              }]
+    ,
+                         },
+        litellm_params={},
+        headers={}
+    )
+    assert "translation" not in config["config"]["modules"][0]
+    assert config["config"]["modules"][1]["translation"] == translation_config
+    assert config["config"]["modules"][1]["prompt_templating"]["model"]["name"] == "gpt-5"
+    assert config["config"]["modules"][0]["prompt_templating"]["model"]["name"] == "gpt-4o"
+    assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+    assert config["config"]["modules"][1]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello world!"
+    assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello."
