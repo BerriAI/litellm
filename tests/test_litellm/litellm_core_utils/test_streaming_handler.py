@@ -1266,6 +1266,8 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
         )
         is True
     )
+
+
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_anext_does_not_block_event_loop_for_sync_iterators(
     logging_obj: Logging,

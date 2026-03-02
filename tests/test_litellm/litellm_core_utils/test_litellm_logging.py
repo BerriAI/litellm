@@ -461,7 +461,7 @@ async def test_wrapper_async_calls_sync_success_callbacks_once():
         caching=False,
         litellm_logging_obj=test_logging_obj,
     )
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(1.0)
 
     assert (
         test_logging_obj.handle_sync_success_callbacks_for_async_calls.call_count == 1

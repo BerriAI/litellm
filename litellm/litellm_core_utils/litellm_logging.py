@@ -217,15 +217,73 @@ _CUSTOM_PRICING_KEYS: frozenset = frozenset(
     CustomPricingLiteLLMParams.model_fields.keys()
 )
 
-# CallTypes that represent async requests.
-# Excludes `add_message` which is a sync call type despite starting with "a".
+# Explicit allowlist of CallTypes that represent async requests.
+# Keep this list explicit to avoid accidental classification from naming heuristics.
 _ASYNC_CALL_TYPE_VALUES: frozenset[str] = frozenset(
-    call_type.value
-    for call_type in CallTypes
-    if (
-        call_type.value.startswith("a") or call_type.value.startswith("_a")
-    )
-    and call_type.value != "add_message"
+    {
+        CallTypes.aembedding.value,
+        CallTypes.acompletion.value,
+        CallTypes.atext_completion.value,
+        CallTypes.aimage_generation.value,
+        CallTypes.aimage_edit.value,
+        CallTypes.amoderation.value,
+        CallTypes.atranscription.value,
+        CallTypes.aspeech.value,
+        CallTypes.arerank.value,
+        CallTypes.asearch.value,
+        CallTypes.arealtime.value,
+        CallTypes.acreate_batch.value,
+        CallTypes.aretrieve_batch.value,
+        CallTypes.acancel_batch.value,
+        CallTypes.anthropic_messages.value,
+        CallTypes.aget_assistants.value,
+        CallTypes.acreate_assistants.value,
+        CallTypes.adelete_assistant.value,
+        CallTypes.acreate_thread.value,
+        CallTypes.aget_thread.value,
+        CallTypes.a_add_message.value,
+        CallTypes.aget_messages.value,
+        CallTypes.arun_thread.value,
+        CallTypes.arun_thread_stream.value,
+        CallTypes.afile_retrieve.value,
+        CallTypes.afile_delete.value,
+        CallTypes.afile_list.value,
+        CallTypes.acreate_file.value,
+        CallTypes.afile_content.value,
+        CallTypes.acreate_fine_tuning_job.value,
+        CallTypes.acreate_video.value,
+        CallTypes.avideo_retrieve.value,
+        CallTypes.avideo_content.value,
+        CallTypes.avideo_remix.value,
+        CallTypes.avideo_list.value,
+        CallTypes.avideo_retrieve_job.value,
+        CallTypes.avideo_delete.value,
+        CallTypes.avector_store_file_create.value,
+        CallTypes.avector_store_file_list.value,
+        CallTypes.avector_store_file_retrieve.value,
+        CallTypes.avector_store_file_content.value,
+        CallTypes.avector_store_file_update.value,
+        CallTypes.avector_store_file_delete.value,
+        CallTypes.avector_store_create.value,
+        CallTypes.avector_store_search.value,
+        CallTypes.acreate_container.value,
+        CallTypes.alist_containers.value,
+        CallTypes.aretrieve_container.value,
+        CallTypes.adelete_container.value,
+        CallTypes.alist_container_files.value,
+        CallTypes.aupload_container_file.value,
+        CallTypes.acancel_fine_tuning_job.value,
+        CallTypes.alist_fine_tuning_jobs.value,
+        CallTypes.aretrieve_fine_tuning_job.value,
+        CallTypes.aresponses.value,
+        CallTypes.alist_input_items.value,
+        CallTypes.allm_passthrough_route.value,
+        CallTypes.agenerate_content.value,
+        CallTypes.agenerate_content_stream.value,
+        CallTypes.aocr.value,
+        CallTypes.asend_message.value,
+        CallTypes.acreate_skill.value,
+    }
 )
 
 sentry_sdk_instance = None
@@ -5647,4 +5705,3 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         model_parameters={"stream": True},
         hidden_params=hidden_params,
     )
-
