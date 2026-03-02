@@ -92,7 +92,11 @@ def get_azure_ad_token_provider(
             tenant_id=os.environ["AZURE_TENANT_ID"],
         )
     elif cred == AzureCredentialType.ManagedIdentityCredential:
-        credential = ManagedIdentityCredential(client_id=os.environ["AZURE_CLIENT_ID"])
+        managed_identity_client_id = os.environ.get("AZURE_CLIENT_ID")
+        if managed_identity_client_id:
+            credential = ManagedIdentityCredential(client_id=managed_identity_client_id)
+        else:
+            credential = ManagedIdentityCredential()
     elif cred == AzureCredentialType.CertificateCredential:
         if os.getenv("AZURE_CERTIFICATE_PASSWORD"):
             credential = CertificateCredential(

@@ -1251,6 +1251,20 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_base=api_base,
                 is_async=False,
             )
+
+            # If MI/DefaultAzureCredential resolved a token provider inside
+            # initialize_azure_sdk_client, use it to set the Authorization header
+            # for the raw httpx request (SDK clients handle this internally, but
+            # image generation uses raw httpx).
+            if api_key is None and "Authorization" not in headers:
+                resolved_provider = azure_client_params.get("azure_ad_token_provider")
+                resolved_token = azure_client_params.get("azure_ad_token")
+                if resolved_provider is not None and resolved_token is None:
+                    resolved_token = resolved_provider()
+                if resolved_token:
+                    headers.pop("api-key", None)
+                    headers["Authorization"] = f"Bearer {resolved_token}"
+
             if aimg_generation is True:
                 return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers, model=model)  # type: ignore
 
