@@ -469,8 +469,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     getattr(s, "text", "") for s in item.summary
                 )
                 if reasoning_content is None:
-                    reasoning_content = item_text
-                    "thinking": reasoning_content or "",
+                reasoning_content = (reasoning_content or "") + item_reasoning
 
                 # Capture encrypted_content for thinking_blocks passthrough
                 encrypted = getattr(item, "encrypted_content", None)
@@ -479,7 +478,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         thinking_blocks = []
                     block: Dict[str, Any] = {
                         "type": "thinking",
-                        "thinking": item_text,
+                        "thinking": item_reasoning,
                         "encrypted_content": encrypted,
                     }
                     item_id = getattr(item, "id", None)
