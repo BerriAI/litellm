@@ -1181,7 +1181,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part2.xml --durations=10 -n 8 --timeout=300 -vv --log-cli-level=INFO
+            python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part2.xml --durations=10 -n 4 --timeout=300 -vv --log-cli-level=INFO
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1699,7 +1699,7 @@ jobs:
           command: |
             prisma generate
             export PYTHONUNBUFFERED=1
-            python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 8 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
+            python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 4 --maxfail=5 --timeout=120 -vv --log-cli-level=WARNING -r A
           no_output_timeout: 60m
       - run:
           name: Rename the coverage files
@@ -3886,7 +3886,7 @@ jobs:
           command: |
             cd ~/project
             # Check pyproject.toml
-            CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['dependencies']['litellm-proxy-extras'].split('\"')[1])")
+            CURRENT_VERSION=$(python -c "import toml; dep = toml.load('pyproject.toml')['tool']['poetry']['dependencies']['litellm-proxy-extras']; print(dep['version'] if isinstance(dep, dict) else dep)")
             if [ "$CURRENT_VERSION" != "$NEW_VERSION" ]; then
               echo "Error: Version in pyproject.toml ($CURRENT_VERSION) doesn't match new version ($NEW_VERSION)"
               exit 1
@@ -4100,6 +4100,63 @@ jobs:
           path: playwright-report
           destination: playwright-report
 
+  prisma_schema_sync:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Install Neon CLI
+          command: |
+            npm i -g neonctl
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Sync schema on base e2e database
+          command: |
+            BASE_DATABASE_URL=$(neon connection-string \
+              --project-id $NEON_PROJECT_ID \
+              --api-key $NEON_API_KEY \
+              --branch br-fancy-paper-ad1olsb3 \
+              --database-name yuneng-trial-db \
+              --role neondb_owner)
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$BASE_DATABASE_URL \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              --name schema-sync \
+              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --use_prisma_db_push
+      - run:
+          name: Start outputting logs
+          command: docker logs -f schema-sync
+          background: true
+      - run:
+          name: Wait for proxy to be ready (schema sync complete)
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Stop schema sync container
+          command: docker stop schema-sync
+
   test_nonroot_image:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -4298,6 +4355,15 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - prisma_schema_sync:
+          context: e2e_ui_tests
+          requires:
+            - build_docker_database_image
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - e2e_ui_testing:
           name: e2e_ui_testing_chromium
           browser: chromium
@@ -4305,6 +4371,7 @@ workflows:
           requires:
             - ui_build
             - build_docker_database_image
+            - prisma_schema_sync
           filters:
             branches:
               only:
@@ -4317,6 +4384,7 @@ workflows:
           requires:
             - ui_build
             - build_docker_database_image
+            - prisma_schema_sync
           filters:
             branches:
               only:

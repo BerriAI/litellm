@@ -383,6 +383,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vertex-ai",
         "/vertex_ai",
         "/cohere",
+        "/cursor",
         "/gemini",
         "/anthropic",
         "/langfuse",
@@ -431,6 +432,7 @@ class LiteLLMRoutes(enum.Enum):
 
     agent_routes = [
         "/v1/agents",
+        "/v1/agents/{agent_id}",
         "/agents",
         "/a2a/{agent_id}",
         "/a2a/{agent_id}/message/send",
@@ -1092,7 +1094,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
-    available_on_public_internet: bool = False
+    available_on_public_internet: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -1146,7 +1148,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
-    available_on_public_internet: bool = False
+    available_on_public_internet: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -1203,7 +1205,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
-    available_on_public_internet: bool = False
+    available_on_public_internet: bool = True
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
@@ -2280,6 +2282,9 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     organization_rpm_limit: Optional[int] = None
     organization_metadata: Optional[dict] = None
 
+    # Project Params
+    project_metadata: Optional[dict] = None
+
     # Time stamps
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
@@ -2413,6 +2418,7 @@ class UserAPIKeyAuth(
             key_alias=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
             team_alias="system",
             user_id="system",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
 
@@ -2581,6 +2587,7 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     team_id: str
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+    tags: Optional[List[str]] = None
     models: List[str] = []
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2590,6 +2597,11 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
+        if "tags" in values and values["tags"] is not None:
+            if not isinstance(values["tags"], list):
+                raise ValueError(
+                    f"tags must be a list of strings, got {type(values['tags']).__name__}"
+                )
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if values.get(field) is not None:
                 if values.get("metadata") is None:
@@ -2607,6 +2619,7 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     description: Optional[str] = None
     team_id: Optional[str] = None
     metadata: Optional[dict] = None
+    tags: Optional[List[str]] = None
     models: Optional[List[str]] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2617,6 +2630,11 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
+        if "tags" in values and values["tags"] is not None:
+            if not isinstance(values["tags"], list):
+                raise ValueError(
+                    f"tags must be a list of strings, got {type(values['tags']).__name__}"
+                )
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if values.get(field) is not None:
                 if values.get("metadata") is None:
@@ -2650,6 +2668,8 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
     object_permission_id: Optional[str] = None
     created_by: str
     updated_by: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 

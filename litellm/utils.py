@@ -2765,8 +2765,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     for key, value in loaded_model_cost.items():
         ## get model info ##
         provider = value.get("litellm_provider", "")
+        _key_str = str(key)
         if provider in _skip_get_model_info_providers or any(
-            key.startswith(f"{p}/") for p in _skip_get_model_info_providers
+            _key_str.startswith(f"{p}/") for p in _skip_get_model_info_providers
         ):
             existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key
@@ -8310,6 +8311,8 @@ class ProviderConfigManager:
             if model and "gpt" in model.lower():
                 return litellm.DatabricksResponsesAPIConfig()
             return None
+        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+            return litellm.HostedVLLMResponsesAPIConfig()
         return None
 
     @staticmethod
@@ -8398,7 +8401,9 @@ class ProviderConfigManager:
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
         elif LlmProviders.BEDROCK == provider:
-            return litellm.llms.bedrock.common_utils.BedrockModelInfo()
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            return BedrockModelInfo()
         elif LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 

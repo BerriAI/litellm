@@ -3509,3 +3509,153 @@ def test_vertex_ai_web_search_options_in_map_openai_params():
     assert optional_params["tools"][0]["googleSearch"] == {}, "googleSearch should be empty config"
     assert "web_search_options" not in optional_params, "web_search_options should be removed after transformation"
 
+
+def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():
+    """Test promptTokensDetails with VIDEO modality for video inputs.
+
+    This test verifies that video tokens from promptTokensDetails are correctly
+    parsed and surfaced in prompt_tokens_details.video_tokens.
+
+    Based on a real Gemini response where a video file is sent as input:
+        promptTokensDetails: [VIDEO: 10240, TEXT: 9, AUDIO: 200]
+        candidatesTokensDetails: [TEXT: 79]
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 10449,
+        "candidatesTokenCount": 79,
+        "totalTokenCount": 10528,
+        "trafficType": "ON_DEMAND",
+        "promptTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 10240},
+            {"modality": "TEXT", "tokenCount": 9},
+            {"modality": "AUDIO", "tokenCount": 200},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 79},
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    # Verify basic token counts
+    assert result.prompt_tokens == 10449
+    assert result.completion_tokens == 79
+    assert result.total_tokens == 10528
+
+    # Verify prompt token details include video tokens
+    assert result.prompt_tokens_details is not None
+    assert result.prompt_tokens_details.video_tokens == 10240, \
+        "Prompt video tokens should be 10240"
+    assert result.prompt_tokens_details.text_tokens == 9, \
+        "Prompt text tokens should be 9"
+    assert result.prompt_tokens_details.audio_tokens == 200, \
+        "Prompt audio tokens should be 200"
+
+    # Verify completion token details
+    assert result.completion_tokens_details is not None
+    assert result.completion_tokens_details.text_tokens == 79, \
+        "Completion text tokens should be 79"
+    assert result.completion_tokens_details.video_tokens is None, \
+        "Completion video tokens should be None (text-only response)"
+
+
+def test_vertex_ai_usage_metadata_with_video_tokens_in_candidates():
+    """Test candidatesTokensDetails with VIDEO modality.
+
+    Verifies that video tokens in the response (candidatesTokensDetails) are
+    correctly parsed and reflected in completion_tokens_details.video_tokens,
+    and that text_tokens is auto-calculated by subtracting video tokens.
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 10,
+        "candidatesTokenCount": 10330,
+        "totalTokenCount": 10340,
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 10},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 10240},
+            {"modality": "TEXT", "tokenCount": 90},
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens == 10330
+    assert result.completion_tokens_details is not None
+    assert result.completion_tokens_details.video_tokens == 10240, \
+        "Completion video tokens should be 10240"
+    assert result.completion_tokens_details.text_tokens == 90, \
+        "Completion text tokens should be 90"
+
+    # Verify prompt side has no video tokens
+    assert result.prompt_tokens_details.video_tokens is None, \
+        "Prompt video tokens should be None (text-only input)"
+
+
+def test_vertex_ai_usage_metadata_video_tokens_auto_calculated_text():
+    """Test that text_tokens is auto-calculated correctly when VIDEO modality
+    is present in candidatesTokensDetails but TEXT is omitted.
+
+    text = candidatesTokenCount - video_tokens - image_tokens - audio_tokens
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 10,
+        "candidatesTokenCount": 10330,
+        "totalTokenCount": 10340,
+        "candidatesTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 10240},
+            # TEXT intentionally omitted — should be auto-calculated
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens_details.video_tokens == 10240
+    # text = 10330 - 10240 = 90
+    assert result.completion_tokens_details.text_tokens == 90, \
+        "text_tokens should be auto-calculated as candidatesTokenCount - video_tokens"
+
+
+def test_vertex_ai_usage_metadata_video_tokens_with_caching():
+    """Test that cached video tokens are correctly subtracted from prompt video tokens
+    when cacheTokensDetails includes VIDEO modality.
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 10449,
+        "candidatesTokenCount": 79,
+        "totalTokenCount": 10528,
+        "cachedContentTokenCount": 5120,
+        "promptTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 10240},
+            {"modality": "TEXT", "tokenCount": 9},
+            {"modality": "AUDIO", "tokenCount": 200},
+        ],
+        "cacheTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 5120},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 79},
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    # video tokens should be reduced by cached amount: 10240 - 5120 = 5120
+    assert result.prompt_tokens_details.video_tokens == 5120, \
+        "Prompt video tokens should be 10240 - 5120 (cached) = 5120"
+    assert result.prompt_tokens_details.text_tokens == 9
+    assert result.prompt_tokens_details.audio_tokens == 200
+

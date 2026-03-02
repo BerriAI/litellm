@@ -6071,6 +6071,121 @@ async def test_build_key_filter_admin_all_member_overlap():
 
 
 @pytest.mark.asyncio
+async def test_build_key_filter_project_id():
+    """
+    Test that project_id is applied as a global AND condition, narrowing all results
+    to keys that belong to the specified project.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-123"
+    project_id = "proj-abc"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        project_id=project_id,
+    )
+
+    # Should be wrapped in a top-level AND for the project_id filter
+    assert "AND" in where
+    and_parts = where["AND"]
+    assert len(and_parts) == 2
+
+    # Second part of AND should be the project_id filter
+    assert {"project_id": project_id} in and_parts
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_access_group_id():
+    """
+    Test that access_group_id is applied as a global AND condition using hasSome,
+    narrowing results to keys whose access_group_ids array contains the given ID.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-123"
+    access_group_id = "ag-xyz"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        access_group_id=access_group_id,
+    )
+
+    # Should be wrapped in a top-level AND for the access_group_id filter
+    assert "AND" in where
+    and_parts = where["AND"]
+    assert len(and_parts) == 2
+
+    # Second part of AND should use hasSome for the array field
+    assert {"access_group_ids": {"hasSome": [access_group_id]}} in and_parts
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_project_id_and_access_group_id():
+    """
+    Test that project_id and access_group_id stack correctly when both are provided.
+    Both should be applied as AND conditions, narrowing results to keys that match both.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-123"
+    project_id = "proj-abc"
+    access_group_id = "ag-xyz"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        project_id=project_id,
+        access_group_id=access_group_id,
+    )
+
+    # After project_id: {"AND": [visibility_where, {"project_id": ...}]}
+    # After access_group_id: {"AND": [above, {"access_group_ids": ...}]}
+    assert "AND" in where
+    outer_and = where["AND"]
+    assert len(outer_and) == 2
+
+    # The access_group_ids filter is the outermost AND
+    access_group_filter = outer_and[1]
+    assert access_group_filter == {"access_group_ids": {"hasSome": [access_group_id]}}
+
+    # The project_id filter is nested one level in
+    inner = outer_and[0]
+    assert "AND" in inner
+    inner_and = inner["AND"]
+    assert {"project_id": project_id} in inner_and
+
+
+@pytest.mark.asyncio
 async def test_get_member_team_ids():
     """
     Test that get_member_team_ids returns all teams where user is a member
@@ -6305,3 +6420,38 @@ async def test_key_aliases_no_search_omits_ilike_filter():
     assert "ILIKE" not in count_sql
 
 
+
+class TestValidateKeyAliasFormat:
+    def test_validate_key_alias_format_valid(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
+        # Valid cases
+        _validate_key_alias_format(None)  # OK
+        _validate_key_alias_format("valid-alias")
+        _validate_key_alias_format("valid_alias")
+        _validate_key_alias_format("valid.alias")
+        _validate_key_alias_format("valid/alias")
+        _validate_key_alias_format("a" * 255)
+        _validate_key_alias_format("my-key-123")
+
+    def test_validate_key_alias_format_invalid(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
+        from litellm.proxy._types import ProxyException
+        
+        invalid_aliases = [
+            "",               # empty
+            " ",              # whitespace
+            "a",              # too short (min 2)
+            "!",              # special char
+            "-start",         # non-alphanumeric start
+            "end-",           # non-alphanumeric end
+            "invalid@char",   # invalid char
+            "a" * 256,        # too long
+            "  leading",
+            "trailing  ",
+        ]
+        
+        for alias in invalid_aliases:
+            with pytest.raises(ProxyException) as exc:
+                _validate_key_alias_format(alias)
+            assert str(exc.value.code) == "400"
+            assert "Invalid key_alias format" in str(exc.value.message)

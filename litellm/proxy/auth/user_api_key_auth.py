@@ -164,7 +164,7 @@ def _get_bearer_token(
 def _apply_budget_limits_to_end_user_params(
     end_user_params: dict,
     budget_info: LiteLLM_BudgetTable,
-    end_user_id: str,
+    end_user_id: Optional[str],
 ) -> None:
     """
     Helper function to apply budget limits to end user parameters.
@@ -212,10 +212,12 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
         api_key = websocket.headers.get("api-key")
         if not api_key:
             # Try extracting from WebSocket subprotocol (browser clients)
-            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
+            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(
+                ","
+            ):
                 protocol = protocol.strip()
                 if protocol.startswith("openai-insecure-api-key."):
-                    api_key = protocol[len("openai-insecure-api-key."):]
+                    api_key = protocol[len("openai-insecure-api-key.") :]
                     break
         if not api_key:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -704,6 +706,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         user_api_key_cache=user_api_key_cache,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+                    if _jwt_project_obj is not None:
+                        valid_token.project_metadata = _jwt_project_obj.metadata
 
                 # run through common checks
                 _ = await common_checks(
@@ -1294,6 +1298,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+                if _project_obj is not None:
+                    valid_token.project_metadata = _project_obj.metadata
 
             global_proxy_spend = None
             if (
@@ -1576,7 +1582,7 @@ async def _lookup_end_user_and_apply_budget(
                 _apply_budget_limits_to_end_user_params(
                     end_user_params=end_user_params,
                     budget_info=end_user_object.litellm_budget_table,
-                    end_user_id=valid_token.end_user_id,
+                    end_user_id=valid_token.end_user_id or "",
                 )
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
@@ -1594,7 +1600,7 @@ async def _lookup_end_user_and_apply_budget(
                 _apply_budget_limits_to_end_user_params(
                     end_user_params=end_user_params,
                     budget_info=default_budget,
-                    end_user_id=valid_token.end_user_id,
+                    end_user_id=valid_token.end_user_id or "",
                 )
                 valid_token = update_valid_token_with_end_user_params(
                     valid_token=valid_token, end_user_params=end_user_params
@@ -1743,6 +1749,8 @@ async def _run_post_custom_auth_checks(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if _project_obj is not None:
+            valid_token.project_metadata = _project_obj.metadata
 
     _ = await common_checks(
         request=request,
