@@ -13,6 +13,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -55,7 +56,10 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import (
+    PromptTokensDetailsWrapper,
+    ServerToolUse,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -729,32 +733,30 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
+        effort_to_budget = {
+            "minimal": DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+            "low": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            "medium": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            "high": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            "xhigh": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+        }
         if AnthropicConfig._is_claude_4_6_model(model):
+            budget_tokens = effort_to_budget.get(reasoning_effort)
+            if budget_tokens is not None:
+                return AnthropicThinkingParam(
+                    type="adaptive",
+                    budget_tokens=budget_tokens,
+                )
             return AnthropicThinkingParam(
                 type="adaptive",
             )
-        elif reasoning_effort == "low":
+        budget_tokens = effort_to_budget.get(reasoning_effort)
+        if budget_tokens is not None:
             return AnthropicThinkingParam(
                 type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+                budget_tokens=budget_tokens,
             )
-        elif reasoning_effort == "medium":
-            return AnthropicThinkingParam(
-                type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-            )
-        elif reasoning_effort == "high":
-            return AnthropicThinkingParam(
-                type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-            )
-        elif reasoning_effort == "minimal":
-            return AnthropicThinkingParam(
-                type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
-            )
-        else:
-            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+        raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
@@ -1014,6 +1016,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "minimal": "low",
                         "medium": "medium",
                         "high": "high",
+                        "xhigh": "max",
                         "max": "max",
                     }
                     mapped_effort = effort_map.get(value, value)

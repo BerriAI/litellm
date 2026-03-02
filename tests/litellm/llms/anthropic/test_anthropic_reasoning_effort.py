@@ -28,12 +28,28 @@ class TestMapReasoningEffort:
             reasoning_effort="low", model="claude-opus-4-6"
         )
         assert result["type"] == "adaptive"
+        assert result["budget_tokens"] == 1024
 
     def test_opus_4_6_returns_adaptive_for_high(self):
         result = AnthropicConfig._map_reasoning_effort(
             reasoning_effort="high", model="claude-opus-4-6"
         )
         assert result["type"] == "adaptive"
+        assert result["budget_tokens"] == 4096
+
+    def test_opus_4_6_returns_adaptive_for_medium(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="medium", model="claude-opus-4-6"
+        )
+        assert result["type"] == "adaptive"
+        assert result["budget_tokens"] == 2048
+
+    def test_opus_4_6_returns_adaptive_for_minimal(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="minimal", model="claude-opus-4-6"
+        )
+        assert result["type"] == "adaptive"
+        assert result["budget_tokens"] == 128
 
     def test_other_model_low_returns_enabled_with_budget(self):
         result = AnthropicConfig._map_reasoning_effort(
@@ -62,3 +78,17 @@ class TestMapReasoningEffort:
             reasoning_effort="none", model="claude-4-sonnet-20250514"
         )
         assert result is None
+
+    def test_opus_4_6_returns_adaptive_with_budget_for_xhigh(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="xhigh", model="claude-opus-4-6"
+        )
+        assert result["type"] == "adaptive"
+        assert result["budget_tokens"] == 10000
+
+    def test_other_model_xhigh_returns_enabled_with_budget(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="xhigh", model="claude-4-sonnet-20250514"
+        )
+        assert result["type"] == "enabled"
+        assert result["budget_tokens"] == 10000
