@@ -291,12 +291,27 @@ class MockTeamModelTableForUpdate:
         )
 
 
+class MockDeletedProxyModel:
+    def __init__(self, model_id: str):
+        self.model_id = model_id
+
+    def model_dump_json(self, exclude_none: bool = True):
+        return json.dumps({"model_id": self.model_id})
+
+
 class MockTxSession:
-    def __init__(self, state: dict, fail_after_team_update: bool = False):
+    def __init__(
+        self,
+        state: dict,
+        fail_after_team_update: bool = False,
+        fail_model_delete: bool = False,
+    ):
         self.state = state
         self.fail_after_team_update = fail_after_team_update
+        self.fail_model_delete = fail_model_delete
         self.litellm_teamtable = self
         self.litellm_modeltable = self
+        self.litellm_proxymodeltable = self
 
     async def find_unique(self, where):
         if "team_id" in where:
@@ -348,6 +363,18 @@ class MockTxSession:
             updated_by=data["updated_by"],
         )
 
+    async def delete(self, where):
+        proxy_model_id = where.get("model_id")
+        deployments = self.state.get("deployments", {})
+        if proxy_model_id not in deployments:
+            return None
+        if self.fail_model_delete:
+            raise RuntimeError("forced model delete failure")
+
+        del deployments[proxy_model_id]
+        self.state["deployments"] = deployments
+        return MockDeletedProxyModel(model_id=proxy_model_id)
+
 
 class MockTxContextManager:
     def __init__(self, db):
@@ -358,6 +385,7 @@ class MockTxContextManager:
         self.session = MockTxSession(
             state=self.working_state,
             fail_after_team_update=self.db.fail_after_team_update,
+            fail_model_delete=self.db.fail_model_delete,
         )
         return self.session
 
@@ -368,9 +396,15 @@ class MockTxContextManager:
 
 
 class MockTransactionalDB:
-    def __init__(self, state: dict, fail_after_team_update: bool = False):
+    def __init__(
+        self,
+        state: dict,
+        fail_after_team_update: bool = False,
+        fail_model_delete: bool = False,
+    ):
         self.state = state
         self.fail_after_team_update = fail_after_team_update
+        self.fail_model_delete = fail_model_delete
 
     def tx(self):
         return MockTxContextManager(self)
@@ -545,6 +579,73 @@ class TestTeamModelAliasConsistency:
             "new-public": "internal-1"
         }
         assert patch_data.model_name is None
+
+    @pytest.mark.asyncio
+    async def test_delete_model_and_team_references_atomically_success(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _delete_model_and_team_references_atomically,
+        )
+
+        db_state = {
+            "model_id": 1,
+            "models": ["model1", "model2"],
+            "aliases": json.dumps({"model1": "internal_1", "model2": "internal_2"}),
+            "deployments": {"delete-model-id": {"model_id": "delete-model-id"}},
+        }
+        prisma_client = MagicMock()
+        prisma_client.db = MockTransactionalDB(state=db_state)
+
+        result = await _delete_model_and_team_references_atomically(
+            model_id="delete-model-id",
+            team_id="team-1",
+            internal_model_name="internal_1",
+            public_model_name="model1",
+            prisma_client=prisma_client,
+        )
+
+        assert result is not None
+        assert prisma_client.db.state["models"] == ["model2"]
+        assert json.loads(prisma_client.db.state["aliases"]) == {
+            "model2": "internal_2"
+        }
+        assert "delete-model-id" not in prisma_client.db.state["deployments"]
+
+    @pytest.mark.asyncio
+    async def test_delete_model_and_team_references_atomically_rolls_back_on_delete_failure(
+        self,
+    ):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _delete_model_and_team_references_atomically,
+        )
+
+        db_state = {
+            "model_id": 1,
+            "models": ["model1", "model2"],
+            "aliases": json.dumps({"model1": "internal_1", "model2": "internal_2"}),
+            "deployments": {"delete-model-id": {"model_id": "delete-model-id"}},
+        }
+        prisma_client = MagicMock()
+        prisma_client.db = MockTransactionalDB(
+            state=db_state,
+            fail_model_delete=True,
+        )
+
+        with pytest.raises(RuntimeError):
+            await _delete_model_and_team_references_atomically(
+                model_id="delete-model-id",
+                team_id="team-1",
+                internal_model_name="internal_1",
+                public_model_name="model1",
+                prisma_client=prisma_client,
+            )
+
+        # Team aliases/model list are unchanged because delete is in same tx.
+        assert prisma_client.db.state["models"] == ["model1", "model2"]
+        assert json.loads(prisma_client.db.state["aliases"]) == {
+            "model1": "internal_1",
+            "model2": "internal_2",
+        }
+        assert "delete-model-id" in prisma_client.db.state["deployments"]
 
 
 class TestDeleteTeamModelAlias:
