@@ -36,8 +36,8 @@ class TestBedrockConverseBetaHeaderStripping:
         def spy_get_request_headers(**kwargs):
             nonlocal spy_called
             spy_called = True
-            result = original_get_request_headers(**kwargs)
             captured_request_headers.update(kwargs.get("extra_headers", {}))
+            result = original_get_request_headers(**kwargs)
             return result
 
         with patch.object(handler, "get_request_headers", side_effect=spy_get_request_headers):
