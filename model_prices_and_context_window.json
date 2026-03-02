@@ -23274,19 +23274,6 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "mistral/saba-2502": {
-        "input_cost_per_token": 2e-07,
-        "litellm_provider": "mistral",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "chat",
-        "output_cost_per_token": 6e-07,
-        "source": "https://mistral.ai/pricing",
-        "supports_assistant_prefill": true,
-        "supports_function_calling": true,
-        "supports_tool_choice": true
-    },
     "mistral/mistral-tiny": {
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "mistral",
