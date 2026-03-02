@@ -19,13 +19,14 @@ from litellm.types.utils import ModelResponse
     This helper is intended to be the canonical way of turning MiniMax
             str(item.get("text")) if item.get("text") is not None else ""
             for item in details
-            if isinstance(item, dict)
-    against unexpected shapes:
-    - `str` is returned as-is.
-    - `list` entries that are dicts contribute their `"text"` value (if str).
-      List entries that are plain strings are also included.
-    - A bare `dict` contributes its `"text"` value (if str).
-    - All other values are ignored, and an empty string is returned if no
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning_details" in delta:
+                text = _concat_reasoning_details(delta.pop("reasoning_details"))
+                if text and "reasoning_content" not in delta:
+                    delta["reasoning_content"] = text
+        return super()._map_reasoning_to_reasoning_content(choices)
       usable text fragments are found.
     """
     fragments: List[str] = []
@@ -137,9 +138,10 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         # MiniMax supports cache_control, so return messages and tools unchanged
         return messages, tools
 
-    def get_supported_openai_params(self, model: str) -> list:
-        json_mode: bool = False,
-    ) -> MinimaxChatCompletionStreamingHandler:
+        """
+        Get supported OpenAI parameters for MiniMax.
+        Adds reasoning_split and thinking to the list of supported params.
+        """
         Adds reasoning_split and thinking to the list of supported params.
         """
         base_params = super().get_supported_openai_params(model=model)
