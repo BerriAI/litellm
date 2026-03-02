@@ -2061,12 +2061,10 @@ class InitPassThroughEndpointHelpers:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
         root_path = get_server_root_path()
-
-        ## CHECK IF MAPPED PASS THROUGH ENDPOINT
+        root_path_prefix = InitPassThroughEndpointHelpers._build_full_path_with_root("")
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            full_route = (
-                mapped_route if root_path == "/" else f"{root_path}{mapped_route}"
-            )
+            full_route = f"{root_path_prefix}{mapped_route}"
+            if route.startswith(full_route):
             if route.startswith(full_route):
                 return True
 
