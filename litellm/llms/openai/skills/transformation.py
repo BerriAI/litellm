@@ -431,6 +431,17 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         else:
             created_at_str = str(created_ts)
 
+        updated_ts = data.get("updated_at")
+        if updated_ts is not None:
+            if isinstance(updated_ts, (int, float)):
+                updated_at_str = datetime.datetime.fromtimestamp(
+                    updated_ts, tz=datetime.timezone.utc
+                ).isoformat()
+            else:
+                updated_at_str = str(updated_ts)
+        else:
+            updated_at_str = created_at_str
+
         return Skill(
             id=data["id"],
             created_at=created_at_str,
@@ -439,5 +450,5 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             latest_version=str(data["latest_version"]) if data.get("latest_version") is not None else None,
             source="custom",
             type=data.get("object", "skill"),
-            updated_at=data.get("updated_at", created_at_str),  # OpenAI may not have updated_at; fallback to created_at
+            updated_at=updated_at_str,
         )
