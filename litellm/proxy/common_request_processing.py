@@ -887,7 +887,11 @@ class ProxyBaseLLMRequestProcessing:
 
         response = responses[1]
 
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        hidden_params = (
+            response.get("_hidden_params", {})
+            if isinstance(response, dict)
+            else getattr(response, "_hidden_params", {})
+        ) or {}
         model_id = self._get_model_id_from_response(hidden_params, self.data)
 
         cache_key, api_base, response_cost = (
