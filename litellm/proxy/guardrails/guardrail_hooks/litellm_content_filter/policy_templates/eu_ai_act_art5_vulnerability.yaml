@@ -1,0 +1,112 @@
+# EU AI Act Article 5.1(b) — Exploitation of Vulnerabilities
+# Prohibits AI systems that exploit vulnerabilities of persons due to age,
+# disability, or social/economic situation to distort their behavior.
+# Reference: https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_vulnerability"
+description: "Art. 5.1(b) — Blocks AI systems that exploit vulnerabilities of children, elderly, or disabled persons"
+default_action: "BLOCK"
+
+identifier_words:
+  # System development actions
+  - "build"
+  - "create"
+  - "develop"
+  - "design"
+  - "implement"
+
+  # Exploitation actions
+  - "exploit"
+  - "target"
+  - "manipulate"
+  - "take advantage"
+  - "abuse"
+  - "leverage"
+  - "prey on"
+
+  # Analysis/profiling actions
+  - "profile"
+  - "assess"
+  - "evaluate"
+  - "analyze"
+  - "score"
+  - "classify"
+  - "detect"
+  - "identify"
+
+additional_block_words:
+  # Children vulnerability
+  - "children vulnerability"
+  - "child vulnerability"
+  - "minor vulnerability"
+  - "vulnerable children"
+  - "vulnerable minors"
+  - "underage vulnerability"
+  - "child susceptibility"
+  - "children susceptibility"
+  - "targeting children"
+  - "targeting minors"
+
+  # Elderly vulnerability
+  - "elderly vulnerability"
+  - "senior vulnerability"
+  - "old age vulnerability"
+  - "vulnerable elderly"
+  - "vulnerable seniors"
+  - "elderly susceptibility"
+  - "targeting elderly"
+  - "targeting seniors"
+  - "cognitive decline"
+
+  # Disability vulnerability
+  - "disabled vulnerability"
+  - "disability vulnerability"
+  - "vulnerable disabled"
+  - "disabled susceptibility"
+  - "intellectual disability"
+  - "cognitive impairment"
+  - "mental disability"
+  - "targeting disabled"
+
+  # Economic vulnerability
+  - "economic vulnerability"
+  - "financial vulnerability"
+  - "poverty vulnerability"
+  - "low income vulnerability"
+  - "socioeconomic vulnerability"
+  - "vulnerable population"
+
+always_block_keywords:
+  - keyword: "exploit child vulnerability"
+    severity: "high"
+  - keyword: "exploit elderly vulnerability"
+    severity: "high"
+  - keyword: "exploit disabled vulnerability"
+    severity: "high"
+  - keyword: "target vulnerable children"
+    severity: "high"
+  - keyword: "target vulnerable elderly"
+    severity: "high"
+  - keyword: "prey on vulnerable"
+    severity: "high"
+  - keyword: "exploit cognitive impairment"
+    severity: "high"
+  - keyword: "manipulate vulnerable population"
+    severity: "high"
+
+exceptions:
+  - "research on"
+  - "study on"
+  - "academic"
+  - "thesis on"
+  - "explain"
+  - "what is"
+  - "article 5"
+  - "prohibited by"
+  - "protect vulnerable"
+  - "safeguard"
+  - "compliance monitoring"
+  - "ethical review"
+  - "accessibility"
+  - "support for"
+  - "help for"
+  - "assist"

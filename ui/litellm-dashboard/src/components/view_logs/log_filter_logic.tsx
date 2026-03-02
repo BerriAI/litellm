@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
+import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
 import { PaginatedResponse } from ".";
@@ -132,16 +132,6 @@ export function useLogFilterLogic({
     return () => debouncedSearch.cancel();
   }, [debouncedSearch]);
 
-  const queryAllKeysQuery = useQuery({
-    queryKey: ["allKeys"],
-    queryFn: async () => {
-      if (!accessToken) throw new Error("Access token required");
-      return await fetchAllKeyAliases(accessToken);
-    },
-    enabled: !!accessToken,
-  });
-  const allKeyAliases = queryAllKeysQuery.data || [];
-
   // Determine when backend filters are active (server-side filtering)
   const hasBackendFilters = useMemo(
     () =>
@@ -158,12 +148,20 @@ export function useLogFilterLogic({
     [filters],
   );
 
-  // Refetch when sort or page changes (backend filters use their own fetch, not the main query)
+  // Refetch when sort, page, or time range changes (backend filters use their own fetch, not the main query)
   useEffect(() => {
     if (hasBackendFilters && accessToken) {
+      // Cancel any pending debounced search to prevent it from overwriting this page's results
+      debouncedSearch.cancel();
       performSearch(filters, currentPage);
     }
-  }, [sortBy, sortOrder, currentPage]);
+    // Intentionally omitted from deps:
+    // - `filters` / `debouncedSearch` / `performSearch`: filter changes are handled by
+    //   handleFilterChange → debouncedSearch; adding them here would double-fetch on filter apply.
+    // - `hasBackendFilters` / `accessToken`: stable across sort/page/time changes; including them
+    //   would cause spurious re-runs when the filter state first becomes active.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortBy, sortOrder, currentPage, startTime, endTime, isCustomDate]);
 
   // Compute client-side filtered logs directly from incoming logs and filters
   const clientDerivedFilteredLogs: PaginatedResponse = useMemo(() => {
@@ -301,7 +299,7 @@ export function useLogFilterLogic({
   return {
     filters,
     filteredLogs,
-    allKeyAliases,
+    hasBackendFilters,
     allTeams,
     handleFilterChange,
     handleFilterReset,

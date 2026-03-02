@@ -332,7 +332,7 @@ async def test_mcp_get_prompt_success():
         mock_manager.get_prompt_from_server = AsyncMock(return_value=prompt_result)
 
         result = await mcp_get_prompt(
-            name="hello",
+            name="server_a-hello",  # prefixed name since server prefixes are always added
             arguments={"foo": "bar"},
             user_api_key_auth=user_api_key_auth,
         )
@@ -486,7 +486,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         working_server if server_id == "working_server" else failing_server
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -588,7 +588,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -967,10 +967,9 @@ async def test_oauth2_headers_passed_to_mcp_client():
         global_mcp_server_manager,
         "_fetch_tools_with_timeout",
         side_effect=mock_fetch_tools_with_timeout,
-    ), patch.object(
-        global_mcp_server_manager,
-        "get_allowed_mcp_servers",
-        AsyncMock(return_value=[oauth2_server.server_id]),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        AsyncMock(return_value=[oauth2_server]),
     ):
         # Call _get_tools_from_mcp_servers which should eventually call _create_mcp_client
         await _get_tools_from_mcp_servers(
@@ -1007,7 +1006,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
 
 @pytest.mark.asyncio
 async def test_list_tools_single_server_unprefixed_names():
-    """When only one MCP server is allowed, list tools should return unprefixed names."""
+    """When only one MCP server is allowed, list tools should return prefixed names (server prefix is always added)."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _get_tools_from_mcp_servers,
@@ -1036,7 +1035,7 @@ async def test_list_tools_single_server_unprefixed_names():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1064,9 +1063,9 @@ async def test_list_tools_single_server_unprefixed_names():
             mcp_server_auth_headers=None,
         )
 
-    # Should be unprefixed since only one server is allowed
+    # Server prefix is always added regardless of number of allowed servers
     assert len(tools) == 1
-    assert tools[0].name == "toolA"
+    assert tools[0].name == "zapier-toolA"
 
 
 @pytest.mark.asyncio
@@ -1114,7 +1113,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         server1 if server_id == "server1" else server2
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1365,7 +1364,7 @@ async def test_list_tools_filters_by_key_team_permissions():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1472,7 +1471,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1564,7 +1563,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1659,7 +1658,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["gitmcp_server"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,

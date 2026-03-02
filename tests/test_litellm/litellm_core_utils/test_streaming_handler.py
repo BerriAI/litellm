@@ -715,6 +715,86 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+@pytest.mark.asyncio
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+    """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20870
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    async def _raise_rate_limit(**kwargs):
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.generated_content == ""
+
+
+def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+    """Ensure __next__ raises MidStreamFallbackError on 429, not RateLimitError.
+
+    This is the sync-streaming equivalent of the async test above.  Before
+    this fix, __next__ would raise RateLimitError directly, bypassing the
+    Router's fallback chain entirely.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    def _raise_rate_limit(**kwargs):
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        next(response)
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.generated_content == ""
+
+
+def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
+    """Ensure __next__ raises BadRequestError (400) directly, not MidStreamFallbackError.
+
+    Non-retriable 4xx errors should surface immediately to the caller.
+    """
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    def _raise_bad_request(**kwargs):
+        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-pro-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_bad_request,
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        next(response)
+
+    assert getattr(excinfo.value, "status_code", None) == 400
+    assert "invalid maxOutputTokens" in str(excinfo.value)
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):
@@ -1333,3 +1413,50 @@ async def test_custom_stream_wrapper_anext_marks_sync_success_handler_as_async_o
 
     assert mock_submit.call_count == 1
     assert mock_submit.call_args.kwargs.get("called_from_async") is True
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose():
+    """Test that aclose() delegates to the underlying completion_stream's aclose()"""
+    mock_stream = AsyncMock()
+    mock_stream.aclose = AsyncMock()
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=mock_stream,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    await wrapper.aclose()
+    mock_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_no_underlying():
+    """Test that aclose() is safe when completion_stream has no aclose method"""
+    mock_stream = MagicMock(spec=[])  # No aclose attribute
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=mock_stream,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    # Should not raise
+    await wrapper.aclose()
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_none_stream():
+    """Test that aclose() is safe when completion_stream is None"""
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    # Should not raise
+    await wrapper.aclose()

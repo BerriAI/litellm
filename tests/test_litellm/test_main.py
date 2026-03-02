@@ -415,7 +415,7 @@ def set_openrouter_api_key():
 
 @pytest.mark.asyncio
 async def test_extra_body_with_fallback(
-    respx_mock: respx.MockRouter, set_openrouter_api_key
+    respx_mock: respx.MockRouter, set_openrouter_api_key, monkeypatch
 ):
     """
     test regression for https://github.com/BerriAI/litellm/issues/8425.
@@ -428,7 +428,12 @@ async def test_extra_body_with_fallback(
 
     try:
         # since this uses respx, we need to set use_aiohttp_transport to False
+        # Set both the global variable and environment variable to ensure it takes effect
         litellm.disable_aiohttp_transport = True
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        # Flush cache to ensure no stale aiohttp clients are used
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        
         # Set up test parameters
         model = "openrouter/deepseek/deepseek-chat"
         messages = [{"role": "user", "content": "Hello, world!"}]
@@ -441,7 +446,11 @@ async def test_extra_body_with_fallback(
         }
         fallbacks = [{"model": "openrouter/google/gemini-flash-1.5-8b"}]
 
-        respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(
+        # Set up mock to respond to any POST request to the OpenRouter endpoint
+        # This ensures it works for both primary and fallback models
+        mock_route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions")
+        mock_route.return_value = httpx.Response(
+            200,
             json={
                 "id": "chatcmpl-123",
                 "object": "chat.completion",
@@ -469,6 +478,10 @@ async def test_extra_body_with_fallback(
             api_key="fake-openrouter-api-key",
         )
 
+        # Verify the response
+        assert response is not None
+        assert len(respx_mock.calls) > 0, "Mock was not called - check if aiohttp transport is properly disabled"
+        
         # Get the request from the mock
         request: httpx.Request = respx_mock.calls[0].request
         request_body = request.read()
@@ -482,12 +495,10 @@ async def test_extra_body_with_fallback(
         assert request_body["provider"]["order"] == ["DeepSeek"]
         assert request_body["provider"]["allow_fallbacks"] is False
         assert request_body["provider"]["require_parameters"] is True
-
-        # Verify the response
-        assert response is not None
     finally:
         # Restore original state to prevent test pollution
         litellm.disable_aiohttp_transport = original_disable_aiohttp
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])

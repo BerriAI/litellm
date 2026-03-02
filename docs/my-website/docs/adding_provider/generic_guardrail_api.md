@@ -237,6 +237,7 @@ litellm_settings:
         mode: pre_call  # or post_call, during_call
         api_base: https://your-guardrail-api.com
         api_key: os.environ/YOUR_GUARDRAIL_API_KEY  # optional
+        unreachable_fallback: fail_closed  # default: fail_closed. Set to fail_open to proceed if the guardrail endpoint is unreachable (network errors, or HTTP 502/503/504 from an upstream proxy/LB).
         additional_provider_specific_params:
           # your custom parameters
           threshold: 0.8

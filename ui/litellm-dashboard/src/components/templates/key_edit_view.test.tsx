@@ -494,7 +494,50 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should disable cancel button during submission", async () => {
+  it("should display 'AI APIs' label for the llm_api key type option", async () => {
+    const keyDataWithLlmApiRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithLlmApiRoutes}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Key Type")).toBeInTheDocument();
+    });
+
+    // The selected key type label should show "AI APIs" (not "LLM API")
+    const keyTypeSection = screen.getByText("Key Type").closest(".ant-form-item")!;
+    expect(keyTypeSection).toBeInTheDocument();
+
+    // Open the dropdown to see all options
+    const selectElement = keyTypeSection.querySelector(".ant-select-selector")!;
+    await userEvent.click(selectElement);
+
+    await waitFor(() => {
+      // Verify "AI APIs" appears as an option label
+      const options = document.querySelectorAll(".ant-select-item-option");
+      const optionTexts = Array.from(options).map((el) => el.textContent);
+      const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
+      expect(hasAIAPIs).toBe(true);
+
+      // Verify old "LLM API" label does NOT appear
+      const hasLLMAPI = optionTexts.some((text) => text?.includes("LLM API"));
+      expect(hasLLMAPI).toBe(false);
+    });
+  });
+
+  it("should display cancel button during submission", async () => {
     let resolveSubmit: (() => void) | undefined;
     const submitPromise = new Promise<void>((resolve) => {
       resolveSubmit = resolve;

@@ -4,25 +4,24 @@ CRUD ENDPOINTS FOR POLICIES
 Provides REST API endpoints for managing policies and policy attachments.
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+from litellm.proxy.policy_engine.attachment_registry import \
+    get_attachment_registry
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.types.proxy.policy_engine import (
-    GuardrailPipeline,
-    PipelineTestRequest,
-    PolicyAttachmentCreateRequest,
-    PolicyAttachmentDBResponse,
-    PolicyAttachmentListResponse,
-    PolicyCreateRequest,
-    PolicyDBResponse,
-    PolicyListDBResponse,
-    PolicyUpdateRequest,
-)
+    GuardrailPipeline, PipelineTestRequest, PolicyAttachmentCreateRequest,
+    PolicyAttachmentDBResponse, PolicyAttachmentListResponse,
+    PolicyCreateRequest, PolicyDBResponse, PolicyListDBResponse,
+    PolicyUpdateRequest, PolicyVersionCompareResponse,
+    PolicyVersionCreateRequest, PolicyVersionListResponse,
+    PolicyVersionStatusUpdateRequest)
 
 router = APIRouter()
 
@@ -38,13 +37,19 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyListDBResponse,
 )
-async def list_policies():
+async def list_policies(version_status: Optional[str] = None):
     """
-    List all policies from the database.
+    List all policies from the database. Optionally filter by version_status.
+
+    Query params:
+    - version_status: Optional. One of "draft", "published", "production".
+      If omitted, all versions are returned.
 
     Example Request:
     ```bash
     curl -X GET "http://localhost:4000/policies/list" \\
+        -H "Authorization: Bearer <your_api_key>"
+    curl -X GET "http://localhost:4000/policies/list?version_status=production" \\
         -H "Authorization: Bearer <your_api_key>"
     ```
 
@@ -55,6 +60,8 @@ async def list_policies():
             {
                 "policy_id": "123e4567-e89b-12d3-a456-426614174000",
                 "policy_name": "global-baseline",
+                "version_number": 1,
+                "version_status": "production",
                 "inherit": null,
                 "description": "Base guardrails for all requests",
                 "guardrails_add": ["pii_masking"],
@@ -74,7 +81,9 @@ async def list_policies():
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        policies = await get_policy_registry().get_all_policies_from_db(prisma_client)
+        policies = await get_policy_registry().get_all_policies_from_db(
+            prisma_client, version_status=version_status
+        )
         return PolicyListDBResponse(policies=policies, total_count=len(policies))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing policies: {e}")
@@ -143,6 +152,172 @@ async def create_policy(
                 detail=f"Policy with name '{request.policy_name}' already exists",
             )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Policy Versioning Endpoints (must be before /policies/{policy_id} to avoid path conflicts)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/policies/name/{policy_name}/versions",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyVersionListResponse,
+)
+async def list_policy_versions(policy_name: str):
+    """
+    List all versions of a policy by name, ordered by version_number descending.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        return await get_policy_registry().get_versions_by_policy_name(
+            policy_name=policy_name,
+            prisma_client=prisma_client,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error listing policy versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/policies/name/{policy_name}/versions",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyDBResponse,
+)
+async def create_policy_version(
+    policy_name: str,
+    request: PolicyVersionCreateRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Create a new draft version of a policy. Copies all fields from the source.
+    Source is current production if source_policy_id is not provided.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        created_by = user_api_key_dict.user_id
+        return await get_policy_registry().create_new_version(
+            policy_name=policy_name,
+            prisma_client=prisma_client,
+            source_policy_id=request.source_policy_id,
+            created_by=created_by,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error creating policy version: {e}")
+        if "not found" in str(e).lower() or "no production" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put(
+    "/policies/{policy_id}/status",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyDBResponse,
+)
+async def update_policy_version_status(
+    policy_id: str,
+    request: PolicyVersionStatusUpdateRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update a policy version's status. Valid transitions:
+    - draft -> published
+    - published -> production (demotes current production to published)
+    - production -> published (demotes, policy becomes inactive)
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        updated_by = user_api_key_dict.user_id
+        return await get_policy_registry().update_version_status(
+            policy_id=policy_id,
+            new_status=request.version_status,
+            prisma_client=prisma_client,
+            updated_by=updated_by,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating version status: {e}")
+        if "invalid status" in str(e).lower() or "only draft" in str(e).lower() or "cannot promote" in str(e).lower():
+            raise HTTPException(status_code=400, detail=str(e))
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/policies/compare",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyVersionCompareResponse,
+)
+async def compare_policy_versions(
+    version_a: str,
+    version_b: str,
+):
+    """
+    Compare two policy versions. Query params: version_a, version_b (policy version IDs).
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        return await get_policy_registry().compare_versions(
+            policy_id_a=version_a,
+            policy_id_b=version_b,
+            prisma_client=prisma_client,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error comparing versions: {e}")
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/policies/name/{policy_name}/all-versions",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_all_policy_versions(policy_name: str):
+    """
+    Delete all versions of a policy. Also removes from in-memory registry.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        return await get_policy_registry().delete_all_versions(
+            policy_name=policy_name,
+            prisma_client=prisma_client,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error deleting all versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Policy CRUD by ID
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 @router.get(
@@ -214,7 +389,7 @@ async def update_policy(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Check if policy exists
+        # Check if policy exists and is draft (only drafts can be updated)
         existing = await get_policy_registry().get_policy_by_id_from_db(
             policy_id=policy_id,
             prisma_client=prisma_client,
@@ -222,6 +397,11 @@ async def update_policy(
         if existing is None:
             raise HTTPException(
                 status_code=404, detail=f"Policy with ID {policy_id} not found"
+            )
+        if getattr(existing, "version_status", "production") != "draft":
+            raise HTTPException(
+                status_code=400,
+                detail="Only draft versions can be updated. Publish or create a new version to change published/production.",
             )
 
         updated_by = user_api_key_dict.user_id
@@ -281,6 +461,7 @@ async def delete_policy(policy_id: str):
             policy_id=policy_id,
             prisma_client=prisma_client,
         )
+        # Result may include "warning" if production was deleted
         return result
     except HTTPException:
         raise
@@ -527,9 +708,11 @@ async def create_policy_attachment(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Verify the policy exists
-        policy = await get_policy_registry().get_all_policies_from_db(prisma_client)
-        policy_names = [p.policy_name for p in policy]
+        # Verify the policy has a production version (attachments resolve against production)
+        policies = await get_policy_registry().get_all_policies_from_db(
+            prisma_client, version_status="production"
+        )
+        policy_names = {p.policy_name for p in policies}
         if request.policy_name not in policy_names:
             raise HTTPException(
                 status_code=404,
