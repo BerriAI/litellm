@@ -1284,8 +1284,14 @@ def completion_cost(  # noqa: PLR0915
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils._count_characters(text=prompt)
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
-                    audio_transcription_file_duration = getattr(
-                        completion_response, "duration", 0.0
+                    # Check _hidden_params first (duration stored there to
+                    # avoid polluting the response body), then fall back to
+                    # the response attribute (for verbose_json responses that
+                    # naturally include duration from the provider).
+                    _hidden = getattr(completion_response, "_hidden_params", {}) or {}
+                    audio_transcription_file_duration = _hidden.get(
+                        "audio_transcription_duration",
+                        getattr(completion_response, "duration", 0.0),
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(

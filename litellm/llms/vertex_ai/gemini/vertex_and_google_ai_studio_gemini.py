@@ -14,6 +14,7 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Type,
     Union,
     cast,
 )
@@ -106,6 +107,8 @@ from .transformation import (
 )
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import ModelResponseStream, StreamingChoices
 
@@ -225,6 +228,47 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    def get_json_schema_from_pydantic_object(
+        self, response_format: Optional[Union[Type["BaseModel"], dict]]
+    ) -> Optional[dict]:
+        """
+        Override to use Pydantic's model_json_schema() instead of OpenAI's
+        to_strict_json_schema().
+
+        OpenAI's to_strict_json_schema() inlines all $ref references, which
+        dramatically increases schema nesting depth and causes Gemini to reject
+        schemas with 'exceeds maximum allowed nesting depth' errors.
+
+        Pydantic's model_json_schema() preserves $ref/$defs, keeping the schema
+        compact. Gemini 2.0+ (responseJsonSchema) natively supports $ref, and
+        Gemini 1.5 (responseSchema) handles unpacking via _build_vertex_schema.
+
+        See: https://github.com/BerriAI/litellm/issues/21014
+        """
+        from pydantic import BaseModel as _BaseModel
+
+        if response_format is None:
+            return None
+
+        if isinstance(response_format, dict):
+            return response_format
+
+        if isinstance(response_format, type) and issubclass(
+            response_format, _BaseModel
+        ):
+            schema = response_format.model_json_schema()
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": schema,
+                    "name": response_format.__name__,
+                    "strict": True,
+                },
+            }
+
+        # Fallback: delegate to parent for unknown types
+        return super().get_json_schema_from_pydantic_object(response_format)
 
     @staticmethod
     def _is_gemini_3_or_newer(model: str) -> bool:
