@@ -10,10 +10,13 @@ def isolate_model_cost_state():
     """Save and restore _model_cost_remote_loaded state across tests."""
     import litellm
     original_state = litellm._model_cost_remote_loaded
+    original_last_failure = litellm._model_cost_last_failure_monotonic
     original_cost_dict = dict(litellm.model_cost)  # shallow copy
+    litellm._model_cost_last_failure_monotonic = 0.0
     yield
     # Restore state after test
     litellm._model_cost_remote_loaded = original_state
+    litellm._model_cost_last_failure_monotonic = original_last_failure
     litellm.model_cost.clear()
     litellm.model_cost.update(original_cost_dict)
 
@@ -94,8 +97,8 @@ class TestLazyModelCostMap:
 
         assert type(litellm.model_cost) is dict
 
-    def test_remote_failure_keeps_local_and_allows_retry(self, isolate_model_cost_state):
-        """If remote fetch fails, local backup data remains and next call retries."""
+    def test_remote_failure_keeps_local_and_uses_cooldown(self, isolate_model_cost_state):
+        """If remote fetch fails, local backup remains and retries respect cooldown."""
         import litellm
 
         litellm._model_cost_remote_loaded = False
@@ -104,9 +107,13 @@ class TestLazyModelCostMap:
             litellm._ensure_remote_model_cost()
             assert set(litellm.model_cost.keys()) == original_keys
             assert litellm._model_cost_remote_loaded is False  # flag NOT set on failure
-            # Next call should retry
+            # Immediate next call should skip due cooldown
             litellm._ensure_remote_model_cost()
-            assert mock_get.call_count == 2  # retried
+            assert mock_get.call_count == 1
+            # Force cooldown expiry, then retry should happen
+            litellm._model_cost_last_failure_monotonic = 0.0
+            litellm._ensure_remote_model_cost()
+            assert mock_get.call_count == 2
 
     def test_cost_per_token_triggers_remote_fetch(self, isolate_model_cost_state):
         """cost_per_token() should trigger _ensure_remote_model_cost on first use."""

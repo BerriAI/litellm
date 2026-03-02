@@ -12,6 +12,7 @@ warnings.filterwarnings(
 ### INIT VARIABLES #########################
 import threading
 import os
+import time
 
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
@@ -461,6 +462,8 @@ _model_cost_remote_loaded: bool = (
     os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true"
 )
 _model_cost_lock = threading.Lock()
+_model_cost_last_failure_monotonic: float = 0.0
+_MODEL_COST_RETRY_COOLDOWN_SECONDS: float = 60.0
 model_cost = GetModelCostMap.load_local_model_cost_map()
 
 
@@ -481,21 +484,35 @@ def _ensure_remote_model_cost() -> None:
     until process restart. This is an acceptable trade-off for thread safety
     (atomic reassignment would break references held by other modules).
     """
-    global _model_cost_remote_loaded
+    global _model_cost_remote_loaded, _model_cost_last_failure_monotonic
     if _model_cost_remote_loaded:
+        return
+    if (
+        _model_cost_last_failure_monotonic > 0
+        and (time.monotonic() - _model_cost_last_failure_monotonic)
+        < _MODEL_COST_RETRY_COOLDOWN_SECONDS
+    ):
         return
     with _model_cost_lock:
         if _model_cost_remote_loaded:
+            return
+        if (
+            _model_cost_last_failure_monotonic > 0
+            and (time.monotonic() - _model_cost_last_failure_monotonic)
+            < _MODEL_COST_RETRY_COOLDOWN_SECONDS
+        ):
             return
         try:
             remote = get_model_cost_map(url=_model_cost_url)
             model_cost.update(remote)  # merge remote on top of local; no clear() needed
             add_known_models()  # repopulate provider model sets with merged data
             _model_cost_remote_loaded = True
+            _model_cost_last_failure_monotonic = 0.0
         except Exception as e:
+            _model_cost_last_failure_monotonic = time.monotonic()
             verbose_logger.debug(
                 "LiteLLM: Remote model cost map fetch/merge failed: %s. "
-                "Keeping local backup; will retry on next call.",
+                "Keeping local backup; will retry after cooldown.",
                 str(e),
             )
 
