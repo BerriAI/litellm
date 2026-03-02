@@ -135,6 +135,9 @@ class TestGetVertexPublisherFromUrl:
 
     @pytest.mark.xfail(reason="Bug: _get_vertex_publisher_or_api_spec_from_url does not detect meta publisher")
     def test_meta_publisher(self):
+        url = "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/publishers/meta/models/llama-3.1-70b-instruct-maas:rawPredict"
+        assert self._get_publisher(url) == "meta"
+
     def test_google_publisher_returns_none(self):
         """Google publisher models go through generateContent, not rawPredict."""
         url = "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
