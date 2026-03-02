@@ -17,7 +17,9 @@ from litellm.types.utils import ModelResponse
     """Concatenate reasoning_details (list/dict/string) into a single string.
 
     This helper is intended to be the canonical way of turning MiniMax
-    `reasoning_details` structures into a flat string. It is defensive
+            str(item.get("text")) if item.get("text") is not None else ""
+            for item in details
+            if isinstance(item, dict)
     against unexpected shapes:
     - `str` is returned as-is.
     - `list` entries that are dicts contribute their `"text"` value (if str).
@@ -136,8 +138,8 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         return messages, tools
 
     def get_supported_openai_params(self, model: str) -> list:
-        """
-        Get supported OpenAI parameters for MiniMax.
+        json_mode: bool = False,
+    ) -> MinimaxChatCompletionStreamingHandler:
         Adds reasoning_split and thinking to the list of supported params.
         """
         base_params = super().get_supported_openai_params(model=model)
