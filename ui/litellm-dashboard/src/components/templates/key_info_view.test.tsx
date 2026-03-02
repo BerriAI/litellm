@@ -1,6 +1,8 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-import { render, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders } from "../../../tests/test-utils";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -12,6 +14,10 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
+  useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
 }));
 
 vi.mock("../networking", () => ({
@@ -49,6 +55,7 @@ describe("KeyInfoView", () => {
     config: {},
     user_id: "default_user_id",
     team_id: null,
+    project_id: null,
     max_parallel_requests: 10,
     metadata: {
       logging: [],
@@ -121,7 +128,7 @@ describe("KeyInfoView", () => {
   it("should render tags", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
-    render(
+    renderWithProviders(
       <KeyInfoView
         keyData={MOCK_KEY_DATA}
         onClose={() => { }}
@@ -138,7 +145,7 @@ describe("KeyInfoView", () => {
   it("should not render tags in metadata textarea", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
-    const { container } = render(
+    const { container } = renderWithProviders(
       <KeyInfoView
         keyData={MOCK_KEY_DATA}
         onClose={() => { }}
@@ -168,7 +175,7 @@ describe("KeyInfoView", () => {
     });
 
     const keyData = { ...MOCK_KEY_DATA, user_id: "other-user-id" };
-    render(
+    renderWithProviders(
       <KeyInfoView keyData={keyData} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
     );
 
@@ -213,7 +220,7 @@ describe("KeyInfoView", () => {
     });
 
     const keyData = { ...MOCK_KEY_DATA, team_id: teamId, user_id: "other-user-id" };
-    render(
+    renderWithProviders(
       <KeyInfoView keyData={keyData} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
     );
 
@@ -237,7 +244,7 @@ describe("KeyInfoView", () => {
 
     const ownerUserId = "owner-user-id";
     const keyData = { ...MOCK_KEY_DATA, user_id: ownerUserId };
-    render(
+    renderWithProviders(
       <KeyInfoView keyData={keyData} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
     );
 
@@ -260,7 +267,7 @@ describe("KeyInfoView", () => {
     });
 
     const keyData = { ...MOCK_KEY_DATA, user_id: "owner-user-id" };
-    render(
+    renderWithProviders(
       <KeyInfoView keyData={keyData} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
     );
 
@@ -284,7 +291,7 @@ describe("KeyInfoView", () => {
 
     const ownerUserId = "internal-viewer-user-id";
     const keyData = { ...MOCK_KEY_DATA, user_id: ownerUserId };
-    render(
+    renderWithProviders(
       <KeyInfoView keyData={keyData} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
     );
 
@@ -328,7 +335,7 @@ describe("KeyInfoView", () => {
     });
 
     const keyData = { ...MOCK_KEY_DATA, team_id: "non-matching-team-id", user_id: "other-user-id" };
-    render(
+    renderWithProviders(
       <KeyInfoView keyData={keyData} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
     );
 
@@ -342,7 +349,7 @@ describe("KeyInfoView", () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
     const onCloseMock = vi.fn();
 
-    render(
+    renderWithProviders(
       <KeyInfoView
         keyData={MOCK_KEY_DATA}
         onClose={onCloseMock}
@@ -365,7 +372,7 @@ describe("KeyInfoView", () => {
 
   describe("'Edit Settings' button visibility in the Settings tab", () => {
     const renderAndOpenSettingsTab = async (keyData = MOCK_KEY_DATA) => {
-      render(
+      renderWithProviders(
         <KeyInfoView
           keyData={keyData}
           onClose={() => {}}
@@ -474,7 +481,7 @@ describe("KeyInfoView", () => {
       },
     };
 
-    render(
+    renderWithProviders(
       <KeyInfoView
         keyData={keyDataWithGuardrails}
         onClose={() => { }}
@@ -500,7 +507,7 @@ describe("KeyInfoView", () => {
       },
     };
 
-    render(
+    renderWithProviders(
       <KeyInfoView
         keyData={keyDataWithPolicies}
         onClose={() => { }}
@@ -518,7 +525,7 @@ describe("KeyInfoView", () => {
   it("should display no key found message when keyData is undefined", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
-    render(
+    renderWithProviders(
       <KeyInfoView
         keyData={undefined}
         onClose={() => { }}

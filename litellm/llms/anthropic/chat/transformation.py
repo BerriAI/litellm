@@ -997,12 +997,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=value, model=model
                 )
+                # For Claude 4.6 models, effort is controlled via output_config,
+                # not thinking budget_tokens. Map reasoning_effort to output_config.
                 if AnthropicConfig._is_claude_4_6_model(model):
-                    # Map reasoning_effort to Anthropic's output_config for 4.6 models
-                    effort_map = {"minimal": "low", "low": "low", "medium": "medium", "high": "high", "max": "max"}
-                    anthropic_effort = effort_map.get(value)
-                    if anthropic_effort is not None:
-                        optional_params["output_config"] = {"effort": anthropic_effort}
+                    effort_map = {
+                        "low": "low",
+                        "minimal": "low",
+                        "medium": "medium",
+                        "high": "high",
+                        "max": "max",
+                    }
+                    mapped_effort = effort_map.get(value, value)
+                    optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)

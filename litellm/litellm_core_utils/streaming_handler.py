@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Iterator,
     List,
+    NoReturn,
     Optional,
     Union,
     cast,
@@ -96,6 +97,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self._stream_created_time: float = time.time()
 
         litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
             **self.logging_obj.model_call_details.get("litellm_params", {})
@@ -160,6 +162,20 @@ class CustomStreamWrapper:
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
+
+    def _check_max_streaming_duration(self) -> None:
+        """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
+        from litellm.constants import LITELLM_MAX_STREAMING_DURATION_SECONDS
+
+        if LITELLM_MAX_STREAMING_DURATION_SECONDS is None:
+            return
+        elapsed = time.time() - self._stream_created_time
+        if elapsed > LITELLM_MAX_STREAMING_DURATION_SECONDS:
+            raise litellm.Timeout(
+                message=f"Stream exceeded max streaming duration of {LITELLM_MAX_STREAMING_DURATION_SECONDS}s (elapsed {elapsed:.1f}s)",
+                model=self.model or "",
+                llm_provider=self.custom_llm_provider or "",
+            )
 
     def __iter__(self) -> Iterator["ModelResponseStream"]:
         return self
@@ -1236,27 +1252,27 @@ class CustomStreamWrapper:
                 else:
                     completion_obj["content"] = str(chunk)
             elif self.custom_llm_provider == "petals":
-                if len(self.completion_stream) == 0:
+                if self.completion_stream is None or len(self.completion_stream) == 0:
                     if self.received_finish_reason is not None:
                         raise StopIteration
                     else:
                         self.received_finish_reason = "stop"
                 chunk_size = 30
-                new_chunk = self.completion_stream[:chunk_size]
+                new_chunk = self.completion_stream[:chunk_size]  # type: ignore[index]
                 completion_obj["content"] = new_chunk
-                self.completion_stream = self.completion_stream[chunk_size:]
+                self.completion_stream = self.completion_stream[chunk_size:]  # type: ignore[index]
             elif self.custom_llm_provider == "palm":
                 # fake streaming
                 response_obj = {}
-                if len(self.completion_stream) == 0:
+                if self.completion_stream is None or len(self.completion_stream) == 0:
                     if self.received_finish_reason is not None:
                         raise StopIteration
                     else:
                         self.received_finish_reason = "stop"
                 chunk_size = 30
-                new_chunk = self.completion_stream[:chunk_size]
+                new_chunk = self.completion_stream[:chunk_size]  # type: ignore[index]
                 completion_obj["content"] = new_chunk
-                self.completion_stream = self.completion_stream[chunk_size:]
+                self.completion_stream = self.completion_stream[chunk_size:]  # type: ignore[index]
             elif self.custom_llm_provider == "triton":
                 response_obj = self.handle_triton_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -1743,6 +1759,7 @@ class CustomStreamWrapper:
             and self.custom_llm_provider == "cached_response"
         ):
             cache_hit = True
+        self._check_max_streaming_duration()
         try:
             if self.completion_stream is None:
                 self.fetch_sync_stream()
@@ -1755,7 +1772,7 @@ class CustomStreamWrapper:
                 ):
                     chunk = self.completion_stream
                 else:
-                    chunk = next(self.completion_stream)
+                    chunk = next(self.completion_stream)  # type: ignore[arg-type]
                 if chunk is not None and chunk != b"":
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
@@ -1883,14 +1900,7 @@ class CustomStreamWrapper:
             threading.Thread(
                 target=self.logging_obj.failure_handler, args=(e, traceback_exception)
             ).start()
-            if isinstance(e, OpenAIError):
-                raise e
-            else:
-                raise exception_type(
-                    model=self.model,
-                    original_exception=e,
-                    custom_llm_provider=self.custom_llm_provider,
-                )
+            self._handle_stream_fallback_error(e)
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -1917,12 +1927,13 @@ class CustomStreamWrapper:
             and self.custom_llm_provider == "cached_response"
         ):
             cache_hit = True
+        self._check_max_streaming_duration()
         try:
             if self.completion_stream is None:
                 await self.fetch_stream()
 
             if is_async_iterable(self.completion_stream):
-                async for chunk in self.completion_stream:
+                async for chunk in self.completion_stream:  # type: ignore[union-attr]
                     if chunk == "None" or chunk is None:
                         continue  # skip None chunks
 
@@ -1951,22 +1962,24 @@ class CustomStreamWrapper:
                     self.rules.post_call_rules(
                         input=self.response_uptil_now, model=self.model
                     )
-                    # Store a shallow copy so usage stripping below
-                    # does not mutate the stored chunk.
-                    self.chunks.append(processed_chunk.model_copy())
-
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
                         self.sent_first_chunk = True
-                    if (
+
+                    _has_usage = (
                         hasattr(processed_chunk, "usage")
                         and getattr(processed_chunk, "usage", None) is not None
-                    ):
+                    )
+
+                    if _has_usage:
+                        # Store a copy ONLY when usage stripping below will mutate
+                        # the chunk. For non-usage chunks (vast majority), store
+                        # directly to avoid expensive model_copy() per chunk.
+                        self.chunks.append(processed_chunk.model_copy())
+
                         # Strip usage from the outgoing chunk so it's not sent twice
                         # (once in the chunk, once in _hidden_params).
-                        # Create a new object without usage, matching sync behavior.
-                        # The copy in self.chunks retains usage for calculate_total_usage().
                         obj_dict = processed_chunk.model_dump()
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
@@ -1978,6 +1991,9 @@ class CustomStreamWrapper:
                         )
                         if is_empty:
                             continue
+                    else:
+                        # No usage data — safe to store directly without copying
+                        self.chunks.append(processed_chunk)
 
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
@@ -2004,7 +2020,7 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = next(self.completion_stream)
+                        chunk = next(self.completion_stream)  # type: ignore[arg-type]
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
@@ -2102,7 +2118,25 @@ class CustomStreamWrapper:
                 asyncio.create_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                 )
-            ## Map to OpenAI Exception
+            self._handle_stream_fallback_error(e)
+
+    def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
+        """
+        Common error handling for both __next__ and __anext__.
+
+        Maps the raw exception to an OpenAI-compatible type, then decides
+        whether to raise it directly (non-retriable 4xx) or wrap it in
+        MidStreamFallbackError so the Router can trigger a fallback.
+
+        429 (rate-limit) is explicitly exempted from the 4xx filter because
+        it is transient and the Router should switch to another model group.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        # Map to OpenAI exception format
+        if isinstance(e, OpenAIError):
+            mapped_exception: Exception = e
+        else:
             try:
                 mapped_exception = exception_type(
                     model=self.model,
@@ -2114,46 +2148,44 @@ class CustomStreamWrapper:
             except Exception as mapping_error:
                 mapped_exception = mapping_error
 
-            def _normalize_status_code(exc: Exception) -> Optional[int]:
-                """
-                Best-effort status_code extraction.
-                Uses status_code on the exception, then falls back to the response.
-                """
+        def _normalize_status_code(exc: Exception) -> Optional[int]:
+            """Best-effort status_code extraction."""
+            try:
+                code = getattr(exc, "status_code", None)
+                if code is not None:
+                    return int(code)
+            except Exception:
+                pass
+
+            response = getattr(exc, "response", None)
+            if response is not None:
                 try:
-                    code = getattr(exc, "status_code", None)
-                    if code is not None:
-                        return int(code)
+                    status_code = getattr(response, "status_code", None)
+                    if status_code is not None:
+                        return int(status_code)
                 except Exception:
                     pass
+            return None
 
-                response = getattr(exc, "response", None)
-                if response is not None:
-                    try:
-                        status_code = getattr(response, "status_code", None)
-                        if status_code is not None:
-                            return int(status_code)
-                    except Exception:
-                        pass
-                return None
+        mapped_status_code = _normalize_status_code(mapped_exception)
+        original_status_code = _normalize_status_code(e)
 
-            mapped_status_code = _normalize_status_code(mapped_exception)
-            original_status_code = _normalize_status_code(e)
+        # Raise non-retriable client errors directly (skip fallback).
+        # Exception: 429 (rate-limit) IS retriable/transient — allow it
+        # through so the Router can switch to a different model group.
+        if mapped_status_code is not None and 400 <= mapped_status_code < 500 and mapped_status_code != 429:
+            raise mapped_exception
+        if original_status_code is not None and 400 <= original_status_code < 500 and original_status_code != 429:
+            raise mapped_exception
 
-            if mapped_status_code is not None and 400 <= mapped_status_code < 500:
-                raise mapped_exception
-            if original_status_code is not None and 400 <= original_status_code < 500:
-                raise mapped_exception
-
-            from litellm.exceptions import MidStreamFallbackError
-
-            raise MidStreamFallbackError(
-                message=str(mapped_exception),
-                model=self.model,
-                llm_provider=self.custom_llm_provider or "anthropic",
-                original_exception=mapped_exception,
-                generated_content=self.response_uptil_now,
-                is_pre_first_chunk=not self.sent_first_chunk,
-            )
+        raise MidStreamFallbackError(
+            message=str(mapped_exception),
+            model=self.model,
+            llm_provider=self.custom_llm_provider or "anthropic",
+            original_exception=mapped_exception,
+            generated_content=self.response_uptil_now,
+            is_pre_first_chunk=not self.sent_first_chunk,
+        )
 
     @staticmethod
     def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:

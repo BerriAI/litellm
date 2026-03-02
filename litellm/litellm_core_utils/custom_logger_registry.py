@@ -20,6 +20,7 @@ from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
 from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.focus.focus_logger import FocusLogger
@@ -66,6 +67,7 @@ class CustomLoggerRegistry:
         "prometheus": PrometheusLogger,
         "datadog": DataDogLogger,
         "datadog_llm_observability": DataDogLLMObsLogger,
+        "datadog_metrics": DatadogMetricsLogger,
         "gcs_bucket": GCSBucketLogger,
         "opik": OpikLogger,
         "argilla": ArgillaLogger,

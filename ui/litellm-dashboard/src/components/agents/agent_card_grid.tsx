@@ -37,7 +37,11 @@ const AgentCardGrid: React.FC<AgentCardGridProps> = ({
   if (!agentsList || agentsList.length === 0) {
     return (
       <div className="rounded-lg border border-gray-200 bg-gray-50/50 py-12 text-center">
-        <p className="text-gray-500">No agents found. Create one to get started.</p>
+        <p className="text-gray-500">
+          {isAdmin
+            ? "No agents found. Create one to get started."
+            : "No agents found. Contact an admin to create agents."}
+        </p>
       </div>
     );
   }
