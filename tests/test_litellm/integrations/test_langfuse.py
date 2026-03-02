@@ -669,6 +669,136 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
         litellm.failure_callback = original_failure_callback
 
 
+@pytest.mark.asyncio
+async def test_async_log_failure_event_logs_to_langfuse():
+    """
+    Test that LangfusePromptManagement.async_log_failure_event() calls
+    log_event_on_langfuse with level=ERROR even when standard_logging_object
+    is present. This is the code path the proxy uses for failed LLM calls.
+    """
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    mock_langfuse_module = MagicMock()
+    mock_langfuse_module.version.__version__ = "3.0.0"
+
+    with patch.dict(
+        "os.environ",
+        {
+            "LANGFUSE_SECRET_KEY": "test-secret",
+            "LANGFUSE_PUBLIC_KEY": "test-public",
+            "LANGFUSE_HOST": "https://test.langfuse.com",
+        },
+    ), patch.dict("sys.modules", {"langfuse": mock_langfuse_module}):
+        prompt_mgmt = LangfusePromptManagement()
+
+        # Mock the langfuse logger returned by get_langfuse_logger_for_request
+        mock_logger = MagicMock()
+        mock_logger.log_event_on_langfuse.return_value = {
+            "trace_id": "mock-trace",
+            "generation_id": "mock-gen",
+        }
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler"
+        ) as mock_handler:
+            mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
+
+            kwargs = {
+                "litellm_params": {
+                    "metadata": {"session_id": "test-session-fail"},
+                },
+                "litellm_call_id": "call-fail-123",
+                "user": "test-user",
+                "exception": Exception("API error: model not found"),
+                "standard_logging_object": {
+                    "error_str": "API error: model not found",
+                    "trace_id": "std-trace-fail",
+                    "metadata": {},
+                },
+            }
+
+            await prompt_mgmt.async_log_failure_event(
+                kwargs=kwargs,
+                response_obj=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+            )
+
+            # Verify log_event_on_langfuse was called
+            assert mock_logger.log_event_on_langfuse.called, (
+                "log_event_on_langfuse was not called for failure event"
+            )
+            call_kwargs = mock_logger.log_event_on_langfuse.call_args[1]
+            assert call_kwargs["level"] == "ERROR"
+            assert call_kwargs["status_message"] == "API error: model not found"
+            assert call_kwargs["response_obj"] is None
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_works_without_standard_logging_object():
+    """
+    Test that async_log_failure_event() still logs to Langfuse even when
+    standard_logging_object is None (e.g. when get_standard_logging_object_payload
+    threw an exception). This is the critical fix — before, it silently returned.
+    """
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    mock_langfuse_module = MagicMock()
+    mock_langfuse_module.version.__version__ = "3.0.0"
+
+    with patch.dict(
+        "os.environ",
+        {
+            "LANGFUSE_SECRET_KEY": "test-secret",
+            "LANGFUSE_PUBLIC_KEY": "test-public",
+            "LANGFUSE_HOST": "https://test.langfuse.com",
+        },
+    ), patch.dict("sys.modules", {"langfuse": mock_langfuse_module}):
+        prompt_mgmt = LangfusePromptManagement()
+
+        mock_logger = MagicMock()
+        mock_logger.log_event_on_langfuse.return_value = {
+            "trace_id": "mock-trace",
+            "generation_id": "mock-gen",
+        }
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler"
+        ) as mock_handler:
+            mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
+
+            kwargs = {
+                "litellm_params": {
+                    "metadata": {"session_id": "test-session-no-slo"},
+                },
+                "litellm_call_id": "call-no-slo-456",
+                "user": "test-user",
+                "exception": Exception("InternalServerError: something broke"),
+                "standard_logging_object": None,  # This is the key — it's None
+            }
+
+            await prompt_mgmt.async_log_failure_event(
+                kwargs=kwargs,
+                response_obj=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+            )
+
+            # CRITICAL: log_event_on_langfuse MUST still be called
+            assert mock_logger.log_event_on_langfuse.called, (
+                "log_event_on_langfuse was NOT called when standard_logging_object "
+                "is None — failure trace would be silently dropped"
+            )
+            call_kwargs = mock_logger.log_event_on_langfuse.call_args[1]
+            assert call_kwargs["level"] == "ERROR"
+            # Falls back to exception from kwargs
+            assert "InternalServerError" in call_kwargs["status_message"]
+
+
 def test_max_langfuse_clients_limit():
     """
     Test that the max langfuse clients limit is respected when initializing multiple clients
