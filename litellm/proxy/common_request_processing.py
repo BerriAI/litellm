@@ -518,6 +518,7 @@ class ProxyBaseLLMRequestProcessing:
             "aembedding",
             "aresponses",
             "_arealtime",
+            "_aresponses_websocket",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
