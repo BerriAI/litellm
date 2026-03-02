@@ -6614,7 +6614,6 @@ def speech(  # noqa: PLR0915
         HttpxBinaryResponseContent,
         Coroutine[Any, Any, HttpxBinaryResponseContent],
         None,
-    ] = None
     if custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
     ):
