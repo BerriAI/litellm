@@ -1668,6 +1668,8 @@ class TestCheckVectorStoreAccess:
         
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
         mock_user_api_key.team_id = "team-123"
+        mock_user_api_key.user_role = None
+        mock_user_api_key.object_permission = None
         
         result = _check_vector_store_access(vector_store, mock_user_api_key)
         assert result is True
@@ -1682,6 +1684,8 @@ class TestCheckVectorStoreAccess:
         
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
         mock_user_api_key.team_id = "team-123"
+        mock_user_api_key.user_role = None
+        mock_user_api_key.object_permission = None
         
         result = _check_vector_store_access(vector_store, mock_user_api_key)
         assert result is True
@@ -1696,6 +1700,8 @@ class TestCheckVectorStoreAccess:
         
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
         mock_user_api_key.team_id = "team-456"
+        mock_user_api_key.user_role = None
+        mock_user_api_key.object_permission = None
         
         result = _check_vector_store_access(vector_store, mock_user_api_key)
         assert result is False
@@ -1710,6 +1716,8 @@ class TestCheckVectorStoreAccess:
         
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
         mock_user_api_key.team_id = None
+        mock_user_api_key.user_role = None
+        mock_user_api_key.object_permission = None
         
         result = _check_vector_store_access(vector_store, mock_user_api_key)
         assert result is False
