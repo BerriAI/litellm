@@ -846,7 +846,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -859,7 +861,9 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05
     },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -873,7 +877,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "anthropic.claude-instant-v1": {
         "input_cost_per_token": 8e-07,
@@ -1512,7 +1518,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -1545,7 +1553,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "apac.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.375e-06,
@@ -1581,7 +1591,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "apac.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -6925,7 +6937,9 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "bedrock/sa-east-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 4.45e-06,
@@ -7344,7 +7358,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3.6e-07,
+        "cache_creation_input_token_cost": 4.5e-06
     },
     "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": {
         "input_cost_per_token": 3e-07,
@@ -7358,7 +7374,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": {
         "input_cost_per_token": 3.3e-06,
@@ -7376,7 +7394,9 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3.3e-07,
+        "cache_creation_input_token_cost": 4.125e-06
     },
     "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
@@ -7489,7 +7509,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3.6e-07,
+        "cache_creation_input_token_cost": 4.5e-06
     },
     "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": {
         "input_cost_per_token": 3e-07,
@@ -7503,7 +7525,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": {
         "input_cost_per_token": 3.3e-06,
@@ -7521,7 +7545,9 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3.3e-07,
+        "cache_creation_input_token_cost": 4.125e-06
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
@@ -12018,7 +12044,9 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.375e-06,
@@ -12055,7 +12083,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "input_cost_per_token": 3e-06,
@@ -12072,7 +12102,9 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -12090,7 +12122,9 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-3-haiku-20240307-v1:0": {
         "input_cost_per_token": 2.5e-07,
@@ -12104,7 +12138,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "eu.anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -12117,7 +12153,9 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05
     },
     "eu.anthropic.claude-3-sonnet-20240229-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -12131,7 +12169,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-opus-4-1-20250805-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -29400,7 +29440,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -29453,7 +29495,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "us.anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -29466,7 +29510,9 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05
     },
     "us.anthropic.claude-3-sonnet-20240229-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -29480,7 +29526,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "us.anthropic.claude-opus-4-1-20250805-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
