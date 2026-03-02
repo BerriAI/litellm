@@ -240,6 +240,30 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.function_call is None
 
 
+def test_output_item_done_reasoning_without_encrypted_emits_reasoning_content():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.utils import ModelResponseStream
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "partial reasoning"}],
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+    assert isinstance(result, ModelResponseStream)
+    assert len(result.choices) == 1
+    assert result.choices[0].delta.reasoning_content == "partial reasoning"
+    assert result.choices[0].finish_reason is None
+
+
 def test_chunk_parser_string_output_text_delta_produces_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
