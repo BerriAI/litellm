@@ -543,7 +543,16 @@ async def update_skill_endpoint(
             user_api_key_dict=user_api_key_dict,
             route_type="aupdate_skill",
             proxy_logging_obj=proxy_logging_obj,
-            llm_router=llm_router,
+    if body:
+        try:
+            data = orjson.loads(body)
+        except orjson.JSONDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid JSON in request body for get_skill_content_endpoint.",
+            )
+    else:
+        data = {}
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
