@@ -237,17 +237,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         type_: Optional[str],
         remaining: Dict[str, Any],
         strict_schema: Dict[str, Any],
+        enforce_additional_properties: bool = True,
     ) -> None:
         """Extract and filter type-specific fields from schema."""
         if type_ == "object":
             properties = remaining.pop("properties", None)
             if properties is not None:
                 strict_schema["properties"] = {
-                    key: AnthropicConfig.filter_anthropic_output_schema(prop_schema)
+                    key: AnthropicConfig.filter_anthropic_output_schema(
+                        prop_schema,
+                        enforce_additional_properties=enforce_additional_properties,
+                    )
                     for key, prop_schema in properties.items()
                 }
-            remaining.pop("additionalProperties", None)
-            strict_schema["additionalProperties"] = False
+            user_additional = remaining.pop("additionalProperties", None)
+            if enforce_additional_properties:
+                strict_schema["additionalProperties"] = False
+            elif user_additional is not None:
+                strict_schema["additionalProperties"] = user_additional
 
             required = remaining.pop("required", None)
             if required is not None:
@@ -265,7 +272,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             items = remaining.pop("items", None)
             if items is not None:
                 strict_schema["items"] = (
-                    AnthropicConfig.filter_anthropic_output_schema(items)
+                    AnthropicConfig.filter_anthropic_output_schema(
+                        items,
+                        enforce_additional_properties=enforce_additional_properties,
+                    )
                 )
 
             min_items = remaining.pop("minItems", None)
@@ -294,7 +304,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_anthropic_output_schema(
+        schema: Dict[str, Any],
+        enforce_additional_properties: bool = True,
+    ) -> Dict[str, Any]:
         """
         Transform JSON schema to conform to Anthropic's structured output constraints.
 
@@ -304,6 +317,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Uses a whitelist approach: pop known/supported fields, leftover -> description.
         Intentionally preserves enum/const/default (supported by Anthropic's constrained
         decoding; litellm can't validate client-side like the SDK).
+
+        Args:
+            schema: The JSON schema to transform.
+            enforce_additional_properties: When True (default), forces
+                additionalProperties to False on object schemas (required for
+                response_format / structured output). When False, preserves
+                the caller's value (used for regular tool schemas).
 
         Related: https://github.com/BerriAI/litellm/issues/19444
         """
@@ -323,7 +343,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         defs = remaining.pop("$defs", None)
         if defs is not None:
             strict_schema["$defs"] = {
-                name: AnthropicConfig.filter_anthropic_output_schema(def_schema)
+                name: AnthropicConfig.filter_anthropic_output_schema(
+                    def_schema,
+                    enforce_additional_properties=enforce_additional_properties,
+                )
                 for name, def_schema in defs.items()
             }
 
@@ -337,15 +360,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # When anyOf/oneOf/allOf is present, top-level `type` is intentionally omitted.
         if isinstance(any_of, list):
             strict_schema["anyOf"] = [
-                AnthropicConfig.filter_anthropic_output_schema(v) for v in any_of
+                AnthropicConfig.filter_anthropic_output_schema(
+                    v, enforce_additional_properties=enforce_additional_properties
+                )
+                for v in any_of
             ]
         elif isinstance(one_of, list):
             strict_schema["anyOf"] = [
-                AnthropicConfig.filter_anthropic_output_schema(v) for v in one_of
+                AnthropicConfig.filter_anthropic_output_schema(
+                    v, enforce_additional_properties=enforce_additional_properties
+                )
+                for v in one_of
             ]
         elif isinstance(all_of, list):
             strict_schema["allOf"] = [
-                AnthropicConfig.filter_anthropic_output_schema(v) for v in all_of
+                AnthropicConfig.filter_anthropic_output_schema(
+                    v, enforce_additional_properties=enforce_additional_properties
+                )
+                for v in all_of
             ]
         elif type_ is not None:
             strict_schema["type"] = type_
@@ -365,7 +397,33 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if val is not _sentinel:
                 strict_schema[preserved_key] = val
 
-        AnthropicConfig._filter_type_specific_fields(type_, remaining, strict_schema)
+        # Recurse into conditional / negation sub-schemas
+        for keyword in ("not", "if", "then", "else"):
+            sub = remaining.pop(keyword, None)
+            if sub is not None:
+                strict_schema[keyword] = (
+                    AnthropicConfig.filter_anthropic_output_schema(
+                        sub,
+                        enforce_additional_properties=enforce_additional_properties,
+                    )
+                )
+
+        # Recurse into dependentSchemas and patternProperties (dict of schemas)
+        for dict_keyword in ("dependentSchemas", "patternProperties"):
+            dict_val = remaining.pop(dict_keyword, None)
+            if dict_val is not None:
+                strict_schema[dict_keyword] = {
+                    k: AnthropicConfig.filter_anthropic_output_schema(
+                        v,
+                        enforce_additional_properties=enforce_additional_properties,
+                    )
+                    for k, v in dict_val.items()
+                }
+
+        AnthropicConfig._filter_type_specific_fields(
+            type_, remaining, strict_schema,
+            enforce_additional_properties=enforce_additional_properties,
+        )
         AnthropicConfig._append_leftover_to_description(remaining, strict_schema)
 
         return strict_schema
@@ -442,11 +500,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
             # When strict mode is enabled, filter out unsupported constraints
-            # (minimum, maximum, etc.) from nested properties to avoid 400 errors
+            # (minimum, maximum, etc.) from nested properties to avoid 400 errors.
+            # enforce_additional_properties=False preserves user's additionalProperties
+            # value for tool schemas (unlike response_format which requires False).
             _is_strict = tool["function"].get("strict", False)
             if _is_strict:
-                _input_schema = self.filter_anthropic_output_schema(_input_schema)
+                _input_schema = self.filter_anthropic_output_schema(
+                    _input_schema, enforce_additional_properties=False
+                )
 
+            # Restrict to AnthropicInputSchema keys AFTER filtering. The filter
+            # recursively processes nested schemas (properties, $defs, etc.) while
+            # this step drops any top-level keys unsupported by Anthropic's tool
+            # input_schema (e.g. description appended by leftover handling). Tool
+            # description belongs at the tool level, not inside input_schema.
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
                 k: v for k, v in _input_schema.items() if k in _allowed_properties
