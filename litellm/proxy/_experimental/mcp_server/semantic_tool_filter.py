@@ -226,8 +226,8 @@ class SemanticMCPToolFilter:
 
         # Build a map from matched router name → available tool
         matched: Dict[str, Any] = {}
-                suffix, _ = split_server_prefix_from_name(tool_name)
-                if suffix and suffix in tool_name_set and suffix not in matched:
+        for tool in available_tools:
+            tool_name, _ = self._extract_tool_info(tool)
             if tool_name in tool_name_set:
                 # Exact match (unprefixed name or already matching)
                 matched[tool_name] = tool
