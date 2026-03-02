@@ -738,10 +738,12 @@ def test_response_completed_with_message_only_emits_stop_finish_reason():
     )
 
 
-def test_function_call_done_emits_is_finished():
+def test_function_call_done_does_not_emit_finish_reason():
     """
-    Test that OUTPUT_ITEM_DONE for a function_call still emits is_finished=True.
-    This preserves existing behavior for tool_calls.
+    Test that OUTPUT_ITEM_DONE for a function_call does NOT emit finish_reason.
+    The response.completed event handles the terminal finish_reason correctly.
+    Emitting finish_reason here would prematurely terminate the stream in multi-tool
+    scenarios (same fix as #17246 for the message-type branch).
     """
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -761,11 +763,14 @@ def test_function_call_done_emits_is_finished():
 
     result = iterator.chunk_parser(chunk)
 
-    # function_call completion should emit finish_reason='tool_calls'
+    # function_call completion should NOT emit finish_reason — response.completed handles it
     assert len(result.choices) > 0, "result should have choices"
-    assert result.choices[0].finish_reason == "tool_calls", "function_call should emit finish_reason='tool_calls'"
-    assert result.choices[0].delta.tool_calls is not None and len(result.choices[0].delta.tool_calls) > 0, (
-        "function_call should include tool_calls"
+    assert result.choices[0].finish_reason is None, (
+        "output_item.done for function_call must not emit finish_reason; "
+        "response.completed is responsible for the terminal finish_reason"
+    )
+    assert not result.choices[0].delta.tool_calls, (
+        "output_item.done for function_call must not include a duplicate tool_calls delta"
     )
 
 
@@ -824,14 +829,16 @@ def test_text_plus_tool_calls_sequence():
         "message done should not have finish_reason"
     )
 
-    # Check function_call done (index 5) DOES have finish_reason='tool_calls'
+    # Check function_call done (index 5) does NOT have finish_reason set
+    # (response.completed is responsible for the terminal finish_reason)
     function_done_result = results[5]
     assert len(function_done_result.choices) > 0, "function_call done should have choices"
-    assert function_done_result.choices[0].finish_reason == "tool_calls", (
-        "function_call done should have finish_reason='tool_calls'"
+    assert function_done_result.choices[0].finish_reason is None, (
+        "output_item.done for function_call must not emit finish_reason"
     )
 
     # Check response.completed (index 6) has finish_reason='stop'
+    # (the mock chunk has no nested 'response' data, so has_function_calls is False → 'stop')
     completed_result = results[6]
     assert len(completed_result.choices) > 0, "response.completed should have choices"
     assert completed_result.choices[0].finish_reason == "stop", "response.completed should have finish_reason='stop'"
@@ -1316,5 +1323,152 @@ def test_transform_response_preserves_annotations():
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 20
     assert result.usage.total_tokens == 30
+
+
+def test_multi_tool_call_stream_no_premature_finish():
+    """
+    Regression test for multi-tool-call streaming bug.
+
+    When a response contains multiple tool calls, the stream used to be prematurely
+    terminated after the first output_item.done event because that handler emitted
+    finish_reason="tool_calls". This caused ~58% of streaming requests with multiple
+    tool calls to fail.
+
+    The fix: output_item.done for function_call emits delta=Delta() and finish_reason=None.
+    Only response.completed emits the terminal finish_reason.
+
+    Synthetic event sequence:
+      response.created
+      response.output_item.added   (function_call: read_file,  call_id: call_1)
+      response.function_call_arguments.delta  (read_file args)
+      response.output_item.done    (function_call: read_file)   <- must NOT end stream
+      response.output_item.added   (function_call: list_dir,   call_id: call_2)
+      response.function_call_arguments.delta  (list_dir args)
+      response.output_item.done    (function_call: list_dir)    <- must NOT end stream
+      response.completed           (response with 2 function_call outputs)  <- terminal
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    chunks = [
+        # 0: response created
+        {"type": "response.created", "response": {"id": "resp_001", "status": "in_progress"}},
+        # 1: first tool call added
+        {
+            "type": "response.output_item.added",
+            "item": {"type": "function_call", "name": "read_file", "call_id": "call_1"},
+        },
+        # 2: first tool call arguments delta
+        {"type": "response.function_call_arguments.delta", "delta": '{"path":"/etc/hostname"}'},
+        # 3: first tool call done  ← must NOT emit finish_reason
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "read_file",
+                "call_id": "call_1",
+                "arguments": '{"path":"/etc/hostname"}',
+            },
+        },
+        # 4: second tool call added
+        {
+            "type": "response.output_item.added",
+            "item": {"type": "function_call", "name": "list_dir", "call_id": "call_2"},
+        },
+        # 5: second tool call arguments delta
+        {"type": "response.function_call_arguments.delta", "delta": '{"path":"/tmp"}'},
+        # 6: second tool call done  ← must NOT emit finish_reason
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "list_dir",
+                "call_id": "call_2",
+                "arguments": '{"path":"/tmp"}',
+            },
+        },
+        # 7: response completed with both tool calls in output  ← ONLY terminal chunk
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_001",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "read_file",
+                        "call_id": "call_1",
+                        "arguments": '{"path":"/etc/hostname"}',
+                    },
+                    {
+                        "type": "function_call",
+                        "name": "list_dir",
+                        "call_id": "call_2",
+                        "arguments": '{"path":"/tmp"}',
+                    },
+                ],
+            },
+        },
+    ]
+
+    results = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    # 1. output_item.done events (indices 3 and 6) must NOT emit finish_reason
+    for done_idx, label in [(3, "read_file done"), (6, "list_dir done")]:
+        r = results[done_idx]
+        assert r is not None, f"{label}: chunk_parser must return a result"
+        assert len(r.choices) > 0, f"{label}: result must have choices"
+        assert r.choices[0].finish_reason is None, (
+            f"{label}: output_item.done must not emit finish_reason (stream would terminate prematurely)"
+        )
+        assert not r.choices[0].delta.tool_calls, (
+            f"{label}: output_item.done must not include a duplicate tool_calls delta"
+        )
+
+    # 2. output_item.added events (indices 1 and 4) should carry name + call_id
+    for added_idx, expected_name, expected_call_id in [
+        (1, "read_file", "call_1"),
+        (4, "list_dir", "call_2"),
+    ]:
+        r = results[added_idx]
+        if r is not None and r.choices and r.choices[0].delta.tool_calls:
+            tc = r.choices[0].delta.tool_calls[0]
+            assert tc.function.name == expected_name, (
+                f"output_item.added for {expected_name}: tool_call name mismatch"
+            )
+            assert tc.id == expected_call_id, (
+                f"output_item.added for {expected_name}: call_id mismatch"
+            )
+
+    # 3. argument delta events (indices 2 and 5) should carry arguments
+    for delta_idx, expected_args, label in [
+        (2, '{"path":"/etc/hostname"}', "read_file args"),
+        (5, '{"path":"/tmp"}', "list_dir args"),
+    ]:
+        r = results[delta_idx]
+        if r is not None and r.choices and r.choices[0].delta.tool_calls:
+            tc = r.choices[0].delta.tool_calls[0]
+            assert tc.function.arguments == expected_args, (
+                f"{label}: argument delta mismatch"
+            )
+
+    # 4. Only response.completed (index 7) emits the terminal finish_reason
+    completed_result = results[7]
+    assert completed_result is not None, "response.completed must return a result"
+    assert len(completed_result.choices) > 0, "response.completed must have choices"
+    assert completed_result.choices[0].finish_reason == "tool_calls", (
+        "response.completed with function_call outputs must emit finish_reason='tool_calls'"
+    )
+
+    # 5. No chunk before the last one should have finish_reason set
+    for idx, r in enumerate(results[:-1]):
+        if r is not None and r.choices:
+            assert r.choices[0].finish_reason is None, (
+                f"Chunk at index {idx} (type={chunks[idx]['type']!r}) must not emit finish_reason "
+                f"— only response.completed should terminate the stream"
+            )
 
     print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")

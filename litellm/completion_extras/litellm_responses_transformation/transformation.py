@@ -1025,12 +1025,16 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 if provider_specific_fields:
                     tool_call_chunk.provider_specific_fields = provider_specific_fields  # type: ignore
 
+                # Do NOT emit finish_reason here — response.completed handles the terminal
+                # finish_reason. Emitting "tool_calls" here would prematurely terminate
+                # the stream before subsequent tool calls arrive (same fix as #17246 for
+                # the message-type branch).
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
                             index=0,
-                            delta=Delta(tool_calls=[tool_call_chunk]),
-                            finish_reason="tool_calls",
+                            delta=Delta(),
+                            finish_reason=None,
                         )
                     ]
                 )
