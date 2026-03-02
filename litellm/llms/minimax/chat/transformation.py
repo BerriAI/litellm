@@ -17,7 +17,9 @@ from litellm.types.utils import ModelResponse
 
 
 class MinimaxChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
-    """Streaming handler that maps MiniMax reasoning_details to reasoning_content."""
+            str(item.get("text")) if item.get("text") is not None else ""
+            for item in details
+            if isinstance(item, dict)
 
     def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
         for choice in choices:
@@ -136,5 +138,5 @@ class MinimaxChatConfig(OpenAIGPTConfig):
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
-        )
-
+        json_mode: bool = False,
+    ) -> MinimaxChatCompletionStreamingHandler:
