@@ -42,6 +42,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
     update_team,
 )
+from litellm.proxy.management_helpers.utils import refresh_team_cache
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -142,6 +143,69 @@ def update_db_model(
     return prisma_compatible_model_dict
 
 
+def _parse_model_aliases(alias_payload: Optional[Union[str, Dict[str, str]]]) -> Dict[str, str]:
+    if alias_payload is None:
+        return {}
+    if isinstance(alias_payload, dict):
+        return alias_payload
+    if isinstance(alias_payload, str):
+        try:
+            parsed_aliases = json.loads(alias_payload)
+            if isinstance(parsed_aliases, dict):
+                return parsed_aliases
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+async def _cleanup_team_model_references(
+    team_id: str,
+    internal_model_name: str,
+    public_model_name: Optional[str],
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    Remove deleted team model references from team aliases and team.models atomically.
+    """
+    names_to_remove = set()
+    if public_model_name is not None:
+        names_to_remove.add(public_model_name)
+
+    async with prisma_client.db.tx() as tx:
+        team_row = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
+        if team_row is None:
+            return
+
+        if team_row.model_id is not None:
+            model_table_row = await tx.litellm_modeltable.find_unique(
+                where={"id": team_row.model_id}
+            )
+            if model_table_row is not None:
+                existing_aliases = _parse_model_aliases(model_table_row.model_aliases)
+                updated_aliases = {
+                    key: value
+                    for key, value in existing_aliases.items()
+                    if value != internal_model_name
+                }
+                removed_public_aliases = set(existing_aliases.keys()) - set(updated_aliases.keys())
+                names_to_remove.update(removed_public_aliases)
+
+                if updated_aliases != existing_aliases:
+                    await tx.litellm_modeltable.update(
+                        where={"id": team_row.model_id},
+                        data={"model_aliases": json.dumps(updated_aliases)},
+                    )
+
+        existing_models = list(team_row.models or [])
+        if names_to_remove:
+            updated_models = [model for model in existing_models if model not in names_to_remove]
+            if updated_models != existing_models:
+                await tx.litellm_teamtable.update(
+                    where={"team_id": team_id},
+                    data={"models": updated_models},
+                )
+
+
 @router.patch(
     "/model/{model_id}/update",
     tags=["model management"],
@@ -174,7 +238,9 @@ async def patch_model(
         llm_router,
         premium_user,
         prisma_client,
+        proxy_logging_obj,
         store_model_in_db,
+        user_api_key_cache,
     )
 
     try:
@@ -241,6 +307,20 @@ async def patch_model(
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         await clear_cache()
+
+        updated_team_id = None
+        if patch_data.model_info and patch_data.model_info.team_id:
+            updated_team_id = patch_data.model_info.team_id
+        elif db_model.model_info and db_model.model_info.team_id:
+            updated_team_id = db_model.model_info.team_id
+
+        if updated_team_id is not None:
+            await refresh_team_cache(
+                team_id=updated_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
         ## CREATE AUDIT LOG ##
         asyncio.create_task(
@@ -364,6 +444,15 @@ async def _add_team_model_to_db(
         user_api_key_dict=user_api_key_dict,
     )
 
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    await refresh_team_cache(
+        team_id=_team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     return model_response
 
 
@@ -427,6 +516,7 @@ async def _update_team_model_in_db(
             db_model=db_model,
             patch_data=patch_data,
             user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
     
     return update_db_model(db_model=db_model, updated_patch=patch_data)
@@ -481,6 +571,7 @@ async def _update_existing_team_model_assignment(
     db_model: Deployment,
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
 ) -> None:
     """Update an existing team model if the public name changed."""
     old_public_name = (
@@ -488,18 +579,70 @@ async def _update_existing_team_model_assignment(
         if db_model.model_info
         else None
     )
-    
-    # Update alias only if public name changed
-    if old_public_name and public_model_name != old_public_name:
-        await update_team(
-            data=UpdateTeamRequest(
-                team_id=team_id,
-                model_aliases={public_model_name: db_model.model_name},
-            ),
-            user_api_key_dict=user_api_key_dict,
-            http_request=Request(scope={"type": "http"}),
-        )
-    
+
+    # Keep team.models and model_aliases in sync when public name changes.
+    if public_model_name != old_public_name:
+        async with prisma_client.db.tx() as tx:
+            team_row = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
+            if team_row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error": f"Team not found, passed team_id={team_id}"},
+                )
+
+            existing_models = list(team_row.models or [])
+            updated_models = existing_models
+            if old_public_name:
+                updated_models = [model for model in updated_models if model != old_public_name]
+            if public_model_name not in updated_models:
+                updated_models.append(public_model_name)
+            if updated_models != existing_models:
+                await tx.litellm_teamtable.update(
+                    where={"team_id": team_id},
+                    data={"models": updated_models},
+                )
+
+            existing_aliases: Dict[str, str] = {}
+            if team_row.model_id is not None:
+                model_table_row = await tx.litellm_modeltable.find_unique(
+                    where={"id": team_row.model_id}
+                )
+                if model_table_row is not None:
+                    existing_aliases = _parse_model_aliases(model_table_row.model_aliases)
+            if old_public_name:
+                existing_aliases.pop(old_public_name, None)
+            existing_aliases[public_model_name] = db_model.model_name
+
+            model_table_payload = {
+                "model_aliases": json.dumps(existing_aliases),
+                "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+            }
+
+            if team_row.model_id is not None:
+                await tx.litellm_modeltable.upsert(
+                    where={"id": team_row.model_id},
+                    data={
+                        "update": model_table_payload,
+                        "create": {
+                            **model_table_payload,
+                            "created_by": user_api_key_dict.user_id
+                            or LITELLM_PROXY_ADMIN_NAME,
+                        },
+                    },
+                )
+            else:
+                new_model_row = await tx.litellm_modeltable.create(
+                    data={
+                        **model_table_payload,
+                        "created_by": user_api_key_dict.user_id
+                        or LITELLM_PROXY_ADMIN_NAME,
+                    }
+                )
+                await tx.litellm_teamtable.update(
+                    where={"team_id": team_id},
+                    data={"model_id": new_model_row.id},
+                )
+
     # Keep existing unique model_name
     patch_data.model_name = None
 
@@ -650,7 +793,9 @@ async def delete_model(
             llm_router,
             premium_user,
             prisma_client,
+            proxy_logging_obj,
             store_model_in_db,
+            user_api_key_cache,
         )
 
         if prisma_client is None:
@@ -678,34 +823,19 @@ async def delete_model(
             premium_user=premium_user,
         )
 
-        # delete team model alias
-        if model_params.model_info.team_id is not None:
-            removed_model_aliases = await delete_team_model_alias(
-                public_model_name=model_params.model_name,
+        team_id = model_params.model_info.team_id if model_params.model_info else None
+        public_model_name = (
+            model_params.model_info.team_public_model_name
+            if model_params.model_info
+            else None
+        ) or model_params.model_name
+        if team_id is not None:
+            await _cleanup_team_model_references(
+                team_id=team_id,
+                internal_model_name=model_params.model_name,
+                public_model_name=public_model_name,
                 prisma_client=prisma_client,
             )
-
-            valid_team_model_aliases = [
-                model
-                for team_id, model in removed_model_aliases
-                if team_id == model_params.model_info.team_id
-            ]
-
-            ## UPDATE TEAM TO NOT LIST MODEL ##
-            existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": model_params.model_info.team_id}
-            )
-            if existing_team_row is not None:
-                existing_team_row.models = [
-                    model
-                    for model in existing_team_row.models
-                    if model not in valid_team_model_aliases
-                ]
-
-                await prisma_client.db.litellm_teamtable.update(
-                    where={"team_id": model_params.model_info.team_id},
-                    data={"models": existing_team_row.models},
-                )
 
         # update DB
         if store_model_in_db is True:
@@ -727,6 +857,14 @@ async def delete_model(
             ## DELETE FROM ROUTER ##
             if llm_router is not None:
                 llm_router.delete_deployment(id=model_info.id)
+
+            if team_id is not None:
+                await refresh_team_cache(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(

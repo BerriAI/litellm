@@ -310,3 +310,89 @@ async def test_team_model_visibility_in_model_info_endpoint():
     # Cleanup
     model_id = model_response.json()["model_info"]["id"]
     await client.post("/model/delete", json={"id": model_id}, headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_team_model_delete_does_not_leave_ghost_models():
+    """
+    Create two team BYOK models, delete in reverse order, and verify /models has no ghost names.
+    """
+    client = AsyncClient(base_url=PROXY_BASE_URL)
+    headers = {"Authorization": f"Bearer {TEST_MASTER_KEY}"}
+
+    team_response = await client.post(
+        "/team/new",
+        json={"models": []},
+        headers=headers,
+    )
+    assert team_response.status_code == 200
+    team_id = team_response.json()["team_id"]
+
+    public_model_1 = f"team-model-{uuid.uuid4()}"
+    public_model_2 = f"team-model-{uuid.uuid4()}"
+
+    create_1 = await client.post(
+        "/model/new",
+        json={
+            "model_name": public_model_1,
+            "litellm_params": {
+                "model": "gpt-4",
+                "custom_llm_provider": "openai",
+                "api_key": "fake_key",
+            },
+            "model_info": {"team_id": team_id},
+        },
+        headers=headers,
+    )
+    assert create_1.status_code == 200
+
+    create_2 = await client.post(
+        "/model/new",
+        json={
+            "model_name": public_model_2,
+            "litellm_params": {
+                "model": "gpt-4",
+                "custom_llm_provider": "openai",
+                "api_key": "fake_key",
+            },
+            "model_info": {"team_id": team_id},
+        },
+        headers=headers,
+    )
+    assert create_2.status_code == 200
+
+    team_key = (
+        await client.post("/key/generate", json={"team_id": team_id}, headers=headers)
+    ).json()["key"]
+
+    before_delete_models = await client.get(
+        "/models", headers={"Authorization": f"Bearer {team_key}"}
+    )
+    assert before_delete_models.status_code == 200
+    before_delete_ids = {model["id"] for model in before_delete_models.json()["data"]}
+    assert public_model_1 in before_delete_ids
+    assert public_model_2 in before_delete_ids
+
+    model_id_2 = create_2.json()["model_info"]["id"]
+    delete_2 = await client.post("/model/delete", json={"id": model_id_2}, headers=headers)
+    assert delete_2.status_code == 200
+
+    after_delete_2_models = await client.get(
+        "/models", headers={"Authorization": f"Bearer {team_key}"}
+    )
+    assert after_delete_2_models.status_code == 200
+    after_delete_2_ids = {model["id"] for model in after_delete_2_models.json()["data"]}
+    assert public_model_2 not in after_delete_2_ids
+    assert public_model_1 in after_delete_2_ids
+
+    model_id_1 = create_1.json()["model_info"]["id"]
+    delete_1 = await client.post("/model/delete", json={"id": model_id_1}, headers=headers)
+    assert delete_1.status_code == 200
+
+    after_delete_all_models = await client.get(
+        "/models", headers={"Authorization": f"Bearer {team_key}"}
+    )
+    assert after_delete_all_models.status_code == 200
+    after_delete_all_ids = {model["id"] for model in after_delete_all_models.json()["data"]}
+    assert public_model_1 not in after_delete_all_ids
+    assert public_model_2 not in after_delete_all_ids

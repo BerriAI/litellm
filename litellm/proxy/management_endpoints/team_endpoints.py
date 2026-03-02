@@ -1053,8 +1053,29 @@ async def _update_model_table(
     ## UPSERT MODEL TABLE
     _model_id = model_id
     if data.model_aliases is not None and isinstance(data.model_aliases, dict):
+        existing_aliases: Dict[str, str] = {}
+        if model_id is not None:
+            existing_model_table = await prisma_client.db.litellm_modeltable.find_unique(
+                where={"id": model_id}
+            )
+            if (
+                existing_model_table is not None
+                and existing_model_table.model_aliases is not None
+            ):
+                if isinstance(existing_model_table.model_aliases, dict):
+                    existing_aliases = existing_model_table.model_aliases
+                elif isinstance(existing_model_table.model_aliases, str):
+                    try:
+                        parsed_aliases = json.loads(existing_model_table.model_aliases)
+                        if isinstance(parsed_aliases, dict):
+                            existing_aliases = parsed_aliases
+                    except json.JSONDecodeError:
+                        existing_aliases = {}
+
+        merged_aliases = {**existing_aliases, **data.model_aliases}
+
         litellm_modeltable = LiteLLM_ModelTable(
-            model_aliases=json.dumps(data.model_aliases),
+            model_aliases=json.dumps(merged_aliases),
             created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
             updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         )
