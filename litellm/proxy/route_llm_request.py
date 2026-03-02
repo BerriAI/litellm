@@ -42,6 +42,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "amoderation": "/moderations",
     "arerank": "/rerank",
     "aresponses": "/responses",
+    "_aresponses_websocket": "/responses",
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
     "acancel_responses": "/responses/{response_id}/cancel",
@@ -163,6 +164,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "acreate_response_reply",
         "alist_input_items",
         "_arealtime",  # private function for realtime API
+        "_aresponses_websocket",  # private function for responses WebSocket mode
         "aimage_edit",
         "agenerate_content",
         "agenerate_content_stream",
