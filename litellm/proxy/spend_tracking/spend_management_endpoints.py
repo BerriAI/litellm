@@ -1672,7 +1672,8 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=None, description="Filter logs by model"
     ),
     model_id: Optional[str] = fastapi.Query(
-        default=None, description="Filter logs by model ID (litellm model deployment id)"
+        default=None,
+        description="Filter logs by model ID (litellm model deployment id)",
     ),
     key_alias: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by key alias"
@@ -1726,7 +1727,13 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     # Validate sort_by and sort_order
-    valid_sort_fields = {"spend", "total_tokens", "startTime", "endTime", "request_duration_ms"}
+    valid_sort_fields = {
+        "spend",
+        "total_tokens",
+        "startTime",
+        "endTime",
+        "request_duration_ms",
+    }
     if sort_by not in valid_sort_fields:
         raise ProxyException(
             message=f"Invalid sort_by: {sort_by}. Must be one of: {', '.join(sorted(valid_sort_fields))}",
@@ -1753,7 +1760,11 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                     return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
                 except ValueError:
                     continue
-            expected = "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'" if is_v2 else "'YYYY-MM-DD HH:MM:SS'"
+            expected = (
+                "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'"
+                if is_v2
+                else "'YYYY-MM-DD HH:MM:SS'"
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid date format: {date_str}. Expected: {expected}",
@@ -1796,22 +1807,28 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         # Build metadata filters
         metadata_filters = []
         if key_alias is not None:
-            metadata_filters.append({
-                "path": ["user_api_key_alias"],
-                "string_contains": key_alias,
-            })
+            metadata_filters.append(
+                {
+                    "path": ["user_api_key_alias"],
+                    "equals": f'"{key_alias}"',
+                }
+            )
 
         if error_code is not None:
-            metadata_filters.append({
-                "path": ["error_information", "error_code"],
-                "equals": f'"{error_code}"',
-            })
+            metadata_filters.append(
+                {
+                    "path": ["error_information", "error_code"],
+                    "equals": f'"{error_code}"',
+                }
+            )
 
         if error_message is not None:
-            metadata_filters.append({
-                "path": ["error_information", "error_message"],
-                "string_contains": error_message,
-            })
+            metadata_filters.append(
+                {
+                    "path": ["error_information", "error_message"],
+                    "string_contains": error_message,
+                }
+            )
 
         if metadata_filters:
             if len(metadata_filters) == 1:
@@ -1919,16 +1936,24 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             sql_params.append(f"%{key_alias}%")
             p += 1
         if error_code is not None:
-            sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")
+            sql_conditions.append(
+                f"metadata->'error_information'->>'error_code' = ${p}"
+            )
             sql_params.append(error_code)
             p += 1
         if error_message is not None:
-            sql_conditions.append(f"metadata->'error_information'->>'error_message' LIKE ${p}")
+            sql_conditions.append(
+                f"metadata->'error_information'->>'error_message' LIKE ${p}"
+            )
             sql_params.append(f"%{error_message}%")
             p += 1
 
         # Quote column names that need quoting in SQL
-        _sql_col = f'"{order_column}"' if order_column in ("startTime", "endTime") else order_column
+        _sql_col = (
+            f'"{order_column}"'
+            if order_column in ("startTime", "endTime")
+            else order_column
+        )
         _sql_dir = "ASC" if order_direction == "asc" else "DESC"
 
         sql_query = f"""
@@ -3041,16 +3066,14 @@ async def provider_budgets() -> ProviderBudgetResponse:
 async def get_spend_by_tags(
     prisma_client: PrismaClient, start_date=None, end_date=None
 ):
-    response = await prisma_client.db.query_raw(
-        """
+    response = await prisma_client.db.query_raw("""
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
         GROUP BY individual_request_tag;
-        """
-    )
+        """)
 
     return response
 
@@ -3218,7 +3241,9 @@ async def ui_view_session_spend_logs(
             ORDER BY "startTime" ASC
             LIMIT $2 OFFSET $3
         """
-        result = await prisma_client.db.query_raw(sql_query, session_id, page_size, skip)
+        result = await prisma_client.db.query_raw(
+            sql_query, session_id, page_size, skip
+        )
 
         total_pages = (total_records + page_size - 1) // page_size
 
@@ -3280,9 +3305,17 @@ async def _build_ui_spend_logs_response(
     if enrich_session_counts:
         session_ids = list(
             {
-                (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
+                (
+                    row.get("session_id")
+                    if isinstance(row, dict)
+                    else getattr(row, "session_id", None)
+                )
                 for row in data
-                if (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
+                if (
+                    row.get("session_id")
+                    if isinstance(row, dict)
+                    else getattr(row, "session_id", None)
+                )
             }
         )
         if session_ids:
@@ -3304,11 +3337,7 @@ async def _build_ui_spend_logs_response(
     if enrich_session_counts:
         enriched: List[dict] = []
         for row in data:
-            row_dict = (
-                dict(row)
-                if isinstance(row, dict)
-                else row.model_dump()
-            )
+            row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
             enriched.append(row_dict)
@@ -3383,7 +3412,11 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     user_role = user_api_key_dict.user_role
     user_id = user_api_key_dict.user_id
-    return user_role in (
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-    ) and user_id is not None
+    return (
+        user_role
+        in (
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        )
+        and user_id is not None
+    )
