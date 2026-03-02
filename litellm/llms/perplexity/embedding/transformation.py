@@ -6,9 +6,14 @@ Docs: https://docs.perplexity.ai/api-reference/embeddings-post
 Supports models:
   - pplx-embed-v1-0.6b  (1024 dims, 32 K context)
   - pplx-embed-v1-4b    (2560 dims, 32 K context)
+
+Perplexity returns embeddings as base64-encoded signed int8 values by default.
+This module decodes them into float arrays for OpenAI-compatible responses.
 """
 
-from typing import List, Optional, Union
+import base64
+import struct
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -115,6 +120,24 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
             **optional_params,
         }
 
+    @staticmethod
+    def _decode_base64_embedding(embedding_value: Any) -> List[float]:
+        """
+        Decode a Perplexity embedding into a list of floats.
+
+        Perplexity returns base64-encoded signed int8 values by default.
+        If the value is already a list of numbers (e.g. from a mock or
+        future float format), it is returned as-is.
+        """
+        if isinstance(embedding_value, list):
+            return embedding_value
+        if isinstance(embedding_value, str):
+            raw_bytes = base64.b64decode(embedding_value)
+            count = len(raw_bytes)
+            int8_values = struct.unpack(f"{count}b", raw_bytes)
+            return [float(v) / 127.0 for v in int8_values]
+        return embedding_value
+
     def transform_embedding_response(
         self,
         model: str,
@@ -134,8 +157,17 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
             )
 
         model_response.model = raw_response_json.get("model", model)
-        model_response.data = raw_response_json.get("data", [])
         model_response.object = raw_response_json.get("object", "list")
+
+        raw_data = raw_response_json.get("data", [])
+        decoded_data: List[Dict[str, Any]] = []
+        for item in raw_data:
+            decoded_item = dict(item)
+            decoded_item["embedding"] = self._decode_base64_embedding(
+                item.get("embedding")
+            )
+            decoded_data.append(decoded_item)
+        model_response.data = decoded_data
 
         usage_data = raw_response_json.get("usage", {})
         usage = Usage(

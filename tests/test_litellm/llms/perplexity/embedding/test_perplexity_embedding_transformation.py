@@ -2,7 +2,9 @@
 Unit tests for Perplexity embedding transformation logic.
 """
 
+import base64
 import json
+import struct
 from unittest.mock import MagicMock
 
 import httpx
@@ -138,8 +140,8 @@ class TestPerplexityEmbeddingConfig:
         assert result["input"] == ["Test"]
         assert result["dimensions"] == 256
 
-    def test_transform_embedding_response(self):
-        """Test response transformation from raw API response."""
+    def test_transform_embedding_response_float_passthrough(self):
+        """Test response transformation when embeddings are already float arrays."""
         mock_response_data = {
             "object": "list",
             "model": "pplx-embed-v1-0.6b",
@@ -173,6 +175,58 @@ class TestPerplexityEmbeddingConfig:
         assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
         assert result.usage.prompt_tokens == 5
         assert result.usage.total_tokens == 5
+
+    def test_transform_embedding_response_base64_int8(self):
+        """Test decoding base64_int8 embeddings to float arrays (Perplexity default)."""
+        int8_values = [127, -128, 0, 64, -64]
+        b64_encoded = base64.b64encode(struct.pack(f"{len(int8_values)}b", *int8_values)).decode()
+
+        mock_response_data = {
+            "object": "list",
+            "model": "pplx-embed-v1-0.6b",
+            "data": [
+                {
+                    "object": "embedding",
+                    "index": 0,
+                    "embedding": b64_encoded,
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "total_tokens": 3},
+        }
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = mock_response_data
+        mock_response.status_code = 200
+
+        model_response = EmbeddingResponse()
+        result = self.config.transform_embedding_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=self.logging_obj,
+        )
+
+        embedding = result.data[0]["embedding"]
+        assert isinstance(embedding, list)
+        assert len(embedding) == 5
+        assert all(isinstance(v, float) for v in embedding)
+        assert abs(embedding[0] - 1.0) < 0.01
+        assert abs(embedding[1] - (-128.0 / 127.0)) < 0.01
+        assert embedding[2] == 0.0
+
+    def test_decode_base64_embedding_static(self):
+        """Test the static decode helper directly."""
+        int8_values = [10, -10, 50, -50]
+        b64_str = base64.b64encode(struct.pack("4b", *int8_values)).decode()
+        result = PerplexityEmbeddingConfig._decode_base64_embedding(b64_str)
+        assert len(result) == 4
+        assert abs(result[0] - 10.0 / 127.0) < 1e-6
+        assert abs(result[1] - (-10.0 / 127.0)) < 1e-6
+
+    def test_decode_base64_embedding_list_passthrough(self):
+        """Test that float lists pass through unchanged."""
+        floats = [0.5, -0.3, 0.8]
+        result = PerplexityEmbeddingConfig._decode_base64_embedding(floats)
+        assert result == floats
 
     def test_transform_embedding_response_error(self):
         """Test that malformed response raises PerplexityEmbeddingError."""
