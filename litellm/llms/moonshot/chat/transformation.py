@@ -94,7 +94,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             reasoning_content = message.get("reasoning_content")
             if (
                 message.get("role") == "assistant"
-                and message.get("reasoning_content") is None
+                and message.get("tool_calls")
                 and (
                     reasoning_content is None
                     or (isinstance(reasoning_content, str) and not reasoning_content.strip())
