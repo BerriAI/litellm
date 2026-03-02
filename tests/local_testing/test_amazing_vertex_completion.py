@@ -2899,7 +2899,7 @@ def test_gemini_function_call_parameter_in_messages():
     }
 
     with patch(
-        "litellm.llms.vertex_ai.vertex_llm_base.VertexLLMBase._ensure_access_token",
+        "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
         return_value=({"Authorization": "Bearer fake"}, "test-project"),
     ):
         with patch.object(client, "post", new=MagicMock()) as mock_client:
@@ -2943,7 +2943,7 @@ def test_gemini_function_call_parameter_in_messages():
                                         "content": "The current weather in Boston is 22°F."
                                     },
                                 }
-                            ]
+                            }
                         ],
                     },
                 ],
