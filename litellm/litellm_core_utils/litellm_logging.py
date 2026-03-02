@@ -2507,11 +2507,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self.model_call_details["async_complete_streaming_response"] = result
 
-            # Only set response_cost to None if not already calculated by
-            # pass-through handlers (e.g. Gemini/Vertex handlers already
-            # compute cost via completion_cost)
+            # Merge response_cost and model from kwargs if available.
+            # Streaming pass-through handlers compute cost and return it
+            # in kwargs, but it needs to be set on model_call_details for
+            # the standard logging payload builder to pick it up.
             if self.model_call_details.get("response_cost") is None:
-                self.model_call_details["response_cost"] = None
+                response_cost_from_kwargs = kwargs.get("response_cost")
+                if response_cost_from_kwargs is not None:
+                    self.model_call_details["response_cost"] = response_cost_from_kwargs
+                else:
+                    self.model_call_details["response_cost"] = None
+            if kwargs.get("model") and not self.model_call_details.get("model"):
+                self.model_call_details["model"] = kwargs["model"]
 
             # Only build standard_logging_object if not already built by
             # _success_handler_helper_fn

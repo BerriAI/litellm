@@ -499,6 +499,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         start_time: datetime,
         all_chunks: List[str],
         end_time: datetime,
+        kwargs: Optional[dict] = None,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle logging for collected OpenAI streaming chunks with cost tracking.
@@ -535,23 +536,30 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 custom_llm_provider=custom_llm_provider,
             )
 
-            # Preserve existing litellm_params to maintain metadata tags
-            existing_litellm_params = litellm_logging_obj.model_call_details.get(
+            # Preserve existing litellm_params from passed kwargs or logging object
+            incoming_kwargs = kwargs or {}
+            existing_litellm_params = incoming_kwargs.get(
+                "litellm_params"
+            ) or litellm_logging_obj.model_call_details.get(
                 "litellm_params", {}
             ) or {}
-            
+
             # Prepare kwargs for logging
             kwargs = {
                 "response_cost": response_cost,
                 "model": model,
                 "custom_llm_provider": custom_llm_provider,
-                "litellm_params": existing_litellm_params.copy(),
+                "litellm_params": existing_litellm_params.copy() if isinstance(existing_litellm_params, dict) else {},
+                "call_type": incoming_kwargs.get("call_type", "pass_through_endpoint"),
+                "litellm_call_id": incoming_kwargs.get("litellm_call_id"),
             }
 
-            # Extract user information for tracking
+            # Extract user information from passed kwargs or logging object
             passthrough_logging_payload: Optional[
                 PassthroughStandardLoggingPayload
-            ] = litellm_logging_obj.model_call_details.get(
+            ] = incoming_kwargs.get(
+                "passthrough_logging_payload"
+            ) or litellm_logging_obj.model_call_details.get(
                 "passthrough_logging_payload"
             )
             if passthrough_logging_payload:

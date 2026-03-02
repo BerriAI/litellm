@@ -333,6 +333,7 @@ class VertexPassthroughLoggingHandler:
         all_chunks: List[str],
         model: Optional[str],
         end_time: datetime,
+        kwargs: Optional[dict] = None,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Takes raw chunks from Vertex passthrough endpoint and logs them in litellm callbacks
@@ -341,7 +342,7 @@ class VertexPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: Dict[str, Any] = {}
+        _kwargs: Dict[str, Any] = kwargs or {}
         model = model or VertexPassthroughLoggingHandler.extract_model_from_url(
             url_route
         )
@@ -360,13 +361,13 @@ class VertexPassthroughLoggingHandler:
             )
             return {
                 "result": None,
-                "kwargs": kwargs,
+                "kwargs": _kwargs,
             }
 
-        kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
+        _kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
             litellm_model_response=complete_streaming_response,
             model=model,
-            kwargs=kwargs,
+            kwargs=_kwargs,
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,
@@ -377,7 +378,7 @@ class VertexPassthroughLoggingHandler:
 
         return {
             "result": complete_streaming_response,
-            "kwargs": kwargs,
+            "kwargs": _kwargs,
         }
 
     @staticmethod
