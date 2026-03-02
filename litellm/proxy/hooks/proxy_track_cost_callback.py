@@ -108,7 +108,7 @@ class _ProxyDBLogger(CustomLogger):
         # match the Langfuse trace_id, making failed requests unsearchable.
         _litellm_logging_obj = request_data.get("litellm_logging_obj")
         if _litellm_logging_obj is not None:
-            if "standard_logging_object" not in request_data:
+            if not request_data.get("standard_logging_object"):
                 request_data["standard_logging_object"] = getattr(
                     _litellm_logging_obj, "model_call_details", {}
                 ).get("standard_logging_object")
