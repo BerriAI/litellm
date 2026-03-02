@@ -11,8 +11,8 @@ import { Button, Tag, Tooltip } from "antd";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
-import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import { allEndUsersCall, keyInfoV1Call, uiSpendLogsCall } from "../networking";
@@ -242,7 +242,6 @@ export default function SpendLogsTable({
     filteredLogs,
     hasBackendFilters,
     allTeams: hookAllTeams,
-    allKeyAliases,
     handleFilterChange,
     handleFilterReset: handleFilterResetFromHook,
   } = useLogFilterLogic({
@@ -424,16 +423,7 @@ export default function SpendLogsTable({
     {
       name: "Key Alias",
       label: "Key Alias",
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!accessToken) return [];
-        const keyAliases = await fetchAllKeyAliases(accessToken);
-        const filtered = keyAliases.filter((alias) => alias.toLowerCase().includes(searchText.toLowerCase()));
-        return filtered.map((alias) => ({
-          label: alias,
-          value: alias,
-        }));
-      },
+      customComponent: PaginatedKeyAliasSelect,
     },
     {
       name: "End User",

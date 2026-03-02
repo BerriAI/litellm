@@ -177,6 +177,19 @@ async def aresponses_api_with_mcp(
         "litellm_metadata", {}
     ).get("user_api_key_auth")
 
+    # Extract MCP auth headers from request (for dynamic auth when fetching tools)
+    mcp_auth_header: Optional[str] = None
+    mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
+    secret_fields = kwargs.get("secret_fields")
+    if secret_fields and isinstance(secret_fields, dict):
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        mcp_auth_header, mcp_server_auth_headers, _, _ = (
+            ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+                secret_fields=secret_fields, tools=tools
+            )
+        )
+
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
         original_mcp_tools,
@@ -185,6 +198,8 @@ async def aresponses_api_with_mcp(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         original_mcp_tools
@@ -289,7 +304,7 @@ async def aresponses_api_with_mcp(
             )
 
             # Extract MCP auth headers from the request to pass to MCP server
-            secret_fields: Optional[Dict[str, Any]] = kwargs.get("secret_fields")
+            secret_fields = kwargs.get("secret_fields")
             (
                 mcp_auth_header,
                 mcp_server_auth_headers,
@@ -370,6 +385,8 @@ async def aresponses_api_with_mcp(
                     ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
                         user_api_key_auth=user_api_key_auth,
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
                     )
                     final_response = (
                         LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(

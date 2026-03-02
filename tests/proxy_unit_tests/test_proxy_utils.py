@@ -2,7 +2,8 @@ import asyncio
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -22,6 +23,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
+
+pytestmark = pytest.mark.xdist_group("proxy_heavy")
 
 
 @pytest.fixture
@@ -1486,12 +1489,46 @@ class MockPrismaClientDB:
         mock_key_data,
     ):
         self.db = MockDb(mock_team_data, mock_key_data)
+    
+    async def get_data(
+        self,
+        token: Optional[Union[str, list]] = None,
+        user_id: Optional[str] = None,
+        user_id_list: Optional[list] = None,
+        team_id: Optional[str] = None,
+        team_id_list: Optional[list] = None,
+        key_val: Optional[dict] = None,
+        table_name: Optional[str] = None,
+        query_type: str = "find_unique",
+        expires: Optional[datetime] = None,
+        reset_at: Optional[datetime] = None,
+        offset: Optional[int] = None,
+        limit: Optional[int] = None,
+    ):
+        """Mock get_data method to return user info for admin"""
+        from litellm.proxy._types import LiteLLM_UserTable
+        
+        # Return a proper LiteLLM_UserTable object when querying by user_id
+        if user_id:
+            return LiteLLM_UserTable(
+                user_id=user_id,
+                user_role="proxy_admin",
+                spend=0.0,
+                max_budget=None,
+            )
+        return None
 
 
 @pytest.mark.asyncio
 async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
     # Patch the prisma_client import
-    from litellm.proxy._types import UserInfoResponse
+    from litellm.proxy._types import UserAPIKeyAuth, UserInfoResponse
+
+    # Create a mock user_api_key_dict for admin user
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user_123",
+        user_role="proxy_admin",
+    )
 
     with patch(
         "litellm.proxy.proxy_server.prisma_client",
@@ -1502,11 +1539,18 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
         )
 
         # Execute the function
-        result = await _get_user_info_for_proxy_admin()
+        result = await _get_user_info_for_proxy_admin(
+            user_api_key_dict=mock_user_api_key_dict
+        )
 
         # Verify the result structure
         assert isinstance(result, UserInfoResponse)
         assert len(result.keys) == 2
+        # Verify admin's user_id is populated
+        assert result.user_id == "admin_user_123"
+        # Verify admin's user_info is populated
+        assert result.user_info is not None
+        assert result.user_info["user_id"] == "admin_user_123"
 
 
 def test_custom_openid_response():

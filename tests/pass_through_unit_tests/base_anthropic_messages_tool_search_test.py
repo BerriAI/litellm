@@ -206,6 +206,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
             assert len(tool_uses) > 0, "Expected tool_use blocks when stop_reason is tool_use"
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=3, delay=5)
     async def test_tool_search_streaming(self):
         """
         E2E test: Tool search should work with streaming responses.

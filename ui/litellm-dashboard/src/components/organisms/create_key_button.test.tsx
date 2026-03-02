@@ -15,6 +15,7 @@ vi.mock("../networking", () => ({
   keyCreateCall: mockKeyCreateCall,
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [{ id: "gpt-4" }, { id: "gpt-3.5-turbo" }] }),
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
+  getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
   getPromptsList: vi.fn().mockResolvedValue({ prompts: [] }),
   proxyBaseUrl: "http://localhost:4000",
   getPossibleUserRoles: vi.fn().mockResolvedValue({
@@ -27,7 +28,7 @@ vi.mock("../networking", () => ({
     soft_budget: null,
   }),
   fetchMCPAccessGroups: vi.fn().mockResolvedValue([]),
-  getAgentsList: vi.fn().mockResolvedValue([]),
+  getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
@@ -39,6 +40,20 @@ vi.mock("../molecules/notifications_manager", () => ({
     info: vi.fn(),
     clear: vi.fn(),
   },
+}));
+
+vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
+  useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+}));
+
+vi.mock("../common_components/ProjectDropdown", () => ({
+  default: ({ value, onChange }: { value?: string; onChange?: (v: string) => void }) => (
+    <input
+      data-testid="project-dropdown"
+      value={value || ""}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
+  ),
 }));
 
 vi.mock("../common_components/AccessGroupSelector", () => ({

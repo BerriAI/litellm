@@ -251,20 +251,20 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     </div>
                   </div>
                   <div>
-                    <Text className="font-medium">Available on Public Internet</Text>
+                    <Text className="font-medium">Network Access</Text>
                     <div className="flex items-center gap-2">
                       {mcpServer.available_on_public_internet ? (
                         <span className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-sm">
-                          Public
+                          All networks
                         </span>
                       ) : (
-                        <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md text-sm">
-                          Internal
+                        <span className="px-2 py-1 bg-orange-50 text-orange-700 rounded-md text-sm">
+                          Internal only
                         </span>
                       )}
-                      {mcpServer.available_on_public_internet && (
+                      {!mcpServer.available_on_public_internet && (
                         <Text className="text-xs text-gray-500">
-                          Accessible from external/public IPs
+                          Restricted to internal network
                         </Text>
                       )}
                     </div>

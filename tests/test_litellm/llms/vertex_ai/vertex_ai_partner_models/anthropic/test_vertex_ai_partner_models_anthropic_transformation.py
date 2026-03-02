@@ -86,6 +86,7 @@ def test_vertex_ai_anthropic_context_management_compact_beta_header():
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "context_management": {"edits": [{"type": "compact_20260112"}]},
         "max_tokens": 100,
@@ -97,16 +98,20 @@ def test_vertex_ai_anthropic_context_management_compact_beta_header():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
     # Verify context_management is included
     assert "context_management" in result
     assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
 
-    # Verify compact beta header is in anthropic_beta field
+    # Verify compact beta header is in anthropic_beta body field
     assert "anthropic_beta" in result
     assert "compact-2026-01-12" in result["anthropic_beta"]
+
+    # Verify compact beta header is also set as HTTP header
+    assert "anthropic-beta" in headers
+    assert "compact-2026-01-12" in headers["anthropic-beta"]
 
 
 def test_vertex_ai_anthropic_context_management_mixed_edits():
@@ -114,6 +119,7 @@ def test_vertex_ai_anthropic_context_management_mixed_edits():
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "context_management": {
             "edits": [
@@ -130,13 +136,18 @@ def test_vertex_ai_anthropic_context_management_mixed_edits():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
-    # Verify both beta headers are present
+    # Verify both beta headers are present in body field
     assert "anthropic_beta" in result
     assert "compact-2026-01-12" in result["anthropic_beta"]
     assert "context-management-2025-06-27" in result["anthropic_beta"]
+
+    # Verify both beta headers are also set as HTTP header
+    assert "anthropic-beta" in headers
+    assert "compact-2026-01-12" in headers["anthropic-beta"]
+    assert "context-management-2025-06-27" in headers["anthropic-beta"]
 
 
 def test_vertex_ai_anthropic_structured_output_header_not_added():
@@ -331,16 +342,17 @@ def test_vertex_ai_anthropic_other_models_still_use_tools():
 
 
 def test_vertex_ai_anthropic_extra_headers_beta_propagation():
-    """Test that anthropic-beta values from extra_headers are propagated to the
-    anthropic_beta request body field for Vertex AI requests.
+    """Test that anthropic-beta values from extra_headers are propagated to both
+    the anthropic_beta request body field and the anthropic-beta HTTP header
+    for Vertex AI requests.
 
-    Vertex AI requires beta flags in the request body (anthropic_beta array),
-    not as HTTP headers. This mirrors the Bedrock handler's behavior of
-    extracting user-specified beta headers.
+    Vertex AI rawPredict requires beta flags as HTTP headers. The body field
+    anthropic_beta alone is insufficient for features like context_management.
     """
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "max_tokens": 100,
         "is_vertex_request": True,
@@ -354,12 +366,16 @@ def test_vertex_ai_anthropic_extra_headers_beta_propagation():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
     assert "anthropic_beta" in result
     assert "interleaved-thinking-2025-05-14" in result["anthropic_beta"]
     assert "extra_headers" not in result
+
+    # Verify HTTP header is also set
+    assert "anthropic-beta" in headers
+    assert "interleaved-thinking-2025-05-14" in headers["anthropic-beta"]
 
 
 def test_vertex_ai_anthropic_extra_headers_beta_merged_with_auto_betas():
@@ -421,6 +437,7 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "max_tokens": 100,
         "is_vertex_request": True,
@@ -431,11 +448,12 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
     assert "anthropic_beta" not in result
     assert "extra_headers" not in result
+    assert "anthropic-beta" not in headers
 
 
 def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
