@@ -291,6 +291,7 @@ class CallTypes(str, Enum):
     search = "search"
     asearch = "asearch"
     arealtime = "_arealtime"
+    aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
@@ -1397,6 +1398,9 @@ class PromptTokensDetailsWrapper(
 
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
+
+    video_tokens: Optional[int] = None
+    """Video tokens sent to the model."""
 
     web_search_requests: Optional[int] = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
