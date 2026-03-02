@@ -186,3 +186,30 @@ class TestModelsLabVideoTransformation:
         assert "req_789" in url
         assert "fetch" in url
         assert body["key"] == "test-api-key"
+
+    def test_transform_video_create_response_poll_error_surfaces_message(self):
+        """When _poll_sync returns status=error, the actual error message is raised."""
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.json.return_value = {
+            "status": "processing",
+            "request_id": "req_err",
+        }
+
+        poll_result = {
+            "status": "error",
+            "message": "Insufficient credits",
+        }
+
+        with patch.object(self.config, "_poll_sync", return_value=poll_result):
+            with pytest.raises(BaseLLMException) as exc_info:
+                self.config.transform_video_create_response(
+                    model="i2vgen-xl",
+                    raw_response=mock_response,
+                    logging_obj=self.mock_logging_obj,
+                )
+
+        assert "Insufficient credits" in str(exc_info.value)

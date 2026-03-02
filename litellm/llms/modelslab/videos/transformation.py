@@ -179,6 +179,13 @@ class ModelsLabVideoConfig(BaseVideoConfig):
             response_data = self._poll_sync(request_id)
             status = response_data.get("status", "")
 
+        if status == "error":
+            raise BaseLLMException(
+                status_code=500,
+                message=response_data.get("message", "ModelsLab video generation failed"),
+                headers={},
+            )
+
         if status == "success":
             output = response_data.get("output", [])
             output_url = output[0] if output else None
