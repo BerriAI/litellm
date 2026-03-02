@@ -2060,11 +2060,11 @@ class InitPassThroughEndpointHelpers:
         Returns:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
+        root_path_prefix = InitPassThroughEndpointHelpers._build_full_path_with_root("")
+
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            full_route = InitPassThroughEndpointHelpers._build_full_path_with_root(
-                mapped_route
-            )
+            full_route = f"{root_path_prefix}{mapped_route}"
             if route.startswith(full_route):
                 return True
 
@@ -2076,9 +2076,7 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
-                registered_path = (
-                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
-                )
+                registered_path = f"{root_path_prefix}{parts[2]}"
                 if route_type == "exact" and route == registered_path:
                     return True
                 elif route_type == "subpath":
@@ -2094,13 +2092,12 @@ class InitPassThroughEndpointHelpers:
         route: str, method: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Get passthrough params for a given route and optionally filter by HTTP method"""
+        root_path_prefix = InitPassThroughEndpointHelpers._build_full_path_with_root("")
         for key in _registered_pass_through_routes.keys():
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
-                registered_path = (
-                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
-                )
+                registered_path = f"{root_path_prefix}{parts[2]}"
 
                 # Get the methods for this route
                 route_methods = _registered_pass_through_routes[key].get("methods", [])
