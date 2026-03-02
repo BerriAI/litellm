@@ -368,7 +368,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
   }
 };
 
-const providersRequiringPrefix = new Set<string>(["Azure", "OpenAI_Compatible"]);
+const providersRequiringPrefix = new Set<string>(["Azure", "OpenAI_Compatible", "OpenAI_Text_Compatible"]);
 
 export const prefixWithProvider = (provider: string, modelName: string): string => {
   if (!providersRequiringPrefix.has(provider)) return modelName;
