@@ -273,6 +273,20 @@ class TestFilterAnthropicOutputSchema:
         assert "format: binary" in result["properties"]["binary_data"]["description"]
         assert "format: custom-format" in result["properties"]["custom"]["description"]
 
+    def test_none_string_format_is_moved_to_description(self):
+        """format=None should not be silently dropped from transformed schema."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "maybe_formatted": {"type": "string", "format": None},
+            },
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "format" not in result["properties"]["maybe_formatted"]
+        assert "format: None" in result["properties"]["maybe_formatted"]["description"]
+
     def test_ref_passthrough(self):
         """$ref schemas are passed through without modification."""
         schema = {"$ref": "#/$defs/MyModel"}

@@ -254,11 +254,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 strict_schema["required"] = required
 
         elif type_ == "string":
-            fmt = remaining.pop("format", None)
-            if fmt and fmt in AnthropicConfig.SUPPORTED_STRING_FORMATS:
-                strict_schema["format"] = fmt
-            elif fmt:
-                remaining["format"] = fmt
+            if "format" in remaining:
+                fmt = remaining.pop("format")
+                if fmt in AnthropicConfig.SUPPORTED_STRING_FORMATS:
+                    strict_schema["format"] = fmt
+                else:
+                    remaining["format"] = fmt
 
         elif type_ == "array":
             items = remaining.pop("items", None)
