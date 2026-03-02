@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StandardLoggingPayload",
+  "description": "JSON Schema for validating Pub/Sub StandardLoggingPayload messages. Encodes the contract that downstream reporting systems depend on.",
+  "type": "object",
+  "required": [
+    "id",
+    "call_type",
+    "status",
+    "response_cost",
+    "total_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "model",
+    "messages",
+    "response",
+    "hidden_params"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trace_id": {
+      "type": ["string", "null"]
+    },
+    "call_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stream": {
+      "type": ["boolean", "null"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "failure"]
+    },
+    "response_cost": {
+      "type": "number",
+      "minimum": 0
+    },
+    "total_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "prompt_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "completion_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[Uu][Nn][Kk][Nn][Oo][Ww][Nn]$"
+      }
+    },
+    "custom_llm_provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["choices"],
+      "properties": {
+        "choices": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+              "message": {
+                "type": "object",
+                "required": ["content", "role"],
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "role": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "response_time": {
+      "type": "number",
+      "minimum": 0
+    },
+    "startTime": {
+      "type": ["number", "string"]
+    },
+    "endTime": {
+      "type": ["number", "string"]
+    },
+    "completionStartTime": {
+      "type": ["number", "string"]
+    },
+    "api_base": {
+      "type": "string"
+    },
+    "model_parameters": {
+      "type": "object"
+    },
+    "hidden_params": {
+      "type": "object"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "error_str": {
+      "type": ["string", "null"]
+    },
+    "cache_hit": {
+      "type": ["boolean", "null"]
+    },
+    "request_tags": {
+      "type": "array"
+    }
+  },
+  "additionalProperties": true
+}
