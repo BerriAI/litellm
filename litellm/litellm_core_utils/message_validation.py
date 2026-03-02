@@ -22,19 +22,23 @@ Example usage:
     errors = validate_messages(messages, provider="openai")
     if errors:
         raise ValueError(f"Invalid messages: {errors}")
+
+TODO: Integration - This module is not yet integrated into the main completion flow.
+Planned integration point: litellm/main.py near validate_and_fix_openai_messages() call.
+Can be used as an opt-in utility via direct import until integrated.
 """
 
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Set
 
 # Provider types supported by validation
 ProviderType = Literal["openai", "anthropic", "auto"]
 
 
 def validate_messages(
-    messages: list[dict[str, Any]],
+    messages: List[Dict[str, Any]],
     provider: ProviderType = "auto",
     tools_defined: bool = False,
-) -> list[str]:
+) -> List[str]:
     """Validate a message sequence for LLM API compatibility.
 
     Checks for common issues that cause API errors:
@@ -63,7 +67,7 @@ def validate_messages(
         return _validate_openai_messages(messages, tools_defined)
 
 
-def _detect_provider(messages: list[dict[str, Any]]) -> Literal["openai", "anthropic"]:
+def _detect_provider(messages: List[Dict[str, Any]]) -> Literal["openai", "anthropic"]:
     """Detect provider from message format."""
     for msg in messages:
         content = msg.get("content")
@@ -77,9 +81,9 @@ def _detect_provider(messages: list[dict[str, Any]]) -> Literal["openai", "anthr
 
 
 def _validate_openai_messages(
-    messages: list[dict[str, Any]],
+    messages: List[Dict[str, Any]],
     tools_defined: bool,
-) -> list[str]:
+) -> List[str]:
     """Validate OpenAI Chat Completions message format.
 
     OpenAI rules:
@@ -88,11 +92,11 @@ def _validate_openai_messages(
     - Tool messages must follow the assistant message containing the tool_call
     - No duplicate tool_call_ids in tool responses
     """
-    errors: list[str] = []
+    errors: List[str] = []
 
     # Track tool_call_ids and their responses
-    pending_tool_calls: dict[str, int] = {}  # tool_call_id -> message index
-    seen_tool_responses: set[str] = set()
+    pending_tool_calls: Dict[str, int] = {}  # tool_call_id -> message index
+    seen_tool_responses: Set[str] = set()
 
     for i, msg in enumerate(messages):
         role = msg.get("role")
@@ -134,6 +138,7 @@ def _validate_openai_messages(
                     f"Unresolved tool_calls before {role} message: {unresolved}. "
                     f"Each tool_call must have a matching tool response."
                 )
+                pending_tool_calls.clear()
 
     # Check for any remaining unresolved tool calls at end of messages
     if pending_tool_calls and tools_defined:
@@ -147,9 +152,9 @@ def _validate_openai_messages(
 
 
 def _validate_anthropic_messages(
-    messages: list[dict[str, Any]],
+    messages: List[Dict[str, Any]],
     tools_defined: bool,
-) -> list[str]:
+) -> List[str]:
     """Validate Anthropic Messages API format.
 
     Anthropic rules:
@@ -159,11 +164,11 @@ def _validate_anthropic_messages(
       the assistant message with tool_use
     - No duplicate tool_use_ids in tool_result blocks
     """
-    errors: list[str] = []
+    errors: List[str] = []
 
     # Track tool_use ids and their results
-    pending_tool_uses: dict[str, int] = {}  # tool_use_id -> message index
-    seen_tool_results: set[str] = set()
+    pending_tool_uses: Dict[str, int] = {}  # tool_use_id -> message index
+    seen_tool_results: Set[str] = set()
 
     for i, msg in enumerate(messages):
         role = msg.get("role")
@@ -207,6 +212,7 @@ def _validate_anthropic_messages(
                     f"Unresolved tool_use blocks before user message: {unresolved}. "
                     f"Each tool_use must have a matching tool_result."
                 )
+                pending_tool_uses.clear()
 
     # Check for any remaining unresolved tool uses at end of messages
     if pending_tool_uses and tools_defined:
@@ -220,9 +226,9 @@ def _validate_anthropic_messages(
 
 
 def validate_responses_input(
-    input_items: list[dict[str, Any]],
+    input_items: List[Dict[str, Any]],
     tools_defined: bool = False,
-) -> list[str]:
+) -> List[str]:
     """Validate OpenAI Responses API input format.
 
     Responses API rules:
@@ -230,10 +236,10 @@ def validate_responses_input(
       with matching call_id
     - No duplicate call_ids in function_call_output items
     """
-    errors: list[str] = []
+    errors: List[str] = []
 
-    pending_calls: dict[str, int] = {}  # call_id -> item index
-    seen_outputs: set[str] = set()
+    pending_calls: Dict[str, int] = {}  # call_id -> item index
+    seen_outputs: Set[str] = set()
 
     for i, item in enumerate(input_items):
         item_type = item.get("type")

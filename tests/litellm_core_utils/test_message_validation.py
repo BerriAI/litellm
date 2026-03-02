@@ -54,11 +54,16 @@ class TestOpenAIValidation:
             {"role": "user", "content": "What happened?"},
         ]
         errors = validate_messages(messages, provider="openai", tools_defined=True)
-        assert len(errors) >= 1
-        assert any("unresolved" in e.lower() for e in errors)
+        assert len(errors) == 1
+        assert "unresolved" in errors[0].lower()
 
     def test_duplicate_tool_response(self):
-        """Invalid: multiple tool responses for same tool_call_id."""
+        """Invalid: multiple tool responses for same tool_call_id.
+        
+        After first response resolves the call, second response triggers:
+        1. Duplicate error (same ID seen before)
+        2. Unknown ID error (call was already resolved)
+        """
         messages = [
             {"role": "user", "content": "Run ls"},
             {
@@ -71,7 +76,7 @@ class TestOpenAIValidation:
             {"role": "tool", "tool_call_id": "call_dup", "content": "duplicate"},
         ]
         errors = validate_messages(messages, provider="openai", tools_defined=True)
-        assert len(errors) >= 1
+        assert len(errors) == 2
         assert any("duplicate" in e.lower() for e in errors)
 
     def test_orphan_tool_response(self):
@@ -81,8 +86,8 @@ class TestOpenAIValidation:
             {"role": "tool", "tool_call_id": "unknown_id", "content": "result"},
         ]
         errors = validate_messages(messages, provider="openai", tools_defined=True)
-        assert len(errors) >= 1
-        assert any("unknown" in e.lower() for e in errors)
+        assert len(errors) == 1
+        assert "unknown" in errors[0].lower()
 
     def test_multiple_parallel_tool_calls(self):
         """Valid: multiple tool_calls in one message, all resolved."""
@@ -139,11 +144,16 @@ class TestAnthropicValidation:
             {"role": "user", "content": "What happened?"},
         ]
         errors = validate_messages(messages, provider="anthropic", tools_defined=True)
-        assert len(errors) >= 1
-        assert any("unresolved" in e.lower() for e in errors)
+        assert len(errors) == 1
+        assert "unresolved" in errors[0].lower()
 
     def test_duplicate_tool_result(self):
-        """Invalid: multiple tool_results for same tool_use_id."""
+        """Invalid: multiple tool_results for same tool_use_id.
+        
+        After first result resolves the tool_use, second result triggers:
+        1. Duplicate error (same ID seen before)
+        2. Unknown ID error (tool_use was already resolved)
+        """
         messages = [
             {"role": "user", "content": "Run ls"},
             {
@@ -161,7 +171,7 @@ class TestAnthropicValidation:
             },
         ]
         errors = validate_messages(messages, provider="anthropic", tools_defined=True)
-        assert len(errors) >= 1
+        assert len(errors) == 2
         assert any("duplicate" in e.lower() for e in errors)
 
 
@@ -188,18 +198,23 @@ class TestResponsesAPIValidation:
             {"type": "function_call", "call_id": "fc_orphan", "name": "x", "arguments": "{}"},
         ]
         errors = validate_responses_input(input_items, tools_defined=True)
-        assert len(errors) >= 1
-        assert any("unresolved" in e.lower() for e in errors)
+        assert len(errors) == 1
+        assert "unresolved" in errors[0].lower()
 
     def test_duplicate_function_output(self):
-        """Invalid: multiple outputs for same call_id."""
+        """Invalid: multiple outputs for same call_id.
+        
+        After first output resolves the call, second output triggers:
+        1. Duplicate error (same ID seen before)
+        2. Unknown ID error (call was already resolved)
+        """
         input_items = [
             {"type": "function_call", "call_id": "fc_dup", "name": "x", "arguments": "{}"},
             {"type": "function_call_output", "call_id": "fc_dup", "output": "first"},
             {"type": "function_call_output", "call_id": "fc_dup", "output": "dup"},
         ]
         errors = validate_responses_input(input_items, tools_defined=True)
-        assert len(errors) >= 1
+        assert len(errors) == 2
         assert any("duplicate" in e.lower() for e in errors)
 
 
