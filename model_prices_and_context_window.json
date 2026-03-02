@@ -15884,7 +15884,7 @@
         "tpm": 10000000
     },
     "gemini/gemini-2.0-flash-live-001": {
-        "deprecation_date": "2026-06-01",
+        "deprecation_date": "2025-12-09",
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 2.1e-06,
         "input_cost_per_image": 2.1e-06,
