@@ -1,4 +1,5 @@
 #### SPEND MANAGEMENT #####
+import asyncio
 import collections
 import json
 import os
@@ -48,18 +49,17 @@ router = APIRouter()
 
 
 def _get_read_prisma_client():
-    """Get the read replica Prisma client, falling back to primary if not configured."""
-    from litellm.proxy.proxy_server import prisma_client, prisma_read_client
+    """Get the Prisma client. It routes reads to DATABASE_URL_READ_REPLICA when configured."""
+    from litellm.proxy.proxy_server import prisma_client
 
-    client = prisma_read_client if prisma_read_client is not None else prisma_client
-    if client is None:
+    if prisma_client is None:
         raise ProxyException(
             message="Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys",
             type="internal_error",
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    return client
+    return prisma_client
 
 
 class ErrorStatsResponse(BaseModel):
@@ -1769,15 +1769,7 @@ async def ui_view_spend_logs(
 -H "Authorization: Bearer sk-1234"
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise ProxyException(
-            message="Prisma Client is not initialized",
-            type="internal_error",
-            param="None",
-            code=status.HTTP_401_UNAUTHORIZED,
-        )
+    prisma_client = _get_read_prisma_client()
 
     if start_date is None or end_date is None:
         raise ProxyException(
@@ -2438,6 +2430,14 @@ async def ui_view_error_stats(
 
         time_diff_hours = (end_date_obj - start_date_obj).total_seconds() / 3600
 
+        if time_diff_hours > 240:
+            raise ProxyException(
+                message="Time range exceeds maximum allowed (10 days)",
+                type="bad_request",
+                param="start_date/end_date",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Calculate bucket size dynamically to keep buckets < 700
         # Formula: bucket_seconds = (time_diff_hours * 3600) / max_buckets
         max_buckets = 700
@@ -2543,7 +2543,10 @@ async def ui_view_error_stats(
 
         sql_query += " GROUP BY 1, 2 ORDER BY 1 ASC, 3 DESC"
 
-        db_response = await prisma_client.db.query_raw(sql_query, *params)
+        db_response = await asyncio.wait_for(
+            prisma_client.db.query_raw(sql_query, *params),
+            timeout=10.0,
+        )
 
         if db_response is None:
             return {
@@ -2638,15 +2641,7 @@ async def ui_view_failure_logs_analytics_paginated(
 
     Only returns logs where metadata.error_information.error_class is set.
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise ProxyException(
-            message="Prisma Client is not initialized",
-            type="internal_error",
-            param="None",
-            code=status.HTTP_401_UNAUTHORIZED,
-        )
+    prisma_client = _get_read_prisma_client()
 
     if start_date is None or end_date is None:
         raise ProxyException(
@@ -2674,6 +2669,15 @@ async def ui_view_failure_logs_analytics_paginated(
         except ValueError:
             end_date_obj = datetime.strptime(end_date, "%Y-%m-%dT%H:%M").replace(
                 tzinfo=timezone.utc
+            )
+
+        time_diff_hours = (end_date_obj - start_date_obj).total_seconds() / 3600
+        if time_diff_hours > 240:
+            raise ProxyException(
+                message="Time range exceeds maximum allowed (10 days)",
+                type="bad_request",
+                param="start_date/end_date",
+                code=status.HTTP_400_BAD_REQUEST,
             )
 
         start_date_iso = start_date_obj.isoformat()
@@ -2815,7 +2819,10 @@ async def ui_view_failure_logs_analytics_paginated(
 
         # Get total count
         count_query = sql_query.replace("SELECT *", "SELECT COUNT(*) as total")
-        count_result = await prisma_client.db.query_raw(count_query, *params)
+        count_result = await asyncio.wait_for(
+            prisma_client.db.query_raw(count_query, *params),
+            timeout=10.0,
+        )
         total = count_result[0].get("total", 0) if count_result else 0
 
         # Calculate pages
@@ -2828,7 +2835,10 @@ async def ui_view_failure_logs_analytics_paginated(
         params.append((page - 1) * page_size)
 
         # Execute paginated query
-        db_response = await prisma_client.db.query_raw(sql_query, *params)
+        db_response = await asyncio.wait_for(
+            prisma_client.db.query_raw(sql_query, *params),
+            timeout=10.0,
+        )
 
         if db_response is None:
             return {
