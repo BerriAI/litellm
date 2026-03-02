@@ -33,9 +33,25 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
-        Moonshot AI does not support content in list format.
+        Moonshot text-only models don't support content in list format.
+        Multimodal models (kimi-k2.5, kimi-latest, etc.) accept the
+        standard OpenAI content array with non-text blocks (image_url,
+        input_audio, video_url, file, etc.).
+
+        If any message contains a non-text content part, skip flattening
+        so the multimodal payload is preserved.
         """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        has_non_text = False
+        for m in messages:
+            _content = m.get("content")
+            if _content and isinstance(_content, list):
+                if any(c.get("type") != "text" for c in _content):
+                    has_non_text = True
+                    break
+
+        if not has_non_text:
+            messages = handle_messages_with_content_list_to_str_conversion(messages)
+
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
