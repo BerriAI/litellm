@@ -466,8 +466,36 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
                         assistant_msg, model=model
                     )
+
+                    # Gemini validates thought signatures on function-call turns.
+                    # If a signature exists for this assistant turn (e.g. from thinking_blocks),
+                    # copy it to parallel function calls missing thoughtSignature.
+                    turn_thought_signature = None
+                    for existing_part in assistant_content:
+                        if (
+                            isinstance(existing_part, dict)
+                            and existing_part.get("thoughtSignature")
+                            and (
+                                existing_part.get("functionCall") is not None
+                                or existing_part.get("function_call") is not None
+                            )
+                        ):
+                            turn_thought_signature = existing_part.get(
+                                "thoughtSignature"
+                            )
+                            break
+
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:
+                        if (
+                            turn_thought_signature is not None
+                            and isinstance(gemini_tool_call_part, dict)
+                            and gemini_tool_call_part.get("thoughtSignature") is None
+                        ):
+                            gemini_tool_call_part["thoughtSignature"] = (
+                                turn_thought_signature
+                            )
+
                         if not check_if_part_exists_in_parts(
                             assistant_content,
                             gemini_tool_call_part,

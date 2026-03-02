@@ -294,12 +294,12 @@ def test_thought_signature_preservation_in_conversion():
 
     # Verify thought signature is preserved in first function call part
     assert len(gemini_parts) == 2
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
     assert gemini_parts[0]["thoughtSignature"] == test_signature
     
     # Verify second function call part does not have thought signature
-    assert "function_call" in gemini_parts[1]
+    assert "functionCall" in gemini_parts[1]
     assert "thoughtSignature" not in gemini_parts[1]
 
 
@@ -361,6 +361,53 @@ def test_thought_signature_sequential_function_calls():
     
     assert len(gemini_parts_step2) == 1
     assert gemini_parts_step2[0]["thoughtSignature"] == signature_2
+
+
+def test_parallel_tool_calls_copy_thought_signature_from_thinking_block():
+    """Test that parallel tool calls inherit turn thought signature from thinking_blocks."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": '{"functionCall":{"name":"get_current_temperature","args":{"location":"Paris"}}}',
+                    "signature": "sig-turn-123",
+                }
+            ],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_temperature",
+                        "arguments": '{"location": "Paris"}',
+                    },
+                    "index": 0,
+                },
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_temperature",
+                        "arguments": '{"location": "London"}',
+                    },
+                    "index": 1,
+                },
+            ],
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages, model="gemini-2.5-flash")
+
+    assert len(contents) == 1
+    model_parts = contents[0]["parts"]
+    function_parts = [
+        p for p in model_parts if p.get("functionCall") is not None or p.get("function_call") is not None
+    ]
+    assert len(function_parts) == 2
+    assert all(p.get("thoughtSignature") == "sig-turn-123" for p in function_parts)
 
 
 def test_thought_signature_with_function_call_mode():
@@ -430,7 +477,7 @@ def test_dummy_signature_added_for_gemini_3_conversation_history():
 
     # Verify dummy signature is added
     assert len(gemini_parts) == 1
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
     
     # Verify it's the expected dummy signature (base64 encoded "skip_thought_signature_validator")
@@ -469,7 +516,7 @@ def test_dummy_signature_not_added_for_gemini_2_5():
 
     # Verify no dummy signature is added for non-gemini-3 models
     assert len(gemini_parts) == 1
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" not in gemini_parts[0]
 
 
@@ -508,7 +555,7 @@ def test_dummy_signature_not_added_when_signature_exists():
 
     # Verify real signature is preserved, not replaced with dummy
     assert len(gemini_parts) == 1
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
     assert gemini_parts[0]["thoughtSignature"] == real_signature
 
@@ -539,7 +586,7 @@ def test_dummy_signature_with_function_call_mode():
 
     # Verify dummy signature is added
     assert len(gemini_parts) == 1
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
     
     # Verify it's the expected dummy signature
