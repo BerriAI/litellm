@@ -317,7 +317,7 @@ class TestDictResponseHiddenParams:
         assert metadata._hidden_params == {"existing_key": "value"}
 
     def test_proxy_reads_hidden_params_from_dict_response(self):
-        """Proxy's getattr/get logic should retrieve _hidden_params from dict responses."""
+        """ResponseMetadata.__init__ should extract _hidden_params from dict responses (same path proxy relies on)."""
         response = {
             "id": "msg_abc",
             "_hidden_params": {
@@ -326,12 +326,7 @@ class TestDictResponseHiddenParams:
             },
         }
 
-        # Simulate what the proxy does after the fix
-        hidden_params = (
-            response.get("_hidden_params", {})
-            if isinstance(response, dict)
-            else getattr(response, "_hidden_params", {})
-        ) or {}
+        metadata = ResponseMetadata(response)
 
-        assert hidden_params["response_cost"] == 0.01
-        assert hidden_params["api_base"] == "https://api.anthropic.com"
+        assert metadata._hidden_params["response_cost"] == 0.01
+        assert metadata._hidden_params["api_base"] == "https://api.anthropic.com"
