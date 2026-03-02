@@ -1,4 +1,5 @@
 #### SPEND MANAGEMENT #####
+import asyncio
 import collections
 import json
 import os
@@ -23,6 +24,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -4462,7 +4465,7 @@ async def ui_view_failure_logs_analytics_paginated(
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_failure_logs_analytics_paginated: {e}")
         raise handle_exception_on_proxy(e)
-    
+
 
 @router.get(
     "/spend/logs/models",

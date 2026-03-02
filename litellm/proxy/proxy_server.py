@@ -695,7 +695,7 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, prisma_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, prisma_client, prisma_read_client
 
     # Set all variables to None
     master_key = None
@@ -712,14 +712,19 @@ def cleanup_router_config_variables():
     health_check_interval = None
     health_check_concurrency = None
     prisma_client = None
+    prisma_read_client = None
 
 
 async def proxy_shutdown_event():
-    global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
+    global prisma_client, prisma_read_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
+
+    if prisma_read_client:
+        verbose_proxy_logger.debug("Disconnecting from Prisma Read Replica")
+        await prisma_read_client.disconnect()
 
     if litellm.cache is not None:
         await litellm.cache.disconnect()
@@ -778,7 +783,7 @@ async def _initialize_shared_aiohttp_session():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
+    global prisma_client, prisma_read_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
     import json
 
     init_verbose_loggers()
@@ -888,6 +893,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
                 verbose_proxy_logger.warning(f"Password migration skipped: {e}")
 
         asyncio.create_task(_run_pw_migration())
+
+    # check if READ_DATABASE_URL in environment - setup read replica client
+    if prisma_read_client is None:
+        _read_db_url: Optional[str] = get_secret("READ_DATABASE_URL", None)  # type: ignore
+        if _read_db_url is not None:
+            prisma_read_client = await ProxyStartupEvent._setup_prisma_client(
+                database_url=_read_db_url,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_cache=user_api_key_cache,
+            )
+            verbose_proxy_logger.debug("Prisma read replica client initialized")
 
     ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
@@ -1002,6 +1018,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             await prisma_client.stop_db_health_watchdog_task()
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
+
+    # Shutdown event - stop RDS IAM token refresh background task for read replica
+    if (
+        prisma_read_client is not None
+        and hasattr(prisma_read_client, "db")
+        and hasattr(prisma_read_client.db, "stop_token_refresh_task")
+    ):
+        try:
+            await prisma_read_client.db.stop_token_refresh_task()
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error stopping read replica token refresh task: {e}")
 
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
@@ -1543,6 +1570,7 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
+prisma_read_client: Optional[PrismaClient] = None  # Read replica client
 shared_aiohttp_session: Optional["ClientSession"] = (
     None  # Global shared session for connection reuse
 )
