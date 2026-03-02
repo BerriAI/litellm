@@ -560,7 +560,7 @@ def test_convert_gemini_tool_call_result_parallel_tool_calls():
     in ``last_message_with_tool_calls``, so the first tool result could never
     find its corresponding tool call.
 
-    See: https://github.com/BerriAI/litellm/issues/XXXXX
+    See: https://github.com/BerriAI/litellm/issues/22578
     """
     from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
