@@ -56,19 +56,52 @@ def test_get_thought_signature_from_tool_normalization():
 
 def test_gemini_transformation_thought_signatures_normalization():
     """
-    Test that _transform_request_body correctly handles 'thought_signatures' in assistant messages.
+    Test that _gemini_convert_messages_with_history correctly handles 'thought_signatures' 
+    in assistant messages (converting list to single thoughtSignature).
     """
-    # This requires mocking or carefully constructing the input to _transform_request_body
-    # simpler to test the internal logic if accessible, but _transform_request_body is acceptable.
+    from litellm.llms.vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
     
-    # Actually, looking at the patch, the fix was also in `transformation.py` around line 428.
-    # It converts `thought_signatures` list to `thoughtSignature` part.
+    signature = "test_signature_abc"
     
-    # We can try to test `_gemini_convert_messages_with_history` or similar if possible, 
-    # but let's stick to unit testing the behavior if we can isolate it.
+    # Input messages simulating an assistant message with thought_signatures (plural)
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant", 
+            "content": "Hi there",
+            "provider_specific_fields": {
+                "thought_signatures": [signature]
+            }
+        }
+    ]
     
-    # The patch in transformation.py:
-    # thought_signatures = provider_specific_fields.get("thought_signatures") or provider_specific_fields.get("thought_signature")
-    # if isinstance(thought_signatures, list): ... use first.
+    # Run transformation
+    contents = _gemini_convert_messages_with_history(messages)
     
-    pass
+    # Verify output
+    # content[0] is user, content[1] is model (assistant)
+    assert len(contents) == 2
+    assert contents[1]["role"] == "model"
+    assert len(contents[1]["parts"]) == 1
+    part = contents[1]["parts"][0]
+    
+    # Verify thoughtSignature is present and normalized
+    assert part["text"] == "Hi there"
+    assert "thoughtSignature" in part
+    assert part["thoughtSignature"] == signature
+
+    # Test case 2: Singular 'thought_signature' (backward compatibility)
+    messages_singular = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant", 
+            "content": "Hi there",
+            "provider_specific_fields": {
+                "thought_signature": signature
+            }
+        }
+    ]
+    
+    contents_singular = _gemini_convert_messages_with_history(messages_singular)
+    part_singular = contents_singular[1]["parts"][0]
+    assert part_singular["thoughtSignature"] == signature
