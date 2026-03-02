@@ -1404,10 +1404,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     raise ValueError(
                         f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
                     )
-                if effort == "max" and not self._is_claude_4_6_model(model):
-                    raise ValueError(
-                        f"effort='max' is only supported by Claude 4.6 models (Opus 4.6, Sonnet 4.6). Got model: {model}"
+                if effort == "max":
+                    from litellm.utils import _supports_factory
+
+                    supports_max = _supports_factory(
+                        model=model,
+                        custom_llm_provider=self.custom_llm_provider,
+                        key="supports_max_effort",
                     )
+                    if not supports_max:
+                        raise ValueError(
+                            f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
+                        )
                 data["output_config"] = output_config
 
         return data
