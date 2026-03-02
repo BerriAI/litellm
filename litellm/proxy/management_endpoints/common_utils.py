@@ -11,11 +11,14 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    NewProjectRequest,
+    UpdateProjectRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import _premium_user_check
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
@@ -283,6 +286,8 @@ def _set_object_metadata_field(
         KeyRequestBase,
         LiteLLM_OrganizationTable,
         LiteLLM_ProjectTable,
+        "NewProjectRequest",
+        "UpdateProjectRequest",
     ],
     field_name: str,
     value: Any,

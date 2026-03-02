@@ -12,6 +12,13 @@ warnings.filterwarnings(
 ### INIT VARIABLES #########################
 import threading
 import os
+
+# Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
+import dotenv as _dotenv
+
+if os.getenv("LITELLM_MODE", "DEV") == "DEV":
+    _dotenv.load_dotenv()
+
 from typing import (
     Callable,
     List,
@@ -74,12 +81,9 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
-import dotenv
 # register_async_client_cleanup is lazy-loaded and called on first access
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
-    dotenv.load_dotenv()
 
 
 ####################################################
@@ -1517,6 +1521,7 @@ if TYPE_CHECKING:
     from .llms.azure.completion.transformation import AzureOpenAITextConfig as AzureOpenAITextConfig
     from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig as HostedVLLMChatConfig
     from .llms.hosted_vllm.embedding.transformation import HostedVLLMEmbeddingConfig as HostedVLLMEmbeddingConfig
+    from .llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig as HostedVLLMResponsesAPIConfig
     from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
     from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
     from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig

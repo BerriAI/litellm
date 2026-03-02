@@ -233,9 +233,9 @@ class RealTimeStreaming:
                 message, self.model, self.session_configuration_request
             )
             for msg in transformed:
-                await self.backend_ws.send(msg)  # type: ignore[union-attr]
+                await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
         else:
-            await self.backend_ws.send(message)  # type: ignore[union-attr]
+            await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
 
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime guardrail event types."""
@@ -376,7 +376,7 @@ class RealTimeStreaming:
                         "[realtime guardrail] ending session after violation %d",
                         self._violation_count,
                     )
-                    await self.backend_ws.close()  # type: ignore[union-attr]
+                    await self.backend_ws.close()  # type: ignore[union-attr, attr-defined]
 
                 verbose_logger.warning(
                     "[realtime guardrail] BLOCKED transcript (violation %d): %r",

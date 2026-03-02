@@ -99,6 +99,11 @@ class UISettings(BaseModel):
         description="If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
 
+    enable_projects_ui: bool = Field(
+        default=False,
+        description="If enabled, shows the Projects feature in the UI sidebar and the project field in key management.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -113,6 +118,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
+    "enable_projects_ui",
 }
 
 

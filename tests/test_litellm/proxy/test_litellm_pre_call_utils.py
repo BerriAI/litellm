@@ -1713,3 +1713,69 @@ async def test_add_guardrails_from_policy_engine_policy_version_by_id():
     # Clean up
     policy_registry._policies = {}
     policy_registry._initialized = False
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_not_in_debug_logs():
+    """
+    E2E regression test for the client-reported JWT leak.
+
+    Calls add_litellm_data_to_request with a Bearer token in the request
+    headers and captures all debug log output. Asserts the raw token never
+    appears in any log message — covering the exact paths the client reported:
+      - "Request Headers: ..."
+      - "receiving data: ..."
+      - "[PROXY] returned data from litellm_pre_call_utils: ..."
+    """
+    import logging
+    from io import StringIO
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    secret_token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.fakesignature"
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {
+        "authorization": f"Bearer {secret_token}",
+        "content-type": "application/json",
+    }
+    mock_request.url = MagicMock()
+    mock_request.url.__str__ = lambda self: "http://localhost:4000/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.query_params = {}
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+
+    # Capture all debug log output from the proxy logger
+    log_capture = StringIO()
+    log_handler = logging.StreamHandler(log_capture)
+    log_handler.setLevel(logging.DEBUG)
+    logger = logging.getLogger("LiteLLM Proxy")
+    logger.addHandler(log_handler)
+    original_level = logger.level
+    logger.setLevel(logging.DEBUG)
+
+    try:
+        with patch("litellm.proxy.proxy_server.llm_router", None), \
+             patch("litellm.proxy.proxy_server.premium_user", True):
+            await add_litellm_data_to_request(
+                data=data,
+                request=mock_request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=ProxyConfig(),
+                general_settings={},
+            )
+    finally:
+        logger.removeHandler(log_handler)
+        logger.setLevel(original_level)
+
+    log_output = log_capture.getvalue()
+    assert secret_token not in log_output, (
+        f"Bearer token leaked in debug logs. "
+        f"Found token in log output:\n{log_output[:500]}"
+    )

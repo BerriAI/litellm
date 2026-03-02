@@ -286,8 +286,6 @@ async def test_output_parsing():
         }
     ]
 
-    pii_masking.pii_tokens = {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
-
     response = mock_completion(
         model="gpt-3.5-turbo",
         messages=filtered_message,
@@ -296,7 +294,8 @@ async def test_output_parsing():
     new_response = await pii_masking.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
+            "messages": [{"role": "system", "content": "You are an helpfull assistant"}],
+            "pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"},
         },
         response=response,
     )

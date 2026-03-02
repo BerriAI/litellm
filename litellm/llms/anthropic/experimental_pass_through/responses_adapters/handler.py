@@ -65,7 +65,7 @@ def _build_responses_kwargs(
     if output_format:
         request_data["output_format"] = output_format
 
-    anthropic_request = AnthropicMessagesRequest(**request_data)
+    anthropic_request = AnthropicMessagesRequest(**request_data)  # type: ignore[typeddict-item]
     responses_kwargs = _ADAPTER.translate_request(anthropic_request)
 
     if stream:

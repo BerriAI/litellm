@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         ALL_RESPONSES_API_TOOL_PARAMS,
         AllMessageValues,
         ChatCompletionImageObject,
+        ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
@@ -161,7 +162,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             "type": "message",
                             "role": role,
                             "content": self._convert_content_to_responses_format(
-                                content,
+                                content,  # type: ignore[arg-type]
                                 role,  # type: ignore
                             ),
                         }
@@ -213,7 +214,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     {
                         "type": "message",
                         "role": role,
-                        "content": self._convert_content_to_responses_format(content, cast(str, role)),
+                        "content": self._convert_content_to_responses_format(content, cast(str, role)),  # type: ignore[arg-type]
                     }
                 )
 
@@ -579,7 +580,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         content: Optional[
             Union[
                 str,
-                Iterable[Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock"]],
+                List[Any],
+                Iterable[Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]],
             ]
         ],
         role: str,

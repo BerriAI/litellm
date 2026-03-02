@@ -714,6 +714,86 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+@pytest.mark.asyncio
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+    """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20870
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    async def _raise_rate_limit(**kwargs):
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.generated_content == ""
+
+
+def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+    """Ensure __next__ raises MidStreamFallbackError on 429, not RateLimitError.
+
+    This is the sync-streaming equivalent of the async test above.  Before
+    this fix, __next__ would raise RateLimitError directly, bypassing the
+    Router's fallback chain entirely.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    def _raise_rate_limit(**kwargs):
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        next(response)
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.generated_content == ""
+
+
+def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
+    """Ensure __next__ raises BadRequestError (400) directly, not MidStreamFallbackError.
+
+    Non-retriable 4xx errors should surface immediately to the caller.
+    """
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    def _raise_bad_request(**kwargs):
+        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-pro-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_bad_request,
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        next(response)
+
+    assert getattr(excinfo.value, "status_code", None) == 400
+    assert "invalid maxOutputTokens" in str(excinfo.value)
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):

@@ -14,6 +14,7 @@ import copy
 import inspect
 import json
 import os
+import re
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -125,7 +126,7 @@ def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
 
 
 def _set_key_rotation_fields(
-    data: dict, auto_rotate: bool, rotation_interval: Optional[str]
+    data: dict, auto_rotate: bool, rotation_interval: Optional[str], existing_key_alias: Optional[str] = None
 ) -> None:
     """
     Helper function to set rotation fields in key data if auto_rotate is enabled.
@@ -134,8 +135,21 @@ def _set_key_rotation_fields(
         data: Dictionary to update with rotation fields
         auto_rotate: Whether auto rotation is enabled
         rotation_interval: The rotation interval string (required if auto_rotate is True)
+        existing_key_alias: The existing key alias from the database (if any)
     """
     if auto_rotate and rotation_interval:
+        if (
+            litellm._key_management_settings is not None
+            and litellm._key_management_settings.store_virtual_keys is True
+            and data.get("key_alias") is None
+            and existing_key_alias is None
+        ):
+            raise ProxyException(
+                message="key_alias is required when auto_rotate=True and store_virtual_keys is enabled. This ensures stable secret naming during rotation.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key_alias",
+                code=400,
+            )
         data.update(
             {
                 "auto_rotate": auto_rotate,
@@ -624,6 +638,8 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         data_json=data_json,
         prisma_client=prisma_client,
     )
+
+    _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
 
     await _enforce_unique_key_alias(
         key_alias=data_json.get("key_alias", None),
@@ -1931,6 +1947,8 @@ async def update_key_fn(
             data=data, existing_key_row=existing_key_row
         )
 
+        _validate_key_alias_format(key_alias=non_default_values.get("key_alias", None))
+
         await _enforce_unique_key_alias(
             key_alias=non_default_values.get("key_alias", None),
             prisma_client=prisma_client,
@@ -1942,6 +1960,7 @@ async def update_key_fn(
             non_default_values,
             non_default_values.get("auto_rotate", False),
             non_default_values.get("rotation_interval"),
+            existing_key_alias=existing_key_row.key_alias,
         )
 
         _data = {**non_default_values, "token": key}
@@ -3378,6 +3397,7 @@ async def _execute_virtual_key_regeneration(
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=key_in_db
         )
+        _validate_key_alias_format(key_alias=non_default_values.get("key_alias"))
         verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
     update_data.update(non_default_values)
     update_data = prisma_client.jsonify_object(data=update_data)
@@ -4968,6 +4988,31 @@ async def test_key_logging(
             callbacks=logging_callbacks,
             status="healthy",
             details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
+        )
+
+
+_KEY_ALIAS_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.]{0,253}[a-zA-Z0-9]$")
+
+
+def _validate_key_alias_format(key_alias: Optional[str]) -> None:
+    """
+    Validate the format of the key_alias.
+
+    Rules:
+    - None is OK (no alias).
+    - Otherwise must be 2–255 chars
+    - start/end with alphanumeric
+    - only allow a-zA-Z0-9_-/.
+    """
+    if key_alias is None:
+        return
+
+    if not _KEY_ALIAS_PATTERN.match(key_alias):
+        raise ProxyException(
+            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key_alias",
+            code=400,
         )
 
 
