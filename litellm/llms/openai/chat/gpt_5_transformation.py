@@ -25,7 +25,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:
-        """Check if the model is a GPT-5 search variant (e.g. gpt-5-search-api)."""
+        """Check if the model is a GPT-5 search variant (e.g. gpt-5-search-api).
+
+        Search-only models have a severely restricted parameter set compared to
+        regular GPT-5 models.  They are identified by name convention (contain
+        both ``gpt-5`` and ``search``).  Note: ``supports_web_search`` in model
+        info is a *different* concept — it indicates a model can *use* web
+        search as a tool, which many non-search-only models also support.
+        """
         return "gpt-5" in model and "search" in model
 
     @classmethod
