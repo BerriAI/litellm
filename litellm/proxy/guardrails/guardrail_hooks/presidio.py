@@ -534,7 +534,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if item["operator"] == "replace" and output_parse_pii is True:
                         # Always append a UUID to ensure the replacement token is unique to this request and session.
                         # This prevents collisions where the LLM might hallucinate a generic token like [PHONE_NUMBER].
-                        replacement = f"{replacement}_{str(uuid.uuid4())[:12]}"
+                        replacement = f"{replacement}{str(uuid.uuid4())}"
                         # Use original text[start:end] (not new_text) so offsets stay correct when processing right-to-left.
                         token_store[replacement] = text[start:end]
 
