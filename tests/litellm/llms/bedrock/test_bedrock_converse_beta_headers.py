@@ -36,7 +36,7 @@ class TestBedrockConverseBetaHeaderStripping:
         def spy_get_request_headers(**kwargs):
             nonlocal spy_called
             spy_called = True
-            captured_request_headers.update(kwargs.get("extra_headers", {}))
+            captured_request_headers.update(kwargs.get("headers", {}))
             result = original_get_request_headers(**kwargs)
             return result
 
@@ -55,11 +55,14 @@ class TestBedrockConverseBetaHeaderStripping:
                     handler.completion(
                         model="anthropic.claude-sonnet-4-20250514-v1:0",
                         messages=[{"role": "user", "content": "test"}],
+                        api_base=None,
+                        custom_prompt_dict={},
                         model_response=MagicMock(),
-                        timeout=30,
                         encoding=None,
                         logging_obj=MagicMock(pre_call=MagicMock()),
-                        optional_params={},
+                        optional_params={"stream": False},
+                        acompletion=False,
+                        timeout=30,
                         litellm_params={
                             "api_base": "https://bedrock.us-east-1.amazonaws.com",
                             "model": "bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
@@ -68,8 +71,6 @@ class TestBedrockConverseBetaHeaderStripping:
                         extra_headers={
                             "anthropic-beta": "context-1m-2025-08-07",
                         },
-                        acompletion=False,
-                        stream=False,
                     )
                 except Exception:
                     pass
