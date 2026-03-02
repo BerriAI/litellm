@@ -874,7 +874,6 @@ class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
     expires: Optional[datetime] = None
-    budget_reset_at: Optional[datetime] = None  # computed/stored value from DB
     user_id: Optional[str] = None
     token_id: Optional[str] = None
     organization_id: Optional[str] = None
