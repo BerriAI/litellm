@@ -518,40 +518,70 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     "token mappings will be discarded and response unmasking may fail."
                 )
             token_store = pii_tokens if pii_tokens is not None else {}
-            new_text = text
             if redacted_text is not None:
                 verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
                 items = redacted_text["items"]
-                if output_parse_pii:
-                    # Presidio offsets are based on the original text. Apply
-                    # replacements from right-to-left so earlier offsets don't shift.
-                    items = sorted(items, key=lambda i: i["start"], reverse=True)
-
                 for item in items:
-                    start = item["start"]
-                    end = item["end"]
-                    replacement = item["text"]  # replacement token
-                    if item["operator"] == "replace" and output_parse_pii is True:
-                        # Always append a UUID to ensure the replacement token is unique to this request and session.
-                        # This prevents collisions where the LLM might hallucinate a generic token like [PHONE_NUMBER].
-                        replacement = f"{replacement}{str(uuid.uuid4())}"
-                        # Use original text[start:end] (not new_text) so offsets stay correct when processing right-to-left.
-                        token_store[replacement] = text[start:end]
-
-                    # With output_parse_pii enabled we still need to apply non-replace
-                    # operators (e.g. mask/hash/redact) to avoid leaking raw PII to the LLM.
-                    if output_parse_pii:
-                        new_text = new_text[:start] + replacement + new_text[end:]
                     entity_type = item.get("entity_type", None)
                     if entity_type is not None:
                         masked_entity_count[entity_type] = (
                             masked_entity_count.get(entity_type, 0) + 1
                         )
-                # When output_parse_pii is True, return new_text so the LLM sees
-                # unique placeholders and we can replace each correctly in the response.
-                # When output_parse_pii is False, return Presidio's redacted_text["text"].
+
+                # output_parse_pii is designed for replace-and-unmask flow.
+                # If Presidio returns non-replace operators, use Presidio's text as-is
+                # to avoid incorrect offset arithmetic on mixed operator outputs.
                 if output_parse_pii:
+                    replace_items = [i for i in items if i.get("operator") == "replace"]
+                    non_replace_items = [i for i in items if i.get("operator") != "replace"]
+                    if non_replace_items:
+                        verbose_proxy_logger.warning(
+                            "Presidio output_parse_pii fallback: detected non-replace "
+                            "operators (%s); returning redacted_text without unmask mapping.",
+                            sorted({str(i.get("operator")) for i in non_replace_items}),
+                        )
+                        return redacted_text["text"]
+
+                    if not isinstance(analyze_results, list):
+                        verbose_proxy_logger.warning(
+                            "Presidio output_parse_pii fallback: analyze_results is not a list; "
+                            "returning redacted_text without unmask mapping."
+                        )
+                        return redacted_text["text"]
+
+                    analyze_spans = [
+                        r
+                        for r in analyze_results
+                        if isinstance(r, dict)
+                        and isinstance(r.get("start"), int)
+                        and isinstance(r.get("end"), int)
+                    ]
+                    replace_items_sorted = sorted(replace_items, key=lambda i: i["start"])
+                    analyze_spans_sorted = sorted(analyze_spans, key=lambda r: r["start"])
+                    if len(replace_items_sorted) != len(analyze_spans_sorted):
+                        verbose_proxy_logger.warning(
+                            "Presidio output_parse_pii fallback: replace item count (%s) "
+                            "does not match analyze span count (%s); returning redacted_text.",
+                            len(replace_items_sorted),
+                            len(analyze_spans_sorted),
+                        )
+                        return redacted_text["text"]
+
+                    # Build unique placeholders in original-text coordinates (from
+                    # analyze results) so replacement offsets stay stable.
+                    new_text = text
+                    for analyze_span, replace_item in zip(
+                        reversed(analyze_spans_sorted), reversed(replace_items_sorted)
+                    ):
+                        start = cast(int, analyze_span["start"])
+                        end = cast(int, analyze_span["end"])
+                        replacement = cast(str, replace_item["text"])
+                        replacement = f"{replacement}{str(uuid.uuid4())}"
+                        token_store[replacement] = text[start:end]
+                        new_text = new_text[:start] + replacement + new_text[end:]
                     return new_text
+
+                # output_parse_pii disabled: return Presidio's redacted text directly.
                 return redacted_text["text"]
             else:
                 raise Exception("Invalid anonymizer response: received None")

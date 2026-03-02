@@ -1841,6 +1841,54 @@ async def test_anonymize_output_parse_pii_applies_non_replace_operators():
 
 
 @pytest.mark.asyncio
+async def test_anonymize_output_parse_pii_mixed_operators_falls_back_to_redacted_text():
+    """
+    With mixed operators, output_parse_pii should return Presidio output directly
+    to avoid offset corruption from mixed-length placeholder rewrites.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail.presidio_anonymizer_api_base = "http://mock-presidio/"
+    guardrail._get_session_iterator = _make_mock_session_iterator(
+        {
+            "text": "Hello <PERSON> and <PHONE_NUMBER>",
+            "items": [
+                {
+                    "start": 6,
+                    "end": 14,
+                    "text": "<PERSON>",
+                    "operator": "replace",
+                    "entity_type": "PERSON",
+                },
+                {
+                    "start": 19,
+                    "end": 33,
+                    "text": "<PHONE_NUMBER>",
+                    "operator": "mask",
+                    "entity_type": "PHONE_NUMBER",
+                },
+            ],
+        }
+    )
+    pii_tokens = {}
+    masked_entity_count = {}
+
+    result = await guardrail.anonymize_text(
+        text="Hello Jane Doe and 555-123-4567",
+        analyze_results=[
+            {"entity_type": "PERSON", "score": 0.99, "start": 6, "end": 14},
+            {"entity_type": "PHONE_NUMBER", "score": 0.99, "start": 19, "end": 31},
+        ],
+        output_parse_pii=True,
+        masked_entity_count=masked_entity_count,
+        pii_tokens=pii_tokens,
+    )
+
+    assert result == "Hello <PERSON> and <PHONE_NUMBER>"
+    assert pii_tokens == {}
+    assert masked_entity_count == {"PERSON": 1, "PHONE_NUMBER": 1}
+
+
+@pytest.mark.asyncio
 async def test_anonymize_output_parse_pii_multiple_replace_items_offset_safe():
     """
     Multiple replacements should be offset-safe when output_parse_pii=True.
@@ -1888,6 +1936,55 @@ async def test_anonymize_output_parse_pii_multiple_replace_items_offset_safe():
     assert " and " in result
     assert len(pii_tokens) == 2
     assert set(pii_tokens.values()) == {"Alice", "Bob"}
+    assert masked_entity_count == {"PERSON": 2}
+
+
+@pytest.mark.asyncio
+async def test_anonymize_output_parse_pii_uses_analyze_spans_for_original_mapping():
+    """
+    Presidio items offsets are in anonymized-output coordinates. Ensure original
+    value mapping uses analyze spans (original coordinates), not item offsets.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail.presidio_anonymizer_api_base = "http://mock-presidio/"
+    guardrail._get_session_iterator = _make_mock_session_iterator(
+        {
+            "text": "Hello <PERSON> and <PERSON>",
+            "items": [
+                {
+                    "start": 6,
+                    "end": 14,
+                    "text": "<PERSON>",
+                    "operator": "replace",
+                    "entity_type": "PERSON",
+                },
+                {
+                    "start": 19,
+                    "end": 27,
+                    "text": "<PERSON>",
+                    "operator": "replace",
+                    "entity_type": "PERSON",
+                },
+            ],
+        }
+    )
+    pii_tokens = {}
+    masked_entity_count = {}
+
+    result = await guardrail.anonymize_text(
+        text="Hello Jane and Christopher",
+        analyze_results=[
+            {"entity_type": "PERSON", "score": 0.99, "start": 6, "end": 10},
+            {"entity_type": "PERSON", "score": 0.99, "start": 15, "end": 26},
+        ],
+        output_parse_pii=True,
+        masked_entity_count=masked_entity_count,
+        pii_tokens=pii_tokens,
+    )
+
+    assert "Jane" not in result
+    assert "Christopher" not in result
+    assert set(pii_tokens.values()) == {"Jane", "Christopher"}
     assert masked_entity_count == {"PERSON": 2}
 
 
