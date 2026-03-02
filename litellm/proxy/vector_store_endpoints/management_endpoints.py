@@ -280,31 +280,43 @@ def _check_vector_store_access(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> bool:
     """
-    Check if the user has access to the vector store based on team membership.
-    
+    Check if the user has access to the vector store.
+
     Args:
         vector_store: The vector store to check access for
         user_api_key_dict: User API key authentication info
-        
+
     Returns:
         True if user has access, False otherwise
-        
+
     Access rules:
     - If vector store has no team_id, it's accessible to all (legacy behavior)
+    - If the key has explicit vector store access via object_permission, access is granted
     - If user's team_id matches the vector store's team_id, access is granted
     - Otherwise, access is denied
     """
     vector_store_team_id = vector_store.get("team_id")
-    
+
     # If vector store has no team_id, it's accessible to all (legacy behavior)
     if vector_store_team_id is None:
         return True
-    
+
+    # Check if the key has explicit access to this vector store via object_permission.
+    # This allows virtual keys granted vector_stores: [id] to access team-scoped stores
+    # without needing to be on the same team.
+    vector_store_id = vector_store.get("vector_store_id")
+    if (
+        user_api_key_dict.object_permission is not None
+        and user_api_key_dict.object_permission.vector_stores
+        and vector_store_id in user_api_key_dict.object_permission.vector_stores
+    ):
+        return True
+
     # Check if user's team matches the vector store's team
     user_team_id = user_api_key_dict.team_id
     if user_team_id == vector_store_team_id:
         return True
-    
+
     return False
 
 
