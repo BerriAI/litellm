@@ -6407,7 +6407,6 @@ def transcription(
         )
     elif custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
-        and provider_config is None
     ):
         api_base = (
             api_base
@@ -6440,7 +6439,11 @@ def transcription(
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
         )
-    elif provider_config is not None:
+    elif (
+        provider_config is not None
+        and custom_llm_provider != "openai"
+        and custom_llm_provider not in litellm.openai_compatible_providers
+    ):
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -6614,7 +6617,6 @@ def speech(  # noqa: PLR0915
     ] = None
     if custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
-        and text_to_speech_provider_config is None
     ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
@@ -6972,7 +6974,11 @@ def speech(  # noqa: PLR0915
             api_key=api_key,
             **kwargs,
         )
-    elif text_to_speech_provider_config is not None:
+    elif (
+        text_to_speech_provider_config is not None
+        and custom_llm_provider != "openai"
+        and custom_llm_provider not in litellm.openai_compatible_providers
+    ):
         voice_str = voice if isinstance(voice, str) else None
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base

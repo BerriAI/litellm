@@ -119,7 +119,7 @@ print(response.text)
 model_list:
 - model_name: sarvam-stt
   litellm_params:
-    model: saaras:v3/saarika:v2.5
+    model: sarvam/saaras:v3
     api_key: os.environ/SARVAM_API_KEY
   model_info:
     mode: audio_transcription
