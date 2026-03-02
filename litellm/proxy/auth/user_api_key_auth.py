@@ -1625,6 +1625,8 @@ def _apply_custom_auth_team_overrides(
     - If DB has default (empty models [], None budgets), custom auth values are used
     - If neither has values, defaults are preserved (empty = all access)
     """
+    team_obj = team_obj.model_copy(deep=True)
+
     if len(team_obj.models) == 0 and len(valid_token.team_models) > 0:
         team_obj.models = valid_token.team_models
 
