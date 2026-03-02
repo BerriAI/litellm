@@ -82,6 +82,7 @@ def extract_pubsub_payload(mock_post: AsyncMock) -> dict:
     Handles base64 decoding of the Pub/Sub message data.
     """
     actual_request = mock_post.call_args[1]["json"]
+    assert "messages" in actual_request, f"Expected 'messages' key in Pub/Sub request, got keys: {list(actual_request.keys())}"
     encoded_message = actual_request["messages"][0]["data"]
     decoded_message = base64.b64decode(encoded_message).decode("utf-8")
     return json.loads(decoded_message)
