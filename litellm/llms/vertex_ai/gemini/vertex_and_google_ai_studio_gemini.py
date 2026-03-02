@@ -1590,6 +1590,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         prompt_audio_tokens: Optional[int] = None
         prompt_image_tokens: Optional[int] = None
         prompt_text_tokens: Optional[int] = None
+        prompt_video_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
         response_tokens: Optional[int] = None
@@ -1624,9 +1625,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.audio_tokens = token_count
                 elif modality == "IMAGE":
                     response_tokens_details.image_tokens = token_count
+                elif modality == "VIDEO":
+                    response_tokens_details.video_tokens = token_count
 
         # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
-        # candidatesTokenCount includes all modalities, so: text = total - (image + audio)
+        # candidatesTokenCount includes all modalities, so: text = total - (image + audio + video)
         candidates_token_count = usage_metadata.get("candidatesTokenCount", 0)
         if candidates_token_count > 0:
             if response_tokens_details is None:
@@ -1634,10 +1637,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if response_tokens_details.text_tokens is None:
                 completion_image_tokens = response_tokens_details.image_tokens or 0
                 completion_audio_tokens = response_tokens_details.audio_tokens or 0
+                completion_video_tokens = response_tokens_details.video_tokens or 0
                 calculated_text_tokens = (
                     candidates_token_count
                     - completion_image_tokens
                     - completion_audio_tokens
+                    - completion_video_tokens
                 )
                 response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
@@ -1651,12 +1656,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     prompt_text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "IMAGE":
                     prompt_image_tokens = detail.get("tokenCount", 0)
+                elif detail["modality"] == "VIDEO":
+                    prompt_video_tokens = detail.get("tokenCount", 0)
 
         ## Parse cacheTokensDetails (breakdown of cached tokens by modality)
         ## When explicit caching is used, Gemini provides this field to show which modalities were cached
         cached_text_tokens: Optional[int] = None
         cached_audio_tokens: Optional[int] = None
         cached_image_tokens: Optional[int] = None
+        cached_video_tokens: Optional[int] = None
 
         if "cacheTokensDetails" in usage_metadata:
             for detail in usage_metadata["cacheTokensDetails"]:
@@ -1666,6 +1674,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     cached_text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "IMAGE":
                     cached_image_tokens = detail.get("tokenCount", 0)
+                elif detail["modality"] == "VIDEO":
+                    cached_video_tokens = detail.get("tokenCount", 0)
 
         ## Calculate non-cached tokens by subtracting cached from total (per modality)
         ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
@@ -1677,6 +1687,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             cached_tokens is not None
             and prompt_text_tokens is not None
             and cached_text_tokens is None
+            and "cacheTokensDetails" not in usage_metadata
         ):
             # Implicit caching: only cachedContentTokenCount is provided (no cacheTokensDetails)
             # Subtract from text tokens since implicit caching is primarily for text content
@@ -1686,6 +1697,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             prompt_audio_tokens = prompt_audio_tokens - cached_audio_tokens
         if cached_image_tokens is not None and prompt_image_tokens is not None:
             prompt_image_tokens = prompt_image_tokens - cached_image_tokens
+        if cached_video_tokens is not None and prompt_video_tokens is not None:
+            prompt_video_tokens = prompt_video_tokens - cached_video_tokens
 
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
@@ -1699,6 +1712,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             audio_tokens=prompt_audio_tokens,
             text_tokens=prompt_text_tokens,
             image_tokens=prompt_image_tokens,
+            video_tokens=prompt_video_tokens,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get(

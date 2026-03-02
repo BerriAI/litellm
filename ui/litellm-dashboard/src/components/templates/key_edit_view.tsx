@@ -1,5 +1,6 @@
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
@@ -97,6 +98,8 @@ export function KeyEditView({
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
   const [isKeySaving, setIsKeySaving] = useState(false);
   const { data: projects } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
   const projectDisplay = (() => {
     if (!keyData.project_id) return null;
@@ -603,12 +606,12 @@ export function KeyEditView({
       <Form.Item
         label="Team ID"
         name="team_id"
-        help={hasProject ? "Team is locked because this key belongs to a project" : undefined}
+        help={enableProjectsUI && hasProject ? "Team is locked because this key belongs to a project" : undefined}
       >
         <Select
           placeholder="Select team"
           showSearch
-          disabled={hasProject}
+          disabled={enableProjectsUI && hasProject}
           style={{ width: "100%" }}
           filterOption={(input, option) => {
             const team = teams?.find((t) => t.team_id === option?.value);
@@ -623,7 +626,7 @@ export function KeyEditView({
           ))}
         </Select>
       </Form.Item>
-      {hasProject && (
+      {enableProjectsUI && hasProject && (
         <Form.Item label="Project">
           <Input value={projectDisplay ?? ""} disabled />
         </Form.Item>

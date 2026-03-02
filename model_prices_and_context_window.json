@@ -16289,7 +16289,7 @@
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
-        "litellm_provider": "vertex_ai-language-models",
+        "litellm_provider": "gemini",
         "max_audio_length_hours": 8.4,
         "max_audio_per_prompt": 1,
         "supports_reasoning": false,

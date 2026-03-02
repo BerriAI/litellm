@@ -829,7 +829,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError(f"Unknown openai event: {key}, value: {value}")
         return openai_event
 
-    def transform_realtime_response(
+    def transform_realtime_response(  # noqa: PLR0915
         self,
         message: Union[str, bytes],
         model: str,
