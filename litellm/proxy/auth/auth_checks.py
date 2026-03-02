@@ -927,11 +927,10 @@ async def get_end_user_object(
 
         return _response
 
-    except Exception as e:
+    except Exception:
         verbose_proxy_logger.exception(
             "Error getting end user object for end_user_id: %s",
             end_user_id,
-            e,
         )
         return None
 
