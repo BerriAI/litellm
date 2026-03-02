@@ -454,6 +454,79 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         assert self.last_trace_kwargs.get("id") == "call-id-xyz"
 
+    def test_log_langfuse_v2_uses_litellm_trace_id_fallback_over_call_id(self):
+        """
+        When standard_logging_object has no trace_id, but kwargs contains
+        litellm_trace_id (the same ID the DB stores as Session ID), Langfuse
+        should use litellm_trace_id — NOT litellm_call_id. This ensures the
+        trace_id in Langfuse matches the Session ID shown in LiteLLM logs.
+        """
+        payload = self._build_standard_logging_payload()  # no trace_id
+        kwargs = self._build_langfuse_kwargs(payload)
+        kwargs["litellm_trace_id"] = "trace-id-from-kwargs"
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={},
+                litellm_params={"metadata": {}},
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="ERROR",
+                litellm_call_id="call-id-xyz",
+            )
+
+        # litellm_trace_id should be preferred over litellm_call_id
+        assert self.last_trace_kwargs.get("id") == "trace-id-from-kwargs"
+
+    def test_log_langfuse_v2_uses_litellm_trace_id_when_standard_logging_object_none(self):
+        """
+        When standard_logging_object is None (failure case where
+        get_standard_logging_object_payload threw), litellm_trace_id from kwargs
+        should be used as the Langfuse trace_id. This matches the DB Session ID.
+        """
+        kwargs = {
+            "standard_logging_object": None,
+            "model": "gpt-4",
+            "call_type": "completion",
+            "cache_hit": False,
+            "messages": [],
+            "litellm_trace_id": "trace-id-failure",
+        }
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={},
+                litellm_params={"metadata": {}},
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="ERROR",
+                litellm_call_id="call-id-different",
+            )
+
+        # Must use litellm_trace_id, not litellm_call_id
+        assert self.last_trace_kwargs.get("id") == "trace-id-failure"
 
     def test_log_langfuse_v2_session_id_passed_as_trace_session_id(self):
         """
