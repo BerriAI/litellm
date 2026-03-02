@@ -472,10 +472,11 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["purpose", "file_type", "model", "api_provider", "user"],
             )
 
-            self.litellm_managed_batch_duration_seconds = self._gauge_factory(
+            self.litellm_managed_batch_duration_seconds = self._histogram_factory(
                 "litellm_managed_batch_duration_seconds",
-                "Duration of the last completed managed batch in seconds (completed_at - created_at)",
+                "Duration of completed managed batches in seconds (completed_at - created_at)",
                 labelnames=self.get_labels_for_metric("litellm_managed_batch_duration_seconds"),
+                buckets=BATCH_DURATION_BUCKETS,
             )
 
             self.litellm_managed_file_created_total = self._counter_factory(
@@ -2309,7 +2310,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_managed_batch_duration_seconds.labels(
                 model=model or "",
                 api_provider=api_provider or "",
-            ).set(duration_seconds)
+            ).observe(duration_seconds)
         except Exception as e:
             verbose_logger.warning(f"Error recording batch duration metric: {e}")
 
