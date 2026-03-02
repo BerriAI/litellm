@@ -310,3 +310,27 @@ class TestMoonshotConfig:
             # Check that no extra message was added
             assert len(result["messages"]) == 1
             assert result["messages"][0]["content"] == "What's the weather?"
+
+
+class TestMoonshotVisionModel:
+    """Test class for Moonshot AI Vision model functionality."""
+
+    def test_image_content_is_preserved(self):
+        """Test that image content lists are not converted to strings."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}},
+                    {"type": "text", "text": "Describe this"}
+                ]
+            }
+        ]
+
+        result = config._transform_messages(messages, "kimi-k2.5")
+
+        # Image content should remain as a list
+        assert isinstance(result[0]["content"], list)
+        assert result[0]["content"][0]["type"] == "image_url"
