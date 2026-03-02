@@ -2022,9 +2022,15 @@ class CustomStreamWrapper:
                     else:
                         # Sync iterators can block (e.g. boto3 streams). Run next()
                         # off the event loop thread to keep async callers responsive.
+                        # NOTE: We use a sentinel default because StopIteration cannot
+                        # be stored in an asyncio.Future (raises TypeError), which
+                        # would cause the await to hang forever.
+                        _EXHAUSTED = object()
                         chunk = await asyncio.to_thread(  # type: ignore[arg-type]
-                            next, self.completion_stream
+                            next, self.completion_stream, _EXHAUSTED
                         )
+                        if chunk is _EXHAUSTED:
+                            raise StopIteration
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
