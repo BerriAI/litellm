@@ -2136,6 +2136,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    store_prompts_on_guardrail_failure: Optional[Union[bool, List[str]]] = Field(
+        None,
+        description="Stores request messages and responses in spend logs when a guardrail intervenes or fails to respond, even if store_prompts_in_spend_logs is False. Set to True for all guardrails, or a list of guardrail names to only log for specific ones. Default is None (disabled).",
+    )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
