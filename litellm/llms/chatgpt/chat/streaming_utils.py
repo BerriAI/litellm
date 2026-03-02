@@ -4,7 +4,7 @@ Streaming utilities for ChatGPT provider.
 Normalizes non-spec-compliant tool_call chunks from the ChatGPT backend API.
 """
 
-from typing import Any
+from typing import Any, Dict, Optional
 
 
 class ChatGPTToolCallNormalizer:
