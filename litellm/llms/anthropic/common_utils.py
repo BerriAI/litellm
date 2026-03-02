@@ -238,10 +238,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return False
 
         # If reasoning_effort is set but no model is provided, we cannot
-        if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower() or "opus-4.5" in model.lower() or "opus_4.5" in model.lower()):
-        reasoning_effort = optional_params.get("reasoning_effort")
-        if reasoning_effort and isinstance(reasoning_effort, str) and model is None:
-            raise ValueError(
+        if model:
+            model_lower = model.lower()
+            if "opus-4-5" in model_lower or "opus_4_5" in model_lower:
+                reasoning_effort = optional_params.get("reasoning_effort")
+                if reasoning_effort and isinstance(reasoning_effort, str):
+                    return True
                 "is_effort_used requires `model` when `reasoning_effort` is set in "
                 "optional_params to determine whether the Opus 4.5 beta header is needed."
             )
