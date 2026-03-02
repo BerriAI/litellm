@@ -721,10 +721,10 @@ def convert_anyof_null_to_nullable(schema, depth=0):
             siblings = {k: v for k, v in schema.items() if k != "anyOf"}
             # Clear the schema and replace with merged content
             schema.clear()
-            # Add sibling fields first (can be overwritten by variant fields if there's a conflict)
-            schema.update(siblings)
-            # Merge the single variant's fields (these take precedence)
+            # Merge the single variant's fields
             schema.update(single_variant)
+            # Add sibling fields last (these take precedence on conflicts)
+            schema.update(siblings)
 
     properties = schema.get("properties", None)
     if properties is not None:
