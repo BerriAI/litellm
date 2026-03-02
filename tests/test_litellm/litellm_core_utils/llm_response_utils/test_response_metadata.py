@@ -316,6 +316,17 @@ class TestDictResponseHiddenParams:
         metadata = ResponseMetadata(result)
         assert metadata._hidden_params == {"existing_key": "value"}
 
+    def test_init_handles_none_hidden_params_in_dict_response(self):
+        """When _hidden_params key exists but is None, should fall back to empty dict."""
+        response = {
+            "id": "msg_none",
+            "_hidden_params": None,
+        }
+
+        metadata = ResponseMetadata(response)
+
+        assert metadata._hidden_params == {}
+
     def test_proxy_reads_hidden_params_from_dict_response(self):
         """ResponseMetadata.__init__ should extract _hidden_params from dict responses (same path proxy relies on)."""
         response = {
