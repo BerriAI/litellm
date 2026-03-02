@@ -94,13 +94,13 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             reasoning_content = message.get("reasoning_content")
             if (
                 message.get("role") == "assistant"
-                and message.get("tool_calls")
+                and message.get("reasoning_content") is None
                 and (
                     reasoning_content is None
                     or (isinstance(reasoning_content, str) and not reasoning_content.strip())
                 )
             ):
-                raise litellm.BadRequestError(
+                raise BadRequestError(
                     message=(
                         f"Moonshot reasoning model '{model}' requires "
                         f"'reasoning_content' in assistant messages that contain "
