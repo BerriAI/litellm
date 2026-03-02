@@ -129,15 +129,9 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
                 )
                 return last_response
 
-        # All chunks safe – return the last response (or a synthetic safe
-        # response if, unexpectedly, there were no chunks).
-        if last_response is not None:
-            return last_response
-
-        return AzurePromptShieldGuardrailResponse(
-            userPromptAnalysis={"attackDetected": False},
-            documentsAnalysis=[],
-        )
+        # chunks is always non-empty (split_text_by_words guarantees ≥1 element)
+        assert last_response is not None
+        return last_response
 
     @log_guardrail_information
     async def async_pre_call_hook(

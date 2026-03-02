@@ -151,11 +151,13 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 "Azure Text Moderation guard response: %s", response.json()
             )
 
-            last_response = AzureTextModerationGuardrailResponse(**response.json())
+            chunk_response = AzureTextModerationGuardrailResponse(**response.json())
 
-            # If any chunk violates thresholds, raise immediately
+            # For multi-chunk texts the callers only see the final response,
+            # so we must check every intermediate chunk here to avoid silently
+            # swallowing a violation that appears in an earlier chunk.
             try:
-                self.check_severity_threshold(response=last_response)
+                self.check_severity_threshold(response=chunk_response)
             except HTTPException:
                 verbose_proxy_logger.warning(
                     "Azure Text Moderation: Violation detected in chunk of length %d",
@@ -163,8 +165,10 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 )
                 raise
 
-        # All chunks safe – return the last response
-        assert last_response is not None  # chunks is always non-empty
+            last_response = chunk_response
+
+        # chunks is always non-empty (split_text_by_words guarantees ≥1 element)
+        assert last_response is not None
         return last_response
 
     def check_severity_threshold(
