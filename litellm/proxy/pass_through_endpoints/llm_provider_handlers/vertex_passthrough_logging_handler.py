@@ -122,6 +122,7 @@ class VertexPassthroughLoggingHandler:
                 custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(
                     url_route
                 ),
+                request_body=request_body,
             )
 
             return {
@@ -183,6 +184,7 @@ class VertexPassthroughLoggingHandler:
                 end_time=end_time,
                 logging_obj=logging_obj,
                 custom_llm_provider="vertex_ai",
+                request_body=request_body,
             )
 
             return {
@@ -373,6 +375,7 @@ class VertexPassthroughLoggingHandler:
             custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(
                 url_route
             ),
+            request_body=request_body,
         )
 
         return {
@@ -477,6 +480,8 @@ class VertexPassthroughLoggingHandler:
             return "anthropic"
         elif "/publishers/ai21/" in url:
             return "ai21"
+        elif "/publishers/meta/" in url:
+            return "meta"
         elif "/endpoints/openapi/" in url:
             return "openapi"
         return None
@@ -532,11 +537,19 @@ class VertexPassthroughLoggingHandler:
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
+        request_body: Optional[dict] = None,
     ) -> dict:
         """
         Create the standard logging object for Vertex passthrough generateContent (streaming and non-streaming)
 
         """
+        # Propagate request body messages to kwargs so that
+        # get_standard_logging_object_payload() can populate the messages field
+        if request_body:
+            if "messages" in request_body:
+                kwargs["messages"] = request_body["messages"]
+            elif "contents" in request_body:
+                kwargs["messages"] = request_body["contents"]
 
         response_cost = litellm.completion_cost(
             completion_response=litellm_model_response,

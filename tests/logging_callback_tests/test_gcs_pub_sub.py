@@ -571,6 +571,12 @@ async def test_pubsub_anthropic_passthrough_tokens_and_response(_mock_premium):
     # The kwargs should include model
     assert kwargs.get("model") == "claude-3-5-sonnet-20241022"
 
+    # Messages should be propagated from request_body to kwargs
+    assert isinstance(kwargs.get("messages"), list), (
+        f"kwargs['messages'] should be a list from request_body, got {type(kwargs.get('messages'))}"
+    )
+    assert kwargs["messages"][0]["content"] == "Hi there!"
+
 
 # ---------------------------------------------------------------------------
 # Test 3d: Meta/Llama via Vertex passthrough — model and provider
@@ -677,6 +683,11 @@ async def test_pubsub_vertex_meta_passthrough_model_and_provider():
             f"completion_tokens should be > 0, got {litellm_model_response.usage.completion_tokens}"
         )
 
+    # Messages should be propagated from request_body to kwargs
+    assert isinstance(kwargs.get("messages"), list), (
+        f"kwargs['messages'] should be a list from request_body, got {type(kwargs.get('messages'))}"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Test 3e: Vertex AI generateContent — messages must be array
@@ -766,6 +777,11 @@ async def test_pubsub_vertex_generate_content_messages_is_array():
     # response_cost should be set
     assert "response_cost" in kwargs
     assert isinstance(kwargs["response_cost"], (int, float))
+
+    # Messages should be propagated from request_body contents to kwargs
+    assert isinstance(kwargs.get("messages"), list), (
+        f"kwargs['messages'] should be a list from request_body, got {type(kwargs.get('messages'))}"
+    )
 
 
 # ---------------------------------------------------------------------------

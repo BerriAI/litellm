@@ -133,7 +133,6 @@ class TestGetVertexPublisherFromUrl:
         url = "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/publishers/mistralai/models/mistral-large:rawPredict"
         assert self._get_publisher(url) == "mistralai"
 
-    @pytest.mark.xfail(reason="Bug: _get_vertex_publisher_or_api_spec_from_url does not detect meta publisher")
     def test_meta_publisher(self):
         url = "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/publishers/meta/models/llama-3.1-70b-instruct-maas:rawPredict"
         assert self._get_publisher(url) == "meta"
@@ -149,13 +148,11 @@ class TestGetVertexPublisherFromUrl:
 class TestAnthropicPassthroughMessages:
     """Tests that Anthropic passthrough handler preserves request messages for logging."""
 
-    @pytest.mark.xfail(reason="Bug: anthropic_passthrough_handler does not set kwargs['messages'] from request body")
     @pytest.mark.asyncio
     async def test_anthropic_handler_includes_request_messages_in_kwargs(self):
         """
-        Bug: anthropic_passthrough_handler calls transform_response with messages=[]
-        (hardcoded at line 69). The request_body messages are never propagated to
-        kwargs for downstream standard logging, causing messages={} in Pub/Sub.
+        Verify that anthropic_passthrough_handler propagates request_body messages
+        to kwargs so get_standard_logging_object_payload() can populate the messages field.
         """
         from litellm.litellm_core_utils.litellm_logging import (
             Logging as LiteLLMLoggingObj,
@@ -223,12 +220,10 @@ class TestAnthropicPassthroughMessages:
 
         # The kwargs should contain messages from the request body so that
         # get_standard_logging_object_payload() can populate the messages field.
-        # Currently this is NOT the case — kwargs["messages"] is never set.
         messages_in_kwargs = kwargs.get("messages")
         assert messages_in_kwargs is not None, (
             "kwargs['messages'] should be set from request_body['messages'] "
-            "so that the StandardLoggingPayload messages field is populated. "
-            "Currently the Anthropic passthrough handler does not set this."
+            "so that the StandardLoggingPayload messages field is populated."
         )
         assert isinstance(messages_in_kwargs, list), (
             f"kwargs['messages'] should be a list, got {type(messages_in_kwargs)}"
