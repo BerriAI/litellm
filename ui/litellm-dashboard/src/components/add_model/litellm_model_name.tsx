@@ -2,7 +2,7 @@ import React from "react";
 import { Form, Select as AntSelect } from "antd";
 import { TextInput, Text } from "@tremor/react";
 import { Row, Col } from "antd";
-import { Providers } from "../provider_info_helpers";
+import { Providers, prefixWithProvider } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
   selectedProvider: Providers;
@@ -31,18 +31,10 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
       // Only update if the value has actually changed
       if (JSON.stringify(currentModel) !== JSON.stringify(values)) {
         // Create mappings first
-        const mappings = values.map((model) => {
-          if (selectedProvider === Providers.Azure) {
-            return {
-              public_name: model,
-              litellm_model: `azure/${model}`,
-            };
-          }
-          return {
-            public_name: model,
-            litellm_model: model,
-          };
-        });
+        const mappings = values.map((model) => ({
+          public_name: model,
+          litellm_model: prefixWithProvider(selectedProvider, model),
+        }));
 
         // Update both fields in one call to reduce re-renders
         form.setFieldsValue({
@@ -53,43 +45,28 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
     }
   };
 
-  const handleAzureDeploymentNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const deploymentName = e.target.value;
+  const handleFreeTextModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const modelName = e.target.value;
 
-    // Create mapping with Azure-specific format
-    const mappings = deploymentName
-      ? [
-          {
-            public_name: deploymentName,
-            litellm_model: `azure/${deploymentName}`,
-          },
-        ]
+    const mappings = modelName
+      ? [{ public_name: modelName, litellm_model: prefixWithProvider(selectedProvider, modelName) }]
       : [];
 
-    // Update both fields
     form.setFieldsValue({
-      model: deploymentName,
+      model: modelName,
       model_mappings: mappings,
     });
   };
 
-  // Handle custom model name changes
   const handleCustomModelNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const customName = e.target.value;
 
-    // Immediately update the model mappings
     const currentMappings = form.getFieldValue("model_mappings") || [];
     const updatedMappings = currentMappings.map((mapping: any) => {
       if (mapping.public_name === "custom" || mapping.litellm_model === "custom") {
-        if (selectedProvider === Providers.Azure) {
-          return {
-            public_name: customName,
-            litellm_model: `azure/${customName}`,
-          };
-        }
         return {
           public_name: customName,
-          litellm_model: customName,
+          litellm_model: prefixWithProvider(selectedProvider, customName),
         };
       }
       return mapping;
@@ -121,7 +98,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
             <>
               <TextInput
                 placeholder={getPlaceholder(selectedProvider)}
-                onChange={selectedProvider === Providers.Azure ? handleAzureDeploymentNameChange : undefined}
+                onChange={handleFreeTextModelChange}
               />
             </>
           ) : providerModels.length > 0 ? (

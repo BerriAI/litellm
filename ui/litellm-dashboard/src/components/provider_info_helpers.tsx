@@ -368,11 +368,17 @@ export const getPlaceholder = (selectedProvider: string): string => {
   }
 };
 
+const providersRequiringPrefix = new Set<string>(["Azure", "OpenAI_Compatible"]);
+
+export const prefixWithProvider = (provider: string, modelName: string): string => {
+  if (!providersRequiringPrefix.has(provider)) return modelName;
+  const prefix = provider_map[provider];
+  return prefix ? `${prefix}/${modelName}` : modelName;
+};
+
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
   let providerKey = provider;
-  console.log(`Provider key: ${providerKey}`);
   let custom_llm_provider = provider_map[providerKey];
-  console.log(`Provider mapped to: ${custom_llm_provider}`);
 
   let providerModels: Array<string> = [];
 
