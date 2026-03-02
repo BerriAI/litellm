@@ -6947,6 +6947,7 @@ async def moderations(
         data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
+        _add_dd_apm_tags_for_litellm_call_id(data.get("litellm_call_id"))
 
         data["model"] = (
             general_settings.get("moderation_model", None)  # server default
