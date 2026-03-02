@@ -615,8 +615,6 @@ def process_items(schema, depth=0):
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     if isinstance(schema, dict):
-        if "items" in schema and isinstance(schema["items"], dict) and _is_any_type_schema(schema["items"]):
-            pass  # preserve "any type" semantics — don't coerce to object
         for key, value in schema.items():
             if isinstance(value, dict):
                 process_items(value, depth + 1)
