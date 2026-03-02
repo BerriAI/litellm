@@ -439,5 +439,5 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             latest_version=str(data["latest_version"]) if data.get("latest_version") is not None else None,
             source="custom",
             type=data.get("object", "skill"),
-            updated_at=created_at_str,  # OpenAI doesn't have updated_at; use created_at
+            updated_at=data.get("updated_at", created_at_str),  # OpenAI may not have updated_at; fallback to created_at
         )
