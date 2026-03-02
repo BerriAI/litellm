@@ -909,9 +909,11 @@ def _should_store_prompts_and_responses_in_spend_logs(
 
     # Check if we should store prompts only when a guardrail failed
     store_on_failure = general_settings.get("store_prompts_on_guardrail_failure")
-    # Normalize: handle string "true"/"True" from YAML/env vars
+    # Normalize: handle string "true"/"false" from YAML/env vars
     if isinstance(store_on_failure, str) and store_on_failure.lower() == "true":
         store_on_failure = True
+    elif isinstance(store_on_failure, str) and store_on_failure.lower() == "false":
+        store_on_failure = False
     if store_on_failure and guardrail_information:
         for guardrail in guardrail_information:
             if guardrail.get("guardrail_status") in ("guardrail_intervened", "guardrail_failed_to_respond"):
