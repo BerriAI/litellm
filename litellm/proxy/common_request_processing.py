@@ -1018,9 +1018,13 @@ class ProxyBaseLLMRequestProcessing:
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
             )
 
+
         hidden_params = (
-            getattr(response, "_hidden_params", {}) or {}
-        )  # get any updated response headers
+            response.get("_hidden_params", {})
+            if isinstance(response, dict)
+            else getattr(response, "_hidden_params", {})
+        ) or {}
+ 
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         fastapi_response.headers.update(
