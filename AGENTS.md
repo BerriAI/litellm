@@ -239,7 +239,9 @@ Start the proxy with a config file:
 poetry run litellm --config dev_config.yaml --port 4000
 ```
 
-The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
+The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health/liveliness` to return `200` before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
+
+**Important:** After a fresh `poetry install`, you must run `poetry run prisma generate --schema=./litellm/proxy/schema.prisma` before starting the proxy. Without this, startup fails with "Unable to find Prisma binaries". The update script handles this automatically.
 
 ### Running tests
 
