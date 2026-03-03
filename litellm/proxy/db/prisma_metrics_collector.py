@@ -5,7 +5,7 @@ and exposes them as Prometheus gauges/counters.
 
 import asyncio
 import os
-from typing import Optional
+from typing import Optional, Set
 
 from prometheus_client import REGISTRY, Counter, Gauge
 
@@ -13,34 +13,21 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 
 
-def _is_metric_registered(metric_name: str) -> bool:
-    """Check if a Prometheus metric is already registered (O(1) lookup)."""
-    names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
-    if names_to_collectors is not None:
-        return metric_name in names_to_collectors
-    for metric in REGISTRY.collect():
-        if metric_name == metric.name:
-            return True
-    return False
-
-
 def _get_or_create_gauge(
     name: str, description: str, labelnames: Optional[list] = None
 ) -> Gauge:
-    if _is_metric_registered(name):
-        names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
-        if names_to_collectors is not None and name in names_to_collectors:
-            return names_to_collectors[name]
+    names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
+    if names_to_collectors is not None and name in names_to_collectors:
+        return names_to_collectors[name]
     if labelnames:
         return Gauge(name, description, labelnames=labelnames)
     return Gauge(name, description)
 
 
 def _get_or_create_counter(name: str, description: str) -> Counter:
-    if _is_metric_registered(name):
-        names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
-        if names_to_collectors is not None and name in names_to_collectors:
-            return names_to_collectors[name]
+    names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
+    if names_to_collectors is not None and name in names_to_collectors:
+        return names_to_collectors[name]
     return Counter(name, description)
 
 
@@ -57,6 +44,16 @@ FROM pg_stat_activity
 WHERE pid != pg_backend_pid() AND datname = current_database() AND usename = current_user
   AND wait_event_type = 'Lock'
 """
+
+# All possible pg_stat_activity states — used to zero out stale labels
+_PG_STATES = [
+    "active",
+    "idle",
+    "idle in transaction",
+    "idle in transaction (aborted)",
+    "fastpath function call",
+    "disabled",
+]
 
 _MIN_COLLECTION_INTERVAL = 5
 _DEFAULT_COLLECTION_INTERVAL = 30
@@ -137,9 +134,16 @@ class PrismaMetricsCollector:
     async def _collect_pool_metrics(self) -> None:
         try:
             rows = await self.prisma_client.db.query_raw(_POOL_METRICS_SQL)
+
+            # Zero out all known states first to clear stale values
+            seen_states: Set[str] = set()
             for row in rows:
                 state = row.get("state") or "unknown"
                 self._pool_connections.labels(state=state).set(row.get("count", 0))
+                seen_states.add(state)
+            for state in _PG_STATES:
+                if state not in seen_states:
+                    self._pool_connections.labels(state=state).set(0)
 
             lock_rows = await self.prisma_client.db.query_raw(_LOCK_WAITING_SQL)
             if lock_rows:

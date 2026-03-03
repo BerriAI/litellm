@@ -136,17 +136,22 @@ async def test_collect_pool_metrics_sets_gauges():
 
 @pytest.mark.asyncio
 async def test_collect_pool_metrics_handles_empty_result():
-    """When query_raw returns empty lists, no crash should occur."""
+    """When query_raw returns empty lists, known states should be zeroed."""
     client = _make_prisma_client()
-    client.db.query_raw = AsyncMock(return_value=[])
+    pool_rows: list = []
+    lock_rows = [{"waiting": 0}]
+    client.db.query_raw = AsyncMock(side_effect=[pool_rows, lock_rows])
     collector, registry = _make_collector(prisma_client=client)
 
     await collector._collect_pool_metrics()
 
-    # No labeled values should be set — just verify no crash
+    # Known states should be zeroed out
     assert (
         registry.get_sample_value("litellm_db_pool_connections", {"state": "active"})
-        is None
+        == 0
+    )
+    assert (
+        registry.get_sample_value("litellm_db_pool_connections", {"state": "idle"}) == 0
     )
 
 
@@ -164,6 +169,37 @@ async def test_collect_pool_metrics_handles_null_state():
     assert (
         registry.get_sample_value("litellm_db_pool_connections", {"state": "unknown"})
         == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_pool_metrics_clears_stale_states():
+    """States present in cycle 1 but absent in cycle 2 should be zeroed out."""
+    client = _make_prisma_client()
+
+    # Cycle 1: active=5
+    pool_rows_1 = [{"state": "active", "count": 5}]
+    lock_rows = [{"waiting": 0}]
+    client.db.query_raw = AsyncMock(side_effect=[pool_rows_1, lock_rows])
+    collector, registry = _make_collector(prisma_client=client)
+
+    await collector._collect_pool_metrics()
+    assert (
+        registry.get_sample_value("litellm_db_pool_connections", {"state": "active"})
+        == 5
+    )
+
+    # Cycle 2: only idle connections, active should be zeroed
+    pool_rows_2 = [{"state": "idle", "count": 3}]
+    client.db.query_raw = AsyncMock(side_effect=[pool_rows_2, lock_rows])
+
+    await collector._collect_pool_metrics()
+    assert (
+        registry.get_sample_value("litellm_db_pool_connections", {"state": "active"})
+        == 0
+    )
+    assert (
+        registry.get_sample_value("litellm_db_pool_connections", {"state": "idle"}) == 3
     )
 
 
