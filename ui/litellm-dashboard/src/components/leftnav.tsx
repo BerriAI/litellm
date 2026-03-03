@@ -11,6 +11,7 @@ import {
   BookOutlined,
   BranchesOutlined,
   CreditCardOutlined,
+  DeploymentUnitOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
   FileTextOutlined,
@@ -89,11 +90,29 @@ const menuGroups: MenuGroup[] = [
         roles: rolesWithWriteAccess,
       },
       {
-        key: "routing-groups",
+        key: "routing",
         page: "routing-groups",
-        label: "Routing Groups",
+        label: "Routing",
         icon: <BranchesOutlined />,
         roles: rolesWithWriteAccess,
+        children: [
+          {
+            key: "routing-groups",
+            page: "routing-groups",
+            label: "Routing Groups",
+            icon: <BranchesOutlined />,
+          },
+          {
+            key: "model-rollout",
+            page: "model-rollout",
+            label: (
+              <span className="flex items-center gap-2">
+                Model Rollout <NewBadge />
+              </span>
+            ),
+            icon: <DeploymentUnitOutlined />,
+          },
+        ],
       },
       {
         key: "agents",
@@ -522,6 +541,17 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
   const selectedMenuKey = findMenuItemKey(defaultSelectedKey);
 
+  const findParentKey = (page: string): string | null => {
+    for (const group of menuGroups) {
+      for (const item of group.items) {
+        if (item.children?.some((c) => c.page === page)) return item.key;
+      }
+    }
+    return null;
+  };
+  const parentKey = findParentKey(defaultSelectedKey);
+  const openKeys = parentKey ? [parentKey] : [];
+
   return (
     <Layout>
       <Sider
@@ -556,7 +586,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           <Menu
             mode="inline"
             selectedKeys={[selectedMenuKey]}
-            defaultOpenKeys={[]}
+            defaultOpenKeys={openKeys}
             inlineCollapsed={collapsed}
             className="custom-sidebar-menu"
             style={{

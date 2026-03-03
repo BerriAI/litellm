@@ -108,6 +108,8 @@ const routeFor = (slug: string): string => {
       return "policies";
     case "routing-groups":
       return "routing-groups";
+    case "model-rollout":
+      return "model-rollout";
 
     // tools
     case "mcp-servers":

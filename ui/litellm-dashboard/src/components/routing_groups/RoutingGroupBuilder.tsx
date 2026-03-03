@@ -21,6 +21,7 @@ import { routingGroupCreateCall, routingGroupUpdateCall } from "@/components/net
 import ModelSelector from "@/components/common_components/ModelSelector";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import RoutingFlowVisualization, { DEPLOY_COLORS } from "./RoutingFlowVisualization";
+import type { SimTrace } from "./RoutingFlowVisualization";
 
 interface Deployment {
   model_id: string;
@@ -112,6 +113,8 @@ export default function RoutingGroupBuilder({
   const [logicalName, setLogicalName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [tierModels, setTierModels] = useState<Record<string, string>>({ SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" });
+  const [failingIndices, setFailingIndices] = useState<Set<number>>(new Set());
+  const [simTrace, setSimTrace] = useState<SimTrace | null>(null);
 
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
@@ -151,6 +154,64 @@ export default function RoutingGroupBuilder({
       .filter(Boolean)
       .map((name) => ({ model_id: name, model_name: name, provider: "-" }));
     setDeployments(deps);
+  };
+
+  const toggleFail = (index: number) => {
+    setSimTrace(null);
+    setFailingIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index); else next.add(index);
+      return next;
+    });
+  };
+
+  const runSimulation = () => {
+    if (deployments.length === 0) return;
+    const steps: SimTrace["steps"] = [];
+    let selectedIndex: number | null = null;
+
+    if (strategy === "priority-failover") {
+      for (let i = 0; i < deployments.length; i++) {
+        if (failingIndices.has(i)) {
+          steps.push({ index: i, status: "fail" });
+        } else {
+          steps.push({ index: i, status: "success" });
+          selectedIndex = i;
+          break;
+        }
+      }
+    } else if (strategy === "weighted") {
+      const available = deployments.map((d, i) => ({ i, w: d.weight ?? 1 })).filter((x) => !failingIndices.has(x.i));
+      if (available.length > 0) {
+        const totalW = available.reduce((s, x) => s + x.w, 0);
+        let r = Math.random() * totalW;
+        for (const x of available) {
+          r -= x.w;
+          if (r <= 0) { selectedIndex = x.i; break; }
+        }
+        if (selectedIndex === null) selectedIndex = available[available.length - 1].i;
+      }
+      for (let i = 0; i < deployments.length; i++) {
+        if (failingIndices.has(i)) steps.push({ index: i, status: "fail" });
+        else if (i === selectedIndex) steps.push({ index: i, status: "success" });
+      }
+    } else {
+      const available = deployments.map((_, i) => i).filter((i) => !failingIndices.has(i));
+      if (available.length > 0) {
+        selectedIndex = available[Math.floor(Math.random() * available.length)];
+      }
+      for (let i = 0; i < deployments.length; i++) {
+        if (failingIndices.has(i)) steps.push({ index: i, status: "fail" });
+        else if (i === selectedIndex) steps.push({ index: i, status: "success" });
+      }
+    }
+
+    setSimTrace({ steps, selectedIndex });
+  };
+
+  const resetSimulation = () => {
+    setSimTrace(null);
+    setFailingIndices(new Set());
   };
 
   const handleStrategyChange = (value: string) => {
@@ -261,6 +322,9 @@ export default function RoutingGroupBuilder({
         routing_strategy: strategy,
         deployments,
       };
+      if (isComplexityRouter) {
+        payload.settings = { tiers: tierModels };
+      }
       if (isEditing && editTarget?.routing_group_id) {
         await routingGroupUpdateCall(token, editTarget.routing_group_id as string, payload);
         message.success("Routing group updated");
@@ -343,7 +407,7 @@ export default function RoutingGroupBuilder({
             ) : (
               <>
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs font-semibold text-gray-400 tracking-wide uppercase">2 &middot; Deployments</div>
+                  <div className="text-xs font-semibold text-gray-400 tracking-wide uppercase">2 &middot; Model Group</div>
                   <button
                     onClick={addEmptySlot}
                     className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 bg-transparent border-none cursor-pointer p-0 font-medium"
@@ -516,37 +580,45 @@ export default function RoutingGroupBuilder({
           >
             <span style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>Flow Preview</span>
             <div className="flex items-center gap-2">
-              <div className="flex" style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "hidden" }}>
-                {["1x", "2x", "5x"].map((label) => (
-                  <button
-                    key={label}
-                    className="text-xs px-2.5 py-1 bg-white hover:bg-gray-50 border-none cursor-pointer text-gray-500"
-                    style={{ borderRight: label !== "5x" ? "1px solid #e5e7eb" : "none" }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <button className="flex items-center gap-1 text-xs text-gray-500 px-2.5 py-1 border border-gray-200 rounded-md bg-white hover:bg-gray-50 cursor-pointer">
+              {failingIndices.size > 0 && (
+                <span className="text-xs text-red-500 font-medium">{failingIndices.size} failing</span>
+              )}
+              <button
+                onClick={resetSimulation}
+                className="flex items-center gap-1 text-xs text-gray-500 px-2.5 py-1 border border-gray-200 rounded-md bg-white hover:bg-gray-50 cursor-pointer"
+              >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M1 4v6h6M23 20v-6h-6" /><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
                 </svg>
                 Reset
               </button>
               <button
+                onClick={runSimulation}
+                disabled={deployments.length === 0}
                 className="flex items-center gap-1 text-xs text-white px-3 py-1.5 border-none rounded-md cursor-pointer font-semibold"
-                style={{ backgroundColor: "#111827" }}
+                style={{ backgroundColor: deployments.length === 0 ? "#9ca3af" : "#111827" }}
               >
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="#fff" stroke="none"><polygon points="6,3 20,12 6,21" /></svg>
-                Run
+                Send Request
               </button>
             </div>
           </div>
 
           {/* Flow canvas */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "24px", display: "flex", justifyContent: "center" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: "24px", display: "flex", flexDirection: "column", alignItems: "center" }}>
+            {strategy !== "complexity-router" && deployments.length > 0 && (
+              <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 12, textAlign: "center" }}>
+                Click any deployment to toggle failure &middot; then press <strong>Send Request</strong> to simulate
+              </div>
+            )}
             <div style={{ maxWidth: 520, width: "100%" }}>
-              <RoutingFlowVisualization strategy={strategy} deployments={deployments} />
+              <RoutingFlowVisualization
+                strategy={strategy}
+                deployments={deployments}
+                failingIndices={failingIndices}
+                simTrace={simTrace}
+                onToggleFail={toggleFail}
+              />
             </div>
           </div>
 

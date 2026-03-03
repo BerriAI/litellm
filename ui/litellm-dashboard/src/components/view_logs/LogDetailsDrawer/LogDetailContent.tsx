@@ -132,6 +132,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
         </Card>
       </div>
 
+      {/* Routing Info */}
+      <RoutingSection metadata={metadata} modelGroup={logEntry.model_group} selectedModel={logEntry.model} selectedModelId={logEntry.model_id} />
+
       {/* Metrics */}
       <MetricsSection logEntry={logEntry} metadata={metadata} />
 
@@ -495,6 +498,193 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
         {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
         <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
       </div>
+    </div>
+  );
+}
+
+const STRATEGY_LABELS: Record<string, string> = {
+  "simple-shuffle": "Random",
+  "latency-based-routing": "Lowest Latency",
+  "usage-based-routing-v2": "Usage-Based",
+  "cost-based-routing": "Lowest Cost",
+  "least-busy": "Least Busy",
+  "priority-failover": "Ordered Fallback",
+  "weighted-round-robin": "Weighted Round Robin",
+  "complexity-router": "Complexity Router",
+};
+
+function RoutingSection({
+  metadata,
+  modelGroup,
+  selectedModel,
+  selectedModelId,
+}: {
+  metadata: Record<string, any>;
+  modelGroup?: string;
+  selectedModel: string;
+  selectedModelId: string;
+}) {
+  const modelGroupSize = metadata?.model_group_size;
+  const routingStrategy = metadata?.routing_strategy;
+  const candidates: Array<{ model_id?: string; model_name?: string; litellm_model?: string; priority?: number }> =
+    metadata?.model_group_candidates || [];
+
+  if (!modelGroup) return null;
+
+  const isRoutingGroup = modelGroup !== selectedModel;
+  const strategyLabel = (routingStrategy && STRATEGY_LABELS[routingStrategy]) || routingStrategy;
+  const isOrdered = routingStrategy === "priority-failover";
+  const sortedCandidates = isOrdered
+    ? [...candidates].sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999))
+    : candidates;
+
+  return (
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <Card
+        title={
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span>Routing</span>
+            {isRoutingGroup && (
+              <Tag color="blue" style={{ margin: 0, fontSize: 11 }}>Routing Group</Tag>
+            )}
+          </div>
+        }
+        size="small"
+        bordered={false}
+        style={{ marginBottom: 0 }}
+      >
+        <Descriptions column={2} size="small">
+          <Descriptions.Item label="Model Group">
+            <Text strong>{modelGroup}</Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="Selected">
+            <Text>{selectedModel}</Text>
+            {selectedModelId && (
+              <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
+                ({selectedModelId.slice(0, 8)}…)
+              </Text>
+            )}
+          </Descriptions.Item>
+          {routingStrategy && (
+            <Descriptions.Item label="Strategy">
+              <Tag style={{ margin: 0 }}>{strategyLabel}</Tag>
+            </Descriptions.Item>
+          )}
+          {modelGroupSize != null && (
+            <Descriptions.Item label="Candidates">
+              {modelGroupSize} deployment{modelGroupSize !== 1 ? "s" : ""}
+            </Descriptions.Item>
+          )}
+        </Descriptions>
+
+        {/* Candidate list */}
+        {sortedCandidates.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8, fontWeight: 500 }}>
+              {isOrdered ? "Fallback Order" : "Candidates Considered"}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              {sortedCandidates.map((c, idx) => {
+                const isSelected = c.model_id === selectedModelId;
+                const label = c.litellm_model || c.model_name || c.model_id || "unknown";
+                return (
+                  <div key={c.model_id || idx}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "8px 12px",
+                        borderRadius: 8,
+                        backgroundColor: isSelected ? "#eff6ff" : "#fafafa",
+                        border: isSelected ? "1px solid #bfdbfe" : "1px solid #f3f4f6",
+                      }}
+                    >
+                      {isOrdered && (
+                        <div style={{
+                          width: 22, height: 22, borderRadius: "50%",
+                          backgroundColor: isSelected ? "#3b82f6" : "#e5e7eb",
+                          color: isSelected ? "#fff" : "#6b7280",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 11, fontWeight: 600, flexShrink: 0,
+                        }}>
+                          {idx + 1}
+                        </div>
+                      )}
+                      {!isOrdered && (
+                        <div style={{
+                          width: 6, height: 6, borderRadius: "50%",
+                          backgroundColor: isSelected ? "#3b82f6" : "#d1d5db",
+                          flexShrink: 0,
+                        }} />
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={{ fontSize: 13, fontWeight: isSelected ? 600 : 400 }}>
+                          {label}
+                        </Text>
+                        {c.model_id && (
+                          <Text type="secondary" style={{ fontSize: 10, marginLeft: 6 }}>
+                            {c.model_id.slice(0, 8)}…
+                          </Text>
+                        )}
+                      </div>
+                      {isSelected && (
+                        <Tag color="green" style={{ margin: 0, fontSize: 10 }}>selected</Tag>
+                      )}
+                      {isOrdered && !isSelected && idx === 0 && (
+                        <Tag style={{ margin: 0, fontSize: 10, color: "#9ca3af", borderColor: "#e5e7eb" }}>primary</Tag>
+                      )}
+                    </div>
+                    {/* Connector line between items */}
+                    {isOrdered && idx < sortedCandidates.length - 1 && (
+                      <div style={{ display: "flex", alignItems: "center", paddingLeft: 22, height: 16 }}>
+                        <div style={{ width: 1, height: "100%", backgroundColor: "#e5e7eb", marginLeft: 0 }} />
+                        <span style={{ fontSize: 9, color: "#d1d5db", marginLeft: 8 }}>↓ fallback</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Explanation */}
+        {modelGroupSize != null && modelGroupSize > 1 && (
+          <div style={{ marginTop: 12, padding: "8px 12px", backgroundColor: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6" }}>
+            <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
+              {routingStrategy === "simple-shuffle" && (
+                <>Randomly selected from {modelGroupSize} available deployments.</>
+              )}
+              {routingStrategy === "latency-based-routing" && (
+                <>Picked the lowest-latency deployment from {modelGroupSize} candidates.</>
+              )}
+              {routingStrategy === "usage-based-routing-v2" && (
+                <>Picked the deployment with the most available TPM/RPM capacity.</>
+              )}
+              {routingStrategy === "cost-based-routing" && (
+                <>Picked the lowest-cost deployment from {modelGroupSize} candidates.</>
+              )}
+              {routingStrategy === "least-busy" && (
+                <>Picked the deployment with the fewest active requests.</>
+              )}
+              {routingStrategy === "priority-failover" && (
+                <>Tried deployments in priority order. {
+                  sortedCandidates.length > 0 && sortedCandidates[0]?.model_id === selectedModelId
+                    ? "Primary deployment was healthy."
+                    : `Primary was unavailable — fell back to priority ${(sortedCandidates.findIndex(c => c.model_id === selectedModelId) + 1) || "?"}.`
+                }</>
+              )}
+              {!routingStrategy && (
+                <>Router selected <strong>{selectedModel}</strong> from {modelGroupSize} deployments.</>
+              )}
+              {routingStrategy && !["simple-shuffle", "latency-based-routing", "usage-based-routing-v2", "cost-based-routing", "least-busy", "priority-failover"].includes(routingStrategy) && (
+                <>Strategy: {strategyLabel}. Selected from {modelGroupSize} candidates.</>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

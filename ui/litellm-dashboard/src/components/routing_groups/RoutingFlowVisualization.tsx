@@ -10,9 +10,17 @@ interface Deployment {
   priority?: number;
 }
 
+export interface SimTrace {
+  steps: { index: number; status: "success" | "fail" | "skipped" }[];
+  selectedIndex: number | null;
+}
+
 interface RoutingFlowVisualizationProps {
   strategy: string;
   deployments: Deployment[];
+  failingIndices?: Set<number>;
+  simTrace?: SimTrace | null;
+  onToggleFail?: (index: number) => void;
 }
 
 const DEPLOY_COLORS = ["#3b82f6", "#6366f1", "#0ea5e9"];
@@ -72,43 +80,121 @@ const OutputCard: React.FC<{ subtitle: string }> = ({ subtitle }) => (
   </div>
 );
 
-const ModelNodeCard: React.FC<{ label: string; name: string; subName: string }> = ({ label, name, subName }) => (
-  <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: "14px 18px", backgroundColor: "#fff", width: "100%", maxWidth: 340, position: "relative" }}>
-    <div style={{ position: "absolute", top: 12, right: 14 }}><StatusDot /></div>
-    <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>{label}</div>
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2.5">
-        <div style={{ width: 32, height: 32, borderRadius: "50%", backgroundColor: "#eff6ff", border: "1.5px solid #bfdbfe", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 13, fontWeight: 700, color: "#3b82f6" }}>
-          {name.charAt(0).toUpperCase()}
+type NodeStatus = "idle" | "failing" | "sim-fail" | "sim-success" | "sim-skipped";
+
+const FailDot: React.FC = () => (
+  <div style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: "#ef4444", flexShrink: 0 }} />
+);
+
+const ModelNodeCard: React.FC<{
+  label: string; name: string; subName: string;
+  status?: NodeStatus; onClick?: () => void;
+}> = ({ label, name, subName, status = "idle", onClick }) => {
+  const isFailing = status === "failing" || status === "sim-fail";
+  const isSuccess = status === "sim-success";
+  const isSkipped = status === "sim-skipped";
+
+  let borderColor = "#e5e7eb";
+  let bg = "#fff";
+  if (isSuccess) { borderColor = "#22c55e"; bg = "#f0fdf4"; }
+  else if (status === "sim-fail") { borderColor = "#ef4444"; bg = "#fef2f2"; }
+  else if (isSkipped) { bg = "#f9fafb"; }
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        border: `1.5px solid ${borderColor}`, borderRadius: 12, padding: "14px 18px",
+        backgroundColor: bg, width: "100%", maxWidth: 340, position: "relative",
+        cursor: onClick ? "pointer" : "default", opacity: isSkipped ? 0.45 : 1,
+        transition: "all 0.2s",
+      }}
+    >
+      <div style={{ position: "absolute", top: 12, right: 14 }}>
+        {isFailing ? <FailDot /> : <StatusDot />}
+      </div>
+      {onClick && (
+        <div style={{ position: "absolute", top: 12, right: 30, fontSize: 9, color: "#9ca3af" }}>
+          {isFailing ? "click: unfail" : "click: fail"}
         </div>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{name}</div>
-          <div style={{ fontSize: 12, color: "#9ca3af" }}>{subName}</div>
+      )}
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>{label}</div>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div style={{ width: 32, height: 32, borderRadius: "50%", backgroundColor: "#eff6ff", border: "1.5px solid #bfdbfe", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 13, fontWeight: 700, color: "#3b82f6" }}>
+            {name.charAt(0).toUpperCase()}
+          </div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{name}</div>
+            <div style={{ fontSize: 12, color: "#9ca3af" }}>{subName}</div>
+          </div>
         </div>
       </div>
+      {isSuccess && (
+        <div style={{ marginTop: 8, fontSize: 11, fontWeight: 600, color: "#16a34a", display: "flex", alignItems: "center", gap: 4 }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5"><path d="M20 6L9 17l-5-5" /></svg>
+          Request handled
+        </div>
+      )}
+      {status === "sim-fail" && (
+        <div style={{ marginTop: 8, fontSize: 11, fontWeight: 600, color: "#ef4444", display: "flex", alignItems: "center", gap: 4 }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+          Failed — trying next
+        </div>
+      )}
     </div>
-  </div>
-);
+  );
+};
 
-const FailoverFlow: React.FC<{ deployments: Deployment[] }> = ({ deployments }) => (
-  <div className="flex flex-col items-center">
-    <TriggerCard subtitle="→ first available" />
-    {deployments.map((dep, i) => {
-      const label = i === 0 ? "PRIMARY" : `FALLBACK-${i}`;
-      const shortName = dep.model_name.split("/").pop() || dep.model_name;
-      return (
-        <React.Fragment key={dep.model_id + "-" + i}>
-          {i === 0 ? <VerticalLine /> : <FailConnector />}
-          <ModelNodeCard label={label} name={shortName} subName={dep.model_name} />
-        </React.Fragment>
-      );
-    })}
-    <VerticalLine />
-    <OutputCard subtitle="first successful result" />
-  </div>
-);
+const FailoverFlow: React.FC<{
+  deployments: Deployment[];
+  failingIndices?: Set<number>;
+  simTrace?: SimTrace | null;
+  onToggleFail?: (index: number) => void;
+}> = ({ deployments, failingIndices, simTrace, onToggleFail }) => {
+  const getStatus = (i: number): NodeStatus => {
+    if (simTrace) {
+      const step = simTrace.steps.find((s) => s.index === i);
+      if (step) return step.status === "success" ? "sim-success" : "sim-fail";
+      return "sim-skipped";
+    }
+    if (failingIndices?.has(i)) return "failing";
+    return "idle";
+  };
 
-const WeightedFlow: React.FC<{ deployments: Deployment[] }> = ({ deployments }) => {
+  return (
+    <div className="flex flex-col items-center">
+      <TriggerCard subtitle="→ first available" />
+      {deployments.map((dep, i) => {
+        const label = i === 0 ? "PRIMARY" : `FALLBACK-${i}`;
+        const shortName = dep.model_name.split("/").pop() || dep.model_name;
+        const nodeStatus = getStatus(i);
+        return (
+          <React.Fragment key={dep.model_id + "-" + i}>
+            {i === 0 ? <VerticalLine /> : <FailConnector />}
+            <ModelNodeCard
+              label={label} name={shortName} subName={dep.model_name}
+              status={nodeStatus}
+              onClick={onToggleFail ? () => onToggleFail(i) : undefined}
+            />
+          </React.Fragment>
+        );
+      })}
+      <VerticalLine />
+      <OutputCard subtitle={simTrace?.selectedIndex !== null && simTrace?.selectedIndex !== undefined
+        ? `handled by ${deployments[simTrace.selectedIndex]?.model_name.split("/").pop()}`
+        : "first successful result"
+      } />
+    </div>
+  );
+};
+
+const WeightedFlow: React.FC<{
+  deployments: Deployment[];
+  failingIndices?: Set<number>;
+  simTrace?: SimTrace | null;
+  onToggleFail?: (index: number) => void;
+}> = ({ deployments, failingIndices, simTrace, onToggleFail }) => {
   const totalWeight = deployments.reduce((s, d) => s + (d.weight ?? 1), 0);
 
   return (
@@ -136,24 +222,43 @@ const WeightedFlow: React.FC<{ deployments: Deployment[] }> = ({ deployments }) 
             const pct = totalWeight > 0 ? Math.round(((dep.weight ?? 1) / totalWeight) * 100) : 0;
             const shortName = dep.model_name.split("/").pop() || dep.model_name;
             const color = DEPLOY_COLORS[i % DEPLOY_COLORS.length];
+            const isFailing = failingIndices?.has(i);
+            const simStep = simTrace?.steps.find((s) => s.index === i);
+            const isSimSuccess = simStep?.status === "success";
+            const isSimFail = simStep?.status === "fail";
+            const isSkipped = simTrace && !simStep;
+
+            let rowBg = "#f9fafb";
+            let rowBorder = "1px solid #f3f4f6";
+            if (isSimSuccess) { rowBg = "#f0fdf4"; rowBorder = "1.5px solid #22c55e"; }
+            else if (isSimFail) { rowBg = "#fef2f2"; rowBorder = "1.5px solid #fca5a5"; }
+
             return (
               <div
                 key={dep.model_id + "-row-" + i}
                 className="flex items-center justify-between"
-                style={{ padding: "8px 12px", backgroundColor: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6" }}
+                onClick={onToggleFail ? () => onToggleFail(i) : undefined}
+                style={{
+                  padding: "8px 12px", backgroundColor: rowBg, borderRadius: 8, border: rowBorder,
+                  cursor: onToggleFail ? "pointer" : "default", opacity: isSkipped ? 0.4 : 1, transition: "all 0.2s",
+                }}
               >
                 <div className="flex items-center gap-2.5">
                   <div style={{ width: 28, height: 28, borderRadius: "50%", backgroundColor: color + "18", border: `1.5px solid ${color}44`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 11, fontWeight: 700, color }}>
                     {shortName.charAt(0).toUpperCase()}
                   </div>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{shortName}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
+                      {shortName}
+                      {isSimSuccess && <span style={{ marginLeft: 6, fontSize: 10, color: "#16a34a" }}>✓ selected</span>}
+                      {isSimFail && <span style={{ marginLeft: 6, fontSize: 10, color: "#ef4444" }}>✗ failed</span>}
+                    </div>
                     <div style={{ fontSize: 10, color: "#9ca3af" }}>{dep.model_name}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <span style={{ fontSize: 13, fontWeight: 700, color }}>{pct}%</span>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: "#22c55e", flexShrink: 0 }} />
+                  {isFailing || isSimFail ? <FailDot /> : <div style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: "#22c55e", flexShrink: 0 }} />}
                 </div>
               </div>
             );
@@ -230,7 +335,10 @@ const ComplexityFlow: React.FC<{ deployments: Deployment[] }> = ({ deployments }
   </div>
 );
 
-const SmartRoutingFlow: React.FC<{ deployments: Deployment[]; strategy: string }> = ({ deployments, strategy }) => {
+const SmartRoutingFlow: React.FC<{
+  deployments: Deployment[]; strategy: string;
+  failingIndices?: Set<number>; simTrace?: SimTrace | null; onToggleFail?: (index: number) => void;
+}> = ({ deployments, strategy, failingIndices, simTrace, onToggleFail }) => {
   const meta = STRATEGY_META[strategy] ?? STRATEGY_META["simple-shuffle"];
   return (
     <div className="flex flex-col items-center">
@@ -243,25 +351,48 @@ const SmartRoutingFlow: React.FC<{ deployments: Deployment[]; strategy: string }
         <div className="flex flex-col gap-2">
           {deployments.map((dep, i) => {
             const shortName = dep.model_name.split("/").pop() || dep.model_name;
+            const isFailing = failingIndices?.has(i);
+            const simStep = simTrace?.steps.find((s) => s.index === i);
+            const isSimSuccess = simStep?.status === "success";
+            const isSkipped = simTrace && !simStep;
+
+            let rowBg = "#f9fafb";
+            let rowBorder = "1px solid #f3f4f6";
+            if (isSimSuccess) { rowBg = "#f0fdf4"; rowBorder = "1.5px solid #22c55e"; }
+
             return (
-              <div key={dep.model_id + "-" + i} className="flex items-center justify-between" style={{ padding: "8px 12px", backgroundColor: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6" }}>
+              <div
+                key={dep.model_id + "-" + i}
+                className="flex items-center justify-between"
+                onClick={onToggleFail ? () => onToggleFail(i) : undefined}
+                style={{
+                  padding: "8px 12px", backgroundColor: rowBg, borderRadius: 8, border: rowBorder,
+                  cursor: onToggleFail ? "pointer" : "default", opacity: isSkipped ? 0.4 : 1, transition: "all 0.2s",
+                }}
+              >
                 <div className="flex items-center gap-2">
                   <div style={{ width: 28, height: 28, borderRadius: "50%", backgroundColor: "#eff6ff", border: "1.5px solid #bfdbfe", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 11, fontWeight: 700, color: "#3b82f6" }}>
                     {shortName.charAt(0).toUpperCase()}
                   </div>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{shortName}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
+                      {shortName}
+                      {isSimSuccess && <span style={{ marginLeft: 6, fontSize: 10, color: "#16a34a" }}>✓ selected</span>}
+                    </div>
                     <div style={{ fontSize: 10, color: "#9ca3af" }}>{dep.model_name}</div>
                   </div>
                 </div>
-                <StatusDot />
+                {isFailing ? <FailDot /> : <StatusDot />}
               </div>
             );
           })}
         </div>
       </div>
       <VerticalLine />
-      <OutputCard subtitle={meta.output} />
+      <OutputCard subtitle={simTrace?.selectedIndex !== null && simTrace?.selectedIndex !== undefined
+        ? `handled by ${deployments[simTrace.selectedIndex]?.model_name.split("/").pop()}`
+        : meta.output
+      } />
     </div>
   );
 };
@@ -271,26 +402,27 @@ const EmptyFlow: React.FC = () => (
     <TriggerCard subtitle="→ select a strategy" />
     <VerticalLine />
     <div style={{ border: "1px dashed #d1d5db", borderRadius: 12, padding: "28px 20px", width: "100%", maxWidth: 340, textAlign: "center" }}>
-      <span style={{ fontSize: 13, color: "#9ca3af" }}>Add deployments to see the flow</span>
+      <span style={{ fontSize: 13, color: "#9ca3af" }}>Add models to see the flow</span>
     </div>
     <VerticalLine />
     <OutputCard subtitle="waiting for configuration" />
   </div>
 );
 
-export default function RoutingFlowVisualization({ strategy, deployments }: RoutingFlowVisualizationProps) {
+export default function RoutingFlowVisualization({ strategy, deployments, failingIndices, simTrace, onToggleFail }: RoutingFlowVisualizationProps) {
   if (strategy === "complexity-router") return <ComplexityFlow deployments={deployments} />;
   if (deployments.length === 0) return <EmptyFlow />;
+  const simProps = { failingIndices, simTrace, onToggleFail };
   switch (strategy) {
-    case "priority-failover": return <FailoverFlow deployments={deployments} />;
-    case "weighted": return <WeightedFlow deployments={deployments} />;
+    case "priority-failover": return <FailoverFlow deployments={deployments} {...simProps} />;
+    case "weighted": return <WeightedFlow deployments={deployments} {...simProps} />;
     case "simple-shuffle":
     case "latency-based-routing":
     case "usage-based-routing-v2":
     case "cost-based-routing":
     case "least-busy":
-      return <SmartRoutingFlow deployments={deployments} strategy={strategy} />;
-    default: return <SmartRoutingFlow deployments={deployments} strategy={strategy} />;
+      return <SmartRoutingFlow deployments={deployments} strategy={strategy} {...simProps} />;
+    default: return <SmartRoutingFlow deployments={deployments} strategy={strategy} {...simProps} />;
   }
 }
 
