@@ -1170,6 +1170,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 thinking=thinking,
                 web_search_options=web_search_options,
                 shared_session=shared_session,
+                enable_json_schema_validation=enable_json_schema_validation,
                 **kwargs,
             )
     api_base = kwargs.get("api_base", None)
