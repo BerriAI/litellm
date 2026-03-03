@@ -454,8 +454,17 @@ async def create_file(  # noqa: PLR0915
                     model=router_model, llm_router=llm_router
                 )
 
+        # Apply team-level file expiry enforcement
+        team_metadata = user_api_key_dict.team_metadata or {}
+        enforced_file_expiry = team_metadata.get("enforced_file_expires_after")
+        if enforced_file_expiry is not None:
+            expires_after = FileExpiresAfter(
+                anchor=enforced_file_expiry["anchor"],
+                seconds=enforced_file_expiry["seconds"],
+            )
+
         _create_file_request = CreateFileRequest(
-            file=file_data, 
+            file=file_data,
             purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose),
             expires_after=expires_after,
             **data
