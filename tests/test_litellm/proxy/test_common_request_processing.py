@@ -11,10 +11,9 @@ import litellm
 from litellm._uuid import uuid
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
+    DDSpanTagger,
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
-    _add_dd_apm_tags_for_litellm_call_id,
-    _add_dd_apm_tags_for_request,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     _override_openai_response_model,
@@ -89,7 +88,7 @@ class TestProxyBaseLLMRequestProcessing:
             mock_set_active_span_tag,
         )
 
-        _add_dd_apm_tags_for_litellm_call_id("test-call-id")
+        DDSpanTagger.tag_call_id("test-call-id")
 
         mock_set_active_span_tag.assert_called_once_with(
             "litellm.call_id", "test-call-id"
@@ -1567,8 +1566,8 @@ class TestStreamingOverheadHeader:
         assert custom_headers["x-litellm-overhead-duration-ms"] == "55.3"
 
 
-class TestAddDdApmTagsForRequest:
-    """Tests for _add_dd_apm_tags_for_request - key/model DD span tagging."""
+class TestDDSpanTaggerTagRequest:
+    """Tests for DDSpanTagger.tag_request - key/model DD span tagging."""
 
     def _make_user_api_key_dict(self, key_alias=None, token=None):
         from litellm.proxy._types import UserAPIKeyAuth
@@ -1585,7 +1584,7 @@ class TestAddDdApmTagsForRequest:
         with patch(
             "litellm.proxy.common_request_processing.set_active_span_tag"
         ) as mock_set_tag:
-            _add_dd_apm_tags_for_request(
+            DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="gpt-4o",
             )
@@ -1601,7 +1600,7 @@ class TestAddDdApmTagsForRequest:
         with patch(
             "litellm.proxy.common_request_processing.set_active_span_tag"
         ) as mock_set_tag:
-            _add_dd_apm_tags_for_request(
+            DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model=None,
             )
@@ -1615,7 +1614,7 @@ class TestAddDdApmTagsForRequest:
         with patch(
             "litellm.proxy.common_request_processing.set_active_span_tag"
         ) as mock_set_tag:
-            _add_dd_apm_tags_for_request(
+            DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="claude-3-5-sonnet",
             )
