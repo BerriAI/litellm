@@ -481,6 +481,51 @@ class WebSearchInterceptionLogger(CustomLogger):
             response_format=response_format,
         )
 
+    @staticmethod
+    def _resolve_max_tokens(
+        optional_params: Dict,
+        kwargs: Dict,
+    ) -> int:
+        """Extract max_tokens and validate against thinking.budget_tokens.
+
+        Anthropic API requires ``max_tokens > thinking.budget_tokens``.
+        If the constraint is violated, auto-adjust to ``budget_tokens + 1024``.
+        """
+        max_tokens: int = optional_params.get(
+            "max_tokens",
+            kwargs.get("max_tokens", 1024),
+        )
+        thinking_param = optional_params.get("thinking")
+        if thinking_param and isinstance(thinking_param, dict):
+            budget_tokens = thinking_param.get("budget_tokens")
+            if budget_tokens is not None and isinstance(budget_tokens, (int, float)):
+                if max_tokens <= budget_tokens:
+                    adjusted = int(budget_tokens) + 1024
+                    verbose_logger.warning(
+                        "WebSearchInterception: max_tokens=%d <= thinking.budget_tokens=%d, "
+                        "adjusting to %d to satisfy Anthropic API constraint",
+                        max_tokens, budget_tokens, adjusted,
+                    )
+                    max_tokens = adjusted
+        return max_tokens
+
+    @staticmethod
+    def _prepare_followup_kwargs(kwargs: Dict) -> Dict:
+        """Build kwargs for the follow-up call, excluding internal keys.
+
+        ``litellm_logging_obj`` MUST be excluded so the follow-up call creates
+        its own ``Logging`` instance via ``function_setup``.  Reusing the
+        initial call's logging object triggers the dedup flag
+        (``has_logged_async_success``) which silently prevents the initial
+        call's spend from being recorded — the root cause of the
+        SpendLog / AWS billing mismatch.
+        """
+        _internal_keys = {'litellm_logging_obj'}
+        return {
+            k: v for k, v in kwargs.items()
+            if not k.startswith('_websearch_interception') and k not in _internal_keys
+        }
+
     async def _execute_agentic_loop(
         self,
         model: str,
@@ -565,27 +610,9 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         # Use anthropic_messages.acreate for follow-up request
         try:
-            # Extract max_tokens from optional params or kwargs
-            # max_tokens is a required parameter for anthropic_messages.acreate()
-            max_tokens = anthropic_messages_optional_request_params.get(
-                "max_tokens",
-                kwargs.get("max_tokens", 1024)  # Default to 1024 if not found
+            max_tokens = self._resolve_max_tokens(
+                anthropic_messages_optional_request_params, kwargs
             )
-
-            # Validate max_tokens against thinking.budget_tokens constraint.
-            # Anthropic API requires: max_tokens > thinking.budget_tokens
-            thinking_param = anthropic_messages_optional_request_params.get("thinking")
-            if thinking_param and isinstance(thinking_param, dict):
-                budget_tokens = thinking_param.get("budget_tokens")
-                if budget_tokens is not None and isinstance(budget_tokens, (int, float)):
-                    if max_tokens <= budget_tokens:
-                        adjusted_max_tokens = int(budget_tokens) + 1024
-                        verbose_logger.warning(
-                            "WebSearchInterception: max_tokens=%d <= thinking.budget_tokens=%d, "
-                            "adjusting to %d to satisfy Anthropic API constraint",
-                            max_tokens, budget_tokens, adjusted_max_tokens,
-                        )
-                        max_tokens = adjusted_max_tokens
 
             verbose_logger.debug(
                 f"WebSearchInterception: Using max_tokens={max_tokens} for follow-up request"
@@ -597,19 +624,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if k != 'max_tokens'
             }
 
-            # Remove internal parameters from kwargs before follow-up request.
-            # litellm_logging_obj MUST be excluded so the follow-up call creates its
-            # own Logging instance via function_setup.  Reusing the initial call's
-            # logging object causes a dedup flag (has_logged_async_success) to fire,
-            # which silently prevents the initial call's spend from being recorded —
-            # this was the root cause of the SpendLog / AWS billing mismatch.
-            _internal_keys = {
-                'litellm_logging_obj',
-            }
-            kwargs_for_followup = {
-                k: v for k, v in kwargs.items()
-                if not k.startswith('_websearch_interception') and k not in _internal_keys
-            }
+            kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
