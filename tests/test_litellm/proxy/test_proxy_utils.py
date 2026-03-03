@@ -47,6 +47,18 @@ def test_proxy_only_error_true_for_info_route():
     )
 
 
+def test_proxy_only_error_false_for_non_llm_non_info_route():
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    assert (
+        proxy_logging_obj._is_proxy_only_llm_api_error(
+            original_exception=Exception(),
+            error_type=ProxyErrorTypes.auth_error,
+            route="/key/generate",
+        )
+        is False
+    )
+
+
 def test_proxy_only_error_false_for_other_error_type():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     assert (
