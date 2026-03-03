@@ -71,7 +71,14 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    PrivateAttr,
+    field_serializer,
+    field_validator,
+)
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -964,6 +971,10 @@ class Hyperparameters(BaseModel):
     n_epochs: Optional[Union[str, int]] = (
         None  # "The number of epochs to train the model for"
     )
+    
+    model_config = {
+        "extra": "allow"
+    }
 
 
 class FineTuningJobCreate(BaseModel):
