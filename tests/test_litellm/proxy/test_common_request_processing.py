@@ -11,7 +11,6 @@ import litellm
 from litellm._uuid import uuid
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
-    DDSpanTagger,
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
     _extract_error_from_sse_chunk,
@@ -20,6 +19,7 @@ from litellm.proxy.common_request_processing import (
     _parse_event_data_for_error,
     create_response,
 )
+from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -82,8 +82,10 @@ class TestProxyBaseLLMRequestProcessing:
 
     def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
         mock_set_active_span_tag = MagicMock(return_value=True)
+        import litellm.proxy.dd_span_tagger
+
         monkeypatch.setattr(
-            litellm.proxy.common_request_processing,
+            litellm.proxy.dd_span_tagger,
             "set_active_span_tag",
             mock_set_active_span_tag,
         )
@@ -1405,7 +1407,7 @@ class TestDDSpanTaggerTagRequest:
         user_key = self._make_user_api_key_dict(key_alias="my-prod-key", token="hashed123")
 
         with patch(
-            "litellm.proxy.common_request_processing.set_active_span_tag"
+            "litellm.proxy.dd_span_tagger.set_active_span_tag"
         ) as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
@@ -1421,7 +1423,7 @@ class TestDDSpanTaggerTagRequest:
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
         with patch(
-            "litellm.proxy.common_request_processing.set_active_span_tag"
+            "litellm.proxy.dd_span_tagger.set_active_span_tag"
         ) as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
@@ -1435,7 +1437,7 @@ class TestDDSpanTaggerTagRequest:
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
         with patch(
-            "litellm.proxy.common_request_processing.set_active_span_tag"
+            "litellm.proxy.dd_span_tagger.set_active_span_tag"
         ) as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
