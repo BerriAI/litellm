@@ -5,6 +5,7 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "./key_info_view";
 
@@ -26,6 +27,14 @@ vi.mock("../networking", () => ({
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({
     resolved_guardrails: ["guardrail-1", "guardrail-2"],
   }),
+}));
+
+const mockResetKeySpendMutate = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
+  useResetKeySpend: vi.fn(() => ({
+    mutate: mockResetKeySpendMutate,
+    isPending: false,
+  })),
 }));
 
 vi.mock("@/utils/dataUtils", () => ({
@@ -537,6 +546,138 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Key not found")).toBeInTheDocument();
+    });
+  });
+
+  describe("Reset Spend button visibility", () => {
+    it("should show Reset Spend button for proxy admin", async () => {
+      vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user",
+        userRole: "proxy_admin",
+      });
+
+      renderWithProviders(
+        <KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
+      });
+    });
+
+    it("should show Reset Spend button for team admin of key's team", async () => {
+      const teamId = "test-team-id";
+      const teamAdminUserId = "team-admin-user";
+      const mockTeam: Team = {
+        team_id: teamId,
+        team_alias: "Test Team",
+        models: [],
+        max_budget: null,
+        budget_duration: null,
+        tpm_limit: null,
+        rpm_limit: null,
+        organization_id: "org-1",
+        created_at: "2025-01-01T00:00:00Z",
+        keys: [],
+        members_with_roles: [{ user_id: teamAdminUserId, role: "admin" }],
+        spend: 0,
+      };
+
+      vi.mocked(useTeams).mockReturnValue({ teams: [mockTeam], setTeams: vi.fn() });
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: teamAdminUserId,
+        userRole: "user",
+      });
+
+      const keyData = { ...MOCK_KEY_DATA, team_id: teamId, user_id: "other-user-id" };
+      renderWithProviders(
+        <KeyInfoView keyData={keyData} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
+      });
+    });
+
+    it("should not show Reset Spend button for regular key owner", async () => {
+      vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "owner-user-id",
+        userRole: "user",
+      });
+
+      const keyData = { ...MOCK_KEY_DATA, user_id: "owner-user-id" };
+      renderWithProviders(
+        <KeyInfoView keyData={keyData} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.queryByRole("button", { name: /reset spend/i })).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  describe("Reset Spend modal flow", () => {
+    it("should open confirmation modal when Reset Spend is clicked", async () => {
+      vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user",
+        userRole: "proxy_admin",
+      });
+
+      renderWithProviders(
+        <KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /reset spend/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText("Reset Key Spend")).toBeInTheDocument();
+        expect(screen.getByText(/reset to \$0/i)).toBeInTheDocument();
+      });
+    });
+
+    it("should call mutate with token on confirm", async () => {
+      vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user",
+        userRole: "proxy_admin",
+      });
+
+      const keyDataWithSpend = { ...MOCK_KEY_DATA, spend: 5.0 };
+      renderWithProviders(
+        <KeyInfoView keyData={keyDataWithSpend} onClose={() => { }} keyId={"test-key-id"} onKeyDataUpdate={() => { }} teams={[]} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /reset spend/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText("Reset Key Spend")).toBeInTheDocument();
+      });
+
+      // Click the confirm button in the modal
+      await userEvent.click(screen.getByRole("button", { name: /reset to \$0/i }));
+
+      await waitFor(() => {
+        expect(mockResetKeySpendMutate).toHaveBeenCalledWith(
+          MOCK_KEY_DATA.token,
+          expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
+        );
+      });
     });
   });
 });
