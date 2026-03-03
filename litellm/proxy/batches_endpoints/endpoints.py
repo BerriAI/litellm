@@ -242,7 +242,26 @@ async def create_batch(  # noqa: PLR0915
                     custom_llm_provider=credentials["custom_llm_provider"],
                     **_create_batch_data  # type: ignore
                 )
-                
+
+                # Encode response IDs with model info so retrieve_batch
+                # can route back to the correct provider/credentials.
+                if response and hasattr(response, "id") and response.id:
+                    response.id = encode_file_id_with_model(
+                        file_id=response.id,
+                        model=model_param,
+                        id_type="batch",
+                    )
+
+                    if hasattr(response, "output_file_id") and response.output_file_id:
+                        response.output_file_id = encode_file_id_with_model(
+                            file_id=response.output_file_id, model=model_param
+                        )
+
+                    if hasattr(response, "error_file_id") and response.error_file_id:
+                        response.error_file_id = encode_file_id_with_model(
+                            file_id=response.error_file_id, model=model_param
+                        )
+
                 verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
