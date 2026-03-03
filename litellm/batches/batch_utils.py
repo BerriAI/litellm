@@ -263,18 +263,6 @@ async def _get_vertex_ai_batch_output_with_custom_id(
     )
     output_lines = _get_file_content_as_dictionary(output_content.content)
 
-    input_content = await afile_content(
-        file_id=batch.input_file_id,
-        custom_llm_provider="vertex_ai",
-        **credentials,
-    )
-    input_lines = _get_file_content_as_dictionary(input_content.content)
-
-    if len(output_lines) != len(input_lines):
-        raise ValueError(
-            "Vertex AI batch output line count does not match input line count"
-        )
-
     output_has_keys = all(
         (line.get("custom_id") or line.get("key")) for line in output_lines
     )
