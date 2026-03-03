@@ -627,7 +627,7 @@ export default function ModelInfoView({
                       : [],
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
-                    litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || undefined,
+                    litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
                     litellm_extra_params: JSON.stringify(
                       Object.fromEntries(
                         Object.entries(localModelData.litellm_params || {}).filter(
@@ -970,7 +970,7 @@ export default function ModelInfoView({
                                 (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
                               }
                               options={[
-                                { value: undefined, label: "None" },
+                                { value: "", label: "None" },
                                 ...credentialsList.map((credential) => ({
                                   value: credential.credential_name,
                                   label: credential.credential_name,
