@@ -1,6 +1,6 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Form, InputNumber, Modal } from "antd";
+import { Checkbox, Form, InputNumber, Modal } from "antd";
 import { add } from "date-fns";
 import { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -22,6 +22,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
   const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [neverExpires, setNeverExpires] = useState<boolean>(false);
 
   // Track whether this is the user's own authentication key
   const [isOwnKey, setIsOwnKey] = useState<boolean>(false);
@@ -31,12 +32,14 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
 
   useEffect(() => {
     if (visible && selectedToken && accessToken) {
+      const currentlyNeverExpires = !selectedToken.expires;
+      setNeverExpires(currentlyNeverExpires);
       form.setFieldsValue({
         key_alias: selectedToken.key_alias,
         max_budget: selectedToken.max_budget,
         tpm_limit: selectedToken.tpm_limit,
         rpm_limit: selectedToken.rpm_limit,
-        duration: selectedToken.duration || "",
+        duration: currentlyNeverExpires ? null : (selectedToken.duration || ""),
         grace_period: "",
       });
 
@@ -56,6 +59,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       setIsRegenerating(false);
       setIsOwnKey(false);
       setCurrentAccessToken(null);
+      setNeverExpires(false);
       form.resetFields();
     }
   }, [visible, form]);
@@ -97,6 +101,13 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     setIsRegenerating(true);
     try {
       const formValues = await form.validateFields();
+
+      // Translate "Never Expires" checkbox to an explicit null duration
+      if (neverExpires) {
+        formValues.duration = null;
+      } else if (!formValues.duration || formValues.duration.trim() === "") {
+        delete formValues.duration; // Not provided — leave existing expiry unchanged
+      }
 
       // Use the current access token for the API call
       const response = await regenerateKeyCall(
@@ -217,13 +228,35 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
           <Form.Item name="rpm_limit" label="RPM Limit">
             <InputNumber style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="duration" label="Expire Key (eg: 30s, 30h, 30d)" className="mt-8">
-            <TextInput placeholder="" />
+          <Form.Item
+            label={
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <span>Expire Key (eg: 30s, 30h, 30d)</span>
+                <Checkbox
+                  checked={neverExpires}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setNeverExpires(checked);
+                    if (checked) {
+                      form.setFieldValue("duration", null);
+                      setRegenerateFormData((prev: any) => ({ ...prev, duration: null }));
+                    }
+                  }}
+                >
+                  Never Expires
+                </Checkbox>
+              </div>
+            }
+            name="duration"
+            className="mt-8"
+          >
+            <TextInput placeholder="e.g., 30s, 30m, 30h, 30d" disabled={neverExpires} />
           </Form.Item>
           <div className="mt-2 text-sm text-gray-500">
             Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
           </div>
-          {newExpiryTime && <div className="mt-2 text-sm text-green-600">New expiry: {newExpiryTime}</div>}
+          {!neverExpires && newExpiryTime && <div className="mt-2 text-sm text-green-600">New expiry: {newExpiryTime}</div>}
+          {neverExpires && <div className="mt-2 text-sm text-green-600">New expiry: Never</div>}
           <Form.Item
             name="grace_period"
             label="Grace Period (eg: 24h, 2d)"

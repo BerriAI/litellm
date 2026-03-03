@@ -555,18 +555,20 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         and data.duration is not None
     ):
         team_max_duration = team_table.metadata["team_member_key_duration"]
-        team_max_seconds = duration_in_seconds(duration=team_max_duration)
-        if data.duration == "-1":
-            user_key_duration: float = float("inf")
-        else:
-            user_key_duration = duration_in_seconds(duration=data.duration)
-        if user_key_duration > team_max_seconds:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Key duration exceeds team maximum. Requested: {data.duration}; Team maximum: {team_max_duration}"
-                },
-            )
+        # "-1" on the team side means no limit is enforced
+        if team_max_duration != "-1":
+            team_max_seconds = duration_in_seconds(duration=team_max_duration)
+            if data.duration == "-1":
+                user_key_duration: float = float("inf")
+            else:
+                user_key_duration = duration_in_seconds(duration=data.duration)
+            if user_key_duration > team_max_seconds:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Key duration exceeds team maximum. Requested: {data.duration}; Team maximum: {team_max_duration}"
+                    },
+                )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -1483,8 +1485,8 @@ async def prepare_key_update_data(
 
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        if duration == "-1":
-            # Set expires to None to indicate the key never expires
+        if duration == "-1" or duration is None:
+            # "-1" (legacy) or null (never-expires checkbox) both mean no expiry
             non_default_values["expires"] = None
         elif duration and (isinstance(duration, str)) and len(duration) > 0:
             duration_s = duration_in_seconds(duration=duration)
@@ -3400,8 +3402,19 @@ async def _validate_regenerate_key_duration_against_team(
     user_api_key_cache: DualCache,
 ) -> None:
     """Raise HTTP 400 if the requested duration exceeds the team's max key duration."""
-    if data is None or not data.duration:
+    if data is None:
         return
+
+    # Determine the user's requested duration in seconds.
+    # Distinguish "duration not sent" (leave unchanged) from "duration: null" (never expires).
+    if data.duration is None:
+        if "duration" not in data.model_fields_set:
+            return  # Not provided — leave the existing expiry unchanged
+        user_seconds: float = float("inf")  # Explicitly null = never expires
+    elif data.duration == "-1":
+        user_seconds = float("inf")  # Legacy sentinel for never-expires
+    else:
+        user_seconds = duration_in_seconds(duration=data.duration)
 
     team_id = getattr(key_in_db, "team_id", None)
     if not team_id:
@@ -3431,12 +3444,11 @@ async def _validate_regenerate_key_duration_against_team(
         return
 
     team_max_duration = team_table.metadata["team_member_key_duration"]
-    team_max_seconds = duration_in_seconds(duration=team_max_duration)
+    # "-1" on the team side means no limit is enforced
+    if team_max_duration == "-1":
+        return
 
-    if data.duration == "-1":
-        user_seconds: float = float("inf")
-    else:
-        user_seconds = duration_in_seconds(duration=data.duration)
+    team_max_seconds = duration_in_seconds(duration=team_max_duration)
 
     if user_seconds > team_max_seconds:
         raise HTTPException(
