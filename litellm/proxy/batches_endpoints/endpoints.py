@@ -118,6 +118,15 @@ async def create_batch(  # noqa: PLR0915
             or "openai"
         )
         _create_batch_data = LiteLLMBatchCreateRequest(**data)
+
+        # Apply team-level batch output expiry enforcement
+        team_metadata = user_api_key_dict.team_metadata or {}
+        enforced_batch_expiry = team_metadata.get(
+            "enforced_batch_output_expires_after"
+        )
+        if enforced_batch_expiry is not None:
+            _create_batch_data["output_expires_after"] = enforced_batch_expiry
+
         input_file_id = _create_batch_data.get("input_file_id", None)
         unified_file_id: Union[str, Literal[False]] = False
         
