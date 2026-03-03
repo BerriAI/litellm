@@ -560,7 +560,7 @@ class VertexAIBatchEmbeddingsResponseObject(TypedDict):
 
 
 class GcsSource(TypedDict):
-    uris: str
+    uris: List[str]
 
 
 class InputConfig(TypedDict):

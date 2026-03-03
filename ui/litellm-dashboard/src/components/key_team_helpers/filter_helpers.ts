@@ -82,25 +82,6 @@ export const fetchTeamFilterOptions = async (
 };
 
 /**
- * Fetches all key aliases via the dedicated /key/aliases endpoint
- * @param accessToken The access token for API authentication
- * @returns Array of all unique key aliases
- */
-export const fetchAllKeyAliases = async (accessToken: string | null): Promise<string[]> => {
-  if (!accessToken) return [];
-
-  try {
-    const { aliases } = await keyAliasesCall(accessToken as unknown as string);
-    // Defensive dedupe & null-guard
-    return Array.from(new Set((aliases || []).filter(Boolean)));
-  } catch (error) {
-    console.error("Error fetching all key aliases:", error);
-    return [];
-  }
-};
-
-
-/**
  * Fetches all teams across all pages
  * @param accessToken The access token for API authentication
  * @param organizationId Optional organization ID to filter teams

@@ -381,6 +381,8 @@ def get_redis_async_client(
 ) -> Union[async_redis.Redis, async_redis.RedisCluster]:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        if connection_pool is not None:
+            return async_redis.Redis(connection_pool=connection_pool)
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
         url_kwargs = {}
         for arg in redis_kwargs:
@@ -461,9 +463,16 @@ def get_redis_connection_pool(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        return async_redis.BlockingConnectionPool.from_url(
-            timeout=REDIS_CONNECTION_POOL_TIMEOUT, url=redis_kwargs["url"]
-        )
+        pool_kwargs = {"timeout": REDIS_CONNECTION_POOL_TIMEOUT, "url": redis_kwargs["url"]}
+        if "max_connections" in redis_kwargs:
+            try:
+                pool_kwargs["max_connections"] = int(redis_kwargs["max_connections"])
+            except (TypeError, ValueError):
+                verbose_logger.warning(
+                    "REDIS: invalid max_connections value %r, ignoring",
+                    redis_kwargs["max_connections"],
+                )
+        return async_redis.BlockingConnectionPool.from_url(**pool_kwargs)
     connection_class = async_redis.Connection
     if "ssl" in redis_kwargs:
         connection_class = async_redis.SSLConnection

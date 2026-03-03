@@ -45,6 +45,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     check_team_key_model_specific_limits,
     delete_verification_tokens,
     generate_key_helper_fn,
+    key_aliases,
     list_keys,
     prepare_key_update_data,
     reset_key_spend_fn,
@@ -5623,6 +5624,7 @@ async def test_rotate_master_key_model_data_valid_for_prisma(
     litellm_params/model_info are JSON strings (create_many expects dicts).
     """
     from unittest.mock import AsyncMock, MagicMock
+
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _rotate_master_key,
@@ -6069,6 +6071,121 @@ async def test_build_key_filter_admin_all_member_overlap():
 
 
 @pytest.mark.asyncio
+async def test_build_key_filter_project_id():
+    """
+    Test that project_id is applied as a global AND condition, narrowing all results
+    to keys that belong to the specified project.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-123"
+    project_id = "proj-abc"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        project_id=project_id,
+    )
+
+    # Should be wrapped in a top-level AND for the project_id filter
+    assert "AND" in where
+    and_parts = where["AND"]
+    assert len(and_parts) == 2
+
+    # Second part of AND should be the project_id filter
+    assert {"project_id": project_id} in and_parts
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_access_group_id():
+    """
+    Test that access_group_id is applied as a global AND condition using hasSome,
+    narrowing results to keys whose access_group_ids array contains the given ID.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-123"
+    access_group_id = "ag-xyz"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        access_group_id=access_group_id,
+    )
+
+    # Should be wrapped in a top-level AND for the access_group_id filter
+    assert "AND" in where
+    and_parts = where["AND"]
+    assert len(and_parts) == 2
+
+    # Second part of AND should use hasSome for the array field
+    assert {"access_group_ids": {"hasSome": [access_group_id]}} in and_parts
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_project_id_and_access_group_id():
+    """
+    Test that project_id and access_group_id stack correctly when both are provided.
+    Both should be applied as AND conditions, narrowing results to keys that match both.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-123"
+    project_id = "proj-abc"
+    access_group_id = "ag-xyz"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        project_id=project_id,
+        access_group_id=access_group_id,
+    )
+
+    # After project_id: {"AND": [visibility_where, {"project_id": ...}]}
+    # After access_group_id: {"AND": [above, {"access_group_ids": ...}]}
+    assert "AND" in where
+    outer_and = where["AND"]
+    assert len(outer_and) == 2
+
+    # The access_group_ids filter is the outermost AND
+    access_group_filter = outer_and[1]
+    assert access_group_filter == {"access_group_ids": {"hasSome": [access_group_id]}}
+
+    # The project_id filter is nested one level in
+    inner = outer_and[0]
+    assert "AND" in inner
+    inner_and = inner["AND"]
+    assert {"project_id": project_id} in inner_and
+
+
+@pytest.mark.asyncio
 async def test_get_member_team_ids():
     """
     Test that get_member_team_ids returns all teams where user is a member
@@ -6157,3 +6274,184 @@ async def test_get_member_team_ids():
     # Should return team-A and team-B (user is a member of both)
     # Should NOT return team-C (user is not in members list)
     assert sorted(result) == ["team-A", "team-B"]
+
+
+@pytest.mark.asyncio
+async def test_generate_key_with_agent_id():
+    """Test that agent_id is accepted in GenerateKeyRequest and passed to generate_key_helper_fn."""
+    from litellm.proxy._types import GenerateKeyRequest
+
+    # Verify GenerateKeyRequest accepts agent_id
+    request = GenerateKeyRequest(
+        key_alias="agent-test-key",
+        agent_id="test-agent-123",
+        models=[],
+    )
+    assert request.agent_id == "test-agent-123"
+    data_json = request.model_dump(exclude_unset=True, exclude_none=True)
+    assert data_json["agent_id"] == "test-agent-123"
+
+
+@pytest.mark.asyncio
+async def test_generate_key_helper_fn_agent_id():
+    """Test that generate_key_helper_fn passes agent_id into the insert_data call."""
+    from unittest.mock import AsyncMock, MagicMock, call, patch
+
+    import litellm.proxy.management_endpoints.key_management_endpoints as km
+
+    mock_prisma_client = AsyncMock()
+    mock_insert = AsyncMock(
+        return_value=MagicMock(
+            token="sk-test",
+            created_at=None,
+            updated_at=None,
+            litellm_budget_table=None,
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await generate_key_helper_fn(
+            request_type="key",
+            agent_id="test-agent-456",
+            key_alias="test-agent-key",
+            models=[],
+            table_name="key",
+        )
+
+    assert mock_insert.called, "insert_data was never called"
+    # insert_data is called as insert_data(data=key_data, ...)
+    call_kwargs = mock_insert.call_args.kwargs
+    key_data = call_kwargs.get("data", {})
+    assert key_data.get("agent_id") == "test-agent-456", (
+        f"Expected agent_id='test-agent-456' in key_data, got: {key_data.get('agent_id')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_response_shape():
+    """Test that key_aliases returns the correct paginated response shape."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 2}],
+            [{"key_alias": "alias-alpha"}, {"key_alias": "alias-beta"}],
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await key_aliases(page=1, size=50, search=None)
+
+    assert result["aliases"] == ["alias-alpha", "alias-beta"]
+    assert result["total_count"] == 2
+    assert result["current_page"] == 1
+    assert result["total_pages"] == 1
+    assert result["size"] == 50
+
+    # Both SQL calls must filter out null/empty aliases
+    count_sql = mock_prisma_client.db.query_raw.call_args_list[0].args[0]
+    aliases_sql = mock_prisma_client.db.query_raw.call_args_list[1].args[0]
+    assert "key_alias IS NOT NULL" in count_sql
+    assert "key_alias IS NOT NULL" in aliases_sql
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_pagination_skip_take():
+    """Test that LIMIT and OFFSET are correctly derived from page and size."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 120}],
+            [],
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await key_aliases(page=3, size=25, search=None)
+
+    assert result["current_page"] == 3
+    assert result["size"] == 25
+    assert result["total_count"] == 120
+    assert result["total_pages"] == 5  # ceil(120 / 25)
+
+    # aliases query params: [UI_SESSION_TOKEN_TEAM_ID, size=25, offset=50]
+    aliases_call_args = mock_prisma_client.db.query_raw.call_args_list[1].args
+    assert aliases_call_args[-2] == 25   # LIMIT = size
+    assert aliases_call_args[-1] == 50   # OFFSET = (3 - 1) * 25
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_search_filter():
+    """Test that the search param adds a case-insensitive ILIKE condition."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 0}],
+            [],
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await key_aliases(page=1, size=50, search="my-key")
+
+    count_call = mock_prisma_client.db.query_raw.call_args_list[0]
+    count_sql = count_call.args[0]
+    count_params = count_call.args[1:]
+
+    assert "ILIKE" in count_sql
+    assert "%my-key%" in count_params
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_no_search_omits_ilike_filter():
+    """Test that without a search term no ILIKE condition is added."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 0}],
+            [],
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await key_aliases(page=1, size=50, search=None)
+
+    count_sql = mock_prisma_client.db.query_raw.call_args_list[0].args[0]
+    assert "ILIKE" not in count_sql
+
+
+
+class TestValidateKeyAliasFormat:
+    def test_validate_key_alias_format_valid(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
+        # Valid cases
+        _validate_key_alias_format(None)  # OK
+        _validate_key_alias_format("valid-alias")
+        _validate_key_alias_format("valid_alias")
+        _validate_key_alias_format("valid.alias")
+        _validate_key_alias_format("valid/alias")
+        _validate_key_alias_format("a" * 255)
+        _validate_key_alias_format("my-key-123")
+
+    def test_validate_key_alias_format_invalid(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
+        from litellm.proxy._types import ProxyException
+        
+        invalid_aliases = [
+            "",               # empty
+            " ",              # whitespace
+            "a",              # too short (min 2)
+            "!",              # special char
+            "-start",         # non-alphanumeric start
+            "end-",           # non-alphanumeric end
+            "invalid@char",   # invalid char
+            "a" * 256,        # too long
+            "  leading",
+            "trailing  ",
+        ]
+        
+        for alias in invalid_aliases:
+            with pytest.raises(ProxyException) as exc:
+                _validate_key_alias_format(alias)
+            assert str(exc.value.code) == "400"
+            assert "Invalid key_alias format" in str(exc.value.message)

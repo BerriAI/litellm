@@ -7,7 +7,7 @@
 
 import fnmatch
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Set
 
 import httpx
 
@@ -54,22 +54,30 @@ _HEADER_VALUE_ALLOWLIST = frozenset(
 _HEADER_PRESENT_PLACEHOLDER = "[present]"
 
 
-def _header_value_allowed(header_name: str) -> bool:
-    """Return True if this header's value may be forwarded (allowlist, including globs)."""
+def _header_value_allowed(
+    header_name: str,
+    extra_allowlist: Optional[Set[str]] = None,
+) -> bool:
+    """Return True if this header's value may be forwarded (allowlist, including globs and extra_headers)."""
     lower = header_name.lower()
     if lower in _HEADER_VALUE_ALLOWLIST:
         return True
     for pattern in _HEADER_VALUE_ALLOWLIST:
         if "*" in pattern and fnmatch.fnmatch(lower, pattern):
             return True
+    if extra_allowlist and lower in extra_allowlist:
+        return True
     return False
 
 
-def _sanitize_inbound_headers(headers: Any) -> Optional[Dict[str, str]]:
+def _sanitize_inbound_headers(
+    headers: Any,
+    extra_allowlist: Optional[Set[str]] = None,
+) -> Optional[Dict[str, str]]:
     """
     Sanitize inbound headers before passing them to a 3rd party guardrail service.
 
-    - Allowlist: only headers in the allowlist have their values forwarded (exact + glob: x-stainless-*, x-litellm-*).
+    - Allowlist: default allowlist + extra_allowlist (from litellm_params.extra_headers); only these have values forwarded.
     - All other headers are included with value "[present]" so the guardrail knows the header existed.
     - Coerces values to str (for JSON serialization).
     """
@@ -81,7 +89,7 @@ def _sanitize_inbound_headers(headers: Any) -> Optional[Dict[str, str]]:
         if k is None:
             continue
         key = str(k)
-        if _header_value_allowed(key):
+        if _header_value_allowed(key, extra_allowlist=extra_allowlist):
             try:
                 sanitized[key] = str(v)
             except Exception:
@@ -93,7 +101,9 @@ def _sanitize_inbound_headers(headers: Any) -> Optional[Dict[str, str]]:
 
 
 def _extract_inbound_headers(
-    request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]
+    request_data: dict,
+    logging_obj: Optional["LiteLLMLoggingObj"],
+    extra_allowlist: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, str]]:
     """
     Extract inbound headers from available request context.
@@ -107,23 +117,27 @@ def _extract_inbound_headers(
     # 1) Most common path (proxy): full request context in proxy_server_request
     headers = request_data.get("proxy_server_request", {}).get("headers")
     if headers:
-        return _sanitize_inbound_headers(headers)
+        return _sanitize_inbound_headers(headers, extra_allowlist=extra_allowlist)
 
     # 2) Some guardrails pass proxy_server_request as request_data itself
     headers = request_data.get("headers")
     if headers:
-        return _sanitize_inbound_headers(headers)
+        return _sanitize_inbound_headers(headers, extra_allowlist=extra_allowlist)
 
     # 3) Pre-call: headers stored in request metadata
     metadata_headers = (request_data.get("metadata") or {}).get("headers")
     if metadata_headers:
-        return _sanitize_inbound_headers(metadata_headers)
+        return _sanitize_inbound_headers(
+            metadata_headers, extra_allowlist=extra_allowlist
+        )
 
     litellm_metadata_headers = (request_data.get("litellm_metadata") or {}).get(
         "headers"
     )
     if litellm_metadata_headers:
-        return _sanitize_inbound_headers(litellm_metadata_headers)
+        return _sanitize_inbound_headers(
+            litellm_metadata_headers, extra_allowlist=extra_allowlist
+        )
 
     # 4) Post-call: headers not present on response; fallback to logging object
     if logging_obj and getattr(logging_obj, "model_call_details", None):
@@ -135,7 +149,9 @@ def _extract_inbound_headers(
                 .get("headers", None)
             )
             if headers:
-                return _sanitize_inbound_headers(headers)
+                return _sanitize_inbound_headers(
+                    headers, extra_allowlist=extra_allowlist
+                )
         except Exception:
             pass
 
@@ -171,12 +187,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         api_key: Optional[str] = None,
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
+        extra_headers: Optional[list] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
         self.headers = headers or {}
+        self.extra_headers = extra_headers or []
 
         # If api_key is provided, add it as x-api-key header
         if api_key:
@@ -370,8 +388,15 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         # Extract user API key metadata
         user_metadata = self._extract_user_api_key_metadata(request_data)
+        extra_allowlist = (
+            {h.lower() for h in self.extra_headers if isinstance(h, str)}
+            if self.extra_headers
+            else None
+        )
         inbound_headers = _extract_inbound_headers(
-            request_data=request_data, logging_obj=logging_obj
+            request_data=request_data,
+            logging_obj=logging_obj,
+            extra_allowlist=extra_allowlist,
         )
 
         # Create request payload

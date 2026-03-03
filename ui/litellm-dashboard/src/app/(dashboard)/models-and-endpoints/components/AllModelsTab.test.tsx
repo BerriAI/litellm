@@ -1,5 +1,5 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import { render, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AllModelsTab from "./AllModelsTab";
 
@@ -116,7 +116,7 @@ describe("AllModelsTab", () => {
 
     mockUseModelCostMap.mockReturnValueOnce(createModelCostMapMock({}));
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
     expect(screen.getByText("Current Team:")).toBeInTheDocument();
   });
 
@@ -172,7 +172,7 @@ describe("AllModelsTab", () => {
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     // Component shows API total_count (2), not filtered count
     // Since default is "personal" team and models don't have direct_access, they're filtered out
@@ -233,7 +233,7 @@ describe("AllModelsTab", () => {
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     // Component shows API total_count (2), not filtered count
     // Since default is "personal" team and models don't have direct_access, they're filtered out
@@ -280,7 +280,7 @@ describe("AllModelsTab", () => {
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     // Component shows API total_count (2), but only 1 model has direct_access
     await waitFor(() => {
@@ -338,7 +338,7 @@ describe("AllModelsTab", () => {
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Config Model")).toBeInTheDocument();
@@ -380,7 +380,7 @@ describe("AllModelsTab", () => {
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Defined in config")).toBeInTheDocument();
@@ -426,7 +426,7 @@ describe("AllModelsTab", () => {
       return { data: page1Data, isLoading: false, error: null };
     });
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       // Component calculates: ((1-1)*50)+1 = 1, Math.min(1*50, 2) = 2
@@ -479,7 +479,7 @@ describe("AllModelsTab", () => {
       return { data: singlePageData, isLoading: false, error: null };
     });
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();

@@ -641,7 +641,7 @@ import asyncio
 config = {
     "mcpServers": {
         "mcp_group": {
-            "url": "http://localhost:4000/mcp",
+            "url": "http://localhost:4000/mcp/",
             "headers": {
                 "x-mcp-servers": "dev_group", # assume this gives access to github, zapier and deepwiki
                 "x-litellm-api-key": "Bearer sk-1234",

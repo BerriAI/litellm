@@ -1826,3 +1826,43 @@ def test_gemini_implicit_caching_cost_calculation():
     )
 
     print("✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly")
+
+
+def test_additional_costs_only_for_azure_ai():
+    """
+    Test that _get_additional_costs is only called for azure_ai provider.
+
+    completion_cost() guards the call with `if custom_llm_provider == "azure_ai"`.
+    This test verifies that non-azure_ai providers get additional_costs=None
+    (reflected by the absence of "additional_costs" in cost_breakdown),
+    while azure_ai providers can include additional costs.
+    """
+    from litellm.cost_calculator import _get_additional_costs
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Non-azure_ai providers should return None
+    result = _get_additional_costs(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+    assert result is None, "Non-azure_ai providers should have no additional costs"
+
+    result = _get_additional_costs(
+        model="claude-sonnet-4-20250514",
+        custom_llm_provider="anthropic",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+    assert result is None, "Anthropic should have no additional costs"
+
+    result = _get_additional_costs(
+        model="gemini-2.0-flash",
+        custom_llm_provider="vertex_ai",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+    assert result is None, "Vertex AI should have no additional costs"

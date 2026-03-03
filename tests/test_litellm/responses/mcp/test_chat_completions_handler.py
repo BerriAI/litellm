@@ -91,6 +91,72 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_tools(
+    monkeypatch,
+):
+    """
+    Test that MCP auth headers extracted from secret_fields (e.g. x-mcp-linear_config-authorization)
+    are passed to _process_mcp_tools_without_openai_transform for dynamic auth when fetching tools.
+    """
+    tools = [{"type": "mcp", "server_url": "litellm_proxy"}]
+    mock_acompletion = AsyncMock(return_value="ok")
+
+    captured_process_kwargs = {}
+
+    async def mock_process(**kwargs):
+        captured_process_kwargs.update(kwargs)
+        return ([], {})
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_use_litellm_mcp_gateway",
+        staticmethod(lambda t: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_parse_mcp_tools",
+        staticmethod(lambda t: (t, [])),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(lambda *_, **__: ["openai-tool"]),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_auto_execute_tools",
+        staticmethod(lambda **_: False),
+    )
+
+    # secret_fields with raw_headers containing MCP auth - extract_mcp_headers_from_request
+    # will parse these and pass to _process_mcp_tools_without_openai_transform
+    secret_fields = {
+        "raw_headers": {
+            "x-mcp-linear_config-authorization": "Bearer linear-token",
+        },
+    }
+
+    with patch("litellm.acompletion", mock_acompletion):
+        await acompletion_with_mcp(
+            model="test-model",
+            messages=[],
+            tools=tools,
+            secret_fields=secret_fields,
+        )
+
+    assert "mcp_server_auth_headers" in captured_process_kwargs
+    mcp_server_auth_headers = captured_process_kwargs["mcp_server_auth_headers"]
+    assert mcp_server_auth_headers is not None
+    assert "linear_config" in mcp_server_auth_headers
+    assert mcp_server_auth_headers["linear_config"]["Authorization"] == "Bearer linear-token"
+
+
+@pytest.mark.asyncio
 async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
     from litellm.utils import CustomStreamWrapper
     from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta, ChatCompletionDeltaToolCall, Function

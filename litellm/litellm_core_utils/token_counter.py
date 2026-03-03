@@ -726,10 +726,12 @@ def _count_content_list(
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
             else:
+                content_type = (
+                    c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
+                )
                 raise ValueError(
-                    f"Invalid content item type: {type(c).__name__}. "
-                    f"Expected str or dict with 'type' field. "
-                    f"Value: {c!r}"
+                    f"Invalid content item type: {content_type}. "
+                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking)."
                 )
         return num_tokens
     except Exception as e:
