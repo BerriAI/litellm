@@ -69,6 +69,10 @@
     "base_url": "https://api.abliteration.ai/v1",
     "api_key_env": "ABLITERATION_API_KEY"
   },
+  "avian": {
+    "base_url": "https://api.avian.io/v1",
+    "api_key_env": "AVIAN_API_KEY"
+  },
   "llamagate": {
     "base_url": "https://api.llamagate.dev/v1",
     "api_key_env": "LLAMAGATE_API_KEY",
