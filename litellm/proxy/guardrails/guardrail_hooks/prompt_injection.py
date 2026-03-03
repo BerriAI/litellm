@@ -4,11 +4,11 @@
 #
 # +------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
-## Reject a call if it contains a prompt injection attack.
+# ## Reject a call if it contains a prompt injection attack.
 
 
 from difflib import SequenceMatcher
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -16,22 +16,37 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_injection_detection_default_pt,
 )
 from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
 from litellm.router import Router
 from litellm.utils import get_formatted_prompt
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 
-
-class _OPTIONAL_PromptInjectionDetection(CustomLogger):
-    # Class variables or attributes
+class PromptInjectionGuardrail(CustomGuardrail):
     def __init__(
         self,
-        prompt_injection_params: Optional[LiteLLMPromptInjectionParams] = None,
+        guardrail_name: str = "prompt_injection",
+        default_on: bool = False,
+        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = None,
+        litellm_params: Optional[LitellmParams] = None,
+        **kwargs,
     ):
-        self.prompt_injection_params = prompt_injection_params
+        super().__init__(
+            guardrail_name=guardrail_name,
+            default_on=default_on,
+            event_hook=event_hook,
+            **kwargs,
+        )
+        self.prompt_injection_params = None
+        if litellm_params and litellm_params.guardrail == "prompt_injection":
+            # Map LitellmParams to LiteLLMPromptInjectionParams
+            # Filter out standard LitellmParams fields to get the injection-specific ones
+            params_dict = litellm_params.dict(exclude={"guardrail", "mode", "default_on"}, exclude_none=True)
+            self.prompt_injection_params = LiteLLMPromptInjectionParams(**params_dict)
+            
         self.llm_router: Optional[Router] = None
 
         self.verbs = [
@@ -65,15 +80,6 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             "and start from scratch",
         ]
 
-    def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
-        if level == "INFO":
-            verbose_proxy_logger.info(print_statement)
-        elif level == "DEBUG":
-            verbose_proxy_logger.debug(print_statement)
-
-        if litellm.set_verbose is True:
-            print(print_statement)  # noqa
-
     def update_environment(self, router: Optional[Router] = None):
         self.llm_router = router
 
@@ -86,7 +92,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     "PromptInjectionDetection: Model List not set. Required for Prompt Injection detection."
                 )
 
-            self.print_verbose(
+            verbose_proxy_logger.debug(
                 f"model_names: {self.llm_router.model_names}; self.prompt_injection_params.llm_api_name: {self.prompt_injection_params.llm_api_name}"
             )
             if (
@@ -129,13 +135,13 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 # Calculate similarity
                 match_ratio = SequenceMatcher(None, substring, keyword).ratio()
                 if match_ratio > similarity_threshold:
-                    self.print_verbose(
-                        print_statement=f"Rejected user input - {user_input}. {match_ratio} similar to {keyword}",
-                        level="INFO",
+                    verbose_proxy_logger.info(
+                        f"Rejected user input - {user_input}. {match_ratio} similar to {keyword}"
                     )
                     return True  # Found a highly similar substring
         return False  # No substring crossed the threshold
 
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -148,7 +154,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             - check if user id part of call
             - check if user id part of blocked list
             """
-            self.print_verbose("Inside Prompt Injection Detection Pre-Call Hook")
+            verbose_proxy_logger.debug("Inside Prompt Injection Detection Pre-Call Hook")
             try:
                 assert call_type in [
                     "acompletion",
@@ -160,7 +166,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     "audio_transcription",
                 ]
             except Exception:
-                self.print_verbose(
+                verbose_proxy_logger.debug(
                     f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
                 )
                 return data
@@ -175,11 +181,9 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                         user_input=formatted_prompt
                     )
                     if is_prompt_attack is True:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": "Rejected message. This is a prompt injection attack."
-                            },
+                        self.raise_passthrough_exception(
+                            violation_message="Rejected message. This is a prompt injection attack.",
+                            request_data=data,
                         )
                 # 2. check if vector db similarity check turned on [TODO] Not Implemented yet
                 if self.prompt_injection_params.vector_db_check is True:
@@ -190,13 +194,10 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 )
 
             if is_prompt_attack is True:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Rejected message. This is a prompt injection attack."
-                    },
-                )
-
+                                        self.raise_passthrough_exception(
+                            violation_message="Rejected message. This is a prompt injection attack.",
+                            request_data=data,
+                        )
             return data
 
         except HTTPException as e:
@@ -211,11 +212,13 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             raise e
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.proxy.guardrails.guardrail_hooks.prompt_injection.py::async_pre_call_hook(): Exception occured - {}".format(
                     str(e)
                 )
             )
+            raise e
 
+    @log_guardrail_information
     async def async_moderation_hook(  # type: ignore
         self,
         data: dict,
@@ -229,7 +232,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             "audio_transcription",
         ],
     ) -> Optional[bool]:
-        self.print_verbose(
+        verbose_proxy_logger.debug(
             f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}"
         )
 
@@ -263,8 +266,8 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 ],
             )
 
-            self.print_verbose(f"Received LLM Moderation response: {response}")
-            self.print_verbose(
+            verbose_proxy_logger.debug(f"Received LLM Moderation response: {response}")
+            verbose_proxy_logger.debug(
                 f"llm_api_fail_call_string: {self.prompt_injection_params.llm_api_fail_call_string}"
             )
             if isinstance(response, litellm.ModelResponse) and isinstance(
@@ -274,11 +277,21 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     is_prompt_attack = True
 
         if is_prompt_attack is True:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Rejected message. This is a prompt injection attack."
-                },
-            )
+            self.raise_passthrough_exception(
+                            violation_message="Rejected message. This is a prompt injection attack.",
+                            request_data=data,
+                        )
 
         return is_prompt_attack
+
+def initialize_prompt_injection(
+    litellm_params: LitellmParams,
+    guardrail: dict,
+    llm_router: Optional[Router] = None,
+) -> PromptInjectionGuardrail:
+    return PromptInjectionGuardrail(
+        guardrail_name=guardrail.get("guardrail_name", "prompt_injection"),
+        default_on=guardrail.get("default_on", False),
+        event_hook=litellm_params.mode,
+        litellm_params=litellm_params,
+    )
