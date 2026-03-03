@@ -3415,7 +3415,12 @@ async def _validate_regenerate_key_duration_against_team(
             parent_otel_span=None,
             check_db_only=True,
         )
-    except Exception:
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Could not look up team %s for duration validation during key regeneration, skipping check: %s",
+            team_id,
+            str(e),
+        )
         return
 
     if (
