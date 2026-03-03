@@ -1,11 +1,11 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union, get_args
 
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -58,6 +58,12 @@ def safe_divide(
     return numerator / denominator
 
 
+# Module-level constant derived from the source-of-truth Literal type.
+# Avoids recreating the set on every call (map_finish_reason is called per-chunk
+# during streaming) and stays in sync when the Literal is updated.
+_VALID_OPENAI_FINISH_REASONS = frozenset(get_args(OpenAIChatCompletionFinishReason))
+
+
 def map_finish_reason(
     finish_reason: str,
 ):  # openai supports 5 stop sequences - 'stop', 'length', 'function_call', 'content_filter', 'null'
@@ -97,22 +103,11 @@ def map_finish_reason(
     elif finish_reason == "compaction":
         return "length"
     # Unknown finish_reason values (e.g. provider-specific error codes like
-    # "network_error" from ZhipuAI/GLM) are not in OpenAIChatCompletionFinishReason
+    # "network_error" from ZhipuAI/GLM-5) are not in OpenAIChatCompletionFinishReason
     # Literal and will cause a Pydantic ValidationError in Choices.__init__.
     # Map them to "finish_reason_unspecified" so the stream can be assembled
     # without raising an exception.
-    _valid_finish_reasons = {
-        "stop",
-        "content_filter",
-        "function_call",
-        "tool_calls",
-        "length",
-        "guardrail_intervened",
-        "eos",
-        "finish_reason_unspecified",
-        "malformed_function_call",
-    }
-    if finish_reason not in _valid_finish_reasons:
+    if finish_reason not in _VALID_OPENAI_FINISH_REASONS:
         return "finish_reason_unspecified"
     return finish_reason
 
