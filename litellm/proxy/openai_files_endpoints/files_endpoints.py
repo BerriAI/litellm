@@ -465,8 +465,15 @@ async def create_file(  # noqa: PLR0915
                         "error": "enforced_file_expires_after must contain 'anchor' and 'seconds' keys",
                     },
                 )
+            if enforced_file_expiry["anchor"] != "created_at":
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"enforced_file_expires_after anchor must be 'created_at', got '{enforced_file_expiry['anchor']}'",
+                    },
+                )
             expires_after = FileExpiresAfter(
-                anchor=enforced_file_expiry["anchor"],
+                anchor="created_at",
                 seconds=enforced_file_expiry["seconds"],
             )
 
