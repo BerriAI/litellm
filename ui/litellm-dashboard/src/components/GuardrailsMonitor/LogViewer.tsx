@@ -5,12 +5,18 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
+import { Activity } from "lucide-react";
 import moment from "moment";
 import { Button, Spin } from "antd";
 import React, { useState } from "react";
 import { uiSpendLogsCall } from "@/components/networking";
 import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
 import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
+import { AgentTraceDrawer } from "./AgentTrace";
+import {
+  type AgentTraceSession,
+  MOCK_AGENT_TRACE_SESSIONS,
+} from "./agentTraceTypes";
 import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
@@ -65,7 +71,10 @@ export function LogViewer({
   const [activeFilter, setActiveFilter] = useState<string>(filterAction);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedTraceSession, setSelectedTraceSession] =
+    useState<AgentTraceSession | null>(null);
 
+  const demoTraces = MOCK_AGENT_TRACE_SESSIONS.slice(0, 2);
   const filteredLogs = logs.filter(
     (log) => activeFilter === "all" || log.action === activeFilter
   );
@@ -107,8 +116,13 @@ export function LogViewer({
     fullLogResponse?.data?.[0] ?? null;
 
   const handleLogClick = (log: LogEntry) => {
+    setSelectedTraceSession(null);
     setSelectedRequestId(log.id);
     setDrawerOpen(true);
+  };
+
+  const handleTraceSessionClick = (session: AgentTraceSession) => {
+    setSelectedTraceSession(session);
   };
 
   const handleCloseDrawer = () => {
@@ -127,9 +141,11 @@ export function LogViewer({
             <p className="text-xs text-gray-500 mt-0.5">
               {logsLoading
                 ? "Loading…"
-                : logs.length > 0
-                  ? `Showing ${displayLogs.length} of ${total} entries`
-                  : "No logs for this period. Select a guardrail and date range."}
+                : demoTraces.length > 0
+                  ? `2 demo traces, then showing ${displayLogs.length} of ${total} log entries`
+                  : logs.length > 0
+                    ? `Showing ${displayLogs.length} of ${total} entries`
+                    : "No logs for this period. Select a guardrail and date range."}
             </p>
           </div>
           {logs.length > 0 && (
@@ -170,13 +186,64 @@ export function LogViewer({
           <Spin />
         </div>
       )}
-      {!logsLoading && displayLogs.length === 0 && (
+      {!logsLoading && demoTraces.length === 0 && displayLogs.length === 0 && (
         <div className="py-12 text-center text-sm text-gray-500">
           No logs to display. Adjust filters or date range.
         </div>
       )}
-      {!logsLoading && displayLogs.length > 0 && (
+      {!logsLoading && (demoTraces.length > 0 || displayLogs.length > 0) && (
         <div className="divide-y divide-gray-100">
+          {demoTraces.map((session) => {
+            const statusDotColor =
+              session.status === "success"
+                ? "bg-green-500"
+                : session.status === "error"
+                  ? "bg-red-500"
+                  : session.status === "running"
+                    ? "bg-blue-500"
+                    : "bg-amber-500";
+            return (
+              <button
+                key={session.id}
+                type="button"
+                onClick={() => handleTraceSessionClick(session)}
+                className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-start gap-3"
+              >
+                <Activity className="w-4 h-4 mt-0.5 flex-shrink-0 text-indigo-500" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border bg-indigo-50 text-indigo-600 border-indigo-200">
+                      Trace
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      {session.relativeTime}
+                    </span>
+                    <span className="text-xs text-gray-400">·</span>
+                    <span className="text-xs text-gray-500">
+                      {session.totalSpans} spans
+                    </span>
+                    <span className="text-xs text-gray-400">·</span>
+                    <span className="text-xs text-gray-500">
+                      {session.totalDurationMs}ms
+                    </span>
+                    <span className="text-xs text-gray-400">·</span>
+                    <span className="text-xs text-gray-500">
+                      ${session.totalCost.toFixed(4)}
+                    </span>
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusDotColor}`}
+                      title={session.status}
+                      aria-hidden
+                    />
+                  </div>
+                  <p className="text-sm text-gray-800 truncate font-medium">
+                    {session.rootAgentName}
+                  </p>
+                </div>
+                <DownOutlined className="w-4 h-4 text-gray-400 flex-shrink-0 mt-1" />
+              </button>
+            );
+          })}
           {displayLogs.map((log) => {
             const config = actionConfig[log.action];
             const ActionIcon = config.icon;
@@ -221,6 +288,11 @@ export function LogViewer({
         accessToken={accessToken}
         allLogs={selectedLog ? [selectedLog] : []}
         startTime={startTime}
+      />
+      <AgentTraceDrawer
+        open={selectedTraceSession != null}
+        onClose={() => setSelectedTraceSession(null)}
+        session={selectedTraceSession}
       />
     </div>
   );

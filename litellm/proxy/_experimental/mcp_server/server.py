@@ -1,25 +1,16 @@
 """
 LiteLLM MCP Server Routes
 """
+
 # pyright: reportInvalidTypeForm=false, reportArgumentType=false, reportOptionalCall=false
 
 import asyncio
 import contextlib
-
 import traceback
 import uuid
 from datetime import datetime
-from typing import (
-    Any,
-    AsyncIterator,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import (Any, AsyncIterator, Callable, Dict, List, Optional, Tuple,
+                    Union, cast)
 
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
@@ -29,22 +20,20 @@ from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-    MCPRequestHandler,
-)
-from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-    get_request_base_url,
-)
+from litellm.litellm_core_utils.litellm_logging import \
+    Logging as LiteLLMLoggingObj
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import \
+    MCPRequestHandler
+from litellm.proxy._experimental.mcp_server.discoverable_endpoints import \
+    get_request_base_url
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
-    LITELLM_MCP_SERVER_DESCRIPTION,
-    LITELLM_MCP_SERVER_NAME,
-    LITELLM_MCP_SERVER_VERSION,
-)
+    LITELLM_MCP_SERVER_DESCRIPTION, LITELLM_MCP_SERVER_NAME,
+    LITELLM_MCP_SERVER_VERSION)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (LiteLLMProxyRequestSetup,
+                                                  get_chain_id_from_headers)
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
@@ -59,12 +48,8 @@ try:
     from mcp import ReadResourceResult, Resource
     from mcp.server import Server
     from mcp.server.lowlevel.helper_types import ReadResourceContents
-    from mcp.types import (
-        BlobResourceContents,
-        GetPromptResult,
-        ResourceTemplate,
-        TextResourceContents,
-    )
+    from mcp.types import (BlobResourceContents, GetPromptResult,
+                           ResourceTemplate, TextResourceContents)
 except ImportError as e:
     verbose_logger.debug(f"MCP module not found: {e}")
     MCP_AVAILABLE = False
@@ -88,39 +73,29 @@ _INITIALIZATION_LOCK = asyncio.Lock()
 
 if MCP_AVAILABLE:
     from mcp.server import Server
-
     # Import auth context variables and middleware
-    from mcp.server.auth.middleware.auth_context import (
-        AuthContextMiddleware,
-        auth_context_var,
-    )
+    from mcp.server.auth.middleware.auth_context import (AuthContextMiddleware,
+                                                         auth_context_var)
 
     try:
-        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+        from mcp.server.streamable_http_manager import \
+            StreamableHTTPSessionManager
     except ImportError:
         StreamableHTTPSessionManager = None  # type: ignore
-    from mcp.types import (
-        CallToolResult,
-        EmbeddedResource,
-        ImageContent,
-        Prompt,
-        TextContent,
-    )
+    from mcp.types import (CallToolResult, EmbeddedResource, ImageContent,
+                           Prompt, TextContent)
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
-        MCPAuthenticatedUser,
-    )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-    from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
-    from litellm.proxy._experimental.mcp_server.tool_registry import (
-        global_mcp_tool_registry,
-    )
-    from litellm.proxy._experimental.mcp_server.utils import (
-        split_server_prefix_from_name,
-    )
+    from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import \
+        MCPAuthenticatedUser
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import \
+        global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.sse_transport import \
+        SseServerTransport
+    from litellm.proxy._experimental.mcp_server.tool_registry import \
+        global_mcp_tool_registry
+    from litellm.proxy._experimental.mcp_server.utils import \
+        split_server_prefix_from_name
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
@@ -148,7 +123,7 @@ if MCP_AVAILABLE:
     session_manager = StreamableHTTPSessionManager(
         app=server,
         event_store=None,
-        json_response=False, # enables SSE streaming
+        json_response=False,  # enables SSE streaming
         stateless=True,
     )
 
@@ -286,8 +261,10 @@ if MCP_AVAILABLE:
         """
         from fastapi import Request
 
-        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+        from litellm.exceptions import (BlockedPiiEntityError,
+                                        GuardrailRaisedException)
+        from litellm.proxy.litellm_pre_call_utils import \
+            add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
 
         # Validate arguments
@@ -307,9 +284,9 @@ if MCP_AVAILABLE:
         host_progress_callback = None
         try:
             host_ctx = server.request_context
-            if host_ctx and hasattr(host_ctx, 'meta') and host_ctx.meta:
-                host_token = getattr(host_ctx.meta, 'progressToken', None)
-                if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
+            if host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta:
+                host_token = getattr(host_ctx.meta, "progressToken", None)
+                if host_token and hasattr(host_ctx, "session") and host_ctx.session:
                     host_session = host_ctx.session
 
                     async def forward_progress(progress: float, total: float | None):
@@ -318,19 +295,30 @@ if MCP_AVAILABLE:
                             await host_session.send_progress_notification(
                                 progress_token=host_token,
                                 progress=progress,
-                                total=total
+                                total=total,
                             )
-                            verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+                            verbose_logger.debug(
+                                f"Forwarded progress {progress}/{total} to Host"
+                            )
                         except Exception as e:
-                            verbose_logger.error(f"Failed to forward progress to Host: {e}")
+                            verbose_logger.error(
+                                f"Failed to forward progress to Host: {e}"
+                            )
 
                     host_progress_callback = forward_progress
-                    verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+                    verbose_logger.debug(
+                        f"Host progressToken captured: {host_token[:8]}..."
+                    )
         except Exception as e:
             verbose_logger.warning(f"Could not capture host progress context: {e}")
         try:
             # Create a body date for logging
             body_data = {"name": name, "arguments": arguments}
+            # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
+            chain_id = get_chain_id_from_headers(raw_headers)
+            if chain_id:
+                body_data["litellm_trace_id"] = chain_id
+                body_data["litellm_session_id"] = chain_id
 
             request = Request(
                 scope={
@@ -680,9 +668,8 @@ if MCP_AVAILABLE:
         Returns:
             True if the tool name (prefixed or unprefixed) is in the filter list
         """
-        from litellm.proxy._experimental.mcp_server.utils import (
-            split_server_prefix_from_name,
-        )
+        from litellm.proxy._experimental.mcp_server.utils import \
+            split_server_prefix_from_name
 
         # Check if the full name is in the list
         if tool_name in filter_list:
@@ -769,9 +756,7 @@ if MCP_AVAILABLE:
                 )
 
         allowed_mcp_server_ids = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth
-            )
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
         allowed_mcp_server_ids, _ip_blocked = (
             global_mcp_server_manager.filter_server_ids_by_ip_with_info(
@@ -780,7 +765,8 @@ if MCP_AVAILABLE:
         )
         verbose_logger.debug(
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
-            client_ip, allowed_mcp_server_ids,
+            client_ip,
+            allowed_mcp_server_ids,
         )
         if _ip_blocked > 0:
             verbose_logger.debug(
@@ -805,7 +791,6 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
-        
 
         return allowed_mcp_servers
 
@@ -884,6 +869,10 @@ if MCP_AVAILABLE:
             # This is intentionally minimal: only async_success_handler / post_call_failure_hook
             rules_obj = Rules()
             list_tools_call_id = str(uuid.uuid4())
+            # Derive trace_id from raw_headers when not explicitly passed (same as A2A / MCP call_tool)
+            effective_litellm_trace_id = litellm_trace_id or get_chain_id_from_headers(
+                raw_headers
+            )
             spend_logs_metadata: Dict[str, Any] = {
                 "mcp_operation": "list_tools",
             }
@@ -896,7 +885,7 @@ if MCP_AVAILABLE:
                 "model": "MCP: list_tools",
                 "call_type": CallTypes.list_mcp_tools.value,
                 "litellm_call_id": list_tools_call_id,
-                "litellm_trace_id": litellm_trace_id,
+                "litellm_trace_id": effective_litellm_trace_id,
                 "metadata": {
                     "spend_logs_metadata": spend_logs_metadata,
                 },
@@ -1087,7 +1076,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-
         # Get prompts from each allowed server
         all_prompts = []
         for server in allowed_mcp_servers:
@@ -1146,7 +1134,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-
         all_resources: List[Resource] = []
         for server in allowed_mcp_servers:
             if server is None:
@@ -1201,7 +1188,6 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
         )
-
 
         all_resource_templates: List[ResourceTemplate] = []
         for server in allowed_mcp_servers:
@@ -1491,7 +1477,7 @@ if MCP_AVAILABLE:
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
+                    detail=f"User not allowed to call this MCP server.\nTrying to call server: {server_name}\nAllowed MCP servers: {allowed_mcp_servers}",
                 )
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
@@ -1505,9 +1491,9 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
             litellm_logging_obj.model = f"MCP: {name}"
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
@@ -1533,9 +1519,9 @@ if MCP_AVAILABLE:
                 ).get("mcp_server_cost_info")
                 # Update model_call_details with the cost info
                 if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details[
-                        "mcp_tool_call_metadata"
-                    ] = standard_logging_mcp_tool_call
+                    litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                        standard_logging_mcp_tool_call
+                    )
                 response = await _handle_managed_mcp_tool(
                     server_name=server_name,
                     name=original_tool_name,  # Pass the full name (potentially prefixed)
@@ -1679,7 +1665,6 @@ if MCP_AVAILABLE:
                 status_code=403,
                 detail="User not allowed to get this prompt.",
             )
-
 
         # Extract server name from prefixed prompt name
         original_prompt_name, server_name = split_server_prefix_from_name(name)
@@ -2224,17 +2209,15 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> (
-        Tuple[
-            Optional[UserAPIKeyAuth],
-            Optional[str],
-            Optional[List[str]],
-            Optional[Dict[str, Dict[str, str]]],
-            Optional[Dict[str, str]],
-            Optional[Dict[str, str]],
-            Optional[str],
-        ]
-    ):
+    def get_auth_context() -> Tuple[
+        Optional[UserAPIKeyAuth],
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+        Optional[str],
+    ]:
         """
         Get the UserAPIKeyAuth from the auth context variable.
 

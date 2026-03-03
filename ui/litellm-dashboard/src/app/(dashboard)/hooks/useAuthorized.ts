@@ -1,10 +1,11 @@
 "use client";
 
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
+import { useProxyConnection } from "@/contexts/ProxyConnectionContext";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
 function formatUserRole(userRole: string) {
@@ -39,37 +40,84 @@ function formatUserRole(userRole: string) {
 const useAuthorized = () => {
   const router = useRouter();
   const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
+  const { activeConnection, isRemoteProxy } = useProxyConnection();
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
 
   const decoded = useMemo(() => decodeToken(token), [token]);
   const isTokenValid = useMemo(() => checkTokenValidity(token), [token]);
-  const isLoading = isUIConfigLoading;
-  const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled;
+  const isLoading = isUIConfigLoading && !isRemoteProxy;
+
+  // For remote proxies, authorized if we have a stored API key
+  const isRemoteAuthorized = isRemoteProxy && !!activeConnection?.apiKey;
+  const isAuthorized = isRemoteAuthorized || (isTokenValid && !uiConfig?.admin_ui_disabled);
+
+  // Fetch actual user info from remote proxy to get the real role
+  const [remoteUserInfo, setRemoteUserInfo] = useState<{
+    user_role: string | null;
+    user_id: string | null;
+    user_email: string | null;
+  }>({ user_role: null, user_id: null, user_email: null });
+
+  useEffect(() => {
+    if (!isRemoteProxy || !activeConnection?.apiKey) return;
+
+    const fetchRemoteUserInfo = async () => {
+      try {
+        const url = `${getProxyBaseUrl()}/user/info`;
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            [getGlobalLitellmHeaderName()]: `Bearer ${activeConnection.apiKey}`,
+            "Content-Type": "application/json",
+          },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setRemoteUserInfo({
+            user_role: data?.user_role ?? null,
+            user_id: data?.user_id ?? null,
+            user_email: data?.user_email ?? null,
+          });
+        }
+      } catch {
+        // Silently fail — role will fall back to "Admin"
+      }
+    };
+
+    fetchRemoteUserInfo();
+  }, [isRemoteProxy, activeConnection?.apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Single useEffect for all redirect logic
   useEffect(() => {
     if (isLoading) return;
 
-    if (!isAuthorized) {
+    if (!isAuthorized && !isRemoteProxy) {
       if (token) {
         clearTokenCookies();
       }
       router.replace(`${getProxyBaseUrl()}/ui/login`);
     }
-  }, [isLoading, isAuthorized, token, router]);
+  }, [isLoading, isAuthorized, isRemoteProxy, token, router]);
+
+  // For remote proxies, use the stored API key as the access token
+  const effectiveAccessToken = isRemoteProxy
+    ? activeConnection?.apiKey ?? null
+    : decoded?.key ?? null;
 
   return {
     isLoading,
     isAuthorized,
     token: isAuthorized ? token : null,
-    accessToken: decoded?.key ?? null,
-    userId: decoded?.user_id ?? null,
-    userEmail: decoded?.user_email ?? null,
-    userRole: formatUserRole(decoded?.user_role),
+    accessToken: effectiveAccessToken,
+    userId: isRemoteProxy ? (remoteUserInfo.user_id ?? null) : (decoded?.user_id ?? null),
+    userEmail: isRemoteProxy ? (remoteUserInfo.user_email ?? null) : (decoded?.user_email ?? null),
+    userRole: isRemoteProxy
+      ? formatUserRole(remoteUserInfo.user_role ?? "proxy_admin")
+      : formatUserRole(decoded?.user_role),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
-    showSSOBanner: decoded?.login_method === "username_password",
+    showSSOBanner: isRemoteProxy ? false : decoded?.login_method === "username_password",
   };
 };
 

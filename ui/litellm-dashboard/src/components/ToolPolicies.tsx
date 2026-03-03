@@ -1,22 +1,41 @@
 "use client";
 
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { Button, Switch, Tooltip } from "antd";
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
-import { Select, Switch, Tooltip } from "antd";
-import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import FilterComponent, { FilterOption } from "./molecules/filter";
-import { fetchToolsList, ToolRow, updateToolPolicy } from "./networking";
+import { MetricCard } from "./GuardrailsMonitor/MetricCard";
+import { PolicySelect, POLICY_OPTIONS } from "./ToolPolicies/PolicySelect";
+import { fetchToolsList, updateToolPolicy, ToolRow } from "./networking";
 import { TimeCell } from "./view_logs/time_cell";
 
-const POLICY_OPTIONS = [
-  { value: "trusted", label: "trusted", color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
-  { value: "blocked", label: "blocked", color: "#991b1b", bg: "#fee2e2", border: "#fca5a5" },
-] as const;
+// --- Date helpers (UTC) for "new tools" counts ---
+function getUTCDateKey(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
 
-type PolicyValue = "trusted" | "blocked";
+function isCreatedInUTCDay(createdAt: string | undefined, utcDateKey: string): boolean {
+  if (!createdAt) return false;
+  try {
+    const d = new Date(createdAt);
+    return getUTCDateKey(d) === utcDateKey;
+  } catch {
+    return false;
+  }
+}
 
-const policyStyle = (p: string) => POLICY_OPTIONS.find((o) => o.value === p) ?? POLICY_OPTIONS[1];
+function countToolsInUTCDay(tools: ToolRow[], utcDateKey: string): number {
+  return tools.filter((t) => isCreatedInUTCDay(t.created_at, utcDateKey)).length;
+}
+
+function getTrendSubtitle(newToday: number, newYesterday: number): string | undefined {
+  const diff = newToday - newYesterday;
+  if (diff === 0) return undefined;
+  if (diff > 0) return `+${diff} since yesterday`;
+  return `${diff} since yesterday`;
+}
 
 type SortField = "tool_name" | "call_policy" | "team_id" | "key_alias" | "created_at" | "call_count";
 
@@ -27,60 +46,10 @@ interface FilterValues {
 interface ToolPoliciesProps {
   accessToken: string | null;
   userRole?: string;
+  onSelectTool?: (toolName: string) => void;
 }
 
-const PolicySelect: React.FC<{
-  value: string;
-  toolName: string;
-  saving: boolean;
-  onChange: (toolName: string, policy: string) => void;
-}> = ({ value, toolName, saving, onChange }) => {
-  const style = policyStyle(value);
-  return (
-    <Select
-      size="small"
-      value={value}
-      disabled={saving}
-      loading={saving}
-      onChange={(v) => onChange(toolName, v)}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        minWidth: 110,
-        fontWeight: 500,
-      }}
-      popupMatchSelectWidth={false}
-      options={POLICY_OPTIONS.map((o) => ({
-        value: o.value,
-        label: (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 12,
-              fontWeight: 500,
-              color: o.color,
-            }}
-          >
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                backgroundColor: o.color,
-                display: "inline-block",
-                flexShrink: 0,
-              }}
-            />
-            {o.label}
-          </span>
-        ),
-      }))}
-    />
-  );
-};
-
-export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
+export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelectTool }) => {
   const [tools, setTools] = useState<ToolRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
@@ -185,6 +154,41 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
     },
   ];
 
+  // Derived counts for summary cards and "Needs Review" (UTC today/yesterday)
+  const { newToday, newYesterday, trendSubtitle, totalTools, blockedCount, activeTeamsCount, needsReviewTools } =
+    useMemo(() => {
+      const now = new Date();
+      const todayKey = getUTCDateKey(now);
+      const yesterday = new Date(now);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yesterdayKey = getUTCDateKey(yesterday);
+
+      const newToday = countToolsInUTCDay(tools, todayKey);
+      const newYesterday = countToolsInUTCDay(tools, yesterdayKey);
+      const trendSubtitle = getTrendSubtitle(newToday, newYesterday);
+
+      const totalTools = tools.length;
+      const blockedCount = tools.filter((t) => t.call_policy === "blocked").length;
+      const activeTeamsCount = new Set(tools.map((t) => t.team_id).filter(Boolean)).size;
+
+      // New in period (today) and not yet decided — untrusted or dual_llm
+      const needsReviewTools = tools.filter(
+        (t) =>
+          isCreatedInUTCDay(t.created_at, todayKey) &&
+          (t.call_policy === "untrusted" || t.call_policy === "dual_llm")
+      );
+
+      return {
+        newToday,
+        newYesterday,
+        trendSubtitle,
+        totalTools,
+        blockedCount,
+        activeTeamsCount,
+        needsReviewTools,
+      };
+    }, [tools]);
+
   const SortHeader = ({ label, field }: { label: string; field: SortField }) => (
     <div className="flex items-center gap-1">
       <span>{label}</span>
@@ -223,9 +227,76 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const paginated = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
+  const scrollToToolRow = (toolId: string) => {
+    const idx = sorted.findIndex((t) => t.tool_id === toolId);
+    if (idx >= 0) {
+      const page = Math.floor(idx / pageSize) + 1;
+      if (page !== currentPage) setCurrentPage(page);
+      // Scroll after a short delay so the table has re-rendered with the new page
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          document.getElementById(`tool-row-${toolId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 100);
+      });
+    }
+  };
+
   return (
-    <div className="p-6 w-full">
+    <div className="w-full">
       <h1 className="text-2xl font-semibold text-gray-900 mb-6">Tool Policies</h1>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <MetricCard
+          label="New Today"
+          value={newToday}
+          valueColor="text-green-600"
+          subtitle={trendSubtitle}
+          icon={
+            <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+          }
+        />
+        <MetricCard label="Total Tools Discovered" value={totalTools} />
+        <MetricCard
+          label="Blocked Tools"
+          value={blockedCount}
+          valueColor={blockedCount > 0 ? "text-red-600" : undefined}
+        />
+        <MetricCard label="Active Teams" value={activeTeamsCount > 0 ? activeTeamsCount : "—"} />
+      </div>
+
+      {/* Needs Review */}
+      {needsReviewTools.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+          <h2 className="text-sm font-semibold text-amber-900 mb-1">Needs Review</h2>
+          <p className="text-sm text-amber-800 mb-3">
+            {needsReviewTools.length} new tool{needsReviewTools.length !== 1 ? "s" : ""} discovered that require
+            policy decisions.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {needsReviewTools.map((t) => (
+              <span
+                key={t.tool_id}
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-amber-200 rounded-md text-sm"
+              >
+                <span className="font-mono text-amber-900 truncate max-w-[200px]" title={t.tool_name}>
+                  {t.tool_name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => scrollToToolRow(t.tool_id)}
+                  className="text-amber-700 hover:text-amber-900 font-medium text-xs whitespace-nowrap"
+                >
+                  Review
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
         {/* Toolbar */}
         <div className="border-b px-6 py-4 w-full max-w-full box-border">
@@ -377,16 +448,20 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
               </TableRow>
             ) : (
               paginated.map((tool) => (
-                <TableRow key={tool.tool_id} className="h-8 hover:bg-gray-50">
+                <TableRow key={tool.tool_id} id={`tool-row-${tool.tool_id}`} className="h-8 hover:bg-gray-50">
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <TimeCell utcTime={tool.created_at ?? ""} />
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden">
-                    <Tooltip title={tool.tool_name}>
-                      <span className="font-mono text-xs max-w-[20ch] truncate block font-medium">
-                        {tool.tool_name}
-                      </span>
-                    </Tooltip>
+                    <button
+                      type="button"
+                      onClick={() => onSelectTool?.(tool.tool_name)}
+                      className="text-left w-full font-mono text-xs max-w-[20ch] truncate block font-medium text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus:ring-0"
+                    >
+                      <Tooltip title={onSelectTool ? "Click to view details and block for team/key" : tool.tool_name}>
+                        <span>{tool.tool_name}</span>
+                      </Tooltip>
+                    </button>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8">
                     <PolicySelect
@@ -396,8 +471,10 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                       onChange={handlePolicyChange}
                     />
                   </TableCell>
-                  <TableCell className="py-0.5 max-h-8 text-right tabular-nums text-sm font-mono text-gray-700">
-                    {(tool.call_count ?? 0).toLocaleString()}
+                  <TableCell className="py-0.5 max-h-8">
+                    <div className="flex items-center justify-end h-8 tabular-nums text-sm font-mono text-gray-700">
+                      {(tool.call_count ?? 0).toLocaleString()}
+                    </div>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <Tooltip title={tool.team_id ?? "-"}>
@@ -453,6 +530,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
           </div>
         )}
       </div>
+
     </div>
   );
 };
