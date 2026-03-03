@@ -72,6 +72,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
+    _team_member_has_permission,
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
@@ -3971,22 +3972,29 @@ async def get_team_daily_activity(
         t.team_id: {"team_alias": t.team_alias} for t in team_aliases
     }
 
-    # Check if user is team admin for any requested teams
+    # Check if user is team admin or has /team/daily/activity permission
     # If not, filter by user's API keys
     user_api_keys: Optional[List[str]] = None
     if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
-        # Check if user is team admin for any of the teams
-        is_team_admin_for_any = False
+        # Check if user is team admin or has usage view permission for any team
+        has_full_team_view = False
         for team_alias in team_aliases:
             team_obj = LiteLLM_TeamTable(**team_alias.model_dump())
             if _is_user_team_admin(
                 user_api_key_dict=user_api_key_dict, team_obj=team_obj
             ):
-                is_team_admin_for_any = True
+                has_full_team_view = True
+                break
+            if _team_member_has_permission(
+                user_api_key_dict=user_api_key_dict,
+                team_obj=team_obj,
+                permission="/team/daily/activity",
+            ):
+                has_full_team_view = True
                 break
 
-        # If user is not a team admin for any team, filter by their API keys
-        if not is_team_admin_for_any:
+        # If user does not have full team view, filter by their API keys
+        if not has_full_team_view:
             # Get all API keys for this user
             user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
                 where={"user_id": user_api_key_dict.user_id}

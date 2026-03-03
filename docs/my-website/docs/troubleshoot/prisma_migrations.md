@@ -2,6 +2,8 @@
 
 Common Prisma migration issues encountered when upgrading or downgrading LiteLLM proxy versions, and how to fix them.
 
+For a full guide on safely reverting your LiteLLM version, see the **[Safe Rollback Guide](rollback)**.
+
 ## How Prisma Migrations Work in LiteLLM
 
 - LiteLLM uses [Prisma](https://www.prisma.io/) to manage its PostgreSQL database schema.
@@ -46,6 +48,8 @@ After deleting the entry, restart LiteLLM — it will re-apply the migration on 
 
 If deleting the migration entry and restarting doesn't resolve the issue, sync the schema directly:
 
+> **Warning:** `prisma db push` can cause **data loss** if the Prisma schema removes columns or tables that exist in your database. Only use this as a last resort and ensure you have a database backup first.
+
 ```bash
 DATABASE_URL="<your_database_url>" prisma db push
 ```
@@ -76,7 +80,7 @@ DELETE FROM "_prisma_migrations"
 WHERE migration_name = '<failed_migration_name>';
 ```
 
-3. If that doesn't work, use `prisma db push`:
+3. If that doesn't work, use `prisma db push` (see [warning above](#step-2--if-that-doesnt-work-use-prisma-db-push) — back up your database first):
 
 ```bash
 DATABASE_URL="<your_database_url>" prisma db push
@@ -106,7 +110,7 @@ LIMIT 20;
 
 3. Restart LiteLLM to re-run migrations.
 
-4. If that doesn't work, use `prisma db push`:
+4. If that doesn't work, use `prisma db push` (see [warning above](#step-2--if-that-doesnt-work-use-prisma-db-push) — back up your database first):
 
 ```bash
 DATABASE_URL="<your_database_url>" prisma db push

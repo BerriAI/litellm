@@ -102,18 +102,25 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     setImpactResult(null);
   };
 
-  const getAttachmentData = () => buildAttachmentData(form.getFieldsValue(true), scopeType);
-
   const handlePreviewImpact = async () => {
     if (!accessToken) return;
     try {
-      await form.validateFields(["policy_name"]);
+      await form.validateFields(["policy_names"]);
     } catch {
       return;
     }
     setIsEstimating(true);
     try {
-      const data = getAttachmentData();
+      const { policy_names = [] } = form.getFieldsValue(true);
+      const firstPolicy = policy_names?.[0];
+      if (!firstPolicy) return;
+      const data = buildAttachmentData(
+        {
+          ...form.getFieldsValue(true),
+          policy_name: firstPolicy,
+        },
+        scopeType
+      );
       const result = await estimateAttachmentImpactCall(accessToken, data);
       setImpactResult(result);
     } catch (error) {
@@ -137,9 +144,42 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
         throw new Error("No access token available");
       }
 
-      const data = getAttachmentData();
-      await createAttachment(accessToken, data);
-      NotificationsManager.success("Attachment created successfully");
+      const values = form.getFieldsValue(true);
+      const selectedPolicyNames: string[] = values.policy_names || [];
+
+      const results = await Promise.allSettled(
+        selectedPolicyNames.map((policyName) => {
+          const data = buildAttachmentData(
+            {
+              ...values,
+              policy_name: policyName,
+            },
+            scopeType
+          );
+          return createAttachment(accessToken, data);
+        })
+      );
+
+      const successCount = results.filter((r) => r.status === "fulfilled").length;
+      const failed = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+
+      if (successCount > 0 && failed.length === 0) {
+        NotificationsManager.success(
+          successCount === 1
+            ? "Attachment created successfully"
+            : `${successCount} attachments created successfully`
+        );
+      } else if (successCount > 0 && failed.length > 0) {
+        NotificationsManager.fromBackend(
+          `${successCount} attachments created, ${failed.length} failed`
+        );
+      } else {
+        throw new Error(
+          failed[0]?.reason instanceof Error
+            ? failed[0].reason.message
+            : "Failed to create attachments"
+        );
+      }
 
       resetForm();
       onSuccess();
@@ -175,12 +215,13 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
         }}
       >
         <Form.Item
-          name="policy_name"
-          label="Policy"
-          rules={[{ required: true, message: "Please select a policy" }]}
+          name="policy_names"
+          label="Policies"
+          rules={[{ required: true, message: "Please select at least one policy" }]}
         >
           <Select
-            placeholder="Select a policy to attach"
+            mode="multiple"
+            placeholder="Select policies to attach"
             options={policyOptions}
             showSearch
             filterOption={(input, option) =>

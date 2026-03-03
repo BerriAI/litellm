@@ -32,6 +32,8 @@ def get_all_supported_anthropic_beta_headers(provider: str):
     "model_name,provider_name",
     [
         ("claude-sonnet-4-5-20250929", "anthropic"),
+        # ("azure-ai-claude-opus-4.5", "azure_ai"),
+        # ("vertex-ai-claude-opus-4-6", "vertex_ai"), Add once cicd has creds for this
     ],
 )
 async def test_anthropic_messages_with_all_beta_headers(model_name, provider_name):

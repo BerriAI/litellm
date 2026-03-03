@@ -1,17 +1,19 @@
 "use client";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tooltip } from "antd";
+import { Button as Button2, Form, Input, message, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
-import { CopyToClipboard } from "react-copy-to-clipboard";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
@@ -20,8 +22,8 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
-import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import TeamDropdown from "../common_components/team_dropdown";
+import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
@@ -29,6 +31,7 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
+  getAgentsList,
   getGuardrailsList,
   getPoliciesList,
   getPossibleUserRoles,
@@ -39,6 +42,7 @@ import {
   proxyBaseUrl,
   userFilterUICall,
 } from "../networking";
+import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { simplifyKeyGenerateError } from "./utils";
@@ -142,6 +146,9 @@ export const fetchUserModels = async (
  */
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const { data: projects, isLoading: isProjectsLoading } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -156,6 +163,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
@@ -169,6 +177,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
+  const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -180,6 +190,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRotationInterval("30d");
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
+    setSelectedAgentId(null);
+    setSelectedProjectId(null);
   };
 
   const handleCancel = () => {
@@ -195,6 +207,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRotationInterval("30d");
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
+    setSelectedAgentId(null);
+    setSelectedProjectId(null);
   };
 
   useEffect(() => {
@@ -202,6 +216,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
   }, [accessToken, userID, userRole]);
+
+  useEffect(() => {
+    if (accessToken) {
+      getAgentsList(accessToken)
+        .then((res) => setAgentsList(res?.agents || []))
+        .catch(() => setAgentsList([]));
+    }
+  }, [accessToken]);
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -283,6 +305,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
 
       if (keyOwner === "you") {
         formValues.user_id = userID;
+      } else if (keyOwner === "agent") {
+        if (!selectedAgentId) {
+          NotificationsManager.fromBackend("Please select an agent");
+          return;
+        }
+        formValues.agent_id = selectedAgentId;
       }
 
       // Handle metadata for all key types
@@ -449,6 +477,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   };
 
   useEffect(() => {
+    if (selectedProjectId) {
+      // When a project is selected, use the project's models
+      const project = projects?.find((p) => p.project_id === selectedProjectId);
+      const projectModels = project?.models ?? [];
+      setModelsToPick(projectModels);
+      form.setFieldValue("models", []);
+      return;
+    }
     if (userID && userRole && accessToken) {
       fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam?.team_id ?? null).then((models) => {
         let allModels = Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models]));
@@ -456,7 +492,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       });
     }
     form.setFieldValue("models", []);
-  }, [selectedCreateKeyTeam, accessToken, userID, userRole]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole]);
+
+  // Sync team when project is selected but teams loaded later (race condition)
+  useEffect(() => {
+    if (!selectedProjectId || !teams) return;
+    const project = projects?.find((p) => p.project_id === selectedProjectId);
+    if (!project?.team_id) return;
+    // If team is already set correctly, skip
+    if (selectedCreateKeyTeam?.team_id === project.team_id) return;
+    const projectTeam = teams.find((t) => t.team_id === project.team_id) || null;
+    if (projectTeam) {
+      setSelectedCreateKeyTeam(projectTeam);
+      form.setFieldValue("team_id", projectTeam.team_id);
+    }
+  }, [teams, selectedProjectId, projects]);
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
@@ -539,6 +590,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 <Radio value="you">You</Radio>
                 <Radio value="service_account">Service Account</Radio>
                 {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
+                <Radio value="agent">
+                  Agent <Tag color="purple">New</Tag>
+                </Radio>
               </Radio.Group>
             </Form.Item>
 
@@ -583,6 +637,32 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 </div>
               </Form.Item>
             )}
+            {keyOwner === "agent" && (
+              <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md">
+                <div className="mb-3">
+                  <span className="text-sm font-medium text-gray-700">
+                    Select Agent <span className="text-red-500">*</span>
+                  </span>
+                </div>
+                <Select
+                  showSearch
+                  placeholder="Select an agent"
+                  style={{ width: "100%" }}
+                  value={selectedAgentId}
+                  onChange={(value) => setSelectedAgentId(value)}
+                  filterOption={(input, option) =>
+                    (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+                  }
+                  options={agentsList.map((a) => ({
+                    label: a.agent_name || a.agent_id,
+                    value: a.agent_id,
+                  }))}
+                />
+                <div className="text-xs text-gray-500 mt-2">
+                  This key will be used by the selected agent to make requests to LiteLLM
+                </div>
+              </div>
+            )}
             <Form.Item
               label={
                 <span>
@@ -605,12 +685,45 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
             >
               <TeamDropdown
                 teams={teams}
+                disabled={selectedProjectId !== null}
+                loading={!teams}
                 onChange={(teamId) => {
                   const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
                   setSelectedCreateKeyTeam(selectedTeam);
+                  setSelectedProjectId(null);
+                  form.setFieldValue("project_id", undefined);
                 }}
               />
             </Form.Item>
+            {enableProjectsUI && (
+              <Form.Item
+                label={
+                  <span>
+                    Project{" "}
+                    <Tooltip title="Assign this key to a project. Selecting a project will lock the team to the project's team.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="project_id"
+                className="mt-4"
+              >
+                <ProjectDropdown
+                  projects={projects}
+                  teamId={selectedCreateKeyTeam?.team_id}
+                  loading={isProjectsLoading || !teams}
+                  onChange={(projectId) => {
+                    if (!projectId) {
+                      setSelectedProjectId(null);
+                      setSelectedCreateKeyTeam(null);
+                      form.setFieldValue("team_id", undefined);
+                      return;
+                    }
+                    setSelectedProjectId(projectId);
+                  }}
+                />
+              </Form.Item>
+            )}
           </div>
 
           {/* Show message when team selection is required */}
@@ -687,9 +800,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     }
                   }}
                 >
-                  <Option key="all-team-models" value="all-team-models">
-                    All Team Models
-                  </Option>
+                  {!selectedProjectId && (
+                    <Option key="all-team-models" value="all-team-models">
+                      All Team Models
+                    </Option>
+                  )}
                   {modelsToPick.map((model: string) => (
                     <Option key={model} value={model}>
                       {getModelDisplayName(model)}
@@ -728,15 +843,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <div style={{ padding: "4px 0" }}>
                       <div style={{ fontWeight: 500 }}>Default</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call LLM API + Management routes
+                        Can call AI APIs + Management routes
                       </div>
                     </div>
                   </Option>
-                  <Option value="llm_api" label="LLM API">
+                  <Option value="llm_api" label="AI APIs">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>LLM API</div>
+                      <div style={{ fontWeight: 500 }}>AI APIs</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call only LLM API routes (chat/completions, embeddings, etc.)
+                        Can call only AI API routes (chat/completions, embeddings, etc.)
                       </div>
                     </div>
                   </Option>
@@ -958,9 +1073,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                       style={{ width: "100%" }}
                       disabled={!premiumUser}
                       placeholder={
-                        !premiumUser
-                          ? "Premium feature - Upgrade to set policies by key"
-                          : "Select or enter policies"
+                        !premiumUser ? "Premium feature - Upgrade to set policies by key" : "Select or enter policies"
                       }
                       options={policiesList.map((name) => ({ value: name, label: name }))}
                     />
@@ -1012,9 +1125,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     help="Select access groups to assign to this key"
                   >
-                    <AccessGroupSelector
-                      placeholder="Select access groups (optional)"
-                    />
+                    <AccessGroupSelector placeholder="Select access groups (optional)" />
                   </Form.Item>
                   <Form.Item
                     label={
@@ -1250,7 +1361,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           accessToken={accessToken || ""}
                           value={routerSettings || undefined}
                           onChange={setRouterSettings}
-                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
+                          modelData={
+                            userModels.length > 0
+                              ? { data: userModels.map((model) => ({ model_name: model })) }
+                              : undefined
+                          }
                         />
                       </div>
                     </AccordionBody>
@@ -1381,34 +1496,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
           <Grid numItems={1} className="gap-2 w-full">
             <Title>Save your Key</Title>
             <Col numColSpan={1}>
-              <p>
-                Please save this secret key somewhere safe and accessible. For security reasons,{" "}
-                <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key,
-                you will need to generate a new one.
-              </p>
-            </Col>
-            <Col numColSpan={1}>
               {apiKey != null ? (
-                <div>
-                  <Text className="mt-3">Virtual Key:</Text>
-                  <div
-                    style={{
-                      background: "#f8f8f8",
-                      padding: "10px",
-                      borderRadius: "5px",
-                      marginBottom: "10px",
-                    }}
-                  >
-                    <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>{apiKey}</pre>
-                  </div>
-
-                  <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-                    <Button className="mt-3">Copy Virtual Key</Button>
-                  </CopyToClipboard>
-                  {/* <Button className="mt-3" onClick={sendSlackAlert}>
-                    Test Key
-                </Button> */}
-                </div>
+                <CreatedKeyDisplay apiKey={apiKey} />
               ) : (
                 <Text>Key being created, this might take 30s</Text>
               )}

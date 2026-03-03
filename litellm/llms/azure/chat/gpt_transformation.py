@@ -106,6 +106,7 @@ class AzureOpenAIConfig(BaseConfig):
             "audio",
             "web_search_options",
             "prompt_cache_key",
+            "store",
         ]
 
     def _is_response_format_supported_model(self, model: str) -> bool:
@@ -158,7 +159,6 @@ class AzureOpenAIConfig(BaseConfig):
         api_version: str = "",
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model)
-
         api_version_times = api_version.split("-")
 
         if len(api_version_times) >= 3:
@@ -245,7 +245,6 @@ class AzureOpenAIConfig(BaseConfig):
                 optional_params["tools"].extend(value)
             elif param in supported_openai_params:
                 optional_params[param] = value
-
         return optional_params
 
     def transform_request(
