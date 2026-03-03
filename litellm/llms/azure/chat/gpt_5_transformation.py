@@ -16,6 +16,17 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     GPT5_SERIES_ROUTE = "gpt5_series/"
 
     @classmethod
+    def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
+        """Strip the gpt5_series/ routing prefix and pass azure as provider."""
+        from litellm.utils import _supports_factory
+
+        return _supports_factory(
+            model=model.replace(cls.GPT5_SERIES_ROUTE, ""),
+            custom_llm_provider="azure",
+            key=f"supports_{level}_reasoning_effort",
+        )
+
+    @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
         """Check if the Azure model string refers to a gpt-5 variant.
 
@@ -43,10 +54,15 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         if "tool_choice" not in params:
             params.append("tool_choice")
 
-        # Only gpt-5.2 has been verified to support logprobs on Azure
+        # Only gpt-5.2 has been verified to support logprobs on Azure.
+        # The OpenAI base class may include logprobs for gpt-5.1 (supported on openai.com),
+        # but we enforce the Azure-specific constraint here.
         if self.is_model_gpt_5_2_model(model):
-            azure_supported_params = ["logprobs", "top_logprobs"]
-            params.extend(azure_supported_params)
+            for p in ("logprobs", "top_logprobs"):
+                if p not in params:
+                    params.append(p)
+        else:
+            params = [p for p in params if p not in ("logprobs", "top_logprobs")]
 
         return params
 

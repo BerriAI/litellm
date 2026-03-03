@@ -1,8 +1,8 @@
 import pytest
 
 import litellm
-from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.openai import OpenAIConfig
 
 
 @pytest.fixture()
@@ -260,19 +260,21 @@ def test_gpt5_drops_reasoning_effort_xhigh_when_requested(config: OpenAIConfig):
 
 # GPT-5.1 temperature handling tests
 def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
-    """Test that GPT-5.1 models are correctly detected."""
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex-max")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-2025-12-11")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-pro")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-codex")
+    """Test that models supporting reasoning_effort='none' are correctly detected via model map."""
+    # gpt-5.1 and gpt-5.2 chat variants support none
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-2025-11-13", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-chat-latest", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2-2025-12-11", "none")
+    # codex/pro/chat variants do not support none
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex-max", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.2-chat-latest", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.2-pro", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-mini", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-codex", "none")
 
 
 def test_gpt5_1_temperature_with_reasoning_effort_none(config: OpenAIConfig):
