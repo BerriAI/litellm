@@ -317,7 +317,7 @@ class ProxyLogging:
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
-            internal_usage_cache=self.internal_usage_cache.dual_cache,
+            internal_usage_cache=self.internal_usage_cache.dual_cache,  # type: ignore[call-arg]
         )
         self.email_logging_instance: Optional[Any] = None
         if BaseEmailLogger is not None:
@@ -325,7 +325,7 @@ class ProxyLogging:
             if email_logger_class is not None:
                 # All email logger classes now accept internal_usage_cache
                 self.email_logging_instance = email_logger_class(
-                    internal_usage_cache=self.internal_usage_cache.dual_cache,
+                    internal_usage_cache=self.internal_usage_cache.dual_cache,  # type: ignore[call-arg]
                 )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
@@ -3583,8 +3583,9 @@ class PrismaClient:
     def _get_engine_pid(self) -> int:
         try:
             engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
-            if engine is not None and engine.process is not None:
-                return engine.process.pid
+            process = getattr(engine, "process", None) if engine is not None else None
+            if process is not None:
+                return process.pid
         except (AttributeError, TypeError):
             pass
         return 0
@@ -4686,6 +4687,19 @@ async def update_spend_logs_job(
         verbose_proxy_logger.warning(
             "Spend tracking - guardrail usage tracking failed (non-fatal): %s",
             guardrail_tracking_err,
+        )
+
+    # Tool usage tracking (same batch): SpendLogToolIndex for "last N requests for tool X"
+    try:
+        from litellm.proxy.db.spend_log_tool_index import process_spend_logs_tool_usage
+        await process_spend_logs_tool_usage(
+            prisma_client=prisma_client,
+            logs_to_process=logs_to_process,
+        )
+    except Exception as tool_tracking_err:
+        verbose_proxy_logger.warning(
+            "Spend tracking - tool usage tracking failed (non-fatal): %s",
+            tool_tracking_err,
         )
 
 
