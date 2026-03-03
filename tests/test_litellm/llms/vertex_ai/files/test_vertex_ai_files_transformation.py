@@ -167,7 +167,7 @@ class TestTransformDeleteFile:
         assert isinstance(result, FileDeleted)
         assert result.deleted is True
         assert result.object == "file"
-        assert "litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc" in result.id
+        assert result.id == "gs://my-bucket/litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc"
 
     def test_should_fallback_to_deleted_id_when_no_request(self, config):
         raw_response = MagicMock(spec=httpx.Response)
@@ -182,3 +182,49 @@ class TestTransformDeleteFile:
         assert isinstance(result, FileDeleted)
         assert result.id == "deleted"
         assert result.deleted is True
+
+    def test_should_include_bucket_name_in_reconstructed_delete_id(self, config):
+        """
+        Regression: the old code split on /o/ only, dropping the bucket from
+        the reconstructed gs:// URI. e.g. gs://path/to/file instead of
+        gs://my-bucket/path/to/file.
+        """
+        raw_response = MagicMock(spec=httpx.Response)
+        mock_request = MagicMock()
+        encoded_object = urllib.parse.quote("path/to/file.jsonl", safe="")
+        mock_request.url = (
+            f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{encoded_object}"
+        )
+        raw_response.request = mock_request
+
+        result = config.transform_delete_file_response(
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+
+        assert result.id == "gs://my-bucket/path/to/file.jsonl"
+
+    def test_should_include_bucket_in_nested_object_path(self, config):
+        """Verify bucket extraction works with deeply nested GCS object paths."""
+        raw_response = MagicMock(spec=httpx.Response)
+        mock_request = MagicMock()
+        encoded_object = urllib.parse.quote(
+            "litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc-123",
+            safe="",
+        )
+        mock_request.url = (
+            f"https://storage.googleapis.com/storage/v1/b/prod-bucket/o/{encoded_object}"
+        )
+        raw_response.request = mock_request
+
+        result = config.transform_delete_file_response(
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+
+        assert result.id == (
+            "gs://prod-bucket/litellm-vertex-files/publishers/google/"
+            "models/gemini-2.0-flash-001/abc-123"
+        )

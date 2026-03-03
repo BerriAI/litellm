@@ -115,9 +115,10 @@ class VertexAIBatchPrediction(VertexLLM):
                 data=json.dumps(vertex_batch_request),
             )
         except httpx.HTTPStatusError as e:
-            error_body = e.response.text if hasattr(e, 'response') else "N/A"
+            error_body = e.response.text
             litellm.verbose_logger.error(
-                f"Vertex AI batch create failed: status={e.response.status_code}, body={error_body[:1000]}"
+                "Vertex AI batch create failed: status=%s, body=%s",
+                e.response.status_code, error_body[:1000],
             )
             raise
         if response.status_code != 200:
