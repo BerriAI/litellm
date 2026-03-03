@@ -38,24 +38,24 @@ def scheduler_start(scheduler: AsyncIOScheduler):
 # 定时任务集合
 jobs = [scheduler_start]
 
-
-required_params = [
-    'ZX_AUTH_HOST',
-    'ZX_AUTH_API_HOST',
-    'ZX_AUTH_APP_KEY',
-    'ZX_AUTH_APP_SECRET'
-]
-
-check = True
-for param_name in required_params:
-    if not os.environ.get(param_name):
-        check = False
-        logger.warning(f"缺少必要参数：{param_name}")
+# 路由配置
+routers = [zx_user_endpoints.router]
 
 ZX_LLM_DEVEOPER_ENABLED = os.environ.get("ZX_LLM_DEVEOPER_ENABLED") == 'true'
-routers = [zx_user_endpoints.router]
-if ZX_LLM_DEVEOPER_ENABLED and check:
-    from . import zx_config_endpoints
-    routers.append(zx_config_endpoints.router)
-else:
-    logger.warning(f"缺少必要参数，不添加zx_config_endpoints")
+if ZX_LLM_DEVEOPER_ENABLED:
+    check = True
+    required_params = [
+        'ZX_AUTH_HOST',
+        'ZX_AUTH_API_HOST',
+        'ZX_AUTH_APP_KEY',
+        'ZX_AUTH_APP_SECRET'
+    ]
+    for param_name in required_params:
+        if not os.environ.get(param_name):
+            check = False
+            logger.warning(f"缺少必要参数：{param_name}")
+    if check:
+        from . import zx_config_endpoints
+        routers.append(zx_config_endpoints.router)
+    else:
+        logger.warning(f"缺少必要参数，不添加zx_config_endpoints")
