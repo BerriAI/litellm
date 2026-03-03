@@ -133,12 +133,11 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        if api_base:
-            if not api_base.endswith("/chat/completions"):
-                api_base = api_base.rstrip("/")
-                return f"{api_base}/chat/completions"
-            return api_base
-        return "https://openrouter.ai/api/v1/chat/completions"
+        base_url = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+        base_url = base_url.rstrip("/")
+        if not base_url.endswith("/chat/completions"):
+            return f"{base_url}/chat/completions"
+        return base_url
 
     def transform_image_edit_request(
         self,
