@@ -21,7 +21,7 @@ CALLBACK_EVENT_FAILURE = "llm_api_failure"
 
 def get_callbacks_from_callback_settings(
     callback_settings: Dict[str, Any],
-) -> tuple[List[Union[str, Dict[str, Any]]], List[str], List[str]]:
+) -> tuple[List[str], List[str], List[str]]:
     """
     Derive enabled callbacks from callback_settings keys (model_list pattern).
     Callbacks defined in callback_settings are auto-enabled.
