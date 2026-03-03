@@ -10994,21 +10994,40 @@ async def get_image():
     """Get logo to show on admin UI"""
     logo_path = os.getenv("UI_LOGO_PATH", "")
 
-    # Fix for #21005: Redirect HTTP/HTTPS URLs immediately to avoid mixed-content issues
+    # 1. Immediate Redirect for Remote URLs (Fix for #21005)
     if logo_path.startswith(("http://", "https://")):
         return RedirectResponse(url=logo_path)
 
-    # Local file handling logic
+    # Setup directories
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    default_logo = os.path.join(current_dir, "logo.jpg")
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+    default_site_logo = os.path.join(current_dir, "logo.jpg")
+    default_assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
+    assets_dir = os.getenv("LITELLM_ASSETS_PATH", default_assets_dir)
 
+    if not os.path.exists(assets_dir):
+        try:
+            os.makedirs(assets_dir, exist_ok=True)
+        except Exception:
+            assets_dir = current_dir
+
+    default_logo = os.path.join(assets_dir, "logo.jpg") if is_non_root else default_site_logo
+    
+    # 2. LOCAL FILE PRIORITY: Check custom local logo BEFORE cache
+    if logo_path and not logo_path.startswith(("http://", "https://")):
+        if os.path.exists(logo_path):
+            return FileResponse(logo_path, media_type="image/jpeg")
+
+    # 3. CACHE CHECK: Fallback to cache only if no custom local logo exists
+    cache_path = os.path.join(assets_dir, "cached_logo.jpg")
+    if os.path.exists(cache_path):
+        return FileResponse(cache_path, media_type="image/jpeg")
+
+    # 4. FINAL FALLBACK
     if not logo_path:
         logo_path = default_logo
 
-    if os.path.exists(logo_path):
-        return FileResponse(logo_path, media_type="image/jpeg")
-    
-    return FileResponse(default_logo, media_type="image/jpeg")
+    return FileResponse(logo_path if os.path.exists(logo_path) else default_logo, media_type="image/jpeg")
 
 
 @app.get("/get_favicon", include_in_schema=False)
