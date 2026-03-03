@@ -80,11 +80,6 @@ export function KeyInfoHeader({
         </div>
         {canModifyKey && (
           <Space>
-            {onResetSpend && (
-              <Button danger icon={<TransactionOutlined />} onClick={onResetSpend}>
-                Reset Spend
-              </Button>
-            )}
             <Tooltip title={regenerateTooltip || ""}>
               <span>
                 <Button icon={<SyncOutlined />} onClick={onRegenerate} disabled={regenerateDisabled}>
@@ -92,6 +87,11 @@ export function KeyInfoHeader({
                 </Button>
               </span>
             </Tooltip>
+            {onResetSpend && (
+              <Button danger icon={<TransactionOutlined />} onClick={onResetSpend}>
+                Reset Spend
+              </Button>
+            )}
             <Button danger icon={<DeleteOutlined />} onClick={onDelete}>
               Delete Key
             </Button>

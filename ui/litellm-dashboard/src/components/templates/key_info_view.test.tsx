@@ -642,7 +642,7 @@ describe("KeyInfoView", () => {
 
       await waitFor(() => {
         expect(screen.getByText("Reset Key Spend")).toBeInTheDocument();
-        expect(screen.getByText(/reset to \$0/i)).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /^reset$/i })).toBeInTheDocument();
       });
     });
 
@@ -670,7 +670,7 @@ describe("KeyInfoView", () => {
       });
 
       // Click the confirm button in the modal
-      await userEvent.click(screen.getByRole("button", { name: /reset to \$0/i }));
+      await userEvent.click(screen.getByRole("button", { name: /^reset$/i }));
 
       await waitFor(() => {
         expect(mockResetKeySpendMutate).toHaveBeenCalledWith(
