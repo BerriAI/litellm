@@ -918,7 +918,8 @@ class AmazonConverseConfig(BaseConfig):
                 disable_parallel = not value
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {
-                        "disable_parallel_tool_use": disable_parallel
+                        "type": "auto",
+                        "disable_parallel_tool_use": disable_parallel,
                     }
                 }
             if param == "thinking":
