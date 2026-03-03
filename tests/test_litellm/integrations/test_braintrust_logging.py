@@ -304,3 +304,112 @@ class TestBraintrustLogger(unittest.TestCase):
         event_metadata = json_data['events'][0]['metadata']
         self.assertEqual(event_metadata['user_id'], 'user123')
         self.assertEqual(event_metadata['session_id'], 'session456')
+
+    @patch('litellm.integrations.braintrust_logging.HTTPHandler')
+    def test_log_success_event_with_prompt_id(self, MockHTTPHandler):
+        """Test log_success_event sets prompt fields in metadata when prompt_id is provided."""
+        # Mock HTTP response
+        mock_response = Mock()
+        mock_response.json.return_value = {"id": "test-project-id"}
+        mock_http_handler = Mock()
+        mock_http_handler.post.return_value = mock_response
+        MockHTTPHandler.return_value = mock_http_handler
+
+        # Setup
+        logger = BraintrustLogger(api_key="test-key")
+        logger.default_project_id = "test-project-id"
+
+        # Create a mock response object
+        message_mock = Mock()
+        message_mock.json = Mock(return_value={"content": "test"})
+
+        choice_mock = Mock()
+        choice_mock.message = message_mock
+        choice_mock.dict = Mock(return_value={"message": {"content": "test"}})
+        choice_mock.__getitem__ = Mock(return_value=message_mock)
+
+        response_obj = Mock(spec=litellm.ModelResponse)
+        response_obj.choices = [choice_mock]
+        response_obj.__getitem__ = Mock(return_value=[choice_mock])
+        response_obj.usage = litellm.Usage(
+            prompt_tokens=10,
+            completion_tokens=20,
+            total_tokens=30
+        )
+
+        kwargs = {
+            "litellm_call_id": "test-call-id",
+            "messages": [{"role": "user", "content": "test"}],
+            "litellm_params": {
+                "metadata": {
+                    "prompt_id": "my-prompt-id",
+                    "prompt_slug": "my-prompt-slug",
+                    "project_id": "my-project-id",
+                }
+            },
+            "model": "gpt-3.5-turbo",
+            "response_cost": 0.001
+        }
+
+        # Execute
+        logger.log_success_event(kwargs, response_obj, datetime.now(), datetime.now())
+
+        # Verify
+        call_args = mock_http_handler.post.call_args
+        self.assertIsNotNone(call_args)
+        json_data = call_args.kwargs['json']
+        event_metadata = json_data['events'][0]['metadata']
+        self.assertIn('prompt', event_metadata)
+        self.assertEqual(event_metadata['prompt']['id'], 'my-prompt-id')
+        self.assertEqual(event_metadata['prompt']['project_id'], 'my-project-id')
+        self.assertEqual(event_metadata['prompt']['slug'], 'my-prompt-slug')
+
+    @patch('litellm.integrations.braintrust_logging.HTTPHandler')
+    def test_log_success_event_without_prompt_id(self, MockHTTPHandler):
+        """Test log_success_event does not set prompt in metadata when prompt_id is absent."""
+        # Mock HTTP response
+        mock_response = Mock()
+        mock_response.json.return_value = {"id": "test-project-id"}
+        mock_http_handler = Mock()
+        mock_http_handler.post.return_value = mock_response
+        MockHTTPHandler.return_value = mock_http_handler
+
+        # Setup
+        logger = BraintrustLogger(api_key="test-key")
+        logger.default_project_id = "test-project-id"
+
+        # Create a mock response object
+        message_mock = Mock()
+        message_mock.json = Mock(return_value={"content": "test"})
+
+        choice_mock = Mock()
+        choice_mock.message = message_mock
+        choice_mock.dict = Mock(return_value={"message": {"content": "test"}})
+        choice_mock.__getitem__ = Mock(return_value=message_mock)
+
+        response_obj = Mock(spec=litellm.ModelResponse)
+        response_obj.choices = [choice_mock]
+        response_obj.__getitem__ = Mock(return_value=[choice_mock])
+        response_obj.usage = litellm.Usage(
+            prompt_tokens=10,
+            completion_tokens=20,
+            total_tokens=30
+        )
+
+        kwargs = {
+            "litellm_call_id": "test-call-id",
+            "messages": [{"role": "user", "content": "test"}],
+            "litellm_params": {"metadata": {}},
+            "model": "gpt-3.5-turbo",
+            "response_cost": 0.001
+        }
+
+        # Execute
+        logger.log_success_event(kwargs, response_obj, datetime.now(), datetime.now())
+
+        # Verify
+        call_args = mock_http_handler.post.call_args
+        self.assertIsNotNone(call_args)
+        json_data = call_args.kwargs['json']
+        event_metadata = json_data['events'][0]['metadata']
+        self.assertNotIn('prompt', event_metadata)

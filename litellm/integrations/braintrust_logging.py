@@ -187,6 +187,15 @@ class BraintrustLogger(CustomLogger):
                     ):  # support logging dynamic metadata to braintrust
                         standard_logging_object[key] = value
 
+            prompt_id = dynamic_metadata.get("prompt_id")
+            prompt_slug = dynamic_metadata.get("prompt_slug")
+            if prompt_id is not None or prompt_slug is not None:
+                standard_logging_object["prompt"] = {
+                    "id": prompt_id,
+                    "project_id": project_id,
+                    "slug": prompt_slug,
+                }
+
             cost = kwargs.get("response_cost", None)
 
             metrics: Optional[dict] = None
@@ -320,6 +329,15 @@ class BraintrustLogger(CustomLogger):
                         isinstance(value, str) and key not in standard_logging_object
                     ):  # support logging dynamic metadata to braintrust
                         standard_logging_object[key] = value
+
+            prompt_id = dynamic_metadata.get("prompt_id")
+            prompt_slug = dynamic_metadata.get("prompt_slug")
+            if prompt_id is not None or prompt_slug is not None:
+                standard_logging_object["prompt"] = {
+                    "id": prompt_id,
+                    "project_id": project_id,
+                    "slug": prompt_slug,
+                }
 
             cost = kwargs.get("response_cost", None)
 
