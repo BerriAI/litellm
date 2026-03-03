@@ -3889,8 +3889,11 @@ class ProxyConfig:
             )
 
         for callback in merged_callbacks:
+            _name = (
+                callback if isinstance(callback, str) else next(iter(callback.keys()))
+            )
             self._add_callback_from_db_to_in_memory_litellm_callbacks(
-                callback=callback,
+                callback=_name,
                 event_types=["success", "failure"],
                 existing_callbacks=litellm.callbacks,
             )
