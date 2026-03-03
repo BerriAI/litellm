@@ -846,7 +846,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -859,7 +861,9 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05
     },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -873,7 +877,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "anthropic.claude-instant-v1": {
         "input_cost_per_token": 8e-07,
@@ -1512,7 +1518,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -1545,7 +1553,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "apac.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.375e-06,
@@ -1581,7 +1591,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "apac.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -6925,7 +6937,9 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "bedrock/sa-east-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 4.45e-06,
@@ -7344,7 +7358,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3.6e-07,
+        "cache_creation_input_token_cost": 4.5e-06
     },
     "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": {
         "input_cost_per_token": 3e-07,
@@ -7358,7 +7374,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": {
         "input_cost_per_token": 3.3e-06,
@@ -7376,7 +7394,9 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3.3e-07,
+        "cache_creation_input_token_cost": 4.125e-06
     },
     "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
@@ -7489,7 +7509,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3.6e-07,
+        "cache_creation_input_token_cost": 4.5e-06
     },
     "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": {
         "input_cost_per_token": 3e-07,
@@ -7503,7 +7525,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": {
         "input_cost_per_token": 3.3e-06,
@@ -7521,7 +7545,9 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3.3e-07,
+        "cache_creation_input_token_cost": 4.125e-06
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
@@ -9753,6 +9779,74 @@
             }
         ]
     },
+    "dashscope/qwen3-vl-plus": {
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 260096,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tiered_pricing": [
+            {
+                "input_cost_per_token": 2e-07,
+                "output_cost_per_token": 1.6e-06,
+                "range": [
+                    0,
+                    32000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 3e-07,
+                "output_cost_per_token": 2.4e-06,
+                "range": [
+                    32000.0,
+                    128000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 6e-07,
+                "output_cost_per_token": 4.8e-06,
+                "range": [
+                    128000.0,
+                    256000.0
+                ]
+            }
+        ]
+    },
+    "dashscope/qwen3.5-plus": {
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tiered_pricing": [
+            {
+                "input_cost_per_token": 4e-07,
+                "output_cost_per_token": 2.4e-06,
+                "range": [
+                    0,
+                    256000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 5e-07,
+                "output_cost_per_token": 3e-06,
+                "range": [
+                    256000.0,
+                    1000000.0
+                ]
+            }
+        ]
+    },
     "dashscope/qwq-plus": {
         "input_cost_per_token": 8e-07,
         "litellm_provider": "dashscope",
@@ -11089,7 +11183,7 @@
         "supports_tool_choice": true
     },
     "deepinfra/google/gemini-2.0-flash-001": {
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "max_tokens": 1000000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
@@ -11950,7 +12044,9 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.375e-06,
@@ -11987,7 +12083,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "input_cost_per_token": 3e-06,
@@ -12004,7 +12102,9 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -12022,7 +12122,9 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-3-haiku-20240307-v1:0": {
         "input_cost_per_token": 2.5e-07,
@@ -12036,7 +12138,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "eu.anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -12049,7 +12153,9 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05
     },
     "eu.anthropic.claude-3-sonnet-20240229-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -12063,7 +12169,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-opus-4-1-20250805-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -13590,7 +13698,7 @@
     },
     "gemini-2.0-flash": {
         "cache_read_input_token_cost": 2.5e-08,
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -13630,7 +13738,7 @@
     },
     "gemini-2.0-flash-001": {
         "cache_read_input_token_cost": 3.75e-08,
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -13716,7 +13824,7 @@
     },
     "gemini-2.0-flash-lite": {
         "cache_read_input_token_cost": 1.875e-08,
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_audio_token": 7.5e-08,
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "vertex_ai-language-models",
@@ -13752,7 +13860,7 @@
     },
     "gemini-2.0-flash-lite-001": {
         "cache_read_input_token_cost": 1.875e-08,
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_audio_token": 7.5e-08,
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "vertex_ai-language-models",
@@ -14669,6 +14777,7 @@
         "supports_web_search": true
     },
     "gemini-3-pro-preview": {
+        "deprecation_date": "2026-03-26",
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "cache_creation_input_token_cost_above_200k_tokens": 2.5e-07,
@@ -15805,7 +15914,7 @@
     },
     "gemini/gemini-2.0-flash": {
         "cache_read_input_token_cost": 2.5e-08,
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "gemini",
@@ -15846,7 +15955,7 @@
     },
     "gemini/gemini-2.0-flash-001": {
         "cache_read_input_token_cost": 2.5e-08,
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "gemini",
@@ -15934,7 +16043,7 @@
     },
     "gemini/gemini-2.0-flash-lite": {
         "cache_read_input_token_cost": 1.875e-08,
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_audio_token": 7.5e-08,
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "gemini",
@@ -15970,7 +16079,7 @@
         "tpm": 4000000
     },
     "gemini/gemini-2.0-flash-lite-preview-02-05": {
-        "deprecation_date": "2025-12-02",
+        "deprecation_date": "2025-12-09",
         "cache_read_input_token_cost": 1.875e-08,
         "input_cost_per_audio_token": 7.5e-08,
         "input_cost_per_token": 7.5e-08,
@@ -16925,6 +17034,7 @@
         "tpm": 800000
     },
     "gemini/gemini-3-pro-preview": {
+        "deprecation_date": "2026-03-09",
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "input_cost_per_token": 2e-06,
@@ -23112,6 +23222,21 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "mistral/magistral-medium-1-2-2509": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 40000,
+        "max_output_tokens": 40000,
+        "max_tokens": 40000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "source": "https://mistral.ai/news/magistral",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "mistral/mistral-ocr-latest": {
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.001,
@@ -23163,6 +23288,21 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-small-latest": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 40000,
+        "max_output_tokens": 40000,
+        "max_tokens": 40000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://mistral.ai/pricing#api-pricing",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "mistral/magistral-small-1-2-2509": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 40000,
@@ -23238,24 +23378,41 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-large-latest": {
-        "input_cost_per_token": 2e-06,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
         "mode": "chat",
-        "output_cost_per_token": 6e-06,
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://docs.mistral.ai/models/mistral-large-3-25-12",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "mistral/mistral-large-3": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
-        "max_input_tokens": 256000,
-        "max_output_tokens": 8191,
-        "max_tokens": 8191,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://docs.mistral.ai/models/mistral-large-3-25-12",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-large-2512": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
         "source": "https://docs.mistral.ai/models/mistral-large-3-25-12",
@@ -23306,14 +23463,30 @@
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 131072,
-        "max_output_tokens": 8191,
-        "max_tokens": 8191,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-medium-3-1-2508": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://mistral.ai/news/mistral-medium-3",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "mistral/mistral-small": {
         "input_cost_per_token": 1e-07,
@@ -23329,17 +23502,79 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-small-latest": {
-        "input_cost_per_token": 1e-07,
+        "input_cost_per_token": 6e-08,
         "litellm_provider": "mistral",
-        "max_input_tokens": 32000,
-        "max_output_tokens": 8191,
-        "max_tokens": 8191,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.8e-07,
+        "source": "https://mistral.ai/pricing",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-small-3-2-2506": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-07,
+        "source": "https://mistral.ai/pricing",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/ministral-3-3b-2512": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1e-07,
+        "source": "https://mistral.ai/pricing",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/ministral-3-8b-2512": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-07,
+        "source": "https://mistral.ai/pricing",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/ministral-3-14b-2512": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://mistral.ai/pricing",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "mistral/mistral-tiny": {
         "input_cost_per_token": 2.5e-07,
@@ -25328,7 +25563,7 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemini-2.0-flash-001": {
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
@@ -29225,7 +29460,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -29278,7 +29515,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.125e-07
     },
     "us.anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -29291,7 +29530,9 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05
     },
     "us.anthropic.claude-3-sonnet-20240229-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -29305,7 +29546,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06
     },
     "us.anthropic.claude-opus-4-1-20250805-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -30198,7 +30441,7 @@
         "supports_tool_choice": true
     },
     "vercel_ai_gateway/google/gemini-2.0-flash": {
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vercel_ai_gateway",
         "max_input_tokens": 1048576,
@@ -30212,7 +30455,7 @@
         "supports_response_schema": true
     },
     "vercel_ai_gateway/google/gemini-2.0-flash-lite": {
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "vercel_ai_gateway",
         "max_input_tokens": 1048576,
@@ -37569,7 +37812,7 @@
     },
     "gemini/gemini-2.0-flash-lite-001": {
         "cache_read_input_token_cost": 1.875e-08,
-        "deprecation_date": "2026-03-31",
+        "deprecation_date": "2026-06-01",
         "input_cost_per_audio_token": 7.5e-08,
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "gemini",
