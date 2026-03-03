@@ -7,6 +7,8 @@ Use OpenAI's Agents SDK with any LLM provider through LiteLLM Proxy.
 
 This tutorial shows you how to build AI agents using the OpenAI Agents SDK with support for multiple LLM providers through LiteLLM.
 
+<iframe width="840" height="472" src="https://www.youtube.com/embed/go1WqqRn5KM" title="LiteLLM Proxy Setup" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe>
+
 ## Overview
 
 The OpenAI Agents SDK provides a high-level interface for building AI agents. By integrating with LiteLLM, you can:
@@ -84,16 +86,27 @@ model_list:
 litellm --config config.yaml
 ```
 
-Required environment variables:
+## 2. Create a Virtual Key on LiteLLM
 
-| Variable | Value | Description |
-|----------|-------|-------------|
-| `LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy URL |
-| `LITELLM_API_KEY` | `sk-1234` | Your LiteLLM API key (not your provider's key) |
+Virtual Keys are API keys that allow you to authenticate to LiteLLM Proxy. We will create a Virtual Key that the OpenAI Agents SDK will use to access LiteLLM.
 
-## 2. Setting Up Environment
+Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and follow these steps:
 
-Import the necessary libraries and configure your LiteLLM proxy connection:
+1. **Create a Team**: Go to the Teams tab and create a new team (e.g., "Agents Team"). You can read more about LiteLLM's User Management [here](https://docs.litellm.ai/docs/proxy/user_management_heirarchy).
+2. **Create a Virtual Key**: Go to the Virtual Keys tab and create a new key under your team. Select the models the key should have access to (e.g., `bedrock-claude-sonnet-4`, `gpt-4o`, `claude-sonnet-4`).
+
+Copy the generated key, you will use this as the `LITELLM_API_KEY` in the next step.
+
+<iframe width="840" height="472" src="https://www.youtube.com/embed/pap7Gv8wYL0" title="LiteLLM Proxy Setup" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe>
+
+## 3. Setting Up Environment
+
+Import the necessary libraries and configure your LiteLLM proxy connection. Use the Virtual Key you created in Step 2 as the `LITELLM_API_KEY`:
+
+| Variable           | Value                        | Description                                            |
+| ------------------ | ---------------------------- | ------------------------------------------------------ |
+| `LITELLM_BASE_URL` | `http://localhost:4000`      | LiteLLM proxy URL                                      |
+| `LITELLM_API_KEY`  | Your Virtual Key from Step 2 | The key you created in the LiteLLM UI (e.g., `sk-...`) |
 
 ```python showLineNumbers title="Setup environment"
 from __future__ import annotations
@@ -114,7 +127,7 @@ from agents import (
     set_tracing_disabled,
 )
 
-# Point to LiteLLM proxy
+# Point to LiteLLM proxy — use the Virtual Key created in Step 2
 BASE_URL = os.getenv("LITELLM_BASE_URL") or "http://localhost:4000"
 API_KEY = os.getenv("LITELLM_API_KEY") or "sk-1234"
 
@@ -130,7 +143,7 @@ client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
 set_tracing_disabled(disabled=True)
 ```
 
-## 3. Create a Custom Model Provider
+## 4. Create a Custom Model Provider
 
 The Agents SDK uses a `ModelProvider` to resolve model names. Create a custom provider that routes all requests through LiteLLM:
 
@@ -146,7 +159,7 @@ class LiteLLMModelProvider(ModelProvider):
 LITELLM_MODEL_PROVIDER = LiteLLMModelProvider()
 ```
 
-## 4. Define a Simple Tool
+## 5. Define a Simple Tool
 
 Create a tool that your agent can use:
 
@@ -177,9 +190,9 @@ def get_weather(city: str) -> str:
         return f"Sorry, I don't have weather information for '{city}'."
 ```
 
-## 5. Using Different Models with Agents
+## 6. Using Different Models with Agents
 
-### 5.1 Using Bedrock Models
+### 6.1 Using Bedrock Models
 
 ```python showLineNumbers title="Bedrock model via LiteLLM proxy"
 async def test_bedrock_agent():
@@ -207,7 +220,7 @@ async def test_bedrock_agent():
 asyncio.run(test_bedrock_agent())
 ```
 
-### 5.2 Using OpenAI Models
+### 6.2 Using OpenAI Models
 
 ```python showLineNumbers title="OpenAI model via LiteLLM proxy"
 async def test_openai_agent():
@@ -235,7 +248,7 @@ async def test_openai_agent():
 asyncio.run(test_openai_agent())
 ```
 
-### 5.3 Using Anthropic Models
+### 6.3 Using Anthropic Models
 
 ```python showLineNumbers title="Anthropic model via LiteLLM proxy"
 async def test_anthropic_agent():
@@ -263,7 +276,7 @@ async def test_anthropic_agent():
 asyncio.run(test_anthropic_agent())
 ```
 
-## 6. Complete Working Example
+## 7. Complete Working Example
 
 Here's a full end-to-end script you can copy and run:
 
@@ -359,13 +372,13 @@ if __name__ == "__main__":
 
 ## Why Use LiteLLM with Agents SDK?
 
-| Feature | Benefit |
-|---------|---------|
+| Feature            | Benefit                                                              |
+| ------------------ | -------------------------------------------------------------------- |
 | **Multi-Provider** | Use the same agent code with OpenAI, Bedrock, Azure, Vertex AI, etc. |
-| **Cost Tracking** | Track spending across all agent conversations |
-| **Rate Limiting** | Set budgets and limits on agent usage |
-| **Load Balancing** | Distribute requests across multiple API keys or regions |
-| **Fallbacks** | Automatically retry with different models if one fails |
+| **Cost Tracking**  | Track spending across all agent conversations                        |
+| **Rate Limiting**  | Set budgets and limits on agent usage                                |
+| **Load Balancing** | Distribute requests across multiple API keys or regions              |
+| **Fallbacks**      | Automatically retry with different models if one fails               |
 
 ## Related Resources
 
