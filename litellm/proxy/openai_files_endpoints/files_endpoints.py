@@ -477,7 +477,7 @@ async def create_file(  # noqa: PLR0915
                 seconds=enforced_file_expiry["seconds"],
             )
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "create_file expires_after: %s", expires_after
         )
 
