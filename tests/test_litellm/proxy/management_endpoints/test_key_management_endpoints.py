@@ -1058,7 +1058,7 @@ async def test_update_service_account_works_with_team_id():
 
 @pytest.mark.asyncio
 async def test_prepare_key_update_data_duration_never_expires():
-    """Test that duration="-1" sets expires to None (never expires)."""
+    """Test that duration=null sets expires to None (never expires)."""
     from litellm.proxy._types import UpdateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_key_update_data,
@@ -1076,8 +1076,8 @@ async def test_prepare_key_update_data_duration_never_expires():
         metadata={},
     )
 
-    # Test setting duration to "-1" (never expires)
-    update_request = UpdateKeyRequest(key="test-token", duration="-1")
+    # Test setting duration to null (never expires)
+    update_request = UpdateKeyRequest(key="test-token", duration=None)
 
     result = await prepare_key_update_data(
         data=update_request, existing_key_row=existing_key
@@ -6480,13 +6480,13 @@ class TestCommonKeyGenerationHelperTeamDurationValidation:
 
     @pytest.mark.asyncio
     async def test_never_expires_exceeds_team_max_raises(self):
-        """Duration '-1' (never expires) exceeds any finite team max."""
+        """duration=null (never expires) exceeds any finite team max."""
         team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
         team.metadata = {"team_member_key_duration": "30d"}
 
         with pytest.raises(HTTPException) as exc_info:
             await _common_key_generation_helper(
-                data=GenerateKeyRequest(user_id="user-1", duration="-1"),
+                data=GenerateKeyRequest(user_id="user-1", duration=None),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
                 ),
@@ -6521,8 +6521,8 @@ class TestCommonKeyGenerationHelperTeamDurationValidation:
             )
 
     @pytest.mark.asyncio
-    async def test_no_duration_skips_team_validation(self):
-        """No duration provided — team validation is skipped."""
+    async def test_duration_not_sent_skips_team_validation(self):
+        """Duration field absent from request — team validation is skipped."""
         team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
         team.metadata = {"team_member_key_duration": "5d"}
 
@@ -6536,7 +6536,7 @@ class TestCommonKeyGenerationHelperTeamDurationValidation:
             "litellm.proxy.proxy_server.premium_user", False
         ):
             await _common_key_generation_helper(
-                data=GenerateKeyRequest(user_id="user-1", duration=None),
+                data=GenerateKeyRequest(user_id="user-1"),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
                 ),
@@ -6566,10 +6566,10 @@ class TestCommonKeyGenerationHelperTeamDurationValidation:
             )
 
     @pytest.mark.asyncio
-    async def test_team_max_minus_one_skips_validation(self):
-        """team_member_key_duration='-1' means no limit — any user duration is accepted."""
+    async def test_team_max_not_set_skips_validation(self):
+        """No team_member_key_duration in metadata — any user duration is accepted."""
         team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
-        team.metadata = {"team_member_key_duration": "-1"}
+        team.metadata = {}  # no team_member_key_duration
 
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
@@ -6669,8 +6669,8 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_team_max_duration_minus_one_skips_validation(self):
-        """team_member_key_duration='-1' means no team limit — skip validation regardless of user duration."""
+    async def test_team_max_not_set_skips_validation(self):
+        """No team_member_key_duration in metadata — skip validation regardless of user duration."""
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_regenerate_key_duration_against_team,
         )
@@ -6681,7 +6681,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
         data = RegenerateKeyRequest(duration="999d")
 
         mock_team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
-        mock_team.metadata = {"team_member_key_duration": "-1"}
+        mock_team.metadata = {}  # no team_member_key_duration
 
         mock_prisma = AsyncMock()
         mock_cache = MagicMock()
@@ -6691,7 +6691,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
             new_callable=AsyncMock,
             return_value=mock_team,
         ):
-            # Should not raise — team max is "-1" (no limit)
+            # Should not raise — no team max set
             await _validate_regenerate_key_duration_against_team(
                 data=data,
                 key_in_db=mock_key,
@@ -6790,7 +6790,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
 
         mock_key = MagicMock(spec=LiteLLM_VerificationToken)
         mock_key.team_id = "team-123"
-        data = RegenerateKeyRequest(duration="-1")
+        data = RegenerateKeyRequest(duration=None)  # null = never expires = infinite
 
         mock_team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
         mock_team.metadata = {"team_member_key_duration": "30d"}

@@ -534,11 +534,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                         upperbound_duration = duration_in_seconds(
                             duration=upperbound_value
                         )
-                        # Handle special case where duration is "-1" (never expires)
-                        if value == "-1":
-                            user_duration = float("inf")  # Infinite duration
-                        else:
-                            user_duration = duration_in_seconds(duration=value)
+                        user_duration = duration_in_seconds(duration=value)
                         if user_duration > upperbound_duration:
                             raise HTTPException(
                                 status_code=400,
@@ -547,28 +543,28 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                                 },
                             )
 
-    # Validate key duration against the team's max key duration
+    # Validate key duration against the team's max key duration.
+    # Only runs when the caller explicitly included "duration" in the request
+    # (distinguishes "omitted" from "null = never expires").
     if (
         team_table is not None
         and team_table.metadata is not None
         and team_table.metadata.get("team_member_key_duration")
-        and data.duration is not None
+        and "duration" in data.model_fields_set
     ):
         team_max_duration = team_table.metadata["team_member_key_duration"]
-        # "-1" on the team side means no limit is enforced
-        if team_max_duration != "-1":
-            team_max_seconds = duration_in_seconds(duration=team_max_duration)
-            if data.duration == "-1":
-                user_key_duration: float = float("inf")
-            else:
-                user_key_duration = duration_in_seconds(duration=data.duration)
-            if user_key_duration > team_max_seconds:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"Key duration exceeds team maximum. Requested: {data.duration}; Team maximum: {team_max_duration}"
-                    },
-                )
+        team_max_seconds = duration_in_seconds(duration=team_max_duration)
+        if data.duration is None:
+            user_key_duration: float = float("inf")  # null = never expires = infinite
+        else:
+            user_key_duration = duration_in_seconds(duration=data.duration)
+        if user_key_duration > team_max_seconds:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Key duration exceeds team maximum. Requested: {data.duration}; Team maximum: {team_max_duration}"
+                },
+            )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -1485,8 +1481,8 @@ async def prepare_key_update_data(
 
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        if duration == "-1" or duration is None:
-            # "-1" (legacy) or null (never-expires checkbox) both mean no expiry
+        if duration is None:
+            # null (never-expires checkbox) means no expiry
             non_default_values["expires"] = None
         elif duration and (isinstance(duration, str)) and len(duration) > 0:
             duration_s = duration_in_seconds(duration=duration)
@@ -1809,7 +1805,7 @@ async def update_key_fn(
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
-    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.) or "-1" to never expire
+    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.) or null to never expire
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
@@ -3411,8 +3407,6 @@ async def _validate_regenerate_key_duration_against_team(
         if "duration" not in data.model_fields_set:
             return  # Not provided — leave the existing expiry unchanged
         user_seconds: float = float("inf")  # Explicitly null = never expires
-    elif data.duration == "-1":
-        user_seconds = float("inf")  # Legacy sentinel for never-expires
     else:
         user_seconds = duration_in_seconds(duration=data.duration)
 
@@ -3444,10 +3438,6 @@ async def _validate_regenerate_key_duration_against_team(
         return
 
     team_max_duration = team_table.metadata["team_member_key_duration"]
-    # "-1" on the team side means no limit is enforced
-    if team_max_duration == "-1":
-        return
-
     team_max_seconds = duration_in_seconds(duration=team_max_duration)
 
     if user_seconds > team_max_seconds:
