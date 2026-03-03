@@ -184,7 +184,7 @@ class SarvamAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 ),
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
-            )
+            ) from e
 
         # Extract the transcript text
         text = response_json.get("transcript", "")
@@ -210,11 +210,10 @@ class SarvamAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        if api_base and not api_base.rstrip("/").endswith("/v1"):
-            base_url = api_base
-        else:
-            base_url = self.SARVAM_API_BASE
+        base_url = api_base or self.SARVAM_API_BASE
         base_url = base_url.rstrip("/")
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
 
         return f"{base_url}/speech-to-text"
 

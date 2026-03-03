@@ -129,7 +129,7 @@ model_list:
 curl --location 'http://0.0.0.0:4000/v1/audio/transcriptions' \
   --header 'Authorization: Bearer sk-1234' \
   --form 'file=@"audio.wav"' \
-  --form 'model="saaras:v3"' \
+  --form 'model="sarvam/saaras:v3"' \
   --form 'language="hi-IN"'
 ```
 
@@ -173,7 +173,7 @@ curl http://0.0.0.0:4000/v1/audio/speech \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "bulbul:v3",
+    "model": "sarvam/bulbul:v3",
     "input": "Welcome to Sarvam AI!",
     "voice": "shubh",
     "response_format": "wav"
