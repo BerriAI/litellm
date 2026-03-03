@@ -168,7 +168,7 @@ describe("TeamMembersComponent", () => {
     renderWithProviders(
       <TeamMembersComponent
         teamData={createMockTeamData()}
-        canEditTeam={false}
+        canEditTeam={true}
         handleMemberDelete={mockHandleMemberDelete}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}

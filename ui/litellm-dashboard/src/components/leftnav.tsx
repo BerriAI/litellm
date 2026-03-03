@@ -13,6 +13,7 @@ import {
   DatabaseOutlined,
   ExperimentOutlined,
   FileTextOutlined,
+  FolderOutlined,
   KeyOutlined,
   LineChartOutlined,
   PlayCircleOutlined,
@@ -40,6 +41,7 @@ interface SidebarProps {
   defaultSelectedKey: string;
   collapsed?: boolean;
   enabledPagesInternalUsers?: string[] | null;
+  enableProjectsUI?: boolean;
 }
 
 // Menu item configuration
@@ -134,6 +136,12 @@ const menuGroups: MenuGroup[] = [
             label: "Vector Stores",
             icon: <DatabaseOutlined />,
           },
+          {
+            key: "tool-policies",
+            page: "tool-policies",
+            label: "Tool Policies",
+            icon: <SafetyOutlined />,
+          },
         ],
       },
     ],
@@ -154,23 +162,41 @@ const menuGroups: MenuGroup[] = [
         label: "Logs",
         icon: <LineChartOutlined />,
       },
+      {
+        key: "guardrails-monitor",
+        page: "guardrails-monitor",
+        label: "Guardrails Monitor",
+        icon: <SafetyOutlined />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+      },
     ],
   },
   {
     groupLabel: "ACCESS CONTROL",
     items: [
       {
+        key: "teams",
+        page: "teams",
+        label: "Teams",
+        icon: <TeamOutlined />,
+      },
+      {
+        key: "projects",
+        page: "projects",
+        label: (
+          <span className="flex items-center gap-2">
+            Projects <NewBadge />
+          </span>
+        ),
+        icon: <FolderOutlined />,
+        roles: all_admin_roles,
+      },
+      {
         key: "users",
         page: "users",
         label: "Internal Users",
         icon: <UserOutlined />,
         roles: all_admin_roles,
-      },
-      {
-        key: "teams",
-        page: "teams",
-        label: "Teams",
-        icon: <TeamOutlined />,
       },
       {
         key: "organizations",
@@ -182,11 +208,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "access-groups",
         page: "access-groups",
-        label: (
-          <span className="flex items-center gap-2">
-            Access Groups <NewBadge />
-          </span>
-        ),
+        label: "Access Groups",
         icon: <BlockOutlined />,
         roles: all_admin_roles,
       },
@@ -279,7 +301,11 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: <span className="flex items-center gap-4">Settings</span>,
+        label: (
+          <span className="flex items-center gap-2">
+            Settings <NewBadge />
+          </span>
+        ),
         icon: <SettingOutlined />,
         roles: all_admin_roles,
         children: [
@@ -300,7 +326,11 @@ const menuGroups: MenuGroup[] = [
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: "Admin Settings",
+            label: (
+              <span className="flex items-center gap-2">
+                Admin Settings <NewBadge dot><span /></NewBadge>
+              </span>
+            ),
             icon: <SettingOutlined />,
             roles: all_admin_roles,
           },
@@ -324,7 +354,7 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers }) => {
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI }) => {
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
 
@@ -376,6 +406,9 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           }
           return true;
         }
+
+        // Hide Projects page if enableProjectsUI is not enabled
+        if (item.key === "projects" && !enableProjectsUI) return false;
 
         // Existing role check
         if (item.roles && !item.roles.includes(userRole)) return false;

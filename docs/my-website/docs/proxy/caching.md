@@ -340,6 +340,7 @@ litellm_settings:
     qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
     qdrant_collection_name: test_collection
     qdrant_quantization_config: binary
+    qdrant_semantic_cache_vector_size: 1536 # vector size must match embedding model dimensionality
     similarity_threshold: 0.8 # similarity threshold for semantic cache
 ```
 

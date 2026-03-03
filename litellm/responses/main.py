@@ -20,6 +20,9 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -174,6 +177,19 @@ async def aresponses_api_with_mcp(
         "litellm_metadata", {}
     ).get("user_api_key_auth")
 
+    # Extract MCP auth headers from request (for dynamic auth when fetching tools)
+    mcp_auth_header: Optional[str] = None
+    mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
+    secret_fields = kwargs.get("secret_fields")
+    if secret_fields and isinstance(secret_fields, dict):
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        mcp_auth_header, mcp_server_auth_headers, _, _ = (
+            ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+                secret_fields=secret_fields, tools=tools
+            )
+        )
+
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
         original_mcp_tools,
@@ -182,6 +198,8 @@ async def aresponses_api_with_mcp(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         original_mcp_tools
@@ -286,7 +304,7 @@ async def aresponses_api_with_mcp(
             )
 
             # Extract MCP auth headers from the request to pass to MCP server
-            secret_fields: Optional[Dict[str, Any]] = kwargs.get("secret_fields")
+            secret_fields = kwargs.get("secret_fields")
             (
                 mcp_auth_header,
                 mcp_server_auth_headers,
@@ -367,6 +385,8 @@ async def aresponses_api_with_mcp(
                     ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
                         user_api_key_auth=user_api_key_auth,
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
                     )
                     final_response = (
                         LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
@@ -600,8 +620,12 @@ def responses(
         # Update input and tools with provider-specific file IDs if managed files are used
         #########################################################
         model_file_id_mapping = kwargs.get("model_file_id_mapping")
-        model_info_id = kwargs.get("model_info", {}).get("id") if isinstance(kwargs.get("model_info"), dict) else None
-        
+        model_info_id = (
+            kwargs.get("model_info", {}).get("id")
+            if isinstance(kwargs.get("model_info"), dict)
+            else None
+        )
+
         input = cast(
             Union[str, ResponseInputParam],
             update_responses_input_with_model_file_ids(
@@ -611,7 +635,7 @@ def responses(
             ),
         )
         local_vars["input"] = input
-        
+
         # Update tools with provider-specific file IDs if needed
         if tools:
             tools = cast(
@@ -666,6 +690,14 @@ def responses(
         )
 
         local_vars.update(kwargs)
+        # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
+        if reasoning is None and "reasoning_effort" in local_vars:
+            _mapped = LiteLLMResponsesTransformationHandler()._map_reasoning_effort(
+                local_vars.pop("reasoning_effort")
+            )
+            if _mapped is not None:
+                reasoning = _mapped
+                local_vars["reasoning"] = _mapped
         # Get ResponsesAPIOptionalRequestParams with only valid parameters
         response_api_optional_params: ResponsesAPIOptionalRequestParams = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
@@ -696,7 +728,10 @@ def responses(
             )
         )
 
-        # Pre Call logging
+        # Pre Call logging - preserve metadata for custom callbacks
+        # When called from completion bridge (codex models), metadata is in litellm_metadata
+        metadata_for_callbacks = metadata or kwargs.get("litellm_metadata") or {}
+
         litellm_logging_obj.update_environment_variables(
             model=model,
             user=user,
@@ -705,7 +740,7 @@ def responses(
                 **responses_api_request_params,
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
-                "metadata": metadata,
+                "metadata": metadata_for_callbacks,
             },
             custom_llm_provider=custom_llm_provider,
         )

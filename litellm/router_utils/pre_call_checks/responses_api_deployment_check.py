@@ -10,6 +10,7 @@ This is different from the normal behavior of the router, which does not have ro
 If previous_response_id is provided, route to the deployment that returned the previous response
 """
 
+import warnings
 from typing import List, Optional
 
 from litellm.integrations.custom_logger import CustomLogger, Span
@@ -18,6 +19,17 @@ from litellm.types.llms.openai import AllMessageValues
 
 
 class ResponsesApiDeploymentCheck(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        warnings.warn(
+            (
+                "ResponsesApiDeploymentCheck is deprecated. "
+                "Use DeploymentAffinityCheck(enable_responses_api_affinity=True) instead."
+            ),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     async def async_filter_deployments(
         self,
         model: str,

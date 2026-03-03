@@ -16,6 +16,7 @@ class HeliconeLogger:
     helicone_model_list = [
         "gpt",
         "claude",
+        "gemini",
         "command-r",
         "command-r-plus",
         "command-light",
@@ -127,15 +128,20 @@ class HeliconeLogger:
                 f"Helicone Logging - Enters logging function for model {model}"
             )
             litellm_params = kwargs.get("litellm_params", {})
+            custom_llm_provider = litellm_params.get("custom_llm_provider", "")
             kwargs.get("litellm_call_id", None)
             metadata = litellm_params.get("metadata", {}) or {}
             metadata = self.add_metadata_from_header(litellm_params, metadata)
+
+            # Check if model is a vertex_ai model
+            is_vertex_ai = custom_llm_provider == "vertex_ai" or model.startswith("vertex_ai/")
+
             model = (
                 model
                 if any(
                     accepted_model in model
                     for accepted_model in self.helicone_model_list
-                )
+                ) or is_vertex_ai
                 else "gpt-3.5-turbo"
             )
             provider_request = {"model": model, "messages": messages}
@@ -144,7 +150,7 @@ class HeliconeLogger:
             ):
                 response_obj = response_obj.json()
 
-            if "claude" in model:
+            if "claude" in model and not is_vertex_ai:
                 response_obj = self.claude_mapping(
                     model=model, messages=messages, response_obj=response_obj
                 )
@@ -158,9 +164,15 @@ class HeliconeLogger:
             # Code to be executed
             provider_url = self.provider_url
             url = f"{self.api_base}/oai/v1/log"
-            if "claude" in model:
+            if "claude" in model and not is_vertex_ai:
                 url = f"{self.api_base}/anthropic/v1/log"
                 provider_url = "https://api.anthropic.com/v1/messages"
+            elif "gemini" in model:
+                url = f"{self.api_base}/custom/v1/log"
+                provider_url = "https://generativelanguage.googleapis.com/v1beta"
+            elif is_vertex_ai:
+                url = f"{self.api_base}/custom/v1/log"
+                provider_url = "https://aiplatform.googleapis.com/v1"
             headers = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
