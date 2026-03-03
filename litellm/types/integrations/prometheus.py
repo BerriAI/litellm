@@ -239,9 +239,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
     # Database engine / connection pool metrics
-    "litellm_db_pool_active_connections",
-    "litellm_db_pool_idle_connections",
-    "litellm_db_pool_total_connections",
+    "litellm_db_pool_connections",
     "litellm_db_pool_lock_waiting_connections",
     "litellm_db_engine_up",
     "litellm_db_engine_restarts_total",
@@ -625,10 +623,8 @@ class PrometheusMetricLabels:
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
 
-    # Database engine / connection pool metrics - global metrics with no labels
-    litellm_db_pool_active_connections: List[str] = []
-    litellm_db_pool_idle_connections: List[str] = []
-    litellm_db_pool_total_connections: List[str] = []
+    # Database engine / connection pool metrics
+    litellm_db_pool_connections: List[str] = ["state"]
     litellm_db_pool_lock_waiting_connections: List[str] = []
     litellm_db_engine_up: List[str] = []
     litellm_db_engine_restarts_total: List[str] = []

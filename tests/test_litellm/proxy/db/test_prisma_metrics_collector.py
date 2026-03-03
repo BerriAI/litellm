@@ -46,7 +46,9 @@ def _make_collector(prisma_client=None, collection_interval=None, registry=None)
 
     from prometheus_client import Counter, Gauge
 
-    def _patched_get_or_create_gauge(name, description):
+    def _patched_get_or_create_gauge(name, description, labelnames=None):
+        if labelnames:
+            return Gauge(name, description, labelnames=labelnames, registry=registry)
         return Gauge(name, description, registry=registry)
 
     def _patched_get_or_create_counter(name, description):
@@ -73,12 +75,10 @@ def _make_collector(prisma_client=None, collection_interval=None, registry=None)
 
 
 def test_collector_creates_prometheus_metrics():
-    """Verify all 6 metrics (4 pool gauges, engine_up gauge, restarts counter) are created."""
+    """Verify all 4 metrics (pool connections gauge, lock waiting gauge, engine_up gauge, restarts counter) are created."""
     collector, registry = _make_collector()
 
-    assert collector._pool_active is not None
-    assert collector._pool_idle is not None
-    assert collector._pool_total is not None
+    assert collector._pool_connections is not None
     assert collector._pool_waiting is not None
     assert collector._engine_up is not None
     assert collector._engine_restarts is not None
@@ -86,9 +86,7 @@ def test_collector_creates_prometheus_metrics():
     # Verify names via the registry
     metric_names = {m.name for m in registry.collect()}
     expected = {
-        "litellm_db_pool_active_connections",
-        "litellm_db_pool_idle_connections",
-        "litellm_db_pool_total_connections",
+        "litellm_db_pool_connections",
         "litellm_db_pool_lock_waiting_connections",
         "litellm_db_engine_up",
         "litellm_db_engine_restarts",  # counter exposes _total suffix but name is base
@@ -105,32 +103,68 @@ def test_collector_creates_prometheus_metrics():
 
 @pytest.mark.asyncio
 async def test_collect_pool_metrics_sets_gauges():
-    """Mock query_raw to return pool stats and verify each gauge is set correctly."""
+    """Mock query_raw to return pool stats grouped by state and verify labeled gauge is set."""
     client = _make_prisma_client()
-    client.db.query_raw = AsyncMock(
-        return_value=[{"active": 5, "idle": 10, "total": 15, "waiting": 2}]
-    )
+
+    pool_rows = [
+        {"state": "active", "count": 5},
+        {"state": "idle", "count": 10},
+        {"state": "idle in transaction", "count": 3},
+    ]
+    lock_rows = [{"waiting": 2}]
+    client.db.query_raw = AsyncMock(side_effect=[pool_rows, lock_rows])
     collector, registry = _make_collector(prisma_client=client)
 
     await collector._collect_pool_metrics()
 
-    assert registry.get_sample_value("litellm_db_pool_active_connections") == 5
-    assert registry.get_sample_value("litellm_db_pool_idle_connections") == 10
-    assert registry.get_sample_value("litellm_db_pool_total_connections") == 15
+    assert (
+        registry.get_sample_value("litellm_db_pool_connections", {"state": "active"})
+        == 5
+    )
+    assert (
+        registry.get_sample_value("litellm_db_pool_connections", {"state": "idle"})
+        == 10
+    )
+    assert (
+        registry.get_sample_value(
+            "litellm_db_pool_connections", {"state": "idle in transaction"}
+        )
+        == 3
+    )
     assert registry.get_sample_value("litellm_db_pool_lock_waiting_connections") == 2
 
 
 @pytest.mark.asyncio
 async def test_collect_pool_metrics_handles_empty_result():
-    """When query_raw returns an empty list, no crash should occur."""
+    """When query_raw returns empty lists, no crash should occur."""
     client = _make_prisma_client()
     client.db.query_raw = AsyncMock(return_value=[])
     collector, registry = _make_collector(prisma_client=client)
 
     await collector._collect_pool_metrics()
 
-    # Gauges should remain at their default (0)
-    assert registry.get_sample_value("litellm_db_pool_active_connections") == 0
+    # No labeled values should be set — just verify no crash
+    assert (
+        registry.get_sample_value("litellm_db_pool_connections", {"state": "active"})
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_pool_metrics_handles_null_state():
+    """When pg_stat_activity returns a NULL state, it should be mapped to 'unknown'."""
+    client = _make_prisma_client()
+    pool_rows = [{"state": None, "count": 1}]
+    lock_rows = [{"waiting": 0}]
+    client.db.query_raw = AsyncMock(side_effect=[pool_rows, lock_rows])
+    collector, registry = _make_collector(prisma_client=client)
+
+    await collector._collect_pool_metrics()
+
+    assert (
+        registry.get_sample_value("litellm_db_pool_connections", {"state": "unknown"})
+        == 1
+    )
 
 
 @pytest.mark.asyncio

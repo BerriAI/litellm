@@ -24,11 +24,15 @@ def _is_metric_registered(metric_name: str) -> bool:
     return False
 
 
-def _get_or_create_gauge(name: str, description: str) -> Gauge:
+def _get_or_create_gauge(
+    name: str, description: str, labelnames: Optional[list] = None
+) -> Gauge:
     if _is_metric_registered(name):
         names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
         if names_to_collectors is not None and name in names_to_collectors:
             return names_to_collectors[name]
+    if labelnames:
+        return Gauge(name, description, labelnames=labelnames)
     return Gauge(name, description)
 
 
@@ -41,12 +45,17 @@ def _get_or_create_counter(name: str, description: str) -> Counter:
 
 
 _POOL_METRICS_SQL = """
-SELECT count(*) FILTER (WHERE state = 'active') as active,
-       count(*) FILTER (WHERE state = 'idle') as idle,
-       count(*) as total,
-       count(*) FILTER (WHERE wait_event_type = 'Lock') as waiting
+SELECT state, count(*) as count
 FROM pg_stat_activity
 WHERE pid != pg_backend_pid() AND datname = current_database() AND usename = current_user
+GROUP BY state
+"""
+
+_LOCK_WAITING_SQL = """
+SELECT count(*) as waiting
+FROM pg_stat_activity
+WHERE pid != pg_backend_pid() AND datname = current_database() AND usename = current_user
+  AND wait_event_type = 'Lock'
 """
 
 _MIN_COLLECTION_INTERVAL = 5
@@ -75,17 +84,10 @@ class PrismaMetricsCollector:
         self._task: Optional[asyncio.Task] = None
 
         # Prometheus metrics
-        self._pool_active = _get_or_create_gauge(
-            "litellm_db_pool_active_connections",
-            "Number of active connections in the DB pool",
-        )
-        self._pool_idle = _get_or_create_gauge(
-            "litellm_db_pool_idle_connections",
-            "Number of idle connections in the DB pool",
-        )
-        self._pool_total = _get_or_create_gauge(
-            "litellm_db_pool_total_connections",
-            "Total number of connections in the DB pool",
+        self._pool_connections = _get_or_create_gauge(
+            "litellm_db_pool_connections",
+            "Number of DB connections by state",
+            labelnames=["state"],
         )
         self._pool_waiting = _get_or_create_gauge(
             "litellm_db_pool_lock_waiting_connections",
@@ -135,12 +137,13 @@ class PrismaMetricsCollector:
     async def _collect_pool_metrics(self) -> None:
         try:
             rows = await self.prisma_client.db.query_raw(_POOL_METRICS_SQL)
-            if rows:
-                row = rows[0]
-                self._pool_active.set(row.get("active", 0))
-                self._pool_idle.set(row.get("idle", 0))
-                self._pool_total.set(row.get("total", 0))
-                self._pool_waiting.set(row.get("waiting", 0))
+            for row in rows:
+                state = row.get("state") or "unknown"
+                self._pool_connections.labels(state=state).set(row.get("count", 0))
+
+            lock_rows = await self.prisma_client.db.query_raw(_LOCK_WAITING_SQL)
+            if lock_rows:
+                self._pool_waiting.set(lock_rows[0].get("waiting", 0))
         except Exception as e:
             verbose_proxy_logger.warning(
                 "PrismaMetricsCollector failed to collect pool metrics: %s", e

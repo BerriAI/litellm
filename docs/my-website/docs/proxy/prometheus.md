@@ -565,14 +565,14 @@ Use these metrics to monitor the health of the DB Transaction Queue. Eg. Monitor
 
 Monitor PostgreSQL connection pool utilization and Prisma query engine health. These metrics are collected every 30 seconds by default.
 
-| Metric Name                              | Type    | Description                                                |
-|------------------------------------------|---------|------------------------------------------------------------|
-| `litellm_db_pool_active_connections`     | Gauge   | Number of active (non-idle) connections in the DB pool     |
-| `litellm_db_pool_idle_connections`       | Gauge   | Number of idle connections in the DB pool                  |
-| `litellm_db_pool_total_connections`      | Gauge   | Total number of connections in the DB pool                 |
-| `litellm_db_pool_lock_waiting_connections`    | Gauge   | Number of connections blocked on row/table locks           |
-| `litellm_db_engine_up`                   | Gauge   | Whether the Prisma query engine is alive (1=up, 0=down)   |
-| `litellm_db_engine_restarts_total`       | Counter | Total number of Prisma query engine restarts               |
+| Metric Name                              | Type    | Labels  | Description                                                |
+|------------------------------------------|---------|---------|-----------------------------------------------------------|
+| `litellm_db_pool_connections`            | Gauge   | `state` | Number of DB connections by state (active, idle, etc.)    |
+| `litellm_db_pool_lock_waiting_connections`    | Gauge   |         | Number of connections blocked on row/table locks           |
+| `litellm_db_engine_up`                   | Gauge   |         | Whether the Prisma query engine is alive (1=up, 0=down)   |
+| `litellm_db_engine_restarts_total`       | Counter |         | Total number of Prisma query engine restarts               |
+
+The `state` label values come from PostgreSQL's `pg_stat_activity.state` column: `active`, `idle`, `idle in transaction`, `idle in transaction (aborted)`, `fastpath function call`, `disabled`.
 
 The collection interval can be configured via the `PRISMA_METRICS_COLLECTION_INTERVAL_SECONDS` environment variable (default: 30, minimum: 5).
 
