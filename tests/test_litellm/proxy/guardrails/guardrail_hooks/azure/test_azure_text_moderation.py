@@ -1,6 +1,5 @@
 from unittest.mock import Mock, patch
 
-import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -8,7 +7,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
     AzureContentSafetyTextModerationGuardrail,
 )
-from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
