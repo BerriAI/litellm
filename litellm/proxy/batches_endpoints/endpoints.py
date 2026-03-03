@@ -63,6 +63,10 @@ async def create_batch(  # noqa: PLR0915
     Create large batches of API requests for asynchronous processing.
     This is the equivalent of POST https://api.openai.com/v1/batch
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/batch
+    
+    Note: Guardrails for batch content are executed at file upload time 
+    (`/v1/files` with `purpose="batch"`). They are NOT executed here since 
+    the actual file contents/messages are not available in this request.
 
     Example Curl
     ```
