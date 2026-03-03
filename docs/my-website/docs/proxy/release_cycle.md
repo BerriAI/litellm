@@ -23,3 +23,9 @@ Stable releases come out every week (typically Sunday)
 - 'patch' bumps: extremely minor addition that doesn't affect any existing functionality or add any user-facing features. (e.g. a 'created_at' column in a database table)
 - 'minor' bumps: add a new feature or a new database table that is backward compatible.
 - 'major' bumps: break backward compatibility.
+
+### Enterprise Support
+
+
+- Stable releases come out every week. Once a new one is available, we no longer provide support for an older one. 
+- If there is a MAJOR change (according to semvar conventions - e.g. 1.x.x -> 2.x.x), we can provide support for upto 90 days on the prior stable image. 

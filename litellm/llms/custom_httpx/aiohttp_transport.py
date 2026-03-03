@@ -119,8 +119,13 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
 
 
 class AiohttpTransport(httpx.AsyncBaseTransport):
-    def __init__(self, client: Union[ClientSession, Callable[[], ClientSession]]) -> None:
+    def __init__(
+        self,
+        client: Union[ClientSession, Callable[[], ClientSession]],
+        owns_session: bool = True,
+    ) -> None:
         self.client = client
+        self._owns_session = owns_session
 
         #########################################################
         # Class variables for proxy settings
@@ -128,7 +133,7 @@ class AiohttpTransport(httpx.AsyncBaseTransport):
         self.proxy_cache: Dict[str, Optional[str]] = {}
 
     async def aclose(self) -> None:
-        if isinstance(self.client, ClientSession):
+        if self._owns_session and isinstance(self.client, ClientSession):
             await self.client.close()
 
 
@@ -144,10 +149,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         self,
         client: Union[ClientSession, Callable[[], ClientSession]],
         ssl_verify: Optional[Union[bool, ssl.SSLContext]] = None,
+        owns_session: bool = True,
     ):
         self.client = client
         self._ssl_verify = ssl_verify  # Store for per-request SSL override
-        super().__init__(client=client)
+        super().__init__(client=client, owns_session=owns_session)
         # Store the client factory for recreating sessions when needed
         if callable(client):
             self._client_factory = client
@@ -324,7 +330,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         return httpx.Response(
             status_code=response.status,
             headers=response.headers,
-            content=AiohttpResponseStream(response),
+            stream=AiohttpResponseStream(response),
             request=request,
         )
 

@@ -219,3 +219,189 @@ curl -X POST http://localhost:4000/v1/chat/completions \
 3. If a route's similarity score exceeds the threshold, the request is routed to that model
 4. If no route matches, the request goes to the default model
 
+---
+
+## Complexity Router
+
+The Complexity Router provides an alternative to semantic routing that uses **rule-based scoring** to classify requests by complexity and route them to appropriate models — with **zero external API calls** and **sub-millisecond latency**.
+
+### When to Use
+
+| Feature | Semantic Auto Router | Complexity Router |
+|---------|---------------------|-------------------|
+| Classification | Embedding-based matching | Rule-based scoring |
+| Latency | ~100-500ms (embedding API) | &lt;1ms |
+| API Calls | Requires embedding model | None |
+| Training | Requires utterance examples | Works out of the box |
+| Best For | Intent-based routing | Cost optimization |
+
+Use **Complexity Router** when you want to:
+- Route simple queries to cheaper/faster models (e.g., gpt-4o-mini)
+- Route complex queries to more capable models (e.g., claude-sonnet-4)
+- Minimize latency overhead from routing decisions
+- Avoid additional API costs for embeddings
+
+### LiteLLM Python SDK
+
+```python
+from litellm import Router
+
+router = Router(
+    model_list=[
+        # Target models for each tier
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"model": "gpt-4o-mini"},
+        },
+        {
+            "model_name": "gpt-4o",
+            "litellm_params": {"model": "gpt-4o"},
+        },
+        {
+            "model_name": "claude-sonnet",
+            "litellm_params": {"model": "claude-sonnet-4-20250514"},
+        },
+        {
+            "model_name": "o1-preview",
+            "litellm_params": {"model": "o1-preview"},
+        },
+        # Complexity router configuration
+        {
+            "model_name": "smart-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {
+                        "SIMPLE": "gpt-4o-mini",
+                        "MEDIUM": "gpt-4o",
+                        "COMPLEX": "claude-sonnet",
+                        "REASONING": "o1-preview",
+                    },
+                },
+                "complexity_router_default_model": "gpt-4o",
+            },
+        },
+    ],
+)
+```
+
+#### Usage
+
+```python
+# Simple query → routes to gpt-4o-mini
+response = await router.acompletion(
+    model="smart-router",
+    messages=[{"role": "user", "content": "What is 2+2?"}],
+)
+
+# Complex technical query → routes to claude-sonnet or higher
+response = await router.acompletion(
+    model="smart-router",
+    messages=[{"role": "user", "content": "Design a distributed microservice architecture with Kubernetes orchestration"}],
+)
+
+# Reasoning request → routes to o1-preview
+response = await router.acompletion(
+    model="smart-router",
+    messages=[{"role": "user", "content": "Think step by step and reason through this problem carefully..."}],
+)
+```
+
+### LiteLLM Proxy Server
+
+Add the complexity router to your `config.yaml`:
+
+```yaml
+model_list:
+  # Target models
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+      
+  - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+      
+  - model_name: claude-sonnet
+    litellm_params:
+      model: claude-sonnet-4-20250514
+      
+  - model_name: o1-preview
+    litellm_params:
+      model: o1-preview
+
+  # Complexity router
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet
+          REASONING: o1-preview
+      complexity_router_default_model: gpt-4o
+```
+
+### Configuration Options
+
+#### Tier Boundaries
+
+Customize the score thresholds for each tier:
+
+```yaml
+complexity_router_config:
+  tiers:
+    SIMPLE: gpt-4o-mini
+    MEDIUM: gpt-4o
+    COMPLEX: claude-sonnet
+    REASONING: o1-preview
+  tier_boundaries:
+    simple_medium: 0.15    # Below 0.15 → SIMPLE
+    medium_complex: 0.35   # 0.15-0.35 → MEDIUM
+    complex_reasoning: 0.60  # 0.35-0.60 → COMPLEX, above → REASONING
+```
+
+#### Token Thresholds
+
+Adjust when prompts are considered "short" or "long":
+
+```yaml
+complexity_router_config:
+  token_thresholds:
+    simple: 15   # Prompts under 15 tokens are penalized (simple indicator)
+    complex: 400 # Prompts over 400 tokens get complexity boost
+```
+
+#### Dimension Weights
+
+Customize how much each signal contributes to the complexity score:
+
+```yaml
+complexity_router_config:
+  dimension_weights:
+    tokenCount: 0.10        # Prompt length
+    codePresence: 0.30      # Code-related keywords
+    reasoningMarkers: 0.25  # "step by step", "think through", etc.
+    technicalTerms: 0.25    # Domain-specific complexity
+    simpleIndicators: 0.05  # "what is", "define", greetings
+    multiStepPatterns: 0.03 # "first...then", numbered steps
+    questionComplexity: 0.02 # Multiple questions
+```
+
+### How Complexity Routing Works
+
+The router scores each request across 7 dimensions:
+
+| Dimension | What It Detects | Effect |
+|-----------|-----------------|--------|
+| Token Count | Short (&lt;15) or long (&gt;400) prompts | Short = simple, long = complex |
+| Code Presence | "function", "class", "api", "database", etc. | Increases complexity |
+| Reasoning Markers | "step by step", "think through", "analyze" | Triggers REASONING tier |
+| Technical Terms | "architecture", "distributed", "encryption" | Increases complexity |
+| Simple Indicators | "what is", "define", "hello" | Decreases complexity |
+| Multi-Step Patterns | "first...then", "1. 2. 3." | Increases complexity |
+| Question Complexity | Multiple question marks | Increases complexity |
+
+**Special behavior:** If 2+ reasoning markers are detected in the user message, the request automatically routes to the REASONING tier regardless of the weighted score.
+

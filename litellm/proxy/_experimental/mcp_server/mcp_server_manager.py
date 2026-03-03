@@ -31,6 +31,12 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_HEALTH_CHECK_TIMEOUT,
+    MCP_METADATA_TIMEOUT,
+    MCP_TOOL_LISTING_TIMEOUT,
+)
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -158,13 +164,13 @@ class MCPServerManager:
         [
             "server-1": {
                 "name": "zapier_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
                 "transport": "sse",
                 "auth_type": "api_key"
             },
             "uuid-2": {
                 "name": "google_drive_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
             }
         ]
         """
@@ -331,7 +337,7 @@ class MCPServerManager:
                 static_headers=server_config.get("static_headers", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(
-                    server_config.get("available_on_public_internet", False)
+                    server_config.get("available_on_public_internet", True)
                 ),
             )
             self.config_mcp_servers[server_id] = new_server
@@ -390,8 +396,7 @@ class MCPServerManager:
 
             # Use base_url from config if provided, otherwise extract from spec
             if not base_url:
-                base_url = get_openapi_base_url(spec)
-
+                base_url = get_openapi_base_url(spec, spec_path)
             verbose_logger.info(
                 f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}"
             )
@@ -610,6 +615,7 @@ class MCPServerManager:
             alias=getattr(mcp_server, "alias", None),
             server_name=getattr(mcp_server, "server_name", None),
             url=mcp_server.url,
+            spec_path=getattr(mcp_server, "spec_path", None),
             transport=cast(MCPTransportType, mcp_server.transport),
             auth_type=auth_type,
             authentication_token=auth_value,
@@ -634,17 +640,31 @@ class MCPServerManager:
             disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
             allow_all_keys=mcp_server.allow_all_keys,
             available_on_public_internet=bool(
-                getattr(mcp_server, "available_on_public_internet", False)
+                getattr(mcp_server, "available_on_public_internet", True)
             ),
             updated_at=getattr(mcp_server, "updated_at", None),
         )
         return new_server
+
+    async def _maybe_register_openapi_tools(self, server: MCPServer):
+        """Register OpenAPI tools if the server has a spec_path configured."""
+        if server.spec_path:
+            verbose_logger.info(
+                f"Loading OpenAPI spec from {server.spec_path} for server {server.name}"
+            )
+            await self._register_openapi_tools(
+                spec_path=server.spec_path,
+                server=server,
+                base_url=server.url or "",
+            )
+            self.initialize_tool_name_to_mcp_server_name_mapping()
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -656,6 +676,7 @@ class MCPServerManager:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -741,14 +762,30 @@ class MCPServerManager:
 
         Returns server_ids unchanged when client_ip is None (no filtering).
         """
+        filtered, _ = self.filter_server_ids_by_ip_with_info(server_ids, client_ip)
+        return filtered
+
+    def filter_server_ids_by_ip_with_info(
+        self, server_ids: List[str], client_ip: Optional[str]
+    ) -> Tuple[List[str], int]:
+        """
+        Filter server IDs by client IP — external callers only see public servers.
+
+        Returns (filtered_ids, ip_blocked_count) where ip_blocked_count is the number
+        of servers that were blocked because the client IP is not allowed to access them.
+        Returns server_ids unchanged (with 0 blocked) when client_ip is None.
+        """
         if client_ip is None:
-            return server_ids
-        return [
-            sid
-            for sid in server_ids
-            if (s := self.get_mcp_server_by_id(sid)) is not None
-            and self._is_server_accessible_from_ip(s, client_ip)
-        ]
+            return server_ids, 0
+        allowed = []
+        blocked = 0
+        for sid in server_ids:
+            s = self.get_mcp_server_by_id(sid)
+            if s is not None and self._is_server_accessible_from_ip(s, client_ip):
+                allowed.append(sid)
+            elif s is not None:
+                blocked += 1
+        return allowed, blocked
 
     async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
         """
@@ -912,7 +949,7 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=60.0,
+                timeout=MCP_CLIENT_TIMEOUT,
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
             )
@@ -924,7 +961,7 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=60.0,
+                timeout=MCP_CLIENT_TIMEOUT,
                 extra_headers=extra_headers,
             )
 
@@ -1303,7 +1340,7 @@ class MCPServerManager:
         try:
             client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": 10.0},
+                params={"timeout": MCP_METADATA_TIMEOUT},
             )
             response = await client.get(resource_metadata_url)
             response.raise_for_status()
@@ -1399,7 +1436,7 @@ class MCPServerManager:
             try:
                 client = get_async_httpx_client(
                     llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": 10.0},
+                    params={"timeout": MCP_METADATA_TIMEOUT},
                 )
                 response = await client.get(url)
                 response.raise_for_status()
@@ -1458,7 +1495,7 @@ class MCPServerManager:
             List of tools from the server
         """
         try:
-            with anyio.fail_after(30.0):
+            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
@@ -2244,9 +2281,9 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Building server from DB: {server.server_id} ({server.server_name})"
             )
-            new_registry[server.server_id] = await self.build_mcp_server_from_table(
-                server
-            )
+            new_server = await self.build_mcp_server_from_table(server)
+            new_registry[server.server_id] = new_server
+            await self._maybe_register_openapi_tools(new_server)
 
         self.registry = new_registry
 
@@ -2448,8 +2485,8 @@ class MCPServerManager:
         # Check if we should skip health check based on auth configuration
         should_skip_health_check = False
 
-        # Skip if auth_type is oauth2
-        if server.needs_user_oauth_token:
+        # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
+        if server.requires_per_user_auth:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
         elif (
@@ -2477,10 +2514,14 @@ class MCPServerManager:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=10.0)
+                await asyncio.wait_for(
+                    client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
+                )
                 status = "healthy"
             except asyncio.TimeoutError:
-                health_check_error = "Health check timed out after 10 seconds"
+                health_check_error = (
+                    f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"
+                )
                 status = "unhealthy"
             except asyncio.CancelledError:
                 health_check_error = "Health check was cancelled"
@@ -2589,6 +2630,7 @@ class MCPServerManager:
                 server.mcp_info.get("description") if server.mcp_info else None
             ),
             url=server.url,
+            spec_path=server.spec_path,
             transport=server.transport,
             auth_type=server.auth_type,
             created_at=datetime.now(),

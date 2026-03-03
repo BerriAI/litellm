@@ -210,9 +210,13 @@ async def test_create_vertex_fine_tune_jobs_mocked():
 
     # Save original callbacks to restore later
     original_callbacks = litellm.callbacks
-    # Disable callbacks to avoid Datadog logging interfering with the mock
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
     litellm.callbacks = []
-    
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
     try:
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -226,11 +230,17 @@ async def test_create_vertex_fine_tune_jobs_mocked():
                 vertex_location=location,
             )
 
-            # Verify the request
-            mock_post.assert_called_once()
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
 
             # Validate the request
-            assert mock_post.call_args.kwargs["json"] == {
+            assert vertex_calls[0].kwargs["json"] == {
                 "baseModel": base_model,
                 "supervisedTuningSpec": {"training_dataset_uri": training_file},
                 "tunedModelDisplayName": None,
@@ -259,6 +269,8 @@ async def test_create_vertex_fine_tune_jobs_mocked():
     finally:
         # Restore original callbacks
         litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 @pytest.mark.asyncio()
@@ -291,9 +303,13 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
 
     # Save original callbacks to restore later
     original_callbacks = litellm.callbacks
-    # Disable callbacks to avoid Datadog logging interfering with the mock
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
     litellm.callbacks = []
-    
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
     try:
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -312,11 +328,17 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
                 },
             )
 
-            # Verify the request
-            mock_post.assert_called_once()
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
 
             # Validate the request
-            assert mock_post.call_args.kwargs["json"] == {
+            assert vertex_calls[0].kwargs["json"] == {
                 "baseModel": base_model,
                 "supervisedTuningSpec": {
                     "training_dataset_uri": training_file,
@@ -352,6 +374,8 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
     finally:
         # Restore original callbacks
         litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 # Testing OpenAI -> Vertex AI param mapping

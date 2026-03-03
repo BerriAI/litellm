@@ -89,6 +89,17 @@ vi.mock("@/components/team/member_permissions", () => ({
   default: vi.fn(() => <div>Member Permissions</div>),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: vi.fn().mockReturnValue({
+    data: [
+      { access_group_id: "ag-1", access_group_name: "Group 1" },
+      { access_group_id: "ag-2", access_group_name: "Group 2" },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -298,7 +309,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should navigate to settings tab when clicked", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
     renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -317,7 +328,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should open edit mode when edit button is clicked", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
     renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -342,8 +353,8 @@ describe("TeamInfoView", () => {
     });
   });
 
-  it("should close edit mode when cancel button is clicked", async () => {
-    const user = userEvent.setup();
+  it("should close edit mode when cancel button is clicked", { timeout: 15000 }, async () => {
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
     renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -376,7 +387,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should call onClose when back button is clicked", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = vi.fn();
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
@@ -394,7 +405,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should copy team ID to clipboard when copy button is clicked", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
     renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -414,7 +425,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should disable secret manager settings for non-premium users", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         metadata: {
@@ -447,7 +458,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should allow premium users to edit secret manager settings", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         metadata: {
@@ -481,7 +492,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should add team member when form is submitted", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onUpdate = vi.fn();
     const teamData = createMockTeamData();
     vi.mocked(networking.teamInfoCall).mockResolvedValue(teamData);
@@ -571,7 +582,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should display soft budget in settings view when present", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         soft_budget: 500.75,
@@ -641,7 +652,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should display soft budget alerting emails in settings view when present", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         metadata: {
@@ -667,6 +678,52 @@ describe("TeamInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText(/Soft Budget Alerting Emails:/)).toBeInTheDocument();
       expect(screen.getByText(/alert1@test\.com, alert2@test\.com/)).toBeInTheDocument();
+    });
+  });
+
+  it("should pass access_group_ids to teamUpdateCall when saving team settings", async () => {
+    const user = userEvent.setup({ delay: null });
+    const accessGroupIds = ["ag-1", "ag-2"];
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        access_group_ids: accessGroupIds,
+        models: ["gpt-4"],
+      })
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const settingsTab = screen.getByRole("tab", { name: "Settings" });
+    await user.click(settingsTab);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
+    await user.click(editButton);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+    });
+
+    const saveButton = screen.getByRole("button", { name: /save changes/i });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          access_group_ids: accessGroupIds,
+          team_id: "123",
+        })
+      );
     });
   });
 });

@@ -180,6 +180,14 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4",  # Opus 4
             "sonnet-4",
             "sonnet_4",  # Sonnet 4
+            "sonnet-4.6",
+            "sonnet_4.6",
+            "sonnet-4-6",
+            "sonnet_4_6",
+            "opus-4.6",
+            "opus_4.6",
+            "opus-4-6",
+            "opus_4_6",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -251,6 +259,11 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4.6",
             "opus-4-6",
             "opus_4_6",
+            #sonnet 4.6
+            "sonnet-4.6",
+            "sonnet_4.6",
+            "sonnet-4-6",
+            "sonnet_4_6",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -285,7 +298,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             programmatic_tool_calling_used or input_examples_used
         ):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if "opus-4" in model.lower() or "opus_4" in model.lower():
+            if self._supports_tool_search_on_bedrock(model):
                 beta_set.add("tool-search-tool-2025-10-19")
 
     def _convert_output_format_to_inline_schema(
@@ -420,10 +433,8 @@ class AmazonAnthropicClaudeMessagesConfig(
             beta_set=beta_set,
         )
 
-        # --- Custom logic: if tool-search-tool-2025-10-19 is present, add tool-examples-2025-10-29 ---
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
-        # ------------------------------------------------------------------------------
     
         if beta_set:
             anthropic_messages_request["anthropic_beta"] = list(beta_set)
