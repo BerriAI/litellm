@@ -41,7 +41,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         type="text",
         text="",
     )
-    pending_new_content_block: bool = False
     chunk_queue: deque = deque()  # Queue for buffering multiple chunks
 
     def __init__(
