@@ -1319,7 +1319,18 @@ def post_call_processing(
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
                             ### JSON SCHEMA VALIDATION ###
-                            if litellm.enable_json_schema_validation is True:
+                            # Per-request flag takes priority over global flag
+                            _per_request_validation = (
+                                optional_params.get("enable_json_schema_validation")
+                                if optional_params is not None
+                                else None
+                            )
+                            _enable_json_schema_validation = (
+                                _per_request_validation
+                                if _per_request_validation is not None
+                                else litellm.enable_json_schema_validation
+                            )
+                            if _enable_json_schema_validation is True:
                                 try:
                                     if (
                                         optional_params is not None
@@ -8145,6 +8156,8 @@ class ProviderConfigManager:
             )
 
             return SagemakerEmbeddingConfig.get_model_config(model)
+        elif litellm.LlmProviders.PERPLEXITY == provider:
+            return litellm.PerplexityEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8310,6 +8323,8 @@ class ProviderConfigManager:
             if model and "gpt" in model.lower():
                 return litellm.DatabricksResponsesAPIConfig()
             return None
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         return None
@@ -8776,6 +8791,12 @@ class ProviderConfigManager:
             )
 
             return BedrockStabilityImageEditConfig()
+        elif LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.image_edit import (
+                get_openrouter_image_edit_config,
+            )
+
+            return get_openrouter_image_edit_config(model)
         return None
 
     @staticmethod
