@@ -1,26 +1,28 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { Button, Popconfirm, Table, Tag, Typography } from "antd";
-import { DeleteOutlined, EditOutlined, ThunderboltOutlined } from "@ant-design/icons";
-import { routingGroupDeleteCall, routingGroupListCall } from "@/components/networking";
+import React from "react";
+import { Badge } from "@tremor/react";
+import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
+import { Button, Popconfirm, Tooltip } from "antd";
+import { DeleteOutlined, EditOutlined } from "@ant-design/icons";
 
-interface RoutingGroupsTableProps {
-  accessToken: string | null;
-  refreshKey: number;
-  onEdit: (group: Record<string, unknown>) => void;
-  onTest?: (group: Record<string, unknown>) => void;
+interface RoutingGroupRow {
+  routing_group_id: string;
+  routing_group_name: string;
+  routing_strategy: string;
+  deployments: unknown[];
+  is_active: boolean;
+  created_at: string;
+  description?: string;
+  [key: string]: unknown;
 }
 
-const strategyColors: Record<string, string> = {
-  "priority-failover": "blue",
-  weighted: "green",
-  "cost-based-routing": "gold",
-  "latency-based-routing": "cyan",
-  "least-busy": "purple",
-  "usage-based-routing-v2": "orange",
-  "simple-shuffle": "geekblue",
-};
+interface RoutingGroupsTableProps {
+  data: RoutingGroupRow[];
+  loading: boolean;
+  onEdit: (group: Record<string, unknown>) => void;
+  onDelete: (groupId: string) => void;
+}
 
 const strategyLabels: Record<string, string> = {
   "priority-failover": "Priority Failover",
@@ -32,137 +34,120 @@ const strategyLabels: Record<string, string> = {
   "simple-shuffle": "Round Robin",
 };
 
+const strategyColors: Record<string, "blue" | "emerald" | "amber" | "cyan" | "violet" | "orange" | "indigo" | "gray"> = {
+  "priority-failover": "blue",
+  weighted: "emerald",
+  "cost-based-routing": "amber",
+  "latency-based-routing": "cyan",
+  "least-busy": "violet",
+  "usage-based-routing-v2": "orange",
+  "simple-shuffle": "indigo",
+};
+
 export default function RoutingGroupsTable({
-  accessToken,
-  refreshKey,
+  data,
+  loading,
   onEdit,
-  onTest,
+  onDelete,
 }: RoutingGroupsTableProps) {
-  const [groups, setGroups] = useState<Record<string, unknown>[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!accessToken) return;
-    setLoading(true);
-    routingGroupListCall(accessToken, 1, 50)
-      .then((resp) => {
-        setGroups(resp.routing_groups || []);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [accessToken, refreshKey]);
-
-  const handleDelete = async (groupId: string) => {
-    if (!accessToken) return;
-    try {
-      await routingGroupDeleteCall(accessToken, groupId);
-      setGroups((prev) =>
-        prev.filter((g) => (g.routing_group_id as string) !== groupId)
-      );
-    } catch (err) {
-      console.error("Failed to delete routing group:", err);
-    }
-  };
-
-  const columns = [
-    {
-      title: "Name",
-      dataIndex: "routing_group_name",
-      key: "routing_group_name",
-      render: (name: string) => (
-        <Typography.Text strong>{name}</Typography.Text>
-      ),
-    },
-    {
-      title: "Strategy",
-      dataIndex: "routing_strategy",
-      key: "routing_strategy",
-      render: (strategy: string) => {
-        const label = strategyLabels[strategy] ?? strategy;
-        const color = strategyColors[strategy] ?? "default";
-        return <Tag color={color}>{label}</Tag>;
-      },
-    },
-    {
-      title: "Deployments",
-      dataIndex: "deployments",
-      key: "deployments",
-      render: (deployments: unknown) => {
-        const count = Array.isArray(deployments) ? deployments.length : 0;
-        return <Typography.Text>{count}</Typography.Text>;
-      },
-    },
-    {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      render: (status: string) => {
-        const isActive = !status || status === "active";
-        return (
-          <Tag color={isActive ? "success" : "default"}>
-            {isActive ? "Active" : "Inactive"}
-          </Tag>
-        );
-      },
-    },
-    {
-      title: "Created",
-      dataIndex: "created_at",
-      key: "created_at",
-      render: (created: string) => {
-        if (!created) return "-";
-        return new Date(created).toLocaleDateString();
-      },
-    },
-    {
-      title: "Actions",
-      key: "actions",
-      render: (_: unknown, record: Record<string, unknown>) => {
-        const groupId = record.routing_group_id as string;
-        return (
-          <div style={{ display: "flex", gap: 8 }}>
-            {onTest && (
-              <Button
-                size="small"
-                icon={<ThunderboltOutlined />}
-                onClick={() => onTest(record)}
-                style={{ color: "#14b8a6", borderColor: "#14b8a6" }}
-              >
-                Test
-              </Button>
-            )}
-            <Button
-              size="small"
-              icon={<EditOutlined />}
-              onClick={() => onEdit(record)}
-            >
-              Edit
-            </Button>
-            <Popconfirm
-              title="Delete routing group?"
-              description="This action cannot be undone."
-              onConfirm={() => handleDelete(groupId)}
-              okText="Delete"
-              okButtonProps={{ danger: true }}
-              cancelText="Cancel"
-            >
-              <Button size="small" danger icon={<DeleteOutlined />}>
-                Delete
-              </Button>
-            </Popconfirm>
-          </div>
-        );
-      },
-    },
-  ];
-
   return (
-    <Table
-      dataSource={groups}
-      columns={columns}
-      loading={loading}
-      rowKey={(record) => (record.routing_group_id as string) ?? Math.random().toString()}
-      pagination={{ pageSize: 20 }}
-    />
+    <div className="rounded-lg custom-border relative">
+      <div className="overflow-x-auto">
+        <Table className="[&_td]:py-2 [&_th]:py-2" style={{ minWidth: "100%", tableLayout: "fixed" }}>
+          <TableHead>
+            <TableRow>
+              <TableHeaderCell className="py-1 h-8" style={{ width: 200 }}>Name</TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8" style={{ width: 160 }}>Strategy</TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8" style={{ width: 120 }}>Deployments</TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8" style={{ width: 100 }}>Status</TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8" style={{ width: 140 }}>Created At</TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8" style={{ width: 100 }}></TableHeaderCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {loading ? (
+              <TableRow>
+                <TableCell colSpan={6} className="h-8 text-center">
+                  <div className="text-center text-gray-500 py-4">Loading routing groups...</div>
+                </TableCell>
+              </TableRow>
+            ) : data.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="h-8 text-center">
+                  <div className="text-center text-gray-500 py-4">No routing groups yet. Create one to get started.</div>
+                </TableCell>
+              </TableRow>
+            ) : (
+              data.map((row) => {
+                const strat = row.routing_strategy;
+                const stratLabel = strategyLabels[strat] ?? strat;
+                const stratColor = strategyColors[strat] ?? "gray";
+                const deps = row.deployments;
+                const depCount = Array.isArray(deps) ? deps.length : 0;
+                const active = row.is_active !== false;
+                const created = row.created_at;
+
+                return (
+                  <TableRow
+                    key={row.routing_group_id}
+                    className="cursor-pointer hover:bg-gray-50"
+                    onClick={() => onEdit(row)}
+                  >
+                    <TableCell className="py-0.5" style={{ width: 200 }}>
+                      <span className="text-sm font-semibold text-blue-600 hover:underline">
+                        {row.routing_group_name}
+                      </span>
+                    </TableCell>
+                    <TableCell className="py-0.5" style={{ width: 160 }}>
+                      <Badge size="xs" color={stratColor}>{stratLabel}</Badge>
+                    </TableCell>
+                    <TableCell className="py-0.5" style={{ width: 120 }}>
+                      <span className="text-sm text-gray-600">{depCount} model{depCount !== 1 ? "s" : ""}</span>
+                    </TableCell>
+                    <TableCell className="py-0.5" style={{ width: 100 }}>
+                      <Badge size="xs" color={active ? "emerald" : "gray"}>
+                        {active ? "Active" : "Inactive"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="py-0.5" style={{ width: 140 }}>
+                      {created ? (
+                        <span className="text-sm text-gray-500">{new Date(created).toLocaleDateString()}</span>
+                      ) : (
+                        <span className="text-sm text-gray-400">-</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="py-0.5" style={{ width: 100 }}>
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <Tooltip title="Edit">
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<EditOutlined />}
+                            onClick={() => onEdit(row)}
+                            className="text-gray-500 hover:text-gray-700"
+                          />
+                        </Tooltip>
+                        <Popconfirm
+                          title="Delete routing group?"
+                          description="This action cannot be undone."
+                          onConfirm={() => onDelete(row.routing_group_id)}
+                          okText="Delete"
+                          okButtonProps={{ danger: true }}
+                          cancelText="Cancel"
+                        >
+                          <Tooltip title="Delete">
+                            <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                          </Tooltip>
+                        </Popconfirm>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
   );
 }
