@@ -37,6 +37,7 @@ import UIThemeSettings from "@/components/ui_theme_settings";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
 import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
+import RoutingGroupsView from "@/components/routing_groups/RoutingGroupsView";
 import { ProjectsPage } from "@/components/Projects/ProjectsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
 import ToolPolicies from "@/components/ToolPolicies";
@@ -429,6 +430,12 @@ function CreateKeyPageContent() {
                       organizations={organizations}
                       addKey={addKey}
                       createClicked={createClicked}
+                    />
+                  ) : page == "routing-groups" ? (
+                    <RoutingGroupsView
+                      accessToken={accessToken}
+                      userRole={userRole ?? ""}
+                      userId={userID ?? ""}
                     />
                   ) : page == "models" ? (
                     <OldModelDashboard

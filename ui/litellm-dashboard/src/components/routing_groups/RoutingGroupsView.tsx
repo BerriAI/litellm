@@ -18,14 +18,15 @@ export default function RoutingGroupsView({
   userRole,
   userId,
 }: RoutingGroupsViewProps) {
-  const [createModalVisible, setCreateModalVisible] = useState(false);
+  const [showBuilder, setShowBuilder] = useState(false);
   const [editTarget, setEditTarget] = useState<Record<string, unknown> | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedGroup, setSelectedGroup] = useState<Record<string, unknown> | null>(null);
 
   const handleEdit = (group: Record<string, unknown>) => {
     setEditTarget(group);
-    setCreateModalVisible(true);
+    setShowBuilder(true);
+    setSelectedGroup(null);
   };
 
   const handleTest = (group: Record<string, unknown>) => {
@@ -33,15 +34,28 @@ export default function RoutingGroupsView({
   };
 
   const handleClose = () => {
-    setCreateModalVisible(false);
+    setShowBuilder(false);
     setEditTarget(null);
   };
 
   const handleSuccess = () => {
-    setCreateModalVisible(false);
+    setShowBuilder(false);
     setEditTarget(null);
     setRefreshKey((k) => k + 1);
   };
+
+  if (showBuilder) {
+    return (
+      <div className="w-full">
+        <RoutingGroupBuilder
+          accessToken={accessToken}
+          editTarget={editTarget}
+          onClose={handleClose}
+          onSuccess={handleSuccess}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="w-full mx-4">
@@ -57,7 +71,7 @@ export default function RoutingGroupsView({
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          onClick={() => setCreateModalVisible(true)}
+          onClick={() => setShowBuilder(true)}
         >
           Create Routing Group
         </Button>
@@ -84,7 +98,6 @@ export default function RoutingGroupsView({
               size="small"
               icon={<CloseOutlined />}
               onClick={() => setSelectedGroup(null)}
-              style={{ color: "#64748b", borderColor: "#334155" }}
             >
               Close
             </Button>
@@ -96,16 +109,6 @@ export default function RoutingGroupsView({
             routingStrategy={(selectedGroup.routing_strategy as string) ?? "weighted"}
           />
         </>
-      )}
-
-      {createModalVisible && (
-        <RoutingGroupBuilder
-          accessToken={accessToken}
-          visible={createModalVisible}
-          editTarget={editTarget}
-          onClose={handleClose}
-          onSuccess={handleSuccess}
-        />
       )}
     </div>
   );

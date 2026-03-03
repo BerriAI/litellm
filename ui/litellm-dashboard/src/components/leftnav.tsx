@@ -9,6 +9,7 @@ import {
   BgColorsOutlined,
   BlockOutlined,
   BookOutlined,
+  BranchesOutlined,
   CreditCardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -85,6 +86,13 @@ const menuGroups: MenuGroup[] = [
         page: "models",
         label: "Models + Endpoints",
         icon: <BlockOutlined />,
+        roles: rolesWithWriteAccess,
+      },
+      {
+        key: "routing-groups",
+        page: "routing-groups",
+        label: "Routing Groups",
+        icon: <BranchesOutlined />,
         roles: rolesWithWriteAccess,
       },
       {
