@@ -2115,7 +2115,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                         response=getattr(original_exception, "response", None),
                     )
-                elif "This model's maximum context length is" in error_str:
+                elif (
+                    "This model's maximum context length is" in error_str
+                    or azure_error_code == "context_length_exceeded"
+                    or "input exceeds the context window" in error_str
+                ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"AzureException ContextWindowExceededError - {message}",
