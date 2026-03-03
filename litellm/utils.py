@@ -2803,8 +2803,8 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
                 litellm.anthropic_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
             split_string = key.split("/", 1)
-            if key not in litellm.openrouter_models:
-                litellm.openrouter_models.add(split_string[1])
+            if split_string[-1] not in litellm.openrouter_models:
+                litellm.openrouter_models.add(split_string[-1])
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             if key not in litellm.vercel_ai_gateway_models:
                 litellm.vercel_ai_gateway_models.add(key)
@@ -3868,18 +3868,6 @@ def get_optional_params(  # noqa: PLR0915
 ):
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
-    non_default_params = pre_process_non_default_params(
-        passed_params=passed_params,
-        special_params=special_params,
-        custom_llm_provider=custom_llm_provider,
-        additional_drop_params=additional_drop_params,
-        model=model,
-    )
-    optional_params = pre_process_optional_params(
-        passed_params=passed_params,
-        non_default_params=non_default_params,
-        custom_llm_provider=custom_llm_provider,
-    )
     provider_config: Optional[BaseConfig] = None
     if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
@@ -3887,6 +3875,19 @@ def get_optional_params(  # noqa: PLR0915
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=LlmProviders(custom_llm_provider)
         )
+    non_default_params = pre_process_non_default_params(
+        passed_params=passed_params,
+        special_params=special_params,
+        custom_llm_provider=custom_llm_provider,
+        additional_drop_params=additional_drop_params,
+        model=model,
+        provider_config=provider_config,
+    )
+    optional_params = pre_process_optional_params(
+        passed_params=passed_params,
+        non_default_params=non_default_params,
+        custom_llm_provider=custom_llm_provider,
+    )
 
     def _check_valid_arg(supported_params: List[str]):
         """
@@ -4964,9 +4965,7 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
             return delta if isinstance(delta, str) else ""
 
     # Handle standard ModelResponse and ModelResponseStream
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[List[Choices], List[StreamingChoices]] = response_obj.choices
 
     # Use list accumulation to avoid O(n^2) string concatenation across choices
     response_parts: List[str] = []
@@ -7385,9 +7384,9 @@ def _get_base_model_from_metadata(model_call_details=None):
 class ModelResponseIterator:
     def __init__(self, model_response: ModelResponse, convert_to_delta: bool = False):
         if convert_to_delta is True:
-            self.model_response = ModelResponse(stream=True)
-            _delta = self.model_response.choices[0].delta  # type: ignore
-            _delta.content = model_response.choices[0].message.content  # type: ignore
+            _stream_response = ModelResponseStream()
+            _stream_response.choices[0].delta.content = model_response.choices[0].message.content  # type: ignore
+            self.model_response: Union[ModelResponse, ModelResponseStream] = _stream_response
         else:
             self.model_response = model_response
         self.is_done = False
@@ -8146,6 +8145,8 @@ class ProviderConfigManager:
             )
 
             return SagemakerEmbeddingConfig.get_model_config(model)
+        elif litellm.LlmProviders.PERPLEXITY == provider:
+            return litellm.PerplexityEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8311,6 +8312,8 @@ class ProviderConfigManager:
             if model and "gpt" in model.lower():
                 return litellm.DatabricksResponsesAPIConfig()
             return None
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         return None

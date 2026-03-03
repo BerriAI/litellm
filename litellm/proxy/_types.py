@@ -646,6 +646,8 @@ class LiteLLMRoutes(enum.Enum):
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
         "/invitation/new",
         "/invitation/delete",
+        # Team guardrail submission - requires team-scoped key; endpoint enforces team_id
+        "/guardrails/register",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -2861,6 +2863,9 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     """
     Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
     """
+
+    tools: Optional[List[dict]] = None
+    system: Optional[Any] = None
 
 
 class CallInfo(LiteLLMPydanticObjectBase):
