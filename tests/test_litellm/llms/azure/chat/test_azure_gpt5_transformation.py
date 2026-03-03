@@ -299,12 +299,12 @@ def test_azure_gpt5_base_does_not_support_logprobs(config: AzureOpenAIGPT5Config
     assert "top_logprobs" not in supported_params
 
 
-def test_azure_gpt5_1_supports_logprobs(config: AzureOpenAIGPT5Config):
-    """Test that Azure GPT-5.1 supports logprobs parameters.
+def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.1 does not support logprobs parameters.
 
-    Azure has added logprobs support for gpt-5.1; the config exposes it.
+    Only gpt-5.2 has been verified to support logprobs on Azure.
     """
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
-    assert "logprobs" in supported_params
-    assert "top_logprobs" in supported_params
+    assert "logprobs" not in supported_params
+    assert "top_logprobs" not in supported_params
 
