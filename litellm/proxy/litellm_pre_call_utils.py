@@ -577,6 +577,7 @@ class LiteLLMProxyRequestSetup:
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
 
+
         agent_id_from_header = headers.get("x-litellm-agent-id")
         # x-litellm-trace-id and x-litellm-session-id are interchangeable for call chaining
         chain_id = headers.get("x-litellm-trace-id") or headers.get(

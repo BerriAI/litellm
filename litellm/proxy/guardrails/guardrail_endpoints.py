@@ -1170,11 +1170,10 @@ def _build_field_dict(
     # Determine the field type from annotation
     field_type = _get_field_type_from_annotation(field_annotation)
 
-    # Check for custom UI type override (ui_type preferred; "type" leaks into OpenAPI and breaks schema)
-    field_json_schema_extra = getattr(field, "json_schema_extra", {}) or {}
+    # Check for custom UI type override
+    field_json_schema_extra = getattr(field, "json_schema_extra", {})
     if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-        ut = field_json_schema_extra["ui_type"]
-        field_type = ut if isinstance(ut, str) else getattr(ut, "value", ut)
+        field_type = field_json_schema_extra["ui_type"].value
     elif field_json_schema_extra and "type" in field_json_schema_extra:
         field_type = field_json_schema_extra["type"]
 
@@ -1356,9 +1355,9 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields[
-        "ui_friendly_name"
-    ] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    tool_permission_fields["ui_friendly_name"] = (
+        ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    )
 
     # Return the provider-specific parameters
     provider_params = {
@@ -1497,7 +1496,6 @@ async def test_custom_code_guardrail(
     ```
     """
 
-
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
@@ -1632,10 +1630,10 @@ async def apply_guardrail(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        active_guardrail: Optional[
-            CustomGuardrail
-        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-            guardrail_name=request.guardrail_name
+        active_guardrail: Optional[CustomGuardrail] = (
+            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+                guardrail_name=request.guardrail_name
+            )
         )
         if active_guardrail is None:
             raise HTTPException(
