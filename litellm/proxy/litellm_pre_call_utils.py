@@ -10,16 +10,12 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.proxy._types import (
-    AddTeamCallback,
-    CommonProxyErrors,
-    LitellmDataForBackendLLMCall,
-    LitellmUserRoles,
-    SpecialHeaders,
-    TeamCallbackMetadata,
-    UserAPIKeyAuth,
-)
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy._types import (AddTeamCallback, CommonProxyErrors,
+                                  LitellmDataForBackendLLMCall,
+                                  LitellmUserRoles, SpecialHeaders,
+                                  TeamCallbackMetadata, UserAPIKeyAuth)
+from litellm.proxy.common_utils.http_parsing_utils import \
+    _safe_get_request_headers
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
@@ -28,12 +24,9 @@ _SPECIAL_HEADERS_CACHE = frozenset(
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
-from litellm.types.utils import (
-    LlmProviders,
-    ProviderSpecificHeader,
-    StandardLoggingUserAPIKeyMetadata,
-    SupportedCacheControls,
-)
+from litellm.types.utils import (LlmProviders, ProviderSpecificHeader,
+                                 StandardLoggingUserAPIKeyMetadata,
+                                 SupportedCacheControls)
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
@@ -577,12 +570,12 @@ class LiteLLMProxyRequestSetup:
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
 
-
         agent_id_from_header = headers.get("x-litellm-agent-id")
         # x-litellm-trace-id and x-litellm-session-id are interchangeable for call chaining
         chain_id = headers.get("x-litellm-trace-id") or headers.get(
             "x-litellm-session-id"
         )
+
 
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
@@ -670,8 +663,7 @@ class LiteLLMProxyRequestSetup:
             return data
         from litellm.proxy._types import (
             LiteLLM_ManagementEndpoint_MetadataFields,
-            LiteLLM_ManagementEndpoint_MetadataFields_Premium,
-        )
+            LiteLLM_ManagementEndpoint_MetadataFields_Premium)
 
         # ignore any special fields
         added_metadata = {}
@@ -840,7 +832,8 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     """
 
     from litellm.proxy.proxy_server import llm_router, premium_user
-    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
+    from litellm.types.proxy.litellm_pre_call_utils import (RedactedDict,
+                                                            SecretFields)
 
     _raw_headers: Dict[str, str] = RedactedDict(_safe_get_request_headers(request))
 
@@ -1515,7 +1508,8 @@ async def move_guardrails_to_metadata(
 
     # Only check policy engine if no local config (avoid import + registry lookup)
     if not (has_key_config or has_team_config or has_request_config):
-        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+        from litellm.proxy.policy_engine.policy_registry import \
+            get_policy_registry
 
         if not get_policy_registry().is_initialized():
             # Nothing configured anywhere - clean up request body fields and return
@@ -1579,14 +1573,16 @@ async def move_guardrails_to_metadata(
 
 def _is_policy_version_id(s: str) -> bool:
     """Return True if string is a policy version ID (starts with policy_<uuid> prefix)."""
-    from litellm.proxy.policy_engine.policy_registry import POLICY_VERSION_ID_PREFIX
+    from litellm.proxy.policy_engine.policy_registry import \
+        POLICY_VERSION_ID_PREFIX
 
     return isinstance(s, str) and s.startswith(POLICY_VERSION_ID_PREFIX)
 
 
 def _extract_policy_id(s: str) -> Optional[str]:
     """Extract raw UUID from policy_<uuid> string, or None if not a valid version ID."""
-    from litellm.proxy.policy_engine.policy_registry import POLICY_VERSION_ID_PREFIX
+    from litellm.proxy.policy_engine.policy_registry import \
+        POLICY_VERSION_ID_PREFIX
 
     if not _is_policy_version_id(s):
         return None
@@ -1607,10 +1603,9 @@ def _match_and_track_policies(
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.common_utils.callback_utils import (
-        add_policy_sources_to_metadata,
-        add_policy_to_applied_policies_header,
-    )
-    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+        add_policy_sources_to_metadata, add_policy_to_applied_policies_header)
+    from litellm.proxy.policy_engine.attachment_registry import \
+        get_attachment_registry
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
     # Get matching policies via attachments (with match reasons for attribution)
@@ -1755,7 +1750,8 @@ async def add_guardrails_from_policy_engine(
         user_api_key_dict: The user's API key authentication info
     """
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import \
+        get_tags_from_request_body
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 

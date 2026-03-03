@@ -271,7 +271,9 @@ async def asend_message(
     card_url = getattr(agent_card, "url", None) if agent_card else None
 
     context_id = trace_id or str(uuid.uuid4())
-    request.params.message.context_id = context_id
+    if request.params.message.context_id is None:
+        request.params.message.context_id = context_id
+
     # Retry loop: if connection fails due to localhost URL in agent card, retry with fixed URL
     a2a_response = None
     for _ in range(2):  # max 2 attempts: original + 1 retry
