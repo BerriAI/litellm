@@ -796,6 +796,79 @@ class TestListMCPServers:
             assert not hasattr(result, "credentials")
             assert result.status == "healthy"
 
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_from_registry_config_based(self):
+        """
+        Test that fetch_mcp_server finds config-based servers when not in DB.
+        Config servers appear in list via get_registry() but were 404 on fetch.
+        """
+        config_server = generate_mock_mcp_server_config_record(
+            server_id="serper_custom_dev",
+            name="Serper MCP",
+            url="https://serper.example.com/mcp",
+            transport="http",
+        )
+
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="serper_custom_dev", alias="Serper MCP"
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id = MagicMock(
+            side_effect=lambda sid: config_server if sid == "serper_custom_dev" else None
+        )
+        mock_manager.get_mcp_server_by_name = MagicMock(return_value=None)
+        mock_manager._build_mcp_server_table = MagicMock(
+            return_value=generate_mock_mcp_server_db_record(
+                server_id="serper_custom_dev",
+                alias="Serper MCP",
+                url="https://serper.example.com/mcp",
+                transport="http",
+            )
+        )
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["serper_custom_dev"]
+        )
+        mock_manager.health_check_server = AsyncMock(return_value=mock_health_result)
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                server_id="serper_custom_dev", user_api_key_dict=mock_user_auth
+            )
+
+            assert result.server_id == "serper_custom_dev"
+            assert result.status == "healthy"
+            mock_manager.get_mcp_server_by_id.assert_called_with("serper_custom_dev")
+            mock_manager._build_mcp_server_table.assert_called_once()
+
 
 class TestTemporaryMCPSessionEndpoints:
     def test_inherit_credentials_from_existing_server(self):
