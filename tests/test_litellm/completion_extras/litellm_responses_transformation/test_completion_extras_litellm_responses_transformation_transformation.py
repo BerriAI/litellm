@@ -738,6 +738,57 @@ def test_response_completed_with_message_only_emits_stop_finish_reason():
     )
 
 
+
+def test_response_completed_preserves_usage_with_cached_tokens():
+    """
+    Test that response.completed correctly translates Responses API usage
+    (input_tokens_details) to chat completion usage (prompt_tokens_details).
+
+    This is a regression test for an issue where streaming with models that
+    use the Responses API bridge (e.g. gpt-5.2-codex) would drop
+    prompt_tokens_details, causing cached_tokens to always be None.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_789",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_abc",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Six"}],
+                    "status": "completed",
+                }
+            ],
+            "usage": {
+                "input_tokens": 1226,
+                "output_tokens": 5,
+                "total_tokens": 1231,
+                "input_tokens_details": {"cached_tokens": 1024},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.usage is not None, "usage should be set on response.completed chunk"
+    assert result.usage.prompt_tokens == 1226, "prompt_tokens should map from input_tokens"
+    assert result.usage.completion_tokens == 5, "completion_tokens should map from output_tokens"
+    assert result.usage.prompt_tokens_details is not None, "prompt_tokens_details should be set"
+    assert result.usage.prompt_tokens_details.cached_tokens == 1024, (
+        "cached_tokens should be preserved from input_tokens_details"
+    )
+
+
 def test_function_call_done_emits_is_finished():
     """
     Test that OUTPUT_ITEM_DONE for a function_call still emits is_finished=True.
