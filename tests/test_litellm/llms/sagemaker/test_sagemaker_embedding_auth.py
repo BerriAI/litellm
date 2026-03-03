@@ -1,5 +1,6 @@
 import json
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from litellm.llms.sagemaker.completion.handler import SagemakerLLM
@@ -25,11 +26,28 @@ def test_embedding_uses_load_credentials_for_role_assumption():
         "aws_region_name": "us-east-1",
     }
 
+    mocked_boto3_client_factory = MagicMock(return_value=mocked_sagemaker_client)
+    mocked_boto3_module = ModuleType("boto3")
+    mocked_boto3_module.client = mocked_boto3_client_factory
+    mocked_botocore_module = ModuleType("botocore")
+    mocked_botocore_credentials_module = ModuleType("botocore.credentials")
+
+    class MockCredentials:
+        pass
+
+    mocked_botocore_credentials_module.Credentials = MockCredentials
+    mocked_botocore_module.credentials = mocked_botocore_credentials_module
+
     with patch.object(
         SagemakerLLM, "get_credentials", return_value=assumed_credentials
-    ) as mock_get_credentials, patch(
-        "boto3.client", return_value=mocked_sagemaker_client
-    ) as mock_boto3_client:
+    ) as mock_get_credentials, patch.dict(
+        sys.modules,
+        {
+            "boto3": mocked_boto3_module,
+            "botocore": mocked_botocore_module,
+            "botocore.credentials": mocked_botocore_credentials_module,
+        },
+    ):
         response = llm.embedding(
             model="sentence-transformers-model",
             input=["hello world"],
@@ -51,7 +69,7 @@ def test_embedding_uses_load_credentials_for_role_assumption():
     )
     assert get_credentials_kwargs["aws_session_name"] == "litellm-session"
 
-    mock_boto3_client.assert_called_once_with(
+    mocked_boto3_client_factory.assert_called_once_with(
         service_name="sagemaker-runtime",
         aws_access_key_id="assumed-access-key",
         aws_secret_access_key="assumed-secret-key",
