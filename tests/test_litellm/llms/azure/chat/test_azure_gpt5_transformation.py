@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 import litellm
@@ -111,6 +113,32 @@ def test_azure_gpt5_codex_series_transform_request(config: AzureOpenAIGPT5Config
         headers={},
     )
     assert request["model"] == "gpt-5-codex"
+
+
+def test_responses_api_bridge_check_azure_gpt_53_codex_uses_chat():
+    """Azure Foundry gpt-5.3-codex must use /openai/v1/chat/completions, not Responses API.
+
+    Azure recommends openai/v1/chat/completions for gpt-5.3-codex; the Responses API
+    (openai/responses?api-version=...) returns 'API version not supported'.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"mode": "responses", "max_tokens": 128000}
+
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.3-codex",
+            custom_llm_provider="azure",
+        )
+        assert model_info["mode"] == "chat"
+        assert model == "gpt-5.3-codex"
+
+        model_info2, model2 = responses_api_bridge_check(
+            model="azure/gpt-5.3-codex",
+            custom_llm_provider="azure",
+        )
+        assert model_info2["mode"] == "chat"
+        assert model2 == "azure/gpt-5.3-codex"
 
 
 # GPT-5.1 temperature handling tests for Azure
