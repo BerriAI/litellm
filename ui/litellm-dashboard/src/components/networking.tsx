@@ -121,6 +121,10 @@ const updateServerRootPath = (receivedServerRootPath: string) => {
   serverRootPath = receivedServerRootPath;
 };
 
+export function setProxyBaseUrl(url: string | null) {
+  proxyBaseUrl = url;
+}
+
 export const getProxyBaseUrl = (): string => {
   if (proxyBaseUrl) {
     return proxyBaseUrl;
