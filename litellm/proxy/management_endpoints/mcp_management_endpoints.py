@@ -689,8 +689,23 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy"
         )
 
-        # check to see if server exists for all users
+        # check to see if server exists (DB first, then registry for config-based servers)
         mcp_server = await get_mcp_server(prisma_client, server_id)
+        from_db = mcp_server is not None
+
+        if mcp_server is None:
+            # Fallback: check registry (config-based servers) - list endpoint uses get_registry()
+            registry_server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+            if registry_server is None:
+                # Try lookup by server_name or alias (client may use display name in URL)
+                registry_server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_id, client_ip=None
+                )
+            if registry_server is not None:
+                mcp_server = global_mcp_server_manager._build_mcp_server_table(
+                    registry_server
+                )
+
         if mcp_server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -706,10 +721,17 @@ if MCP_AVAILABLE:
         if not is_admin_view:
             # Perform authz check BEFORE any health check (avoid side-effects for
             # unauthorized callers).
-            mcp_server_records = await get_all_mcp_servers_for_user(
-                prisma_client, user_api_key_dict
-            )
-            exists = does_mcp_server_exist(mcp_server_records, server_id)
+            if from_db:
+                mcp_server_records = await get_all_mcp_servers_for_user(
+                    prisma_client, user_api_key_dict
+                )
+                exists = does_mcp_server_exist(mcp_server_records, server_id)
+            else:
+                # Registry/config server: use same access logic as list endpoint
+                allowed_server_ids = await global_mcp_server_manager.get_allowed_mcp_servers(
+                    user_api_key_dict
+                )
+                exists = mcp_server.server_id in allowed_server_ids
 
             if not exists:
                 raise HTTPException(
@@ -723,7 +745,8 @@ if MCP_AVAILABLE:
                 )
 
         # At this point caller is authorized to view the server.
-        await global_mcp_server_manager.add_server(mcp_server)
+        if from_db:
+            await global_mcp_server_manager.add_server(mcp_server)
 
         # Perform health check on the server using server manager
         try:
