@@ -146,6 +146,9 @@ MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
+    "x-litellm-overhead-duration-ms",
+    "x-litellm-response-duration-ms",
+    "x-litellm-callback-duration-ms",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -1264,6 +1267,9 @@ RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_has
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"
 PYTHON_GC_THRESHOLD = os.getenv("PYTHON_GC_THRESHOLD")
+
+# Performance tracker ring buffer size (number of recent requests to keep latency stats for)
+PERF_TRACKER_RING_BUFFER_SIZE = 100
 
 # pass through route constansts
 BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
