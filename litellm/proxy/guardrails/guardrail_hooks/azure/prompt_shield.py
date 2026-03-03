@@ -12,10 +12,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
 from litellm.types.utils import CallTypesLiteral
 
 from .base import AzureGuardrailBase
@@ -54,25 +50,19 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         """Initialize Azure Prompt Shield guardrail handler."""
         from litellm.types.guardrails import GuardrailEventHooks
 
-        # Initialize parent CustomGuardrail
-
         supported_event_hooks = [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
         ]
+        # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,
+        # async_handler and forwards the rest to CustomGuardrail.
         super().__init__(
+            api_key=api_key,
+            api_base=api_base,
             guardrail_name=guardrail_name,
             supported_event_hooks=supported_event_hooks,
             **kwargs,
         )
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
-
-        # Store configuration
-        self.api_key = api_key
-        self.api_base = api_base
-        self.api_version = kwargs.get("api_version") or "2024-09-01"
 
         verbose_proxy_logger.debug(
             f"Initialized Azure Prompt Shield Guardrail: {guardrail_name}"
@@ -105,22 +95,11 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             request_body = AzurePromptShieldGuardrailRequestBody(
                 documents=[], userPrompt=chunk
             )
-            verbose_proxy_logger.debug(
-                "Azure Prompt Shield guard request: %s", request_body
-            )
-            response = await self.async_handler.post(
-                url=f"{self.api_base}/contentsafety/text:shieldPrompt?api-version={self.api_version}",
-                headers={
-                    "Ocp-Apim-Subscription-Key": self.api_key,
-                    "Content-Type": "application/json",
-                },
-                json=cast(dict, request_body),
-            )
-            verbose_proxy_logger.debug(
-                "Azure Prompt Shield guard response: %s", response.json()
+            response_json = await self._post_to_content_safety(
+                "text:shieldPrompt", cast(dict, request_body)
             )
 
-            last_response = AzurePromptShieldGuardrailResponse(**response.json())
+            last_response = AzurePromptShieldGuardrailResponse(**response_json)
 
             if last_response["userPromptAnalysis"].get("attackDetected"):
                 verbose_proxy_logger.warning(

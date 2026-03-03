@@ -1,5 +1,11 @@
 import re
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -11,7 +17,61 @@ AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH = 10000
 class AzureGuardrailBase:
     """
     Base class for Azure guardrails.
+
+    Provides shared initialisation (API credentials, HTTP client) and
+    utilities (text splitting, authenticated POST) used by all Azure
+    Content Safety guardrails.
     """
+
+    def __init__(
+        self,
+        api_key: str,
+        api_base: str,
+        **kwargs: Any,
+    ):
+        # Forward remaining kwargs to the next class in the MRO
+        # (typically CustomGuardrail).
+        super().__init__(**kwargs)
+
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
+        self.api_key = api_key
+        self.api_base = api_base
+        self.api_version: str = kwargs.get("api_version") or "2024-09-01"
+
+    async def _post_to_content_safety(
+        self, endpoint_path: str, request_body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """POST to an Azure Content Safety endpoint with standard auth headers.
+
+        Args:
+            endpoint_path: The API action, e.g. ``"text:shieldPrompt"`` or
+                ``"text:analyze"``.
+            request_body: JSON-serialisable request payload.
+
+        Returns:
+            Parsed JSON response dict.
+        """
+        url = f"{self.api_base}/contentsafety/{endpoint_path}?api-version={self.api_version}"
+        headers = {
+            "Ocp-Apim-Subscription-Key": self.api_key,
+            "Content-Type": "application/json",
+        }
+
+        verbose_proxy_logger.debug(
+            "Azure Content Safety request [%s]: %s", endpoint_path, request_body
+        )
+        response = await self.async_handler.post(
+            url=url,
+            headers=headers,
+            json=request_body,
+        )
+        response_json: Dict[str, Any] = response.json()
+        verbose_proxy_logger.debug(
+            "Azure Content Safety response [%s]: %s", endpoint_path, response_json
+        )
+        return response_json
 
     @staticmethod
     def split_text_by_words(text: str, max_length: int) -> List[str]:

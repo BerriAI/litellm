@@ -12,10 +12,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import CallTypesLiteral
 
@@ -57,23 +53,19 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         **kwargs,
     ):
         """Initialize Azure Text Moderation guardrail handler."""
-        # Initialize parent CustomGuardrail
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
             AzureTextModerationRequestBodyOptionalParams,
         )
 
+        # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,
+        # async_handler and forwards the rest to CustomGuardrail.
         super().__init__(
+            api_key=api_key,
+            api_base=api_base,
             guardrail_name=guardrail_name,
             **kwargs,
         )
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
 
-        # Store configuration
-        self.api_key = api_key
-        self.api_base = api_base
-        self.api_version = kwargs.get("api_version") or "2024-09-01"
         self.optional_params_request_body: (
             AzureTextModerationRequestBodyOptionalParams
         ) = {
@@ -136,22 +128,11 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 text=chunk,
                 **self.optional_params_request_body,
             )
-            verbose_proxy_logger.debug(
-                "Azure Text Moderation guard request: %s", request_body
-            )
-            response = await self.async_handler.post(
-                url=f"{self.api_base}/contentsafety/text:analyze?api-version={self.api_version}",
-                headers={
-                    "Ocp-Apim-Subscription-Key": self.api_key,
-                    "Content-Type": "application/json",
-                },
-                json=cast(dict, request_body),
-            )
-            verbose_proxy_logger.debug(
-                "Azure Text Moderation guard response: %s", response.json()
+            response_json = await self._post_to_content_safety(
+                "text:analyze", cast(dict, request_body)
             )
 
-            chunk_response = AzureTextModerationGuardrailResponse(**response.json())
+            chunk_response = AzureTextModerationGuardrailResponse(**response_json)
 
             # For multi-chunk texts the callers only see the final response,
             # so we must check every intermediate chunk here to avoid silently
