@@ -96,6 +96,24 @@ def map_finish_reason(
         return "tool_calls"
     elif finish_reason == "compaction":
         return "length"
+    # Unknown finish_reason values (e.g. provider-specific error codes like
+    # "network_error" from ZhipuAI/GLM) are not in OpenAIChatCompletionFinishReason
+    # Literal and will cause a Pydantic ValidationError in Choices.__init__.
+    # Map them to "finish_reason_unspecified" so the stream can be assembled
+    # without raising an exception.
+    _valid_finish_reasons = {
+        "stop",
+        "content_filter",
+        "function_call",
+        "tool_calls",
+        "length",
+        "guardrail_intervened",
+        "eos",
+        "finish_reason_unspecified",
+        "malformed_function_call",
+    }
+    if finish_reason not in _valid_finish_reasons:
+        return "finish_reason_unspecified"
     return finish_reason
 
 
