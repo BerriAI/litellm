@@ -656,7 +656,7 @@ class PrometheusMetricLabels:
 
     litellm_managed_batch_created_total = _batch_user_labels
 
-    litellm_managed_file_size_bytes: List[str] = []  # labels: purpose, file_type, model, api_provider, user, team (custom)
+    litellm_managed_file_size_bytes: List[str] = []  # labels: purpose, file_type, model, api_provider, user (custom)
 
     litellm_managed_batch_duration_seconds = [
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
