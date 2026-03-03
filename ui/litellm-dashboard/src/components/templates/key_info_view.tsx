@@ -450,8 +450,8 @@ export default function KeyInfoView({
           <strong>$0</strong>?
         </p>
         <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
-          Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. The key will be
-          immediately unblocked and able to make requests again.
+          Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. Spend history is
+          preserved in logs. This resets the current period spend counter, the same as an automatic budget reset.
         </p>
       </Modal>
 

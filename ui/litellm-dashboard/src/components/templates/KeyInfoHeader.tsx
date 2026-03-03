@@ -11,7 +11,7 @@ import {
   ClockCircleOutlined,
   ThunderboltOutlined,
   SafetyCertificateOutlined,
-  DollarOutlined,
+  TransactionOutlined,
 } from "@ant-design/icons";
 import LabeledField from "../common_components/LabeledField";
 
@@ -81,7 +81,7 @@ export function KeyInfoHeader({
         {canModifyKey && (
           <Space>
             {onResetSpend && (
-              <Button icon={<DollarOutlined />} onClick={onResetSpend}>
+              <Button danger icon={<TransactionOutlined />} onClick={onResetSpend}>
                 Reset Spend
               </Button>
             )}
