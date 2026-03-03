@@ -141,6 +141,7 @@ async def test_db_health_error_flag_off_raises_no_reconnect(prisma_error):
 
         assert exc_info.value is prisma_error
         mock_prisma.disconnect.assert_not_called()
+        assert _health_endpoints_module.db_health_cache["status"] == "disconnected"
 
 
 @pytest.mark.asyncio
