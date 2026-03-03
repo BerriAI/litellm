@@ -5,6 +5,7 @@ Verifies that create_batch encodes response IDs with model info so that
 retrieve_batch can route back to the correct provider/credentials.
 """
 
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
