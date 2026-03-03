@@ -17,6 +17,7 @@ import {
   Button as TremorButton,
 } from "@tremor/react";
 import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
@@ -244,6 +245,11 @@ export default function ModelInfoView({
       };
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
+      }
+      if (values.vector_store_ids !== undefined) {
+        updatedLitellmParams.vector_store_ids = Array.isArray(values.vector_store_ids)
+          ? values.vector_store_ids
+          : [];
       }
 
       // Handle cache control settings
@@ -606,6 +612,9 @@ export default function ModelInfoView({
                     guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
                       ? localModelData.litellm_params.guardrails
                       : [],
+                    vector_store_ids: Array.isArray(localModelData.litellm_params?.vector_store_ids)
+                      ? localModelData.litellm_params.vector_store_ids
+                      : [],
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
                     litellm_extra_params: JSON.stringify(localModelData.litellm_params || {}, null, 2),
@@ -875,6 +884,58 @@ export default function ModelInfoView({
                                 )
                               ) : (
                                 localModelData.litellm_params.guardrails
+                              )
+                            ) : (
+                              "Not Set"
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">
+                          Attached Knowledge Bases (RAG)
+                          <Tooltip title="Vector stores used for RAG. Every request to this model will automatically retrieve context from these knowledge bases.">
+                            <a
+                              href="https://docs.litellm.ai/docs/completion/knowledgebase"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="vector_store_ids" className="mb-0">
+                            <VectorStoreSelector
+                              onChange={() => {}}
+                              accessToken={accessToken || ""}
+                              placeholder="Select knowledge bases (optional)"
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData.litellm_params?.vector_store_ids ? (
+                              Array.isArray(localModelData.litellm_params.vector_store_ids) ? (
+                                localModelData.litellm_params.vector_store_ids.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {localModelData.litellm_params.vector_store_ids.map(
+                                      (vsId: string, index: number) => (
+                                        <span
+                                          key={index}
+                                          className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
+                                        >
+                                          {vsId}
+                                        </span>
+                                      )
+                                    )}
+                                  </div>
+                                ) : (
+                                  "No knowledge bases attached"
+                                )
+                              ) : (
+                                String(localModelData.litellm_params.vector_store_ids)
                               )
                             ) : (
                               "Not Set"
