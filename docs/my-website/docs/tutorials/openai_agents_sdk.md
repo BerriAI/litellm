@@ -97,7 +97,7 @@ Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and follow thes
 
 Copy the generated key, you will use this as the `LITELLM_API_KEY` in the next step.
 
-<iframe width="840" height="472" src="https://www.youtube.com/embed/pap7Gv8wYL0" title="LiteLLM Proxy Setup" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe>
+<iframe width="840" height="472" src="https://www.youtube.com/embed/pap7Gv8wYL0" title="Virtual Key Creation" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe>
 
 ## 3. Setting Up Environment
 
