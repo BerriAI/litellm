@@ -7,7 +7,6 @@ import moment from "moment";
 import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry } from "./columns";
 import { AuditLogDrawer } from "./AuditLogDrawer/AuditLogDrawer";
-import { Team } from "../key_team_helpers/key_list";
 
 const { Search } = Input;
 
@@ -18,7 +17,6 @@ interface AuditLogsProps {
   userID: string | null;
   isActive: boolean;
   premiumUser: boolean;
-  allTeams: Team[];
 }
 
 const asset_logos_folder = "../ui/assets/";
