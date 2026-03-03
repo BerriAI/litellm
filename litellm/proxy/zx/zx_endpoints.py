@@ -52,8 +52,9 @@ for param_name in required_params:
         check = False
         logger.warning(f"缺少必要参数：{param_name}")
 
+ZX_LLM_DEVEOPER_ENABLED = os.environ.get("ZX_LLM_DEVEOPER_ENABLED") == 'true'
 routers = [zx_user_endpoints.router]
-if check:
+if ZX_LLM_DEVEOPER_ENABLED and check:
     from . import zx_config_endpoints
     routers.append(zx_config_endpoints.router)
 else:
