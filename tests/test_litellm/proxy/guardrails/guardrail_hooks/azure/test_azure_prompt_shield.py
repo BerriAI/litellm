@@ -221,15 +221,14 @@ def test_split_text_by_words():
     # Test with punctuation and special characters
     text_with_punctuation = "Hello, world! How are you? I'm fine."
     chunks = guardrail.split_text_by_words(text_with_punctuation, 30)
-    # Verify chunks don't break words with punctuation attached
+    # Verify no word is broken across chunks
+    assert "".join(chunks) == text_with_punctuation
     for chunk in chunks:
-        # Check that no punctuation is separated from its word
-        assert not chunk.endswith(" ")
-        assert not any(word.endswith(" ") for word in chunk.split())
+        assert len(chunk) <= 30
 
 
 def test_split_prompt_preserves_content():
-    """Test that splitting and recombining preserves the original content."""
+    """Test that splitting and recombining preserves the original content exactly."""
     guardrail = AzureContentSafetyPromptShieldGuardrail(
         guardrail_name="test",
         api_key="test_key",
@@ -239,11 +238,26 @@ def test_split_prompt_preserves_content():
     original_text = "The quick brown fox jumps over the lazy dog. " * 100
     chunks = guardrail.split_text_by_words(original_text, 1000)
     
-    # Recombine with spaces
-    recombined = " ".join(chunks)
-    
-    # Remove extra spaces that might be added during recombination
-    recombined = recombined.replace("  ", " ").strip()
-    
-    # The content should be preserved (allowing for space differences)
-    assert original_text.replace("  ", " ").strip() == recombined
+    # Whitespace-preserving split: concatenation reproduces original exactly
+    assert "".join(chunks) == original_text
+
+
+def test_split_preserves_whitespace():
+    """Test that newlines, tabs, and multiple spaces are preserved in chunks."""
+    guardrail = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="test",
+        api_key="test_key",
+        api_base="test_base",
+    )
+
+    # Text with mixed whitespace that needs splitting
+    text = "hello\n\nworld\t\tfoo   bar"
+    chunks = guardrail.split_text_by_words(text, 15)
+    assert len(chunks) > 1
+    # Exact reconstruction
+    assert "".join(chunks) == text
+
+    # Longer text with varied whitespace
+    original = ("line one\n" + "line two\t\tcol\n" + "  indented\n") * 200
+    chunks = guardrail.split_text_by_words(original, 500)
+    assert "".join(chunks) == original

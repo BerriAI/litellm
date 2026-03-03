@@ -1,3 +1,4 @@
+import re
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
@@ -31,25 +32,30 @@ class AzureGuardrailBase:
         if len(text) <= max_length:
             return [text]
 
+        # Tokenize into alternating non-whitespace and whitespace runs so
+        # that original newlines, tabs, and multiple spaces are preserved
+        # within each chunk.
+        tokens = re.findall(r"\S+|\s+", text)
+
         chunks: List[str] = []
         current_chunk = ""
-        words = text.split()
 
-        for word in words:
-            test_chunk = current_chunk + (" " if current_chunk else "") + word
-
-            if len(test_chunk) <= max_length:
-                current_chunk = test_chunk
+        for token in tokens:
+            # Would appending this token exceed the limit?
+            if len(current_chunk) + len(token) <= max_length:
+                current_chunk += token
             else:
+                # Flush whatever we have accumulated so far
                 if current_chunk:
                     chunks.append(current_chunk)
+                    current_chunk = ""
 
-                # Force-split any word longer than max_length (whether or not current_chunk was empty)
-                while len(word) > max_length:
-                    chunks.append(word[:max_length])
-                    word = word[max_length:]
+                # Force-split any single token longer than max_length
+                while len(token) > max_length:
+                    chunks.append(token[:max_length])
+                    token = token[max_length:]
 
-                current_chunk = word
+                current_chunk = token
 
         if current_chunk:
             chunks.append(current_chunk)
