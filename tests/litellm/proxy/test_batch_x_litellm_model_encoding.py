@@ -33,8 +33,8 @@ def _make_mock_request(headers: dict) -> MagicMock:
 def _make_batch_response(
     batch_id: str = "batch_abc123",
     input_file_id: str = "file-input456",
-    output_file_id: str = None,
-    error_file_id: str = None,
+    output_file_id: Optional[str] = None,
+    error_file_id: Optional[str] = None,
     status: str = "validating",
 ) -> LiteLLMBatch:
     """Create a mock LiteLLMBatch response from a provider."""
