@@ -14382,7 +14382,8 @@
         "supports_url_context": true,
         "supports_video_input": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_native_streaming": true
     },
     "deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
