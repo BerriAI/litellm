@@ -491,6 +491,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         Anthropic API requires ``max_tokens > thinking.budget_tokens``.
         If the constraint is violated, auto-adjust to ``budget_tokens + 1024``.
         """
+        import math
+
         max_tokens: int = optional_params.get(
             "max_tokens",
             kwargs.get("max_tokens", 1024),
@@ -498,7 +500,12 @@ class WebSearchInterceptionLogger(CustomLogger):
         thinking_param = optional_params.get("thinking")
         if thinking_param and isinstance(thinking_param, dict):
             budget_tokens = thinking_param.get("budget_tokens")
-            if budget_tokens is not None and isinstance(budget_tokens, (int, float)):
+            if (
+                budget_tokens is not None
+                and isinstance(budget_tokens, (int, float))
+                and math.isfinite(budget_tokens)
+                and budget_tokens > 0
+            ):
                 if max_tokens <= budget_tokens:
                     adjusted = int(budget_tokens) + 1024
                     verbose_logger.warning(

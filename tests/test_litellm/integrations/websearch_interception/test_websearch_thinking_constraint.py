@@ -204,6 +204,41 @@ class TestThinkingBudgetTokensConstraint:
         assert captured_kwargs["max_tokens"] == 2048
 
 
+class TestResolveMaxTokensEdgeCases:
+    """Edge cases for _resolve_max_tokens: infinity, negative, extreme values."""
+
+    def test_infinity_budget_tokens_no_crash(self):
+        """float('inf') budget_tokens must not crash with OverflowError."""
+        result = WebSearchInterceptionLogger._resolve_max_tokens(
+            {"max_tokens": 1024, "thinking": {"budget_tokens": float("inf")}}, {}
+        )
+        assert result == 1024  # no adjustment for non-finite values
+
+    def test_negative_infinity_no_crash(self):
+        result = WebSearchInterceptionLogger._resolve_max_tokens(
+            {"max_tokens": 1024, "thinking": {"budget_tokens": float("-inf")}}, {}
+        )
+        assert result == 1024
+
+    def test_nan_budget_tokens_no_crash(self):
+        result = WebSearchInterceptionLogger._resolve_max_tokens(
+            {"max_tokens": 1024, "thinking": {"budget_tokens": float("nan")}}, {}
+        )
+        assert result == 1024
+
+    def test_negative_budget_tokens_no_adjustment(self):
+        result = WebSearchInterceptionLogger._resolve_max_tokens(
+            {"max_tokens": 1024, "thinking": {"budget_tokens": -100}}, {}
+        )
+        assert result == 1024
+
+    def test_zero_budget_tokens_no_adjustment(self):
+        result = WebSearchInterceptionLogger._resolve_max_tokens(
+            {"max_tokens": 1024, "thinking": {"budget_tokens": 0}}, {}
+        )
+        assert result == 1024
+
+
 # ---------------------------------------------------------------------------
 # M2-I5 / M2-I8: litellm_logging_obj excluded from follow-up kwargs
 # ---------------------------------------------------------------------------
