@@ -157,7 +157,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return [];
     }
   });
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
+  const [selectedModel, setSelectedModel] = useState<string | undefined>(() => {
+    if (simplified) return fixedModel;
+    return sessionStorage.getItem("selectedModel") || undefined;
+  });
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
