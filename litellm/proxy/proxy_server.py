@@ -12111,8 +12111,10 @@ async def delete_callback(
         )
 
         found = False
-        if callback_name in success_callbacks:
-            success_callbacks.remove(callback_name)
+        _lower_success = [c.lower() if isinstance(c, str) else c for c in success_callbacks]
+        if callback_name in _lower_success:
+            idx = _lower_success.index(callback_name)
+            success_callbacks.pop(idx)
             config.setdefault("litellm_settings", {})[
                 "success_callback"
             ] = success_callbacks
