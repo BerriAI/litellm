@@ -158,6 +158,7 @@ class BedrockEmbedding(BaseAWSLLM):
         model: str,
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         is_async_invoke: Optional[bool] = False,
+        batch_data: Optional[List[dict]] = None,
     ) -> Optional[EmbeddingResponse]:
         """
         Transforms the response from the Bedrock embedding provider to the OpenAI format.
@@ -212,7 +213,7 @@ class BedrockEmbedding(BaseAWSLLM):
             if model == "amazon.titan-embed-image-v1":
                 returned_response = (
                     AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
-                        response_list=response_list, model=model
+                        response_list=response_list, model=model, batch_data=batch_data
                     )
                 )
             elif model == "amazon.titan-embed-text-v1":
@@ -231,7 +232,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 )
             elif provider == "nova":
                 returned_response = AmazonNovaEmbeddingConfig()._transform_response(
-                    response_list=response_list, model=model
+                    response_list=response_list, model=model, batch_data=batch_data
                 )
 
         ##########################################################
@@ -310,6 +311,7 @@ class BedrockEmbedding(BaseAWSLLM):
             model=model,
             provider=provider,
             is_async_invoke=is_async_invoke,
+            batch_data=batch_data,
         )
 
     async def _async_single_func_embeddings(
@@ -379,6 +381,7 @@ class BedrockEmbedding(BaseAWSLLM):
             model=model,
             provider=provider,
             is_async_invoke=is_async_invoke,
+            batch_data=batch_data,
         )
 
     def embeddings(  # noqa: PLR0915

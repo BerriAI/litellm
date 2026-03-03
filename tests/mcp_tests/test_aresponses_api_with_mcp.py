@@ -3,6 +3,7 @@ import os
 import sys
 import pytest
 from typing import List, Any, cast
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
@@ -252,6 +253,76 @@ async def test_aresponses_api_with_mcp_mock_integration():
     print(f"Auto-execute enabled: {should_auto_execute}")
     print(f"MCP tools parsed: {len(mcp_parsed)}")
     print(f"Other tools parsed: {len(other_parsed)}")
+
+
+@pytest.mark.asyncio
+async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process_tools():
+    """
+    Test that MCP auth headers from secret_fields (e.g. x-mcp-linear_config-authorization)
+    are passed to _process_mcp_tools_without_openai_transform when using the responses API.
+    """
+    from litellm.responses.main import aresponses_api_with_mcp
+
+    captured_process_kwargs = {}
+
+    async def mock_process(**kwargs):
+        captured_process_kwargs.update(kwargs)
+        return ([], {})
+
+    mock_response = ResponsesAPIResponse(
+        **{
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1234567890,
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "max_output_tokens": None,
+            "model": "gpt-4o",
+            "output": [{"type": "message", "id": "msg_1", "status": "completed", "role": "assistant", "content": []}],
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "reasoning": {"effort": None, "summary": None},
+            "store": True,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}},
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "truncation": "disabled",
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            "user": None,
+            "metadata": {},
+        }
+    )
+
+    mcp_tools = [{"type": "mcp", "server_url": "litellm_proxy"}]
+    secret_fields = {
+        "raw_headers": {"x-mcp-linear_config-authorization": "Bearer linear-token"},
+    }
+
+    with patch.object(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    ), patch(
+        "litellm.responses.main.aresponses",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        await aresponses_api_with_mcp(
+            input=[{"role": "user", "type": "message", "content": "hi"}],
+            model="gpt-4o",
+            tools=mcp_tools,
+            secret_fields=secret_fields,
+        )
+
+    assert "mcp_server_auth_headers" in captured_process_kwargs
+    mcp_server_auth_headers = captured_process_kwargs["mcp_server_auth_headers"]
+    assert mcp_server_auth_headers is not None
+    assert "linear_config" in mcp_server_auth_headers
+    assert mcp_server_auth_headers["linear_config"]["Authorization"] == "Bearer linear-token"
 
 
 @pytest.mark.asyncio
@@ -683,8 +754,8 @@ async def test_streaming_responses_api_with_mcp_tools(
 
     Return the user the result of request 2
     """
-    # Skip test if required API keys are not set
-    if ("anthropic" in model.lower() or "claude" in model.lower()) and not os.getenv("ANTHROPIC_API_KEY"):
+    # Skip test if API keys are not set for the respective models
+    if ("claude" in model.lower() or "anthropic" in model.lower()) and not os.getenv("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY not set, skipping anthropic model test")
     if ("gpt" in model.lower() or "openai" in model.lower()) and not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set, skipping openai model test")

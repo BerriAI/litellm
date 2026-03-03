@@ -32,6 +32,7 @@ import {
   organizationDailyActivityCall,
   tagDailyActivityCall,
   teamDailyActivityCall,
+  userDailyActivityCall,
 } from "../../../networking";
 import { getProviderLogoAndName } from "../../../provider_info_helpers";
 import { BreakdownMetrics, DailyData, EntityMetricWithMetadata, KeyMetricWithMetadata, TagUsage } from "../../types";
@@ -154,6 +155,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         endTime,
         1,
         selectedTags.length > 0 ? selectedTags : null,
+      );
+      setSpendData(data);
+    } else if (entityType === "user") {
+      const data = await userDailyActivityCall(
+        accessToken,
+        startTime,
+        endTime,
+        1,
+        selectedTags.length > 0 ? selectedTags[0] : null,
       );
       setSpendData(data);
     } else {
@@ -391,6 +401,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
+        filterMode={entityType === "user" ? "single" : "multiple"}
         teams={teams || []}
       />
       <TabGroup>

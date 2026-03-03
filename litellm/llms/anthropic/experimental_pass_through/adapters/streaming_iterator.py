@@ -239,8 +239,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         merged_chunk["delta"] = {}
 
                     # Add usage to the held chunk
+                    uncached_input_tokens = chunk.usage.prompt_tokens or 0
+                    if hasattr(chunk.usage, "prompt_tokens_details") and chunk.usage.prompt_tokens_details:
+                        cached_tokens = getattr(chunk.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+                        uncached_input_tokens -= cached_tokens
+                    
                     usage_dict: UsageDelta = {
-                        "input_tokens": chunk.usage.prompt_tokens or 0,
+                        "input_tokens": uncached_input_tokens,
                         "output_tokens": chunk.usage.completion_tokens or 0,
                     }
                     # Add cache tokens if available (for prompt caching support)
@@ -412,6 +417,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if block_type == "tool_use":
             # Type narrowing: content_block_start is ToolUseBlock when block_type is "tool_use"
             from typing import cast
+
             from litellm.types.llms.anthropic import ToolUseBlock
             
             tool_block = cast(ToolUseBlock, content_block_start)
@@ -430,6 +436,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # if we get a function name since it signals a new tool call
         if block_type == "tool_use":
             from typing import cast
+
             from litellm.types.llms.anthropic import ToolUseBlock
             
             tool_block = cast(ToolUseBlock, content_block_start)

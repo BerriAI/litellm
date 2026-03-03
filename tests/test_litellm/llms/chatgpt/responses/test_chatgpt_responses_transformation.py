@@ -88,6 +88,45 @@ class TestChatGPTResponsesAPITransformation:
             "You are Codex, based on GPT-5."
         )
 
+    def test_chatgpt_drops_unsupported_responses_params(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input="hi",
+            response_api_optional_request_params={
+                # unsupported by ChatGPT Codex
+                "user": "user_123",
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
+                "metadata": {"foo": "bar"},
+                "max_output_tokens": 123,
+                "stream_options": {"include_usage": True},
+                # supported and should be preserved
+                "truncation": "auto",
+                "previous_response_id": "resp_123",
+                "reasoning": {"effort": "medium"},
+                "tools": [{"type": "function", "function": {"name": "hello"}}],
+                "tool_choice": {"type": "function", "function": {"name": "hello"}},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "user" not in request
+        assert "temperature" not in request
+        assert "top_p" not in request
+        assert "context_management" not in request
+        assert "metadata" not in request
+        assert "max_output_tokens" not in request
+        assert "stream_options" not in request
+
+        assert request["truncation"] == "auto"
+        assert request["previous_response_id"] == "resp_123"
+        assert request["reasoning"] == {"effort": "medium"}
+        assert request["tools"] == [{"type": "function", "function": {"name": "hello"}}]
+        assert request["tool_choice"] == {"type": "function", "function": {"name": "hello"}}
+
     def test_chatgpt_non_stream_sse_response_parsing(self):
         config = ChatGPTResponsesAPIConfig()
         response_payload = {

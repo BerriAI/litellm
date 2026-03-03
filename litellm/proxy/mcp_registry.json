@@ -1,0 +1,426 @@
+{
+  "servers": [
+    {
+      "name": "github",
+      "title": "GitHub",
+      "description": "Manage repos, issues, PRs, and workflows through natural language",
+      "icon_url": "https://cdn.simpleicons.org/github",
+      "category": "Developer Tools",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.github%2Fgithub-mcp-server",
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "env_vars": [
+        {"name": "GITHUB_PERSONAL_ACCESS_TOKEN", "description": "GitHub Personal Access Token", "secret": true}
+      ]
+    },
+    {
+      "name": "gitlab",
+      "title": "GitLab",
+      "description": "Official GitLab MCP Server for project and repository management",
+      "icon_url": "https://cdn.simpleicons.org/gitlab",
+      "category": "Developer Tools",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/com.gitlab%2Fmcp",
+      "transport": "http",
+      "url": "https://gitlab.com/api/v4/mcp",
+      "env_vars": [
+        {"name": "GITLAB_PERSONAL_ACCESS_TOKEN", "description": "GitLab Personal Access Token", "secret": true}
+      ]
+    },
+    {
+      "name": "atlassian",
+      "title": "Atlassian (Jira & Confluence)",
+      "description": "Jira issues, Confluence pages, and Atlassian product integration",
+      "icon_url": "https://cdn.simpleicons.org/atlassian",
+      "category": "Developer Tools",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/com.atlassian%2Fatlassian-mcp-server",
+      "transport": "sse",
+      "url": "https://mcp.atlassian.com/v1/sse",
+      "env_vars": []
+    },
+    {
+      "name": "linear",
+      "title": "Linear",
+      "description": "Issue tracking, project management, and team workflow automation",
+      "icon_url": "https://cdn.simpleicons.org/linear",
+      "category": "Developer Tools",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/app.linear%2Flinear",
+      "transport": "sse",
+      "url": "https://mcp.linear.app/sse",
+      "env_vars": []
+    },
+    {
+      "name": "sentry",
+      "title": "Sentry",
+      "description": "Error monitoring, issue tracking, and debugging for AI assistants",
+      "icon_url": "https://cdn.simpleicons.org/sentry",
+      "category": "Developer Tools",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.getsentry%2Fsentry-mcp",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@sentry/mcp-server"],
+      "env_vars": [
+        {"name": "SENTRY_ACCESS_TOKEN", "description": "Sentry Access Token", "secret": true}
+      ]
+    },
+    {
+      "name": "slack",
+      "title": "Slack",
+      "description": "Channel management, messaging, and Slack workspace integration",
+      "icon_url": "https://cdn.simpleicons.org/slack",
+      "category": "Communication",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env_vars": [
+        {"name": "SLACK_BOT_TOKEN", "description": "Slack Bot User OAuth Token", "secret": true},
+        {"name": "SLACK_TEAM_ID", "description": "Slack Team/Workspace ID", "secret": false}
+      ]
+    },
+    {
+      "name": "discord",
+      "title": "Discord",
+      "description": "Discord server management, messaging, and bot integration",
+      "icon_url": "https://cdn.simpleicons.org/discord",
+      "category": "Communication",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-discord"],
+      "env_vars": [
+        {"name": "DISCORD_BOT_TOKEN", "description": "Discord Bot Token", "secret": true}
+      ]
+    },
+    {
+      "name": "postgresql",
+      "title": "PostgreSQL",
+      "description": "Query and manage PostgreSQL databases with read-only access",
+      "icon_url": "https://cdn.simpleicons.org/postgresql",
+      "category": "Databases",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env_vars": [
+        {"name": "POSTGRES_CONNECTION_STRING", "description": "PostgreSQL connection string (e.g., postgresql://user:pass@host:5432/db)", "secret": true}
+      ]
+    },
+    {
+      "name": "sqlite",
+      "title": "SQLite",
+      "description": "Query and manage SQLite databases",
+      "icon_url": "https://cdn.simpleicons.org/sqlite",
+      "category": "Databases",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sqlite"],
+      "env_vars": [
+        {"name": "SQLITE_DB_PATH", "description": "Path to SQLite database file", "secret": false}
+      ]
+    },
+    {
+      "name": "mysql",
+      "title": "MySQL",
+      "description": "Query and manage MySQL databases",
+      "icon_url": "https://cdn.simpleicons.org/mysql",
+      "category": "Databases",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-mysql"],
+      "env_vars": [
+        {"name": "MYSQL_HOST", "description": "MySQL host", "secret": false},
+        {"name": "MYSQL_USER", "description": "MySQL username", "secret": false},
+        {"name": "MYSQL_PASSWORD", "description": "MySQL password", "secret": true},
+        {"name": "MYSQL_DATABASE", "description": "MySQL database name", "secret": false}
+      ]
+    },
+    {
+      "name": "mongodb",
+      "title": "MongoDB",
+      "description": "Query and manage MongoDB databases and collections",
+      "icon_url": "https://cdn.simpleicons.org/mongodb",
+      "category": "Databases",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-mongodb"],
+      "env_vars": [
+        {"name": "MONGODB_CONNECTION_STRING", "description": "MongoDB connection string", "secret": true}
+      ]
+    },
+    {
+      "name": "redis",
+      "title": "Redis",
+      "description": "Interact with Redis key-value stores",
+      "icon_url": "https://cdn.simpleicons.org/redis",
+      "category": "Databases",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-redis"],
+      "env_vars": [
+        {"name": "REDIS_URL", "description": "Redis connection URL (e.g., redis://localhost:6379)", "secret": true}
+      ]
+    },
+    {
+      "name": "snowflake",
+      "title": "Snowflake",
+      "description": "MCP Server for Snowflake from Snowflake Labs",
+      "icon_url": "https://cdn.simpleicons.org/snowflake",
+      "category": "Databases",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.Snowflake-Labs%2Fmcp",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["snowflake-labs-mcp"],
+      "env_vars": [
+        {"name": "SNOWFLAKE_ACCOUNT", "description": "Snowflake account identifier (e.g., xy12345.us-east-1)", "secret": false},
+        {"name": "SNOWFLAKE_USER", "description": "Snowflake username", "secret": false},
+        {"name": "SNOWFLAKE_PASSWORD", "description": "Snowflake password", "secret": true}
+      ]
+    },
+    {
+      "name": "notion",
+      "title": "Notion",
+      "description": "Official Notion MCP server for pages and databases",
+      "icon_url": "https://cdn.simpleicons.org/notion",
+      "category": "Productivity",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/com.notion%2Fmcp",
+      "transport": "sse",
+      "url": "https://mcp.notion.com/sse",
+      "env_vars": []
+    },
+    {
+      "name": "google_drive",
+      "title": "Google Drive",
+      "description": "Search and access files in Google Drive",
+      "icon_url": "https://cdn.simpleicons.org/googledrive",
+      "category": "Productivity",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-gdrive"],
+      "env_vars": [
+        {"name": "GOOGLE_CLIENT_ID", "description": "Google OAuth Client ID", "secret": false},
+        {"name": "GOOGLE_CLIENT_SECRET", "description": "Google OAuth Client Secret", "secret": true}
+      ]
+    },
+    {
+      "name": "google_calendar",
+      "title": "Google Calendar",
+      "description": "Manage events and calendars in Google Calendar",
+      "icon_url": "https://cdn.simpleicons.org/googlecalendar",
+      "category": "Productivity",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-google-calendar"],
+      "env_vars": [
+        {"name": "GOOGLE_CLIENT_ID", "description": "Google OAuth Client ID", "secret": false},
+        {"name": "GOOGLE_CLIENT_SECRET", "description": "Google OAuth Client Secret", "secret": true}
+      ]
+    },
+    {
+      "name": "obsidian",
+      "title": "Obsidian",
+      "description": "Read, search, and manage Obsidian vault notes and files",
+      "icon_url": "https://cdn.simpleicons.org/obsidian",
+      "category": "Productivity",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-obsidian"],
+      "env_vars": [
+        {"name": "OBSIDIAN_VAULT_PATH", "description": "Path to Obsidian vault directory", "secret": false}
+      ]
+    },
+    {
+      "name": "brave_search",
+      "title": "Brave Search",
+      "description": "Web results, images, videos, and AI summaries via Brave Search API",
+      "icon_url": "https://cdn.simpleicons.org/brave",
+      "category": "Search",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.brave%2Fbrave-search-mcp-server",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@brave/brave-search-mcp-server"],
+      "env_vars": [
+        {"name": "BRAVE_API_KEY", "description": "Brave Search API Key", "secret": true}
+      ]
+    },
+    {
+      "name": "exa",
+      "title": "Exa",
+      "description": "Fast, intelligent web search and web crawling",
+      "icon_url": "https://cdn.simpleicons.org/exa",
+      "category": "Search",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/ai.exa%2Fexa",
+      "transport": "http",
+      "url": "https://mcp.exa.ai/mcp",
+      "env_vars": [
+        {"name": "EXA_API_KEY", "description": "Exa API Key", "secret": true}
+      ]
+    },
+    {
+      "name": "tavily",
+      "title": "Tavily",
+      "description": "AI-optimized search engine for research and retrieval",
+      "icon_url": "https://cdn.simpleicons.org/tavily",
+      "category": "Search",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-tavily"],
+      "env_vars": [
+        {"name": "TAVILY_API_KEY", "description": "Tavily API Key", "secret": true}
+      ]
+    },
+    {
+      "name": "puppeteer",
+      "title": "Puppeteer",
+      "description": "Browser automation, web scraping, and screenshot capture",
+      "icon_url": "https://cdn.simpleicons.org/puppeteer",
+      "category": "Web & Browser",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "env_vars": []
+    },
+    {
+      "name": "playwright",
+      "title": "Playwright",
+      "description": "Browser automation and testing with Playwright",
+      "icon_url": "https://cdn.simpleicons.org/playwright",
+      "category": "Web & Browser",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-playwright"],
+      "env_vars": []
+    },
+    {
+      "name": "browserbase",
+      "title": "Browserbase",
+      "description": "Cloud browser automation and session management",
+      "icon_url": "https://cdn.simpleicons.org/browserbase",
+      "category": "Web & Browser",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-browserbase"],
+      "env_vars": [
+        {"name": "BROWSERBASE_API_KEY", "description": "Browserbase API Key", "secret": true},
+        {"name": "BROWSERBASE_PROJECT_ID", "description": "Browserbase Project ID", "secret": false}
+      ]
+    },
+    {
+      "name": "aws",
+      "title": "AWS",
+      "description": "Interact with Amazon Web Services resources and APIs",
+      "icon_url": "https://cdn.simpleicons.org/amazonaws",
+      "category": "Cloud",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-aws"],
+      "env_vars": [
+        {"name": "AWS_ACCESS_KEY_ID", "description": "AWS Access Key ID", "secret": true},
+        {"name": "AWS_SECRET_ACCESS_KEY", "description": "AWS Secret Access Key", "secret": true},
+        {"name": "AWS_REGION", "description": "AWS Region (e.g., us-east-1)", "secret": false}
+      ]
+    },
+    {
+      "name": "cloudflare",
+      "title": "Cloudflare",
+      "description": "Manage Cloudflare Workers, KV, R2, D1, and more",
+      "icon_url": "https://cdn.simpleicons.org/cloudflare",
+      "category": "Cloud",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/com.cloudflare.mcp%2Fmcp",
+      "transport": "sse",
+      "url": "https://bindings.mcp.cloudflare.com/sse",
+      "env_vars": []
+    },
+    {
+      "name": "filesystem",
+      "title": "Filesystem",
+      "description": "Read, write, and manage files and directories on disk",
+      "icon_url": "https://cdn.simpleicons.org/files",
+      "category": "System",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "env_vars": []
+    },
+    {
+      "name": "docker",
+      "title": "Docker",
+      "description": "Manage Docker containers, images, and networks",
+      "icon_url": "https://cdn.simpleicons.org/docker",
+      "category": "System",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-docker"],
+      "env_vars": []
+    },
+    {
+      "name": "stripe",
+      "title": "Stripe",
+      "description": "Manage payments, customers, and subscriptions via Stripe",
+      "icon_url": "https://cdn.simpleicons.org/stripe",
+      "category": "Finance",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/com.stripe%2Fmcp",
+      "transport": "http",
+      "url": "https://mcp.stripe.com",
+      "env_vars": []
+    },
+    {
+      "name": "shopify",
+      "title": "Shopify",
+      "description": "Manage Shopify stores, products, orders, and customers",
+      "icon_url": "https://cdn.simpleicons.org/shopify",
+      "category": "E-Commerce",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-shopify"],
+      "env_vars": [
+        {"name": "SHOPIFY_ACCESS_TOKEN", "description": "Shopify Admin API Access Token", "secret": true},
+        {"name": "SHOPIFY_STORE_URL", "description": "Shopify Store URL (e.g., mystore.myshopify.com)", "secret": false}
+      ]
+    },
+    {
+      "name": "twilio",
+      "title": "Twilio",
+      "description": "Send SMS, make calls, and manage communication via Twilio",
+      "icon_url": "https://cdn.simpleicons.org/twilio",
+      "category": "Communication",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-twilio"],
+      "env_vars": [
+        {"name": "TWILIO_ACCOUNT_SID", "description": "Twilio Account SID", "secret": false},
+        {"name": "TWILIO_AUTH_TOKEN", "description": "Twilio Auth Token", "secret": true}
+      ]
+    },
+    {
+      "name": "supabase",
+      "title": "Supabase",
+      "description": "Manage Supabase projects, databases, and storage",
+      "icon_url": "https://cdn.simpleicons.org/supabase",
+      "category": "Databases",
+      "registry_url": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-supabase"],
+      "env_vars": [
+        {"name": "SUPABASE_URL", "description": "Supabase Project URL", "secret": false},
+        {"name": "SUPABASE_SERVICE_ROLE_KEY", "description": "Supabase Service Role Key", "secret": true}
+      ]
+    }
+  ]
+}

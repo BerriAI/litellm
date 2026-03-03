@@ -9,9 +9,19 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
+from litellm.llms.gemini.image_generation.cost_calculator import (
+    cost_calculator as gemini_image_generation_cost_calculator,
+)
+from litellm.llms.vertex_ai.image_generation.cost_calculator import (
+    cost_calculator as vertex_image_generation_cost_calculator,
+)
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
     ModelInfo,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -23,6 +33,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _calculate_input_cost,
+    PromptTokensDetailsResult,
     calculate_cache_writing_cost,
     generic_cost_per_token,
 )
@@ -559,6 +571,48 @@ def test_calculate_cache_writing_cost():
     assert result_zero == 0.0
 
 
+def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
+    """
+    Regression test: when cache_creation_tokens is 0 but cache_creation_token_details
+    has non-zero ephemeral tokens, the cost must still be calculated.
+    This ensures the guard in _calculate_input_cost doesn't skip
+    calculate_cache_writing_cost when only ephemeral token details are present.
+    """
+    cache_creation_cost = 3.75e-06
+    cache_creation_cost_above_1hr = 6e-06
+
+    prompt_tokens_details: PromptTokensDetailsResult = {
+        "cache_hit_tokens": 0,
+        "cache_creation_tokens": 0,
+        "cache_creation_token_details": CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=100,
+            ephemeral_1h_input_tokens=200,
+        ),
+        "text_tokens": 0,
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "character_count": 0,
+        "image_count": 0,
+        "video_length_seconds": 0.0,
+    }
+
+    model_info: ModelInfo = {}
+
+    result = _calculate_input_cost(
+        prompt_tokens_details=prompt_tokens_details,
+        model_info=model_info,
+        prompt_base_cost=0.0,
+        cache_read_cost=0.0,
+        cache_creation_cost=cache_creation_cost,
+        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+    )
+
+    # Expected: (100 * 3.75e-06) + (200 * 6e-06) = 0.000375 + 0.0012 = 0.001575
+    expected = (100 * cache_creation_cost) + (200 * cache_creation_cost_above_1hr)
+    assert result > 0, "Cost should not be zero when ephemeral token details are present"
+    assert round(result, 6) == round(expected, 6)
+
+
 def test_service_tier_flex_pricing():
     """Test that flex service tier uses correct pricing (approximately 50% of standard)."""
     # Set up environment for local model cost map
@@ -722,7 +776,14 @@ def test_service_tier_fallback_pricing():
     assert abs(std_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
 
 
-def test_gemini_image_generation_cost_with_zero_text_tokens():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3-pro-image-preview",
+        "gemini-3.1-flash-image-preview",
+    ],
+)
+def test_gemini_image_generation_cost_with_zero_text_tokens(model: str):
     """
     Test that image_tokens are correctly costed when text_tokens=0.
 
@@ -735,7 +796,6 @@ def test_gemini_image_generation_cost_with_zero_text_tokens():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    model = "gemini-3-pro-image-preview"
     custom_llm_provider = "vertex_ai"
 
     # Usage from the issue: text_tokens=0, image_tokens=1120, reasoning_tokens=225
@@ -765,9 +825,9 @@ def test_gemini_image_generation_cost_with_zero_text_tokens():
 
     # Expected costs:
     # - text_tokens: 0 * output_cost_per_token = 0
-    # - image_tokens: 1120 * output_cost_per_image_token = 1120 * 1.2e-04 = 0.1344
-    # - reasoning_tokens: 225 * output_cost_per_token = 225 * 1.2e-05 = 0.0027
-    # Total completion: ~0.1371
+    # - image_tokens: 1120 * output_cost_per_image_token
+    # - reasoning_tokens: 225 * output_cost_per_token
+    # Total completion should include both image + reasoning costs.
 
     output_cost_per_image_token = model_cost_map.get("output_cost_per_image_token", 0)
     output_cost_per_token = model_cost_map.get("output_cost_per_token", 0)
@@ -776,16 +836,149 @@ def test_gemini_image_generation_cost_with_zero_text_tokens():
     expected_reasoning_cost = 225 * output_cost_per_token  # reasoning uses base token cost
     expected_completion_cost = expected_image_cost + expected_reasoning_cost
 
-    # The bug was: all 1345 tokens were treated as text = 1345 * 1.2e-05 = 0.01614
-    # Fixed: image_tokens use image pricing = ~0.137
-
-    assert completion_cost > 0.10, (
-        f"Completion cost should be > $0.10 (image tokens are expensive), got ${completion_cost:.6f}. "
-        f"Bug: tokens may be incorrectly treated as text tokens."
+    # The bug was: all completion tokens were treated as text tokens only.
+    bugged_text_only_cost = 1345 * output_cost_per_token
+    assert completion_cost > bugged_text_only_cost * 2, (
+        f"Completion cost should be significantly larger than text-only bugged path. "
+        f"Expected > {bugged_text_only_cost * 2:.6f}, got {completion_cost:.6f}"
     )
     assert round(completion_cost, 4) == round(expected_completion_cost, 4), (
         f"Expected completion cost ${expected_completion_cost:.6f}, got ${completion_cost:.6f}"
     )
+
+
+def test_vertex_image_generation_cost_prefers_token_usage_metadata():
+    """
+    When usage metadata exists on image responses, Vertex image generation cost
+    should be calculated from token pricing, not flat output_cost_per_image.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gemini-3.1-flash-image-preview"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+
+    input_text_tokens = 50
+    input_image_tokens = 1120
+    output_image_tokens = 1120
+    prompt_tokens = input_text_tokens + input_image_tokens
+
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")],
+        usage=ImageUsage(
+            input_tokens=prompt_tokens,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                text_tokens=input_text_tokens,
+                image_tokens=input_image_tokens,
+            ),
+            output_tokens=output_image_tokens,
+            total_tokens=prompt_tokens + output_image_tokens,
+        ),
+    )
+
+    cost = vertex_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
+    expected_completion_cost = output_image_tokens * model_info["output_cost_per_image_token"]
+    expected_total_cost = expected_prompt_cost + expected_completion_cost
+
+    assert round(cost, 10) == round(expected_total_cost, 10)
+    # Ensure this is not falling back to flat per-image pricing.
+    assert cost != len(image_response.data) * model_info["output_cost_per_image"]
+
+
+def test_vertex_image_generation_cost_falls_back_to_flat_image_pricing():
+    """
+    Without usage metadata, Vertex image generation cost should fall back to
+    output_cost_per_image * number_of_images.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gemini-3.1-flash-image-preview"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")]
+    )
+
+    cost = vertex_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_cost = len(image_response.data) * model_info["output_cost_per_image"]
+    assert round(cost, 10) == round(expected_cost, 10)
+
+
+def test_gemini_image_generation_cost_prefers_token_usage_metadata():
+    """
+    When usage metadata exists on image responses, Gemini image generation cost
+    should be calculated from token pricing, not flat output_cost_per_image.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gemini/gemini-3-pro-image-preview"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+
+    input_text_tokens = 20
+    input_image_tokens = 1120
+    output_image_tokens = 1120
+    prompt_tokens = input_text_tokens + input_image_tokens
+
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")],
+        usage=ImageUsage(
+            input_tokens=prompt_tokens,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                text_tokens=input_text_tokens,
+                image_tokens=input_image_tokens,
+            ),
+            output_tokens=output_image_tokens,
+            total_tokens=prompt_tokens + output_image_tokens,
+        ),
+    )
+
+    cost = gemini_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
+    expected_completion_cost = output_image_tokens * model_info["output_cost_per_image_token"]
+    expected_total_cost = expected_prompt_cost + expected_completion_cost
+
+    assert round(cost, 10) == round(expected_total_cost, 10)
+    # Ensure this is not falling back to flat per-image pricing.
+    assert cost != len(image_response.data) * model_info["output_cost_per_image"]
+
+
+def test_gemini_image_generation_cost_falls_back_to_flat_image_pricing():
+    """
+    Without usage metadata, Gemini image generation cost should fall back to
+    output_cost_per_image * number_of_images.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gemini/gemini-3-pro-image-preview"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")]
+    )
+
+    cost = gemini_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_cost = len(image_response.data) * model_info["output_cost_per_image"]
+    assert round(cost, 10) == round(expected_cost, 10)
 
 
 def test_bedrock_anthropic_prompt_caching():
@@ -862,3 +1055,42 @@ def test_reasoning_tokens_without_text_tokens_gpt5_nano():
     wrong_cost = 768 * 0.40 / 1_000_000  # Only reasoning tokens
     assert abs(completion_cost - wrong_cost) > 1e-6, \
         "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
+
+
+def test_image_count_prevents_text_tokens_fallback():
+    """
+    Test that the text_tokens fallback in generic_cost_per_token does not
+    override text_tokens=0 when image_count > 0.
+
+    Regression test for: Bedrock image embedding double-charging bug.
+    When image_count > 0, text_tokens=0 is intentional (image-only request),
+    not "text_tokens not set by provider."
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Simulate Nova image-only embedding: prompt_tokens estimated from
+    # embedding dimensions (768 for 3072-dim), image_count=1
+    usage = Usage(
+        prompt_tokens=768,
+        completion_tokens=0,
+        total_tokens=768,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            image_count=1,
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="amazon.nova-2-multimodal-embeddings-v1:0",
+        usage=usage,
+        custom_llm_provider="bedrock",
+    )
+
+    # Cost should be 1 * input_cost_per_image ($6e-05) = $0.00006
+    # NOT 768 * input_cost_per_token ($1.35e-07) + $0.00006 = $0.000164
+    expected_image_cost = 1 * 6e-05
+    assert prompt_cost == expected_image_cost, (
+        f"Expected prompt_cost={expected_image_cost} (image-only), "
+        f"got {prompt_cost}. text_tokens fallback may be double-charging."
+    )
+    assert completion_cost == 0.0

@@ -42,9 +42,11 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/team_based_guardrails",
         "proxy/guardrails/guardrail_load_balancing",
         "proxy/guardrails/test_playground",
         "proxy/guardrails/litellm_content_filter",
+        "proxy/guardrails/realtime_guardrails",
         {
           type: "category",
           label: "Providers",
@@ -56,6 +58,7 @@ const sidebars = {
               "proxy/guardrails/aporia_api",
               "proxy/guardrails/azure_content_guardrail",
               "proxy/guardrails/bedrock",
+              "proxy/guardrails/crowdstrike_aidr",
               "proxy/guardrails/enkryptai",
               "proxy/guardrails/ibm_guardrails",
               "proxy/guardrails/grayswan",
@@ -97,6 +100,7 @@ const sidebars = {
       label: "Policies",
       items: [
         "proxy/guardrails/guardrail_policies",
+        "proxy/guardrails/policy_templates",
         "proxy/guardrails/policy_tags",
       ],
     },
@@ -106,7 +110,8 @@ const sidebars = {
       items: [
         "proxy/alerting",
         "proxy/pagerduty",
-        "proxy/prometheus"
+        "proxy/prometheus",
+        "proxy/pyroscope_profiling"
       ]
     },
     {
@@ -118,6 +123,13 @@ const sidebars = {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
+        {
+          type: "category",
+          label: "Contributing to Prompt Management",
+          items: [
+            "adding_provider/generic_prompt_management_api",
+          ]
+        },
         "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
@@ -152,10 +164,12 @@ const sidebars = {
           ]
         },
         "tutorials/opencode_integration",
+        "tutorials/openclaw_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
+        "tutorials/google_genai_sdk",
         "tutorials/litellm_qwen_code_cli",
         "tutorials/openai_codex"
       ]
@@ -170,10 +184,12 @@ const sidebars = {
         slug: "/agent_sdks"
       },
       items: [
+        "tutorials/openai_agents_sdk",
         "tutorials/claude_agent_sdk",
         "tutorials/copilotkit_sdk",
         "tutorials/google_adk",
         "tutorials/livekit_xai_realtime",
+        "projects/openai-agents"
       ]
     },
 
@@ -324,6 +340,7 @@ const sidebars = {
                 "proxy/ui_credentials",
                 "proxy/ai_hub",
                 "proxy/model_compare_ui",
+                "proxy/ui_store_model_db_setting",
               ]
             },
             {
@@ -333,6 +350,7 @@ const sidebars = {
                 "proxy/access_control",
                 "proxy/self_serve",
                 "proxy/public_teams",
+                "proxy/ui_project_management",
                 "proxy/ui/bulk_edit_users",
                 "proxy/ui/page_visibility",
               ]
@@ -400,12 +418,14 @@ const sidebars = {
           items: [
             "proxy/users",
             "proxy/team_budgets",
+            "proxy/project_management",
             "proxy/ui_team_soft_budget_alerts",
             "proxy/tag_budgets",
             "proxy/customers",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
+            "proxy/budget_reset_and_tz",
           ],
         },
         "proxy/caching",
@@ -465,6 +485,7 @@ const sidebars = {
             "proxy/model_access_guide",
             "proxy/model_access",
             "proxy/model_access_groups",
+            "proxy/access_groups",
             "proxy/team_model_add"
           ]
         },
@@ -569,6 +590,7 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
+        "evals_api",
         "generateContent",
         "apply_guardrail",
         "bedrock_invoke",
@@ -616,6 +638,7 @@ const sidebars = {
             "pass_through/bedrock",
             "pass_through/azure_passthrough",
             "pass_through/cohere",
+            "pass_through/cursor",
             "pass_through/google_ai_studio",
             "pass_through/langfuse",
             "pass_through/mistral",
@@ -739,6 +762,7 @@ const sidebars = {
             "providers/vertex_batch",
             "providers/vertex_ocr",
             "providers/vertex_ai_agent_engine",
+            "providers/vertex_realtime",
           ]
         },
         {
@@ -769,13 +793,13 @@ const sidebars = {
             "providers/bedrock_batches",
             "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
-        "providers/bedrock_vector_store",
-      ]
-    },
-    "providers/litellm_proxy",
-    "providers/abliteration",
-    "providers/ai21",
-    "providers/aiml",
+            "providers/bedrock_vector_store",
+          ]
+        },
+        "providers/litellm_proxy",
+        "providers/abliteration",
+        "providers/ai21",
+        "providers/aiml",
         "providers/aleph_alpha",
         "providers/amazon_nova",
         "providers/anyscale",
@@ -854,7 +878,14 @@ const sidebars = {
         "providers/openrouter",
         "providers/sarvam",
         "providers/ovhcloud",
-        "providers/perplexity",
+        {
+          type: "category",
+          label: "Perplexity AI",
+          items: [
+            "providers/perplexity",
+            "providers/perplexity_embedding",
+          ]
+        },
         "providers/petals",
         "providers/poe",
         "providers/publicai",
@@ -873,6 +904,7 @@ const sidebars = {
         },
         "providers/sambanova",
         "providers/sap",
+        "providers/scaleway",
         "providers/stability",
         "providers/synthetic",
         "providers/snowflake",
@@ -931,6 +963,7 @@ const sidebars = {
         "providers/anthropic_tool_search",
         "guides/code_interpreter",
         "completion/message_trimming",
+        "completion/message_sanitization",
         "completion/model_alias",
         "completion/mock_requests",
         "completion/predict_outputs",
@@ -1002,6 +1035,7 @@ const sidebars = {
         "tutorials/presidio_pii_masking",
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
+        "tutorials/claude_code_beta_headers",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
@@ -1096,22 +1130,37 @@ const sidebars = {
         "proxy_server",
       ],
     },
-    "troubleshoot",
     {
       type: "category",
-      label: "Issue Reporting",
+      label: "Troubleshooting",
       items: [
-        "troubleshoot/prisma_migrations",
-        "troubleshoot/cpu_issues",
-        "troubleshoot/memory_issues",
-        "troubleshoot/spend_queue_warnings",
-        "troubleshoot/max_callbacks",
+        "troubleshoot/ui_issues",
+        "mcp_troubleshoot",
+        {
+          type: "category",
+          label: "Performance / Latency",
+          items: [
+            "troubleshoot/latency_overhead",
+            "troubleshoot/cpu_issues",
+            "troubleshoot/memory_issues",
+            "troubleshoot/spend_queue_warnings",
+            "troubleshoot/max_callbacks",
+            "troubleshoot/prisma_migrations",
+          ],
+        },
+        "troubleshoot/rollback",
+        "troubleshoot",
       ],
     },
     {
       type: "category",
       label: "Blog",
       items: [
+        {
+          type: "link",
+          label: "Day 0 Support: Claude Sonnet 4.6",
+          href: "/blog/claude_sonnet_4_6",
+        },
         {
           type: "link",
           label: "Incident: Broken Model Cost Map",

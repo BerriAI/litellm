@@ -117,3 +117,41 @@ async def test_scheduler_prioritized_requests(p0, p1, healthy_deployments):
             )
             == False
         )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_queue_cleanup_on_timeout():
+    """
+    Test that a timed-out request is properly removed from the queue.
+    This prevents memory leaks from accumulating timed-out requests.
+    """
+    scheduler = Scheduler()
+
+    # Add multiple requests with different priorities
+    item1 = FlowItem(priority=0, request_id="req-0", model_name="gpt-3.5-turbo")
+    item2 = FlowItem(priority=1, request_id="req-1", model_name="gpt-3.5-turbo")
+    item3 = FlowItem(priority=2, request_id="req-2", model_name="gpt-3.5-turbo")
+
+    await scheduler.add_request(item1)
+    await scheduler.add_request(item2)
+    await scheduler.add_request(item3)
+
+    # Verify initial queue size
+    queue_before = await scheduler.get_queue(model_name="gpt-3.5-turbo")
+    assert len(queue_before) == 3, f"Expected 3 items in queue, got {len(queue_before)}"
+
+    # Simulate timeout cleanup - remove a non-front request (item2)
+    await scheduler.remove_request(request_id="req-1", model_name="gpt-3.5-turbo")
+
+    # Verify queue was cleaned up
+    queue_after = await scheduler.get_queue(model_name="gpt-3.5-turbo")
+    assert len(queue_after) == 2, f"Expected 2 items after cleanup, got {len(queue_after)}"
+
+    # Verify the correct request was removed
+    remaining_ids = [item[1] for item in queue_after]
+    assert "req-1" not in remaining_ids, "Expected req-1 to be removed"
+    assert "req-0" in remaining_ids, "Expected req-0 to remain"
+    assert "req-2" in remaining_ids, "Expected req-2 to remain"
+
+    # Verify remaining items are in correct priority order (0 should be first)
+    assert queue_after[0][1] == "req-0", "Expected req-0 (priority 0) to be at front"
