@@ -112,6 +112,7 @@ async def acreate_batch(
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
+    output_expires_after: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> LiteLLMBatch:
     """
@@ -133,6 +134,7 @@ async def acreate_batch(
             metadata,
             extra_headers,
             extra_body,
+            output_expires_after,
             **kwargs,
         )
 
@@ -160,6 +162,7 @@ def create_batch(
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
+    output_expires_after: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
     """
@@ -215,6 +218,8 @@ def create_batch(
             extra_headers=extra_headers,
             extra_body=extra_body,
         )
+        if output_expires_after is not None:
+            _create_batch_request["output_expires_after"] = output_expires_after
         if model is not None:
             provider_config = ProviderConfigManager.get_provider_batches_config(
                 model=model,
