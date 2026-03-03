@@ -18,7 +18,6 @@ from litellm.types.utils import CallTypesLiteral
 from .base import AzureGuardrailBase
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
         AzureTextModerationGuardrailResponse,
@@ -29,15 +28,15 @@ if TYPE_CHECKING:
 
 class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardrail):
     """
-    LiteLLM Built-in Guardrail for Azure Content Safety Guardrail (Prompt Shield).
+    LiteLLM Built-in Guardrail for Azure Content Safety (Text Moderation).
 
-    This guardrail scans prompts and responses using the Azure Prompt Shield API to detect
-    malicious content, injection attempts, and policy violations.
+    This guardrail scans prompts and responses using the Azure Text Moderation API to detect
+    malicious content and policy violations based on severity thresholds.
 
     Configuration:
         guardrail_name: Name of the guardrail instance
-        api_key: Azure Prompt Shield API key
-        api_base: Azure Prompt Shield API endpoint
+        api_key: Azure Text Moderation API key
+        api_base: Azure Text Moderation API endpoint
         default_on: Whether to enable by default
     """
 
@@ -89,7 +88,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         self.severity_threshold_by_category = severity_threshold_by_category
 
         verbose_proxy_logger.info(
-            f"Initialized Azure Prompt Shield Guardrail: {guardrail_name}"
+            f"Initialized Azure Text Moderation Guardrail: {guardrail_name}"
         )
 
     @staticmethod

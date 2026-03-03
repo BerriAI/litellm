@@ -23,7 +23,6 @@ if TYPE_CHECKING:
         AzurePromptShieldGuardrailResponse,
     )
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-    from litellm.types.utils import ModelResponse
 
 
 class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrail):
@@ -76,8 +75,8 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
         Long prompts are automatically split at word boundaries into chunks
         that respect the Azure Content Safety 10 000-character limit.  Each
-        chunk is analysed independently; an attack in *any* chunk causes an
-        immediate return so the caller can block the request.
+        chunk is analysed independently; an attack in *any* chunk raises
+        an HTTPException immediately.
         """
         from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
@@ -153,24 +152,6 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         else:
             verbose_proxy_logger.warning("Azure Prompt Shield: No user prompt found")
         return None
-
-    @log_guardrail_information
-    async def async_post_call_hook(
-        self,
-        data: Dict[str, Any],
-        user_api_key_dict: "UserAPIKeyAuth",
-        response: "ModelResponse",
-    ) -> "ModelResponse":
-        """
-        Post-call hook to scan LLM responses before returning to user.
-
-        Raises HTTPException if response should be blocked.
-        """
-        verbose_proxy_logger.debug(
-            "Azure Prompt Shield: Running post-call response scan"
-        )
-
-        return response
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
