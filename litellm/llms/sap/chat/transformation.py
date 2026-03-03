@@ -204,8 +204,17 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        # Filter out parameters that are not valid model params for SAP Orchestration API
+        # - tools, model_version, deployment_url: handled separately
+        excluded_params = {"tools", "model_version", "deployment_url"}
+
+        # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
+        # LangChain agents pass strict=true at top level, which fails for GPT models
+        if model.startswith("gpt"):
+            excluded_params.add("strict")
+
         model_params = {
-            k: v for k, v in optional_params.items() if k not in {"tools", "model_version", "deployment_url"}
+            k: v for k, v in optional_params.items() if k not in excluded_params
         }
 
         model_version = optional_params.pop("model_version", "latest")

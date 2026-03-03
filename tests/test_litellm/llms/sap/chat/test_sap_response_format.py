@@ -271,6 +271,167 @@ class TestNestedSchema:
         assert prompt_config["response_format"]["json_schema"]["schema"] == nested_schema
 
 
+class TestTransformResponseWithResponseFormat:
+    """Test transform_response handles response_format correctly."""
+
+    def test_transform_response_strips_markdown_for_json_schema(self):
+        """transform_response should strip markdown when response_format.type=json_schema."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse, Choices, Message
+
+        config = GenAIHubOrchestrationConfig()
+
+        # Create mock raw_response
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"result": "success"}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "anthropic--claude-3-5-sonnet"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        # Create mock logging_obj
+        logging_obj = MagicMock()
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "test", "schema": {"type": "object"}}
+        }
+
+        result = config.transform_response(
+            model="anthropic--claude-3-5-sonnet",
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={"response_format": response_format},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == '{"result": "success"}'
+
+    def test_transform_response_strips_markdown_for_json_object(self):
+        """transform_response should strip markdown when response_format.type=json_object."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"answer": 42}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "anthropic--claude-3-5-sonnet"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="anthropic--claude-3-5-sonnet",
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={"response_format": {"type": "json_object"}},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == '{"answer": 42}'
+
+    def test_transform_response_no_strip_for_text_type(self):
+        """transform_response should NOT strip markdown when response_format.type=text."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"data": "keep me"}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "anthropic--claude-3-5-sonnet"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="anthropic--claude-3-5-sonnet",
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={"response_format": {"type": "text"}},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Content should remain unchanged for text type
+        assert result.choices[0].message.content == '```json\n{"data": "keep me"}\n```'
+
+    def test_transform_response_no_strip_without_response_format(self):
+        """transform_response should NOT strip markdown when no response_format provided."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"preserve": true}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "anthropic--claude-3-5-sonnet"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="anthropic--claude-3-5-sonnet",
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={},  # No response_format
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Content should remain unchanged when no response_format
+        assert result.choices[0].message.content == '```json\n{"preserve": true}\n```'
+
+
 class TestMarkdownStripping:
     """Test markdown code block stripping for JSON responses."""
 
@@ -335,3 +496,310 @@ class TestMarkdownStripping:
         # json_schema type should trigger stripping
         assert config.get_supported_openai_params("anthropic--claude-3-5-sonnet")
         # The actual stripping is tested in transform_response, which checks type
+
+    def test_strip_multiple_choices(self):
+        """Should strip markdown from all choices, not just the first."""
+        from litellm.types.utils import ModelResponse, Choices, Message
+
+        config = GenAIHubOrchestrationConfig()
+        response = ModelResponse(
+            id="test",
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content='```json\n{"choice": 0}\n```'),
+                    finish_reason="stop"
+                ),
+                Choices(
+                    index=1,
+                    message=Message(role="assistant", content='```json\n{"choice": 1}\n```'),
+                    finish_reason="stop"
+                ),
+                Choices(
+                    index=2,
+                    message=Message(role="assistant", content='```\n{"choice": 2}\n```'),
+                    finish_reason="stop"
+                ),
+            ],
+            model="test"
+        )
+
+        result = config._strip_markdown_json(response)
+        assert result.choices[0].message.content == '{"choice": 0}'
+        assert result.choices[1].message.content == '{"choice": 1}'
+        assert result.choices[2].message.content == '{"choice": 2}'
+
+    def test_strip_with_whitespace_variations(self):
+        """Should handle various whitespace patterns around JSON."""
+        from litellm.types.utils import ModelResponse, Choices, Message
+
+        config = GenAIHubOrchestrationConfig()
+
+        # Test with extra spaces and different newline styles
+        test_cases = [
+            ('```json\n{"a":1}\n```', '{"a":1}'),  # Standard
+            ('```json\n  {"a":1}  \n```', '{"a":1}'),  # Extra spaces inside
+            ('  ```json\n{"a":1}\n```  ', '{"a":1}'),  # Extra spaces outside (stripped by .strip())
+            ('```json\n\n{"a":1}\n\n```', '{"a":1}'),  # Extra newlines
+        ]
+
+        for input_content, expected in test_cases:
+            response = ModelResponse(
+                id="test",
+                choices=[Choices(
+                    index=0,
+                    message=Message(role="assistant", content=input_content),
+                    finish_reason="stop"
+                )],
+                model="test"
+            )
+
+            result = config._strip_markdown_json(response)
+            assert result.choices[0].message.content == expected, f"Failed for input: {repr(input_content)}"
+
+    def test_no_strip_partial_markdown(self):
+        """Should not corrupt content with incomplete markdown (only opening ```)."""
+        from litellm.types.utils import ModelResponse, Choices, Message
+
+        config = GenAIHubOrchestrationConfig()
+
+        # Only opening backticks - should be preserved
+        response = ModelResponse(
+            id="test",
+            choices=[Choices(
+                index=0,
+                message=Message(role="assistant", content='```json\n{"incomplete": true}'),
+                finish_reason="stop"
+            )],
+            model="test"
+        )
+
+        result = config._strip_markdown_json(response)
+        # Should remain unchanged since there's no closing ```
+        assert result.choices[0].message.content == '```json\n{"incomplete": true}'
+
+    def test_preserve_markdown_in_json_value(self):
+        """Should preserve markdown code blocks inside JSON string values."""
+        from litellm.types.utils import ModelResponse, Choices, Message
+
+        config = GenAIHubOrchestrationConfig()
+
+        # JSON with markdown inside a string value - only outer wrapper should be stripped
+        content_with_nested = '```json\n{"code": "```python\\nprint(1)\\n```"}\n```'
+        response = ModelResponse(
+            id="test",
+            choices=[Choices(
+                index=0,
+                message=Message(role="assistant", content=content_with_nested),
+                finish_reason="stop"
+            )],
+            model="test"
+        )
+
+        result = config._strip_markdown_json(response)
+        # Only the outer wrapper should be stripped, inner markdown preserved
+        assert result.choices[0].message.content == '{"code": "```python\\nprint(1)\\n```"}'
+
+
+class TestResponseFormatErrorHandling:
+    """Test error handling in response_format processing."""
+
+    def test_empty_content_handling(self):
+        """_strip_markdown_json should handle None/empty content gracefully."""
+        from litellm.types.utils import ModelResponse, Choices, Message
+
+        config = GenAIHubOrchestrationConfig()
+
+        # Test with None content
+        response_none = ModelResponse(
+            id="test",
+            choices=[Choices(
+                index=0,
+                message=Message(role="assistant", content=None),
+                finish_reason="stop"
+            )],
+            model="test"
+        )
+
+        result = config._strip_markdown_json(response_none)
+        assert result.choices[0].message.content is None
+
+        # Test with empty string content
+        response_empty = ModelResponse(
+            id="test",
+            choices=[Choices(
+                index=0,
+                message=Message(role="assistant", content=""),
+                finish_reason="stop"
+            )],
+            model="test"
+        )
+
+        result = config._strip_markdown_json(response_empty)
+        assert result.choices[0].message.content == ""
+
+    def test_response_format_with_no_choices(self):
+        """_strip_markdown_json should handle response with empty choices."""
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        # Empty choices list
+        response = ModelResponse(
+            id="test",
+            choices=[],
+            model="test"
+        )
+
+        # Should not raise an error
+        result = config._strip_markdown_json(response)
+        assert result.choices == []
+
+    def test_response_format_with_message_no_content(self):
+        """_strip_markdown_json should handle choice with message but no content."""
+        from litellm.types.utils import ModelResponse, Choices, Message
+
+        config = GenAIHubOrchestrationConfig()
+
+        # Choice with message but content is None
+        response = ModelResponse(
+            id="test",
+            choices=[Choices(
+                index=0,
+                message=Message(role="assistant", content=None),
+                finish_reason="stop"
+            )],
+            model="test"
+        )
+
+        # Should not raise an error and content should remain None
+        result = config._strip_markdown_json(response)
+        assert result.choices[0].message.content is None
+
+
+class TestStrictParameterFiltering:
+    """Test that strict parameter is filtered from model_params.
+
+    LangChain agents pass strict=true at the top level of optional_params,
+    but SAP AI Core Orchestration API does not accept it as a model parameter
+    for GPT models. The strict parameter should only exist inside
+    response_format.json_schema, not as a top-level model param.
+    """
+
+    def test_strict_param_filtered_from_model_params(self):
+        """strict should be filtered out and not appear in model.params."""
+        config = GenAIHubOrchestrationConfig()
+
+        request = config.transform_request(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={"strict": True, "temperature": 0.7},
+            litellm_params={},
+            headers={},
+        )
+
+        # strict should NOT be in model.params
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        assert "strict" not in model_params
+        # Other params should still be there
+        assert model_params.get("temperature") == 0.7
+
+    def test_strict_preserved_inside_response_format_json_schema(self):
+        """strict inside response_format.json_schema should be preserved."""
+        config = GenAIHubOrchestrationConfig()
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "test_schema",
+                "strict": True,  # This is the correct location for strict
+                "schema": {
+                    "type": "object",
+                    "properties": {"result": {"type": "string"}},
+                    "required": ["result"]
+                }
+            }
+        }
+
+        request = config.transform_request(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={"response_format": response_format},
+            litellm_params={},
+            headers={},
+        )
+
+        # strict should be preserved inside json_schema
+        prompt_config = request["config"]["modules"]["prompt_templating"]["prompt"]
+        assert prompt_config["response_format"]["json_schema"]["strict"] is True
+
+    def test_langchain_style_strict_filtered_with_response_format(self):
+        """LangChain sends strict at top level AND inside json_schema - only top level filtered."""
+        config = GenAIHubOrchestrationConfig()
+
+        # LangChain sends both top-level strict AND inside json_schema
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "agent_response",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}}
+                }
+            }
+        }
+
+        request = config.transform_request(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={
+                "strict": True,  # Top-level strict from LangChain - should be filtered
+                "response_format": response_format,
+                "temperature": 0.5
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        # Top-level strict should NOT be in model.params
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        assert "strict" not in model_params
+        assert model_params.get("temperature") == 0.5
+
+        # strict inside json_schema should be preserved
+        prompt_config = request["config"]["modules"]["prompt_templating"]["prompt"]
+        assert prompt_config["response_format"]["json_schema"]["strict"] is True
+
+    def test_strict_preserved_for_anthropic_models(self):
+        """strict should be preserved for Anthropic models (SAP API accepts it)."""
+        config = GenAIHubOrchestrationConfig()
+
+        request = config.transform_request(
+            model="anthropic--claude-3-5-sonnet",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={"strict": True, "max_tokens": 1000},
+            litellm_params={},
+            headers={},
+        )
+
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        # Anthropic models CAN have strict in model.params (SAP API accepts it)
+        assert model_params.get("strict") is True
+        assert model_params.get("max_tokens") == 1000
+
+
+class TestModelVariantSupport:
+    """Test response_format support for various model variants."""
+
+    def test_gpt4_turbo_supports_response_format(self):
+        """gpt-4-turbo should support response_format (native support)."""
+        config = GenAIHubOrchestrationConfig()
+        params = config.get_supported_openai_params("gpt-4-turbo")
+        assert "response_format" in params
+
+    def test_mistral_model_support(self):
+        """Mistral models should support response_format (native support)."""
+        config = GenAIHubOrchestrationConfig()
+        params = config.get_supported_openai_params("mistral-large")
+        assert "response_format" in params
