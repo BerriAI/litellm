@@ -5484,6 +5484,131 @@ export const getGuardrailsList = async (accessToken: string) => {
   }
 };
 
+// Team guardrail submissions (admin)
+export interface GuardrailSubmissionItem {
+  guardrail_id: string;
+  guardrail_name: string;
+  status: string; // "pending_review" | "active" | "rejected"
+  team_id?: string | null;
+  team_guardrail?: boolean; // true when submitted via team (team_id set)
+  litellm_params?: Record<string, unknown> | null;
+  guardrail_info?: Record<string, unknown> | null;
+  submitted_by_user_id?: string | null;
+  submitted_by_email?: string | null;
+  submitted_at?: string | null;
+  reviewed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface GuardrailSubmissionSummary {
+  total: number;
+  pending_review: number;
+  active: number;
+  rejected: number;
+}
+
+export interface ListGuardrailSubmissionsResponse {
+  submissions: GuardrailSubmissionItem[];
+  summary: GuardrailSubmissionSummary;
+}
+
+export const listGuardrailSubmissions = async (
+  accessToken: string,
+  params?: { status?: string; team_id?: string; team_guardrail?: boolean; search?: string }
+): Promise<ListGuardrailSubmissionsResponse> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/submissions` : `/guardrails/submissions`;
+  const searchParams = new URLSearchParams();
+  if (params?.status) searchParams.set("status", params.status);
+  if (params?.team_id) searchParams.set("team_id", params.team_id);
+  if (params?.team_guardrail !== undefined) searchParams.set("team_guardrail", String(params.team_guardrail));
+  if (params?.search) searchParams.set("search", params.search);
+  const fullUrl = searchParams.toString() ? `${url}?${searchParams.toString()}` : url;
+  const response = await fetch(fullUrl, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const getGuardrailSubmission = async (
+  accessToken: string,
+  guardrailId: string
+): Promise<GuardrailSubmissionItem> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}`
+    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const approveGuardrailSubmission = async (
+  accessToken: string,
+  guardrailId: string
+): Promise<{ guardrail_id: string; status: string; message: string }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`
+    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const rejectGuardrailSubmission = async (
+  accessToken: string,
+  guardrailId: string
+): Promise<{ guardrail_id: string; status: string; message: string }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`
+    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
 // Guardrails / Policies usage (dashboard)
 export const getGuardrailsUsageOverview = async (
   accessToken: string,
@@ -8364,6 +8489,7 @@ export const updateGuardrailCall = async (
     guardrail_name?: string;
     default_on?: boolean;
     guardrail_info?: Record<string, any>;
+    litellm_params?: Record<string, any>;
   },
 ) => {
   try {

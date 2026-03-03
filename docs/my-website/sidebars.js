@@ -42,6 +42,7 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/team_based_guardrails",
         "proxy/guardrails/guardrail_load_balancing",
         "proxy/guardrails/test_playground",
         "proxy/guardrails/litellm_content_filter",
@@ -57,6 +58,7 @@ const sidebars = {
               "proxy/guardrails/aporia_api",
               "proxy/guardrails/azure_content_guardrail",
               "proxy/guardrails/bedrock",
+              "proxy/guardrails/crowdstrike_aidr",
               "proxy/guardrails/enkryptai",
               "proxy/guardrails/ibm_guardrails",
               "proxy/guardrails/grayswan",
@@ -876,7 +878,14 @@ const sidebars = {
         "providers/openrouter",
         "providers/sarvam",
         "providers/ovhcloud",
-        "providers/perplexity",
+        {
+          type: "category",
+          label: "Perplexity AI",
+          items: [
+            "providers/perplexity",
+            "providers/perplexity_embedding",
+          ]
+        },
         "providers/petals",
         "providers/poe",
         "providers/publicai",

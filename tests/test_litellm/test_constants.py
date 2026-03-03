@@ -41,6 +41,10 @@ def test_all_numeric_constants_can_be_overridden():
     # Constants that use a different env var name than the constant name
     constant_to_env_var = {
         "MAX_CALLBACKS": "LITELLM_MAX_CALLBACKS",
+        "MCP_CLIENT_TIMEOUT": "LITELLM_MCP_CLIENT_TIMEOUT",
+        "MCP_TOOL_LISTING_TIMEOUT": "LITELLM_MCP_TOOL_LISTING_TIMEOUT",
+        "MCP_METADATA_TIMEOUT": "LITELLM_MCP_METADATA_TIMEOUT",
+        "MCP_HEALTH_CHECK_TIMEOUT": "LITELLM_MCP_HEALTH_CHECK_TIMEOUT",
     }
 
     # Verify all numeric constants have environment variable support

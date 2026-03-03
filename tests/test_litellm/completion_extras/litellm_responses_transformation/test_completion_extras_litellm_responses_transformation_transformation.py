@@ -1324,6 +1324,8 @@ def test_transform_response_preserves_annotations():
     assert result.usage.completion_tokens == 20
     assert result.usage.total_tokens == 30
 
+    print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
+
 
 def test_multi_tool_call_stream_no_premature_finish():
     """
@@ -1472,3 +1474,94 @@ def test_multi_tool_call_stream_no_premature_finish():
             )
 
     print("✓ Multi-tool-call stream completes without premature finish_reason termination")
+
+
+# =============================================================================
+# Tests for issue #21331: Parallel tool call indices in streaming
+# =============================================================================
+
+
+def test_streaming_parallel_tool_calls_have_distinct_indices():
+    """
+    Test that parallel tool calls get distinct indices matching output_index
+    from the Responses API streaming chunks.
+
+    Regression test for issue #21331 where all tool calls were emitted with
+    index=0, making it impossible to distinguish parallel calls.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    # Simulate two parallel tool calls with output_index 0 and 1
+    chunks = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_abc",
+                "name": "get_weather",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "item_id": "fc_001",
+            "delta": '{"city": "SF"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_abc",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_002",
+                "call_id": "call_def",
+                "name": "get_weather",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "item_id": "fc_002",
+            "delta": '{"city": "NY"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_002",
+                "call_id": "call_def",
+                "name": "get_weather",
+                "arguments": '{"city": "NY"}',
+            },
+        },
+    ]
+
+    for chunk in chunks:
+        result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            chunk
+        )
+        expected_index = chunk["output_index"]
+        for choice in result.choices:
+            if choice.delta.tool_calls:
+                for tc in choice.delta.tool_calls:
+                    assert tc.index == expected_index, (
+                        f"Event {chunk['type']}: expected tool_call.index={expected_index}, "
+                        f"got {tc.index}"
+                    )

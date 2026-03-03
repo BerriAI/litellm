@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Optional
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 if TYPE_CHECKING:
     pass
@@ -44,7 +44,7 @@ class LangGraphSSEStreamIterator:
         self.async_line_iterator = self.response.aiter_lines()
         return self
 
-    def _parse_sse_line(self, line: str) -> Optional[ModelResponse]:
+    def _parse_sse_line(self, line: str) -> Optional[ModelResponseStream]:
         """
         Parse a single SSE line and return a ModelResponse chunk if applicable.
 
@@ -71,7 +71,7 @@ class LangGraphSSEStreamIterator:
 
         return None
 
-    def _process_data(self, data) -> Optional[ModelResponse]:
+    def _process_data(self, data) -> Optional[ModelResponseStream]:
         """
         Process parsed data from SSE stream.
 
@@ -101,7 +101,7 @@ class LangGraphSSEStreamIterator:
 
         return None
 
-    def _process_messages_event(self, payload) -> Optional[ModelResponse]:
+    def _process_messages_event(self, payload) -> Optional[ModelResponseStream]:
         """
         Process a messages event from the stream.
 
@@ -128,7 +128,7 @@ class LangGraphSSEStreamIterator:
 
         return None
 
-    def _process_metadata_event(self, payload) -> Optional[ModelResponse]:
+    def _process_metadata_event(self, payload) -> Optional[ModelResponseStream]:
         """
         Process a metadata event, which may signal the end of the stream.
         """
@@ -139,9 +139,9 @@ class LangGraphSSEStreamIterator:
                 return self._create_final_chunk()
         return None
 
-    def _create_content_chunk(self, text: str) -> ModelResponse:
-        """Create a ModelResponse chunk with content."""
-        chunk = ModelResponse(
+    def _create_content_chunk(self, text: str) -> ModelResponseStream:
+        """Create a ModelResponseStream chunk with content."""
+        chunk = ModelResponseStream(
             id=f"chatcmpl-{uuid.uuid4()}",
             created=0,
             model=self.model,
@@ -158,9 +158,9 @@ class LangGraphSSEStreamIterator:
 
         return chunk
 
-    def _create_final_chunk(self) -> ModelResponse:
-        """Create a final ModelResponse chunk with finish_reason."""
-        chunk = ModelResponse(
+    def _create_final_chunk(self) -> ModelResponseStream:
+        """Create a final ModelResponseStream chunk with finish_reason."""
+        chunk = ModelResponseStream(
             id=f"chatcmpl-{uuid.uuid4()}",
             created=0,
             model=self.model,
@@ -177,7 +177,7 @@ class LangGraphSSEStreamIterator:
 
         return chunk
 
-    def __next__(self) -> ModelResponse:
+    def __next__(self) -> ModelResponseStream:
         """Sync iteration - parse SSE events and yield ModelResponse chunks."""
         try:
             if self.line_iterator is None:
@@ -205,7 +205,7 @@ class LangGraphSSEStreamIterator:
             verbose_logger.error(f"Error in LangGraph SSE stream: {str(e)}")
             raise StopIteration
 
-    async def __anext__(self) -> ModelResponse:
+    async def __anext__(self) -> ModelResponseStream:
         """Async iteration - parse SSE events and yield ModelResponse chunks."""
         try:
             if self.async_line_iterator is None:

@@ -221,7 +221,9 @@ class ResponsesToCompletionBridgeHandler:
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
             )
-            return streamwrapper
+            return self._apply_post_stream_processing(
+                streamwrapper, model, custom_llm_provider
+            )
 
     async def acompletion(
         self, *args, **kwargs
@@ -300,7 +302,30 @@ class ResponsesToCompletionBridgeHandler:
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
             )
-            return streamwrapper
+            return self._apply_post_stream_processing(
+                streamwrapper, model, custom_llm_provider
+            )
+
+    @staticmethod
+    def _apply_post_stream_processing(
+        stream: "CustomStreamWrapper",
+        model: str,
+        custom_llm_provider: str,
+    ) -> Any:
+        """Apply provider-specific post-stream processing if available."""
+        from litellm.types.utils import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        try:
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
+        except (ValueError, KeyError):
+            return stream
+
+        if provider_config is not None:
+            return provider_config.post_stream_processing(stream)
+        return stream
 
 
 responses_api_bridge = ResponsesToCompletionBridgeHandler()

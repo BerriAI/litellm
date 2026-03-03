@@ -5627,6 +5627,21 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
             )
+        elif custom_llm_provider == "perplexity":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
+            )
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
@@ -6244,18 +6259,20 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
                 f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
             )
 
-        # Calculate and add duration if response is missing it
+        # Store duration in _hidden_params for cost calculation without
+        # exposing it in the response body. Adding duration to the response
+        # tricks the OpenAI SDK's "best match deserialization" into thinking
+        # a plain Transcription is a TranscriptionVerbose/Diarized type.
         if (
             response is not None
             and not isinstance(response, Coroutine)
             and file is not None
         ):
-            # Check if response is missing duration
             existing_duration = getattr(response, "duration", None)
             if existing_duration is None:
                 calculated_duration = calculate_request_duration(file)
                 if calculated_duration is not None:
-                    setattr(response, "duration", calculated_duration)
+                    response._hidden_params["audio_transcription_duration"] = calculated_duration
 
         return response
     except Exception as e:
@@ -6471,14 +6488,14 @@ def transcription(
             shared_session=shared_session,
         )
 
-    # Calculate and add duration if response is missing it
+    # Store duration in _hidden_params for cost calculation without
+    # exposing it in the response body (see sync path comment above).
     if response is not None and not isinstance(response, Coroutine):
-        # Check if response is missing duration
         existing_duration = getattr(response, "duration", None)
         if existing_duration is None:
             calculated_duration = calculate_request_duration(file)
             if calculated_duration is not None:
-                setattr(response, "duration", calculated_duration)
+                response._hidden_params["audio_transcription_duration"] = calculated_duration
 
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
