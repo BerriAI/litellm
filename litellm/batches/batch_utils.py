@@ -207,7 +207,10 @@ async def _get_batch_output_file_content_as_dictionary(
     )
 
     if custom_llm_provider == "vertex_ai":
-        raise ValueError("Vertex AI does not support file content retrieval")
+        return await _get_vertex_ai_batch_output_with_custom_id(
+            batch=batch,
+            litellm_params=litellm_params,
+        )
 
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
@@ -233,6 +236,60 @@ async def _get_batch_output_file_content_as_dictionary(
     
     _file_content = await afile_content(**file_content_kwargs)
     return _get_file_content_as_dictionary(_file_content.content)
+
+
+async def _get_vertex_ai_batch_output_with_custom_id(
+    batch: Batch,
+    litellm_params: Optional[dict] = None,
+) -> List[dict]:
+    """
+    Vertex AI batch outputs do not reliably include custom_id.
+    Map output lines back to custom_id using keyField (preferred).
+    """
+    from litellm.files.main import afile_content
+
+    if batch.output_file_id is None:
+        raise ValueError("Output file id is None cannot retrieve file content")
+
+    if batch.input_file_id is None:
+        raise ValueError("Input file id is None cannot map vertex batch outputs")
+
+    credentials = _extract_file_access_credentials(litellm_params)
+
+    output_content = await afile_content(
+        file_id=batch.output_file_id,
+        custom_llm_provider="vertex_ai",
+        **credentials,
+    )
+    output_lines = _get_file_content_as_dictionary(output_content.content)
+
+    input_content = await afile_content(
+        file_id=batch.input_file_id,
+        custom_llm_provider="vertex_ai",
+        **credentials,
+    )
+    input_lines = _get_file_content_as_dictionary(input_content.content)
+
+    if len(output_lines) != len(input_lines):
+        raise ValueError(
+            "Vertex AI batch output line count does not match input line count"
+        )
+
+    output_has_keys = all(
+        (line.get("custom_id") or line.get("key")) for line in output_lines
+    )
+    if not output_has_keys:
+        raise ValueError(
+            "Vertex AI batch output is missing custom_id/key; cannot safely map results"
+        )
+
+    mapped_lines = []
+    for line in output_lines:
+        key = line.get("custom_id") or line.get("key")
+        if key is not None:
+            line["custom_id"] = key
+        mapped_lines.append(line)
+    return mapped_lines
 
 
 def _extract_file_access_credentials(litellm_params: Optional[dict]) -> dict:

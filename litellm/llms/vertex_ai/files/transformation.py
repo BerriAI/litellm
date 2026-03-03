@@ -243,7 +243,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 litellm_params={},
                 cached_content=None,
             )
-            vertex_jsonl_content.append({"request": vertex_request_body})
+            vertex_line: Dict[str, Any] = {"request": vertex_request_body}
+            custom_id = _openai_jsonl_content.get("custom_id")
+            if custom_id is not None:
+                vertex_line["custom_id"] = custom_id
+            vertex_jsonl_content.append(vertex_line)
         return vertex_jsonl_content
 
     def transform_create_file_request(

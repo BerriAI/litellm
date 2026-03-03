@@ -41,6 +41,7 @@ class VertexAIBatchTransformation:
         return VertexAIBatchPredictionJob(
             inputConfig=input_config,
             outputConfig=output_config,
+            instanceConfig={"keyField": "custom_id"},
             model=model,
             displayName=request_display_name,
         )
