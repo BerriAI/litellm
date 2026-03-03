@@ -462,8 +462,8 @@ class TestOpenAISkillsConfigCreateSkillVersion:
         }
         logging_obj = MagicMock()
         result = config.transform_create_skill_version_response(raw_response, logging_obj)
-        assert result["id"] == "sv_1"
-        assert result["version"] == "2"
+        assert result.id == "sv_1"
+        assert result.version == "2"
 
 
 class TestOpenAISkillsConfigListSkillVersions:
@@ -498,7 +498,7 @@ class TestOpenAISkillsConfigListSkillVersions:
         config = OpenAISkillsConfig()
         raw_response = MagicMock(spec=httpx.Response)
         raw_response.json.return_value = {
-            "data": [{"id": "sv_1", "version": "1"}],
+            "data": [{"id": "sv_1", "version": "1", "skill_id": "sk_1", "created_at": 1700000000, "object": "skill.version"}],
             "has_more": True,
             "first_id": "sv_1",
             "last_id": "sv_1",
@@ -506,8 +506,9 @@ class TestOpenAISkillsConfigListSkillVersions:
         }
         logging_obj = MagicMock()
         result = config.transform_list_skill_versions_response(raw_response, logging_obj)
-        assert len(result["data"]) == 1
-        assert result["has_more"] is True
+        assert len(result.data) == 1
+        assert result.has_more is True
+        assert result.data[0].id == "sv_1"
 
 
 class TestOpenAISkillsConfigGetSkillVersion:
@@ -536,7 +537,7 @@ class TestOpenAISkillsConfigGetSkillVersion:
         }
         logging_obj = MagicMock()
         result = config.transform_get_skill_version_response(raw_response, logging_obj)
-        assert result["id"] == "sv_3"
+        assert result.id == "sv_3"
 
 
 class TestOpenAISkillsConfigDeleteSkillVersion:
@@ -565,8 +566,9 @@ class TestOpenAISkillsConfigDeleteSkillVersion:
         }
         logging_obj = MagicMock()
         result = config.transform_delete_skill_version_response(raw_response, logging_obj)
-        assert result["deleted"] is True
-        assert result["id"] == "sv_2"
+        assert result.deleted is True
+        assert result.id == "sv_2"
+        assert result.version == "2"
 
 
 class TestOpenAISkillsConfigGetSkillVersionContent:

@@ -110,6 +110,9 @@ class SkillVersion(BaseModel):
     skill_id: str
     """ID of the parent skill"""
 
+    version: Optional[str] = None
+    """Version number (e.g. '1', '2')"""
+
     created_at: str
     """ISO 8601 timestamp of when the version was created"""
 
@@ -159,4 +162,7 @@ class DeleteSkillVersionResponse(BaseModel):
 
     deleted: bool
     """Whether the version was successfully deleted"""
+
+    version: Optional[str] = None
+    """Version number that was deleted"""
 

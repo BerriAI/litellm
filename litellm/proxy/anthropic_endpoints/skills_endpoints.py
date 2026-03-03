@@ -826,7 +826,6 @@ async def get_skill_version_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Get a specific skill version. OpenAI-specific."""
-    skill_version = version  # save path param before import shadows it
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -838,7 +837,7 @@ async def get_skill_version_endpoint(
         user_model,
         user_request_timeout,
         user_temperature,
-        version,
+        version as proxy_version,
     )
 
     body = await request.body()
@@ -851,7 +850,7 @@ async def get_skill_version_endpoint(
         )
 
     data["skill_id"] = skill_id
-    data["version"] = skill_version
+    data["version"] = version
 
     model = (
         data.get("model")
@@ -883,14 +882,14 @@ async def get_skill_version_endpoint(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            version=version,
+            version=proxy_version,
         )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
-            version=version,
+            version=proxy_version,
         )
 
 
@@ -908,7 +907,6 @@ async def delete_skill_version_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Delete a skill version. OpenAI-specific."""
-    skill_version = version  # save path param before import shadows it
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -920,7 +918,7 @@ async def delete_skill_version_endpoint(
         user_model,
         user_request_timeout,
         user_temperature,
-        version,
+        version as proxy_version,
     )
 
     body = await request.body()
@@ -933,7 +931,7 @@ async def delete_skill_version_endpoint(
         )
 
     data["skill_id"] = skill_id
-    data["version"] = skill_version
+    data["version"] = version
 
     model = (
         data.get("model")
@@ -965,14 +963,14 @@ async def delete_skill_version_endpoint(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            version=version,
+            version=proxy_version,
         )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
-            version=version,
+            version=proxy_version,
         )
 
 
@@ -990,7 +988,6 @@ async def get_skill_version_content_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Get skill version content. OpenAI-specific."""
-    skill_version = version  # save path param before import shadows it
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -1002,7 +999,7 @@ async def get_skill_version_content_endpoint(
         user_model,
         user_request_timeout,
         user_temperature,
-        version,
+        version as proxy_version,
     )
 
     body = await request.body()
@@ -1015,7 +1012,7 @@ async def get_skill_version_content_endpoint(
         )
 
     data["skill_id"] = skill_id
-    data["version"] = skill_version
+    data["version"] = version
 
     model = (
         data.get("model")
@@ -1047,7 +1044,7 @@ async def get_skill_version_content_endpoint(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            version=version,
+            version=proxy_version,
         )
         # Binary content: return raw bytes with proper media type
         if isinstance(result, dict) and "content_type" in result and "json" not in result.get("content_type", ""):
@@ -1062,6 +1059,6 @@ async def get_skill_version_content_endpoint(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
-            version=version,
+            version=proxy_version,
         )
 
