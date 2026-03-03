@@ -26952,6 +26952,26 @@
         "supports_reasoning": false,
         "supports_function_calling": true
     },
+    "perplexity/pplx-embed-v1-0.6b": {
+        "input_cost_per_token": 0.000000004,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
+        "source": "https://docs.perplexity.ai/docs/embeddings/quickstart"
+    },
+    "perplexity/pplx-embed-v1-4b": {
+        "input_cost_per_token": 0.00000003,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 2560,
+        "source": "https://docs.perplexity.ai/docs/embeddings/quickstart"
+    },
     "publicai/aisingapore/Qwen-SEA-LION-v4-32B-IT": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "publicai",

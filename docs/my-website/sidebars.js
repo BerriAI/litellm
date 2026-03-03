@@ -877,7 +877,14 @@ const sidebars = {
         "providers/openrouter",
         "providers/sarvam",
         "providers/ovhcloud",
-        "providers/perplexity",
+        {
+          type: "category",
+          label: "Perplexity AI",
+          items: [
+            "providers/perplexity",
+            "providers/perplexity_embedding",
+          ]
+        },
         "providers/petals",
         "providers/poe",
         "providers/publicai",
