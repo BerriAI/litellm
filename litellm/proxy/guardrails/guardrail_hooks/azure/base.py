@@ -43,13 +43,13 @@ class AzureGuardrailBase:
             else:
                 if current_chunk:
                     chunks.append(current_chunk)
-                    current_chunk = word
-                else:
-                    # Single word longer than max_length – force-split it
-                    while len(word) > max_length:
-                        chunks.append(word[:max_length])
-                        word = word[max_length:]
-                    current_chunk = word
+
+                # Force-split any word longer than max_length (whether or not current_chunk was empty)
+                while len(word) > max_length:
+                    chunks.append(word[:max_length])
+                    word = word[max_length:]
+
+                current_chunk = word
 
         if current_chunk:
             chunks.append(current_chunk)
