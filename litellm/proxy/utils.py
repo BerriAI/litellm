@@ -2109,16 +2109,18 @@ class ProxyLogging:
                 ):
                     if (
                         "async_post_call_streaming_iterator_hook"
-                        in type(callback).__dict__
+                        in type(_callback).__dict__
                     ):
-                        current_response = (
+                        _new_response = (
                             _callback.async_post_call_streaming_iterator_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 response=current_response,
                                 request_data=request_data,
                             )
                         )
-                    elif "apply_guardrail" in type(callback).__dict__:
+                        if _new_response is not None:
+                            current_response = _new_response
+                    elif "apply_guardrail" in type(_callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
                         current_response = (
                             unified_guardrail.async_post_call_streaming_iterator_hook(
@@ -2128,13 +2130,15 @@ class ProxyLogging:
                             )
                         )
                     else:
-                        current_response = (
+                        _new_response = (
                             _callback.async_post_call_streaming_iterator_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 response=current_response,
                                 request_data=request_data,
                             )
                         )
+                        if _new_response is not None:
+                            current_response = _new_response
 
         # Actually iterate through the chained async generator and yield chunks
         async for chunk in current_response:

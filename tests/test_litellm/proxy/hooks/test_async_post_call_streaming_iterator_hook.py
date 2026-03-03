@@ -192,3 +192,46 @@ async def test_streaming_hook_propagates_callback_errors():
         with pytest.raises(RuntimeError, match="Callback failed!"):
             async for _ in result:
                 pass
+
+
+@pytest.mark.asyncio
+async def test_no_double_strip_on_second_call():
+    """Regression test: callback returning None should not break the streaming chain.
+
+    This tests the fix for: 'async for' requires an object with __aiter__ method, got NoneType
+    Caused by a user-defined callback whose async_post_call_streaming_iterator_hook
+    is a regular sync method (not an async generator) that returns None.
+    """
+    proxy_logging = ProxyLogging(user_api_key_cache=MagicMock())
+
+    class NoneReturningCallback(CustomLogger):
+        """Simulates a badly-implemented callback that returns None instead of an async generator."""
+
+        def async_post_call_streaming_iterator_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            response: Any,
+            request_data: dict,
+        ):
+            # Regular sync method, not an async generator — returns None implicitly
+            pass
+
+    bad_callback = NoneReturningCallback()
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+    request_data = {"model": "gpt-4", "messages": []}
+
+    with patch.object(litellm, "callbacks", [bad_callback]):
+        result = proxy_logging.async_post_call_streaming_iterator_hook(
+            response=mock_streaming_response(),
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        )
+
+        # Should not raise TypeError about NoneType
+        collected_chunks = []
+        async for chunk in result:
+            collected_chunks.append(chunk)
+
+        # All 4 original chunks should pass through unmodified
+        assert len(collected_chunks) == 4
