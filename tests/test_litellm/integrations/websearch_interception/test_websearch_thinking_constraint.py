@@ -6,10 +6,13 @@ Covers:
   - M1-I1: max_tokens auto-adjustment when <= thinking.budget_tokens
   - M1-I3: Unit tests for thinking parameter validation
   - M2-I5/I8: litellm_logging_obj excluded from follow-up kwargs to prevent SpendLog dedup
+  - M3-I12: Regression tests for error scenarios
 """
 import asyncio
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
 
 import pytest
 
@@ -286,3 +289,118 @@ class TestLoggingObjExcludedFromFollowUp:
         assert "_websearch_interception_converted_stream" not in captured_kwargs
         assert "_websearch_interception_other" not in captured_kwargs
         assert captured_kwargs.get("api_key") == "fake"
+
+
+# ---------------------------------------------------------------------------
+# M3-I12: Regression tests for error scenarios
+# ---------------------------------------------------------------------------
+
+class TestFollowUpErrorScenarios:
+    """Regression tests: the agentic loop must surface errors properly and
+    not silently swallow them (except at the _call_agentic_completion_hooks
+    level which intentionally catches to return the initial response)."""
+
+    @pytest.mark.asyncio
+    async def test_followup_400_raises(self):
+        """A 400 error from the follow-up call must propagate out of _execute_agentic_loop."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        async def _fail_acreate(**kw):
+            raise Exception("max_tokens must be greater than thinking.budget_tokens")
+
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fail_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
+
+            with pytest.raises(Exception, match="max_tokens must be greater"):
+                await logger._execute_agentic_loop(
+                    model="us.anthropic.claude-opus-4-6-v1",
+                    messages=[{"role": "user", "content": "hi"}],
+                    tool_calls=_make_tool_calls(),
+                    thinking_blocks=[],
+                    anthropic_messages_optional_request_params={"max_tokens": 4096},
+                    logging_obj=_make_logging_obj(),
+                    stream=False,
+                    kwargs={},
+                )
+
+    @pytest.mark.asyncio
+    async def test_search_failure_does_not_crash_loop(self):
+        """If a search fails, the loop should still attempt the follow-up with error text."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def _fake_acreate(**kw):
+            captured_kwargs.update(kw)
+            return MagicMock()
+
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(
+            logger, "_execute_search", side_effect=Exception("search API down")
+        ):
+
+            result = await logger._execute_agentic_loop(
+                model="us.anthropic.claude-opus-4-6-v1",
+                messages=[{"role": "user", "content": "hi"}],
+                tool_calls=_make_tool_calls(),
+                thinking_blocks=[],
+                anthropic_messages_optional_request_params={"max_tokens": 4096},
+                logging_obj=_make_logging_obj(),
+                stream=False,
+                kwargs={},
+            )
+
+        # The follow-up call should have been made (with error text in search results)
+        assert result is not None
+        # Messages should contain the error text
+        follow_up_messages = captured_kwargs.get("messages", [])
+        assert len(follow_up_messages) > 1  # original + assistant + tool_result
+
+    @pytest.mark.asyncio
+    async def test_metadata_preserved_after_logging_obj_exclusion(self):
+        """Proxy metadata (user_api_key, team_id, etc.) must survive in follow-up kwargs
+        even after litellm_logging_obj is excluded — so the new logging_obj from
+        function_setup has access to proxy tracking metadata."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def _fake_acreate(**kw):
+            captured_kwargs.update(kw)
+            return MagicMock()
+
+        proxy_metadata = {
+            "user_api_key": "sk-proxy-key-hash",
+            "user_api_key_user_id": "user-123",
+            "user_api_key_team_id": "team-456",
+            "user_api_key_org_id": "org-789",
+            "user_api_key_end_user_id": "end-user-001",
+        }
+
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
+
+            await logger._execute_agentic_loop(
+                model="us.anthropic.claude-opus-4-6-v1",
+                messages=[{"role": "user", "content": "hi"}],
+                tool_calls=_make_tool_calls(),
+                thinking_blocks=[],
+                anthropic_messages_optional_request_params={"max_tokens": 4096},
+                logging_obj=_make_logging_obj(),
+                stream=False,
+                kwargs={
+                    "litellm_logging_obj": MagicMock(),
+                    "metadata": proxy_metadata,
+                    "litellm_call_id": "call-abc-123",
+                },
+            )
+
+        # litellm_logging_obj excluded
+        assert "litellm_logging_obj" not in captured_kwargs
+        # But ALL proxy metadata must be preserved
+        assert captured_kwargs.get("metadata") == proxy_metadata
+        assert captured_kwargs.get("litellm_call_id") == "call-abc-123"
