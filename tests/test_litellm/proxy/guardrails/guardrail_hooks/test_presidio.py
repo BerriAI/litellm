@@ -1608,3 +1608,106 @@ async def test_anonymize_text_http_error_status():
                 output_parse_pii=False,
                 masked_entity_count={},
             )
+
+
+@pytest.mark.asyncio
+async def test_pii_tokens_stored_in_metadata_not_top_level(presidio_guardrail):
+    """
+    Regression test: pii_tokens must be stored in data['metadata']['pii_tokens'],
+    NOT in data['pii_tokens']. Storing at the top level leaks the field to LLM
+    providers like Anthropic, which reject unknown fields with
+    'pii_tokens: Extra inputs are not permitted'.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        pii_entities_config={
+            PiiEntityType.PERSON: PiiAction.MASK,
+            PiiEntityType.PHONE_NUMBER: PiiAction.MASK,
+        },
+    )
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    mock_cache = DualCache()
+
+    test_data = {
+        "messages": [
+            {"role": "user", "content": "My name is John and my phone is 555-123-4567"}
+        ],
+        "model": "claude-haiku-4-5-20251001",
+        "metadata": {},
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        # Simulate PII masking with token storage (mimics real anonymize_text behavior)
+        import uuid
+
+        if request_data is not None and output_parse_pii:
+            if "metadata" not in request_data:
+                request_data["metadata"] = {}
+            if "pii_tokens" not in request_data["metadata"]:
+                request_data["metadata"]["pii_tokens"] = {}
+            pii_tokens = request_data["metadata"]["pii_tokens"]
+            token = f"<PERSON>_{str(uuid.uuid4())[:12]}"
+            pii_tokens[token] = "John"
+            text = text.replace("John", token)
+        return text
+
+    guardrail.check_pii = mock_check_pii
+
+    result = await guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    # pii_tokens must NOT be at the top level of data (would leak to providers)
+    assert "pii_tokens" not in result, (
+        "pii_tokens must not be a top-level key in request data — "
+        "it would leak to LLM providers and cause 'Extra inputs are not permitted' errors"
+    )
+
+    # pii_tokens must be inside metadata (safe from provider leakage)
+    assert "metadata" in result
+    assert "pii_tokens" in result["metadata"]
+    assert len(result["metadata"]["pii_tokens"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_pii_tokens_in_metadata_used_for_unmasking():
+    """
+    Regression test: _process_response_for_pii must read pii_tokens from
+    data['metadata']['pii_tokens'] and correctly unmask the response.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    token_key = "<PERSON>_abc123def456"
+    request_data = {
+        "model": "claude-haiku-4-5-20251001",
+        "metadata": {"pii_tokens": {token_key: "John"}},
+    }
+
+    response = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content=f"Hello {token_key}, how can I help you?",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ]
+    )
+
+    await guardrail._process_response_for_pii(
+        response=response,
+        request_data=request_data,
+        mode="unmask",
+    )
+
+    assert response.choices[0].message.content == "Hello John, how can I help you?"
