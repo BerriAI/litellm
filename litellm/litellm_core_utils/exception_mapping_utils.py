@@ -1,9 +1,9 @@
 import json
+import re
 import traceback
 from typing import Any, Optional
 
 import httpx
-import re
 
 import litellm
 from litellm._logging import verbose_logger
@@ -442,6 +442,27 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
+                    )
+                elif "invalid_encrypted_content" in error_str or "could not be verified" in error_str:
+                    exception_mapping_worked = True
+                    helpful_message = (
+                        f"{exception_provider} - {message}\n\n"
+                        " This error occurs when load balancing Responses API across deployments with different API keys.\n"
+                        "   Encrypted content is tied to the organization that created it and cannot be decrypted by other organizations.\n\n"
+                        "   Solution: Enable 'encrypted_content_affinity' to route follow-up requests to the correct deployment:\n\n"
+                        "   router_settings:\n"
+                        "     enable_pre_call_checks: true\n"
+                        "     optional_pre_call_checks:\n"
+                        "       - encrypted_content_affinity\n\n"
+                        "   Learn more: https://docs.litellm.ai/docs/response_api#encrypted-content-affinity-multi-region-load-balancing"
+                    )
+                    raise BadRequestError(
+                        message=helpful_message,
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=getattr(original_exception, "response", None),
+                        litellm_debug_info=extra_information,
+                        body=getattr(original_exception, "body", None),
                     )
                 elif (
                     "invalid_request_error" in error_str
@@ -2126,7 +2147,27 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         extra_information=extra_information,
                         original_exception=original_exception,
                     )
-                    
+                elif azure_error_code == "invalid_encrypted_content" or "could not be verified" in error_str:
+                    exception_mapping_worked = True
+                    helpful_message = (
+                        f"AzureException - {message}\n\n"
+                        "This error occurs when load balancing Responses API across deployments with different API keys.\n"
+                        "   Encrypted content is tied to the organization that created it and cannot be decrypted by other organizations.\n\n"
+                        "   Solution: Enable 'encrypted_content_affinity' to route follow-up requests to the correct deployment:\n\n"
+                        "   router_settings:\n"
+                        "     enable_pre_call_checks: true\n"
+                        "     optional_pre_call_checks:\n"
+                        "       - encrypted_content_affinity\n\n"
+                        "   Learn more: https://docs.litellm.ai/docs/response_api#encrypted-content-affinity-multi-region-load-balancing"
+                    )
+                    raise BadRequestError(
+                        message=helpful_message,
+                        llm_provider="azure",
+                        model=model,
+                        litellm_debug_info=extra_information,
+                        response=getattr(original_exception, "response", None),
+                        body=getattr(original_exception, "body", None),
+                    )
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
