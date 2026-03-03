@@ -69,6 +69,7 @@ import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageU
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
 import RealtimePlayground from "./RealtimePlayground";
+import MessageActions from "./MessageActions";
 import { A2ATaskMetadata, MessageType } from "./types";
 import { useCodeInterpreter } from "./useCodeInterpreter";
 
@@ -241,6 +242,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
+
+  const [pendingResend, setPendingResend] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -1217,6 +1220,54 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setInputMessage("");
   };
 
+  useEffect(() => {
+    if (pendingResend && inputMessage.trim() !== "" && !isLoading) {
+      setPendingResend(false);
+      handleSendMessage();
+    }
+  }, [pendingResend, inputMessage]);
+
+  const handleRetry = () => {
+    if (isLoading || chatHistory.length === 0) return;
+
+    // Find the last assistant message index
+    let lastAssistantIdx = -1;
+    for (let i = chatHistory.length - 1; i >= 0; i--) {
+      if (chatHistory[i].role === "assistant") {
+        lastAssistantIdx = i;
+        break;
+      }
+    }
+    if (lastAssistantIdx === -1) return;
+
+    // Find the user message right before the assistant message
+    let userMsgIdx = -1;
+    for (let i = lastAssistantIdx - 1; i >= 0; i--) {
+      if (chatHistory[i].role === "user") {
+        userMsgIdx = i;
+        break;
+      }
+    }
+    if (userMsgIdx === -1) return;
+
+    const userMessage = chatHistory[userMsgIdx];
+    const userContent = typeof userMessage.content === "string" ? userMessage.content : "";
+
+    // Truncate history: keep everything before the user message that triggered the response
+    setChatHistory(chatHistory.slice(0, userMsgIdx));
+    setInputMessage(userContent);
+    setPendingResend(true);
+  };
+
+  const handleEditSubmit = (messageIndex: number, newContent: string) => {
+    if (isLoading) return;
+
+    // Truncate history at the edited message (remove it and everything after)
+    setChatHistory(chatHistory.slice(0, messageIndex));
+    setInputMessage(newContent);
+    setPendingResend(true);
+  };
+
   const clearChatHistory = () => {
     // Clean up audio object URLs before clearing history
     chatHistory.forEach((message) => {
@@ -1867,7 +1918,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {chatHistory.map((message, index) => (
                 <div key={index}>
-                  <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
+                  <div className={`group mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
                     <div
                       className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
                       style={{
@@ -2028,6 +2079,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         )}
                       </div>
                     </div>
+                    <MessageActions
+                      role={message.role}
+                      content={typeof message.content === "string" ? message.content : ""}
+                      messageIndex={index}
+                      isLastAssistantMessage={
+                        message.role === "assistant" &&
+                        index === chatHistory.map((m) => m.role).lastIndexOf("assistant")
+                      }
+                      isLoading={isLoading}
+                      isImage={message.isImage}
+                      isAudio={message.isAudio}
+                      isEmbeddings={message.isEmbeddings}
+                      onRetry={handleRetry}
+                      onEditSubmit={handleEditSubmit}
+                    />
                   </div>
                 </div>
               ))}
