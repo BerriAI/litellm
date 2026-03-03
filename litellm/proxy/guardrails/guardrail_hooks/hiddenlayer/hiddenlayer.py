@@ -170,7 +170,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
 
         if result.get("evaluation", {}).get("action") == HiddenlayerAction.BLOCK:
             detected_reasons = [
-                entry["name"]
+                entry.get("name", "unknown")
                 for entry in result.get("analysis", [])
                 if entry.get("detected")
             ]
