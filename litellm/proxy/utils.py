@@ -1773,7 +1773,7 @@ class ProxyLogging:
         """
 
         #########################################################
-        # Only log LLM API errors for proxy level hooks
+        # Only log LLM API and info route errors for proxy level hooks
         # eg. Authentication errors, rate limit errors, etc.
         # Note: This fixes a security issue where we
         #       would log temporary keys/auth info
@@ -1781,7 +1781,10 @@ class ProxyLogging:
         #########################################################
         if route is None:
             return False
-        if RouteChecks.is_llm_api_route(route) is not True:
+        if (
+            RouteChecks.is_llm_api_route(route) is not True or
+            RouteChecks.is_info_route(route) is not True
+        ):
             return False
 
         return isinstance(original_exception, HTTPException) or (
