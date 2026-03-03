@@ -11177,6 +11177,7 @@
         "output_cost_per_token": 4e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
+        "supports_function_calling": true,
         "supports_tool_choice": true
     },
     "deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
@@ -11187,6 +11188,7 @@
         "output_cost_per_token": 3.9e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
+        "supports_function_calling": true,
         "supports_tool_choice": true
     },
     "deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
@@ -11378,6 +11380,7 @@
         "output_cost_per_token": 4e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
+        "supports_function_calling": true,
         "supports_tool_choice": true
     },
     "deepinfra/nvidia/NVIDIA-Nemotron-Nano-9B-v2": {
