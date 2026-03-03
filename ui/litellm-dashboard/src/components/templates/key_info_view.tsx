@@ -442,7 +442,8 @@ export default function KeyInfoView({
         open={isResetSpendModalOpen}
         onOk={handleResetSpend}
         onCancel={() => setIsResetSpendModalOpen(false)}
-        okText="Reset to $0"
+        okText="Reset"
+        okButtonProps={{ danger: true }}
         confirmLoading={resetSpendLoading}
       >
         <p>
