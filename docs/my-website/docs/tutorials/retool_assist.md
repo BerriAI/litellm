@@ -9,6 +9,19 @@ This guide walks you through connecting [Retool Assist](https://docs.retool.com/
 - Control which models Retool Assist can access
 - Use your own LLM providers via a unified OpenAI-compatible API
 
+<div style={{ maxWidth: '100%', overflow: 'hidden', paddingBottom: '59.52%', position: 'relative', height: 0 }}>
+  <iframe 
+    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', maxWidth: '840px' }}
+    src="https://www.youtube.com/embed/aN-Iua5dHGg" 
+    frameborder="0" 
+    webkitallowfullscreen 
+    mozallowfullscreen 
+    allowfullscreen
+  ></iframe>
+</div>
+
+---
+
 :::info
 **Hosted Retool requires a public URL.** Retool Cloud runs on Retool's servers, so `localhost` will not work. You must expose your LiteLLM proxy via ngrok, Cloudflare Tunnel, or by deploying to a cloud provider.
 :::
@@ -36,18 +49,20 @@ Set up LiteLLM Proxy following the [Getting Started Guide](https://docs.litellm.
 
 ## 2. Expose LiteLLM with a Public URL
 
+<Image img={require('../../img/ngrok_public_url.gif')} />
+
 Retool Cloud runs on Retool's servers. You must expose your local LiteLLM proxy with a public URL.
 
 ### Using ngrok
 
-1. Install [ngrok](https://ngrok.com/download)
-2. In a separate terminal, run:
-
+- Install [ngrok](https://ngrok.com/download)
+- In a separate terminal, run:
+  
 ```bash
 ngrok http 4000
 ```
+- Copy the generated HTTPS URL (e.g. `https://abc123.ngrok-free.app`). This is your **Base URL** for Retool.
 
-3. Copy the generated HTTPS URL (e.g. `https://abc123.ngrok-free.app`). This is your **Base URL** for Retool.
 
 ### Alternative
 
@@ -55,26 +70,26 @@ If you deploy LiteLLM to Railway, Render, Fly.io, or another cloud provider, use
 
 ## 3. Generate a Virtual Key
 
+<Image img={require('../../img/litellm_virtual_key.gif')} />
+
 Create a virtual key that Retool Assist will use to authenticate with LiteLLM. The key must have access to the models you want to use (e.g. `openai/*` for all OpenAI models).
 
 ### Via LiteLLM UI
 
-1. Navigate to [http://localhost:4000/ui](http://localhost:4000/ui)
-2. Go to **Virtual Keys** → **+ Create New Key**
-3. Select the models you need (or `openai/*` for all OpenAI models)
-4. Copy the key
+- Navigate to [http://localhost:4000/ui](http://localhost:4000/ui)
+- Go to **Virtual Keys** → **+ Create New Key**
+- Select the models you need (or `openai/*` for all OpenAI models)
+- Copy the key
 
 ## 4. Add LiteLLM as a Custom Provider in Retool
 
 Inside your Retool dashboard, configure LiteLLM as a custom AI resource:
 
+<Image img={require('../../img/retool_resource_setup.gif')} />
+
 1. Go to **Resources**
 
-<Image img={require('../../img/retool_assist_resources_select.png')} />
-
 2. Under the **AI** category, select **Custom Provider**
-
-<Image img={require('../../img/retool_assist_custom_provider.png')} />
 
 3. Fill in the form:
    - **Name:** `LiteLLM`
@@ -85,16 +100,18 @@ Inside your Retool dashboard, configure LiteLLM as a custom AI resource:
 4. **Add model names** from your LiteLLM proxy (e.g. `openai/gpt-4o-mini`, `openai/gpt-5.2-2025-12-11`).
 5. Click **Create Resource**
 
-<Image img={require('../../img/retool_assist_resources.png')} />
+<Image img={require('../../img/retool_llm_setup.gif')} />
 
 ## 5. Test the Connection
 
-1. Open an app in Retool and enable **Assist** (if not already enabled in your organization)
-2. Use Assist to generate or edit app elements, it will route requests through LiteLLM
-3. Use the code option from the Sidebar to add a resource query, select the LiteLLM resource, and run it to test the setup.
-4. Check the LiteLLM **Logs** section to verify requests and track usage
+<Image img={require('../../img/retool_litellm_connection.gif')} />
 
-<Image img={require('../../img/retool_assist_resource_query.png')} />
+- Open an app in Retool and enable **Assist** (if not already enabled in your organization)
+- Use Assist to generate or edit app elements, it will route requests through LiteLLM
+- Use the code option from the Sidebar to add a resource query, select the LiteLLM resource, and run it to test the setup.
+- Check the LiteLLM **Logs** section to verify requests and track usage
+
+<Image img={require('../../img/retool_litellm_logs.gif')} />
 
 ---
 
