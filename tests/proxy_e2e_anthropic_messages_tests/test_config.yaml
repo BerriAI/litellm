@@ -51,3 +51,6 @@ model_list:
 
 general_settings:  
   forward_client_headers_to_llm_api: true
+
+litellm_settings:
+  drop_params: true

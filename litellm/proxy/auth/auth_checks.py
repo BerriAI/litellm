@@ -41,11 +41,11 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
-    LiteLLM_ProjectTableCachedObj,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
@@ -57,6 +57,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
@@ -233,6 +234,7 @@ async def common_checks(
     request: Request,
     skip_budget_checks: bool = False,
     project_object: Optional[LiteLLM_ProjectTableCachedObj] = None,
+    skip_route_check: bool = False,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -452,18 +454,21 @@ async def common_checks(
         user_object=user_object, route=route, request_body=request_body
     )
 
-    token_team = getattr(valid_token, "team_id", None)
-    token_type: Literal["ui", "api"] = (
-        "ui" if token_team is not None and token_team == "litellm-dashboard" else "api"
-    )
-    _is_route_allowed = _is_allowed_route(
-        route=route,
-        token_type=token_type,
-        user_obj=user_object,
-        request=request,
-        request_data=request_body,
-        valid_token=valid_token,
-    )
+    if not skip_route_check:
+        token_team = getattr(valid_token, "team_id", None)
+        token_type: Literal["ui", "api"] = (
+            "ui"
+            if token_team is not None and token_team == "litellm-dashboard"
+            else "api"
+        )
+        _is_route_allowed = _is_allowed_route(
+            route=route,
+            token_type=token_type,
+            user_obj=user_object,
+            request=request,
+            request_data=request_body,
+            valid_token=valid_token,
+        )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     await vector_store_access_check(
@@ -1883,7 +1888,7 @@ class ExperimentalUIJWTToken:
         if user_info.user_role is None:
             raise Exception("User role is required for experimental UI login")
 
-        # Calculate expiration time (10 minutes from now)
+        # Experimental UI flow uses fixed 10-min expiry for security (does not use LITELLM_UI_SESSION_DURATION)
         expiration_time = get_utc_datetime() + timedelta(minutes=10)
 
         # Format the expiration time as ISO 8601 string
@@ -1982,6 +1987,51 @@ class ExperimentalUIJWTToken:
             )
 
 
+async def _fetch_key_object_from_db_with_reconnect(
+    hashed_token: str,
+    prisma_client: PrismaClient,
+    parent_otel_span: Optional[Span],
+    proxy_logging_obj: Optional[ProxyLogging],
+) -> Optional[BaseModel]:
+    """
+    Fetch key object from DB and retry once if a DB connection error can be healed.
+    """
+    try:
+        return await prisma_client.get_data(
+            token=hashed_token,
+            table_name="combined_view",
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:
+        if PrismaDBExceptionHandler.is_database_transport_error(e):
+            did_reconnect = False
+            if hasattr(prisma_client, "attempt_db_reconnect"):
+                auth_reconnect_timeout = getattr(
+                    prisma_client, "_db_auth_reconnect_timeout_seconds", 2.0
+                )
+                if not isinstance(auth_reconnect_timeout, (int, float)):
+                    auth_reconnect_timeout = 2.0
+                auth_reconnect_lock_timeout = getattr(
+                    prisma_client, "_db_auth_reconnect_lock_timeout_seconds", 0.1
+                )
+                if not isinstance(auth_reconnect_lock_timeout, (int, float)):
+                    auth_reconnect_lock_timeout = 0.1
+                did_reconnect = await prisma_client.attempt_db_reconnect(
+                    reason="auth_get_key_object_lookup_failure",
+                    timeout_seconds=auth_reconnect_timeout,
+                    lock_timeout_seconds=auth_reconnect_lock_timeout,
+                )
+            if did_reconnect:
+                return await prisma_client.get_data(
+                    token=hashed_token,
+                    table_name="combined_view",
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+        raise
+
+
 @log_db_metrics
 async def get_key_object(
     hashed_token: str,
@@ -2020,11 +2070,13 @@ async def get_key_object(
         )
 
     # else, check db
-    _valid_token: Optional[BaseModel] = await prisma_client.get_data(
-        token=hashed_token,
-        table_name="combined_view",
-        parent_otel_span=parent_otel_span,
-        proxy_logging_obj=proxy_logging_obj,
+    _valid_token: Optional[BaseModel] = (
+        await _fetch_key_object_from_db_with_reconnect(
+            hashed_token=hashed_token,
+            prisma_client=prisma_client,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     )
 
     if _valid_token is None:

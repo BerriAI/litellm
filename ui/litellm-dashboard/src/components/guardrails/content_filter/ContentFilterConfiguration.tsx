@@ -9,6 +9,9 @@ import KeywordModal from "./KeywordModal";
 import PatternTable from "./PatternTable";
 import KeywordTable from "./KeywordTable";
 import ContentCategoryConfiguration from "./ContentCategoryConfiguration";
+import CompetitorIntentConfiguration, {
+  CompetitorIntentConfig,
+} from "./CompetitorIntentConfiguration";
 
 const { Title, Text } = Typography;
 
@@ -63,7 +66,7 @@ interface ContentFilterConfigurationProps {
   onBlockedWordUpdate: (id: string, field: string, value: any) => void;
   onFileUpload?: (content: string) => void;
   accessToken: string | null;
-  showStep?: "patterns" | "keywords" | "categories";
+  showStep?: "patterns" | "keywords" | "categories" | "competitor_intent";
   contentCategories?: ContentCategory[];
   selectedContentCategories?: SelectedContentCategory[];
   onContentCategoryAdd?: (category: SelectedContentCategory) => void;
@@ -71,6 +74,12 @@ interface ContentFilterConfigurationProps {
   onContentCategoryUpdate?: (id: string, field: string, value: any) => void;
   pendingCategorySelection?: string;
   onPendingCategorySelectionChange?: (value: string) => void;
+  competitorIntentEnabled?: boolean;
+  competitorIntentConfig?: CompetitorIntentConfig | null;
+  onCompetitorIntentChange?: (
+    enabled: boolean,
+    config: CompetitorIntentConfig | null
+  ) => void;
 }
 
 const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
@@ -94,6 +103,9 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
   onContentCategoryUpdate,
   pendingCategorySelection,
   onPendingCategorySelectionChange,
+  competitorIntentEnabled = false,
+  competitorIntentConfig = null,
+  onCompetitorIntentChange,
 }) => {
   const [patternModalVisible, setPatternModalVisible] = useState(false);
   const [keywordModalVisible, setKeywordModalVisible] = useState(false);
@@ -197,6 +209,8 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
   const showPatterns = !showStep || showStep === "patterns";
   const showKeywords = !showStep || showStep === "keywords";
   const showCategories = !showStep || showStep === "categories";
+  const showCompetitorIntent =
+    !showStep || showStep === "competitor_intent" || showStep === "categories";
 
   return (
     <div className="space-y-6">
@@ -273,6 +287,16 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
           />
         </Card>
       )}
+
+      {showCompetitorIntent &&
+        onCompetitorIntentChange && (
+          <CompetitorIntentConfiguration
+            enabled={competitorIntentEnabled}
+            config={competitorIntentConfig}
+            onChange={onCompetitorIntentChange}
+            accessToken={accessToken}
+          />
+        )}
 
       {showCategories && contentCategories.length > 0 && onContentCategoryAdd && onContentCategoryRemove && onContentCategoryUpdate && (
         <ContentCategoryConfiguration

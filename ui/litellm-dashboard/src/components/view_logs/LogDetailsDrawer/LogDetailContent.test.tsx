@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { LogDetailContent } from "./LogDetailContent";
@@ -23,7 +23,7 @@ const createLogEntry = (overrides: Partial<LogEntry> = {}): LogEntry =>
     startTime: "2025-11-14T00:00:00Z",
     endTime: "2025-11-14T00:00:01Z",
     cache_hit: "miss",
-    duration: 1,
+    request_duration_ms: 1000,
     messages: [{ role: "user", content: "hello" }],
     response: { choices: [{ message: { content: "hi" } }] },
     metadata: { status: "success" },
@@ -341,6 +341,6 @@ describe("LogDetailContent", () => {
 
     const descriptions = screen.getByText("Provider").closest(".ant-descriptions-item");
     expect(descriptions).toBeInTheDocument();
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(within(descriptions as HTMLElement).getByText("-")).toBeInTheDocument();
   });
 });

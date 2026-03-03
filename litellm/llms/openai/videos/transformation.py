@@ -172,18 +172,22 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        variant: Optional[str] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - GET /v1/videos/{video_id}/content
+        - GET /v1/videos/{video_id}/content?variant=thumbnail
         """
         original_video_id = extract_original_video_id(video_id)
-        
+
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{original_video_id}/content"
-        
+        if variant is not None:
+            url = f"{url}?variant={variant}"
+
         # No additional data needed for GET content request
         data: Dict[str, Any] = {}
 

@@ -4,13 +4,15 @@ This file is used to calculate the cost of the Gemini API.
 Handles the context caching for Gemini API.
 """
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 
 
-def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
+def cost_per_token(
+    model: str, usage: "Usage", service_tier: Optional[str] = None
+) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -19,7 +21,7 @@ def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
     from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 
     return generic_cost_per_token(
-        model=model, usage=usage, custom_llm_provider="gemini"
+        model=model, usage=usage, custom_llm_provider="gemini", service_tier=service_tier
     )
 
 

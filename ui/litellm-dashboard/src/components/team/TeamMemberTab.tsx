@@ -3,13 +3,11 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Member } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
-import { CrownOutlined, InfoCircleOutlined, UserAddOutlined, UserOutlined } from "@ant-design/icons";
-import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Space, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import MemberTable from "@/components/common_components/MemberTable";
 import { TeamData } from "./TeamInfo";
-
-const { Text } = Typography;
 
 interface TeamMemberTabProps {
   teamData: TeamData;
@@ -84,48 +82,7 @@ export default function TeamMemberTab({
   const isUserTeamAdmin = isUserTeamAdminForSingleTeam(teamData.team_info.members_with_roles, userId || "");
   const isProxyAdmin = isProxyAdminRole(userRole || "");
 
-  const columns: ColumnsType<Member> = [
-    {
-      title: "User Email",
-      dataIndex: "user_email",
-      key: "user_email",
-      render: (email: string | null) => (
-        <Text>{email || "-"}</Text>
-      ),
-    },
-    {
-      title: "User ID",
-      dataIndex: "user_id",
-      key: "user_id",
-      render: (userId: string | null) =>
-        userId === "default_user_id" ? (
-          <Tag color="blue">Default Proxy Admin</Tag>
-        ) : (
-          <Text>{userId}</Text>
-        ),
-    },
-    {
-      title: (
-        <Space direction="horizontal">
-          Team Role
-          <Tooltip title="This role applies only to this team and is independent from the user's proxy-level role.">
-            <InfoCircleOutlined />
-          </Tooltip>
-        </Space>
-      ),
-      dataIndex: "role",
-      key: "role",
-      render: (role: string) => (
-        <Space>
-          {role?.toLowerCase() === "admin" ? (
-            <CrownOutlined />
-          ) : (
-            <UserOutlined />
-          )}
-          <Text style={{ textTransform: "capitalize" }}>{role}</Text>
-        </Space>
-      ),
-    },
+  const extraColumns: ColumnsType<Member> = [
     {
       title: (
         <Space direction="horizontal">
@@ -137,9 +94,7 @@ export default function TeamMemberTab({
       ),
       key: "spend",
       render: (_: unknown, record: Member) => (
-        <Text>
-          ${formatNumberWithCommas(getUserSpend(record.user_id), 4)}
-        </Text>
+        <Typography.Text>${formatNumberWithCommas(getUserSpend(record.user_id), 4)}</Typography.Text>
       ),
     },
     {
@@ -148,9 +103,9 @@ export default function TeamMemberTab({
       render: (_: unknown, record: Member) => {
         const budget = getUserBudget(record.user_id);
         return (
-          <Text >
+          <Typography.Text>
             {budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}
-          </Text>
+          </Typography.Text>
         );
       },
     },
@@ -165,69 +120,36 @@ export default function TeamMemberTab({
       ),
       key: "rate_limits",
       render: (_: unknown, record: Member) => (
-        <Text>{getUserRateLimits(record.user_id)}</Text>
+        <Typography.Text>{getUserRateLimits(record.user_id)}</Typography.Text>
       ),
-    },
-    {
-      title: "Actions",
-      key: "actions",
-      fixed: "right",
-      width: 120,
-      render: (_: unknown, record: Member) =>
-        canEditTeam ? (
-          <div className="flex gap-2">
-            <TableIconActionButton
-              variant="Edit"
-              tooltipText="Edit member"
-              dataTestId="edit-member"
-              onClick={() => {
-                const membership = teamData.team_memberships.find(
-                  (tm) => tm.user_id === record.user_id
-                );
-                const enhancedMember = {
-                  ...record,
-                  max_budget_in_team:
-                    membership?.litellm_budget_table?.max_budget || null,
-                  tpm_limit:
-                    membership?.litellm_budget_table?.tpm_limit || null,
-                  rpm_limit:
-                    membership?.litellm_budget_table?.rpm_limit || null,
-                };
-                setSelectedEditMember(enhancedMember);
-                setIsEditMemberModalVisible(true);
-              }}
-            />
-            {(isProxyAdmin ||
-              (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)) && (
-                <TableIconActionButton
-                  variant="Delete"
-                  tooltipText="Delete member"
-                  dataTestId="delete-member"
-                  onClick={() => handleMemberDelete(record)}
-                />
-              )}
-          </div>
-        ) : null,
     },
   ];
 
   return (
-    <div className="space-y-4">
-      <Table
-        columns={columns}
-        dataSource={teamData.team_info.members_with_roles}
-        rowKey={(record, index) => record.user_id || String(index)}
-        pagination={false}
-        size="small"
-        scroll={{ x: "max-content" }}
-      />
-      <Button
-        icon={<UserAddOutlined />}
-        type="primary"
-        onClick={() => setIsAddMemberModalVisible(true)}
-      >
-        Add Member
-      </Button>
-    </div>
+    <MemberTable
+      members={teamData.team_info.members_with_roles}
+      canEdit={canEditTeam}
+      onEdit={(record) => {
+        const membership = teamData.team_memberships.find(
+          (tm) => tm.user_id === record.user_id
+        );
+        const enhancedMember = {
+          ...record,
+          max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
+          tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
+          rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+        };
+        setSelectedEditMember(enhancedMember);
+        setIsEditMemberModalVisible(true);
+      }}
+      onDelete={handleMemberDelete}
+      onAddMember={() => setIsAddMemberModalVisible(true)}
+      roleColumnTitle="Team Role"
+      roleTooltip="This role applies only to this team and is independent from the user's proxy-level role."
+      extraColumns={extraColumns}
+      showDeleteForMember={() =>
+        isProxyAdmin || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)
+      }
+    />
   );
-};
+}

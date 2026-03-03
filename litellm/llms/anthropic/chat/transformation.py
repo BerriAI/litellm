@@ -46,6 +46,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
+    OpenAIChatCompletionFinishReason,
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
@@ -54,10 +55,7 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import (
-    PromptTokensDetailsWrapper,
-    ServerToolUse,
-)
+from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -171,21 +169,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return tool_call
 
     @staticmethod
-    def _is_claude_4_6_model(model: str) -> bool:
-        """Check if the model is a Claude 4.6 model that uses adaptive thinking."""
+    def _is_opus_4_6_model(model: str) -> bool:
+        """Check if the model is specifically Claude Opus 4.6."""
         model_lower = model.lower()
         return any(
-            model_variant in model_lower
-            for model_variant in (
-                "opus-4-6",
-                "opus_4_6",
-                "opus-4.6",
-                "opus_4.6",
-                "sonnet-4-6",
-                "sonnet_4_6",
-                "sonnet-4.6",
-                "sonnet_4.6",
-            )
+            v in model_lower
+            for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")
         )
 
     def get_supported_openai_params(self, model: str):
@@ -251,10 +240,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # All numeric/string/array constraints not supported by Anthropic
         unsupported_fields = {
-            "maxItems", "minItems",           # array constraints
-            "minimum", "maximum",             # numeric constraints
-            "exclusiveMinimum", "exclusiveMaximum",  # numeric constraints
-            "minLength", "maxLength",         # string constraints
+            "maxItems",
+            "minItems",  # array constraints
+            "minimum",
+            "maximum",  # numeric constraints
+            "exclusiveMinimum",
+            "exclusiveMaximum",  # numeric constraints
+            "minLength",
+            "maxLength",  # string constraints
         }
 
         # Build description additions from removed constraints
@@ -844,7 +837,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def map_openai_context_management_to_anthropic(
-        context_management: Union[List[Dict[str, Any]], Dict[str, Any]]
+        context_management: Union[List[Dict[str, Any]], Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         """
         OpenAI format: [{"type": "compaction", "compact_threshold": 200000}]
@@ -876,19 +869,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
                 entry_type = entry.get("type")
                 if entry_type == "compaction":
-                    anthropic_edit: Dict[str, Any] = {
-                        "type": "compact_20260112"
-                    }
+                    anthropic_edit: Dict[str, Any] = {"type": "compact_20260112"}
                     compact_threshold = entry.get("compact_threshold")
                     # Rewrite to 'trigger' with correct nesting if threshold exists
-                    if compact_threshold is not None and isinstance(compact_threshold, (int, float)):
+                    if compact_threshold is not None and isinstance(
+                        compact_threshold, (int, float)
+                    ):
                         anthropic_edit["trigger"] = {
                             "type": "input_tokens",
-                            "value": int(compact_threshold)
+                            "value": int(compact_threshold),
                         }
                     # Map any other keys by passthrough except handled ones
                     for k in entry:
-                        if k not in {"type", "compact_threshold"}:  # only passthrough other keys
+                        if k not in {
+                            "type",
+                            "compact_threshold",
+                        }:  # only passthrough other keys
                             anthropic_edit[k] = entry[k]
 
                     anthropic_edits.append(anthropic_edit)
@@ -911,10 +907,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         for param, value in non_default_params.items():
             if param == "max_tokens":
-                optional_params["max_tokens"] = value
-            if param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            if param == "tools":
+                optional_params["max_tokens"] = (
+                    value if isinstance(value, int) else max(1, int(round(value)))
+                )
+            elif param == "max_completion_tokens":
+                optional_params["max_tokens"] = (
+                    value if isinstance(value, int) else max(1, int(round(value)))
+                )
+            elif param == "tools":
                 # check if optional params already has tools
                 anthropic_tools, mcp_servers = self._map_tools(value)
                 optional_params = self._add_tools_to_optional_params(
@@ -922,7 +922,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
-            if param == "tool_choice" or param == "parallel_tool_calls":
+            elif param == "tool_choice" or param == "parallel_tool_calls":
                 _tool_choice: Optional[AnthropicMessagesToolChoice] = (
                     self._map_tool_choice(
                         tool_choice=non_default_params.get("tool_choice"),
@@ -932,17 +932,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
                 if _tool_choice is not None:
                     optional_params["tool_choice"] = _tool_choice
-            if param == "stream" and value is True:
+            elif param == "stream" and value is True:
                 optional_params["stream"] = value
-            if param == "stop" and (isinstance(value, str) or isinstance(value, list)):
+            elif param == "stop" and (
+                isinstance(value, str) or isinstance(value, list)
+            ):
                 _value = self._map_stop_sequences(value)
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
-            if param == "temperature":
+            elif param == "temperature":
                 optional_params["temperature"] = value
-            if param == "top_p":
+            elif param == "top_p":
                 optional_params["top_p"] = value
-            if param == "response_format" and isinstance(value, dict):
+            elif param == "response_format" and isinstance(value, dict):
                 if any(
                     substring in model
                     for substring in {
@@ -982,19 +984,31 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         optional_params=optional_params, tools=[_tool]
                     )
                 optional_params["json_mode"] = True
-            if (
+            elif (
                 param == "user"
                 and value is not None
                 and isinstance(value, str)
                 and _valid_user_id(value)  # anthropic fails on emails
             ):
                 optional_params["metadata"] = {"user_id": value}
-            if param == "thinking":
+            elif param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
                 optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=value, model=model
                 )
+                # For Claude 4.6 models, effort is controlled via output_config,
+                # not thinking budget_tokens. Map reasoning_effort to output_config.
+                if AnthropicConfig._is_claude_4_6_model(model):
+                    effort_map = {
+                        "low": "low",
+                        "minimal": "low",
+                        "medium": "medium",
+                        "high": "high",
+                        "max": "max",
+                    }
+                    mapped_effort = effort_map.get(value, value)
+                    optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -1007,9 +1021,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "context_management":
                 # Supports both OpenAI list format and Anthropic dict format
                 if isinstance(value, (list, dict)):
-                    anthropic_context_management = self.map_openai_context_management_to_anthropic(value)
+                    anthropic_context_management = (
+                        self.map_openai_context_management_to_anthropic(value)
+                    )
                     if anthropic_context_management is not None:
-                        optional_params["context_management"] = anthropic_context_management
+                        optional_params["context_management"] = (
+                            anthropic_context_management
+                        )
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
@@ -1071,7 +1089,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     if not system_message_block["content"]:
                         continue
                     # Skip system messages containing x-anthropic-billing-header metadata
-                    if system_message_block["content"].startswith("x-anthropic-billing-header:"):
+                    if system_message_block["content"].startswith(
+                        "x-anthropic-billing-header:"
+                    ):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
@@ -1091,7 +1111,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         if _content.get("type") == "text" and not text_value:
                             continue
                         # Skip system messages containing x-anthropic-billing-header metadata
-                        if _content.get("type") == "text" and text_value and text_value.startswith("x-anthropic-billing-header:"):
+                        if (
+                            _content.get("type") == "text"
+                            and text_value
+                            and text_value.startswith("x-anthropic-billing-header:")
+                        ):
                             continue
                         anthropic_system_message_content = (
                             AnthropicSystemMessageContent(
@@ -1201,7 +1225,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Add context management header if any other edits/entries exist
         if has_other:
             self._ensure_beta_header(
-                headers, ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                headers,
+                ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
             )
 
     def update_headers_with_optional_anthropic_beta(
@@ -1227,7 +1252,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ANTHROPIC_HOSTED_TOOLS.MEMORY.value
             ):
                 self._ensure_beta_header(
-                    headers, ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                    headers,
+                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
                 )
         if optional_params.get("context_management") is not None:
             self._ensure_context_management_beta_header(
@@ -1369,9 +1395,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     raise ValueError(
                         f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
                     )
-                if effort == "max" and not self._is_claude_4_6_model(model):
+                if effort == "max" and not self._is_opus_4_6_model(model):
                     raise ValueError(
-                        f"effort='max' is only supported by Claude 4.6 models (Opus 4.6, Sonnet 4.6). Got model: {model}"
+                        f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
                     )
                 data["output_config"] = output_config
 
@@ -1491,7 +1517,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if thinking_content is not None:
                     reasoning_content += thinking_content
 
-        return text_content, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks
+        return (
+            text_content,
+            citations,
+            thinking_blocks,
+            reasoning_content,
+            tool_calls,
+            web_search_results,
+            tool_results,
+            compaction_blocks,
+        )
 
     def calculate_usage(
         self,
@@ -1576,7 +1611,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         completion_token_details = CompletionTokensDetailsWrapper(
             reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else 0,
-            text_tokens=completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens,
+            text_tokens=(
+                completion_tokens - reasoning_tokens
+                if reasoning_tokens > 0
+                else completion_tokens
+            ),
         )
         total_tokens = prompt_tokens + completion_tokens
 
@@ -1696,8 +1735,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 "content"
             ]  # allow user to access raw anthropic tool calling response
 
-            model_response.choices[0].finish_reason = map_finish_reason(
-                completion_response["stop_reason"]
+            model_response.choices[0].finish_reason = cast(
+                OpenAIChatCompletionFinishReason,
+                map_finish_reason(completion_response["stop_reason"]),
             )
 
         ## CALCULATING USAGE
