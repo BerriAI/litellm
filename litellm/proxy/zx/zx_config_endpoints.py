@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 import json
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
@@ -149,7 +149,7 @@ async def cli_check_token(token: Annotated[str | None, Header()] = None):
     "/zx/cli_get_key",
     tags=["ZX"],
 )
-async def cli_get_key(token: Annotated[str | None, Header()] = None):
+async def cli_get_key(type: Optional[str] = None, token: Annotated[str | None, Header()] = None):
     """
     处理CLI 获取Key
     """
@@ -166,7 +166,10 @@ async def cli_get_key(token: Annotated[str | None, Header()] = None):
     dept_id = None
     if user_info.get('deptIdList'):
         dept_id = user_info.get('deptIdList')[0]
-    (created, key_or_key_id) = await create_or_get_user_key('ai_developer', user_id, user_name, org_email, dept_id, user_api_key_dict)
+    key_alias = None
+    if type is not None and type.strip().startswith("assistant-"):
+        key_alias = f"{type.strip()}--{org_email.split('@')[0]}"
+    (created, key_or_key_id) = await create_or_get_user_key('ai_developer', user_id, user_name, org_email, dept_id, user_api_key_dict, key_alias)
     key = None
     if created:
         key = key_or_key_id

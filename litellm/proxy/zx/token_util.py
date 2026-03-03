@@ -71,18 +71,21 @@ async def create_or_get_user_key(
         user_name: str, 
         org_email: str, 
         dept_id: Optional[str], 
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        key_alias: Optional[str] = None,
 ) -> tuple[bool, str]:
     if dept_id is None or dept_id.strip() == '':
         dept_id = "none_dept_id"
     if user_api_key_dict is None:
         user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    if key_alias is None:
+        key_alias = org_email
     
     keys = await key_management_endpoints.list_keys(
         Request({'type': 'http', 'query_string': '',}),
         page=1, 
         size=25, 
-        key_alias=org_email, 
+        key_alias=key_alias, 
         user_api_key_dict=user_api_key_dict,
         user_id=None,
         team_id=None,
@@ -98,19 +101,19 @@ async def create_or_get_user_key(
     )
     key_total_count = keys.get('total_count', 0) or 0
     if key_total_count > 1:
-        raise RuntimeError(f"key_alias [{org_email}]在系统中重复: {key_total_count}")
+        raise RuntimeError(f"key_alias [{key_alias}]在系统中重复: {key_total_count}")
     if key_total_count == 1:
         key_id = keys.get('keys', [None])[0]
         if isinstance(key_id, str):
             return (False, key_id)
     
-    logger.info(f'user[{user_id}:{org_email}] create start...')
     teams = await team_endpoints.list_team(Request({'type': 'http', 'query_string': '',}), user_id=None, organization_id=None, user_api_key_dict=user_api_key_dict)
     team = next((x for x in teams if x.team_alias and x.team_alias.endswith(f'__{dept_id}')), None)
     if team is None:
-        logger.info(f'user[{user_id}:{org_email}] create team')
+        logger.info(f'user[{user_id}:{org_email}] create team start')
         team_data = NewTeamRequest(team_alias=f'__{dept_id}', models=["all-proxy-models"])
         team_res = await team_endpoints.new_team(team_data, Request({'type': 'http', 'query_string': '',}), litellm_changed_by=provider, user_api_key_dict=user_api_key_dict)
+        logger.info(f'user[{user_id}:{org_email}] create team end')
         team_id = team_res['team_id']
     else:
         team_id = team.team_id
@@ -139,13 +142,16 @@ async def create_or_get_user_key(
         metadata = {
             'provider': provider
         }
+        logger.info(f'user[{user_id}:{org_email}] create start')
         user_data = NewUserRequest(auto_create_key=False, user_id=user_id, user_alias=user_name, user_email=org_email, user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, team_id=team_id, metadata=metadata)
-        logger.info(f'user[{user_id}:{org_email}] create end...')
         user_res = await internal_user_endpoints.new_user(user_data, user_api_key_dict=user_api_key_dict)
+        logger.info(f'user[{user_id}:{org_email}] create end')
         uid = user_res.user_id
 
-    key_data = GenerateKeyRequest(user_id=uid, key_alias=org_email, key_type=LiteLLMKeyType.LLM_API, models=["all-team-models"])
+    logger.info(f'user[{user_id}:{org_email}] key[{key_alias}] create start')
+    key_data = GenerateKeyRequest(user_id=uid, key_alias=key_alias, key_type=LiteLLMKeyType.LLM_API, models=["all-team-models"])
     key_res = await key_management_endpoints.generate_key_fn(key_data, user_api_key_dict=user_api_key_dict)
+    logger.info(f'user[{user_id}:{org_email}] key[{key_alias}] create start')
 
     return (True, key_res.key)
 
