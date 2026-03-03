@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast, get_type_hin
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -249,7 +249,17 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 parsed_chunk["error"]["code"] = "unknown_error"
         except Exception:
             verbose_logger.debug("Failed to coalesce error.code in parsed_chunk")
-        return event_pydantic_model(**parsed_chunk)
+
+        try:
+            return event_pydantic_model(**parsed_chunk)
+        except ValidationError:
+            verbose_logger.debug(
+                "Pydantic validation failed for %s with chunk %s, "
+                "falling back to model_construct",
+                event_pydantic_model.__name__,
+                parsed_chunk,
+            )
+            return event_pydantic_model.model_construct(**parsed_chunk)
 
     @staticmethod
     def get_event_model_class(event_type: str) -> Any:

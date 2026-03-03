@@ -1,7 +1,17 @@
 import json
 import time
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
+    get_args,
+)
 
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
@@ -33,6 +43,7 @@ from litellm.types.llms.base import (
 from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
+from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
@@ -225,6 +236,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]
     tpm: Optional[int]
     rpm: Optional[int]
+    provider_specific_entry: Optional[Dict[str, float]]
 
 
 class ModelInfo(ModelInfoBase, total=False):
@@ -777,6 +789,7 @@ API_ROUTE_TO_CALL_TYPES = {
     "/mcp/call_tool": [CallTypes.call_mcp_tool],
     # A2A (Agent-to-Agent)
     "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
+    "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.llm_passthrough_route,
@@ -1823,7 +1836,7 @@ class ModelResponse(ModelResponseBase):
             else:
                 usage = usage
         elif stream is None or stream is False:
-            usage = Usage()
+            usage = None  # avoid constructing throwaway Usage; set by convert_to_model_response_object
         if hidden_params:
             self._hidden_params = hidden_params
 
@@ -2139,7 +2152,14 @@ class ImageObject(OpenAIImage):
     revised_prompt: Optional[str] = None
     provider_specific_fields: Optional[Dict[str, Any]] = None
 
-    def __init__(self, b64_json=None, url=None, revised_prompt=None, provider_specific_fields=None, **kwargs):
+    def __init__(
+        self,
+        b64_json=None,
+        url=None,
+        revised_prompt=None,
+        provider_specific_fields=None,
+        **kwargs,
+    ):
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
         if provider_specific_fields:
             self.provider_specific_fields = provider_specific_fields
@@ -2399,6 +2419,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
+    user_api_key_project_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -2523,6 +2544,8 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: Optional[
         str
     ]  # S3/GCS object key for cold storage retrieval
+    team_alias: Optional[str]
+    team_id: Optional[str]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -2611,6 +2634,52 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     }
     """
 
+    guardrail_id: Optional[str]
+    """Unique identifier for the guardrail configuration, e.g. 'gd-eu-pii-001'"""
+
+    policy_template: Optional[str]
+    """Name of the policy template this guardrail belongs to, e.g. 'EU AI Act Article 5'"""
+
+    detection_method: Optional[str]
+    """How detection was performed: 'regex', 'keyword', 'llm-judge', 'presidio', etc."""
+
+    confidence_score: Optional[float]
+    """For LLM-judge guardrails: confidence score 0.0-1.0"""
+
+    classification: Optional[dict]
+    """For LLM-judge guardrails: structured classification output"""
+
+    match_details: Optional[List[dict]]
+    """Detailed match information for each detected pattern"""
+
+    patterns_checked: Optional[int]
+    """Total number of patterns evaluated by this guardrail"""
+
+    alert_recipients: Optional[List[str]]
+    """Email addresses that were notified"""
+
+    risk_score: Optional[float]
+    """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
+
+
+class GuardrailTracingDetail(TypedDict, total=False):
+    """
+    Typed fields for guardrail tracing metadata.
+
+    Passed to add_standard_logging_guardrail_information_to_request_data()
+    to enrich the StandardLoggingGuardrailInformation with provider-specific details.
+    """
+
+    guardrail_id: Optional[str]
+    policy_template: Optional[str]
+    detection_method: Optional[str]
+    confidence_score: Optional[float]
+    classification: Optional[dict]
+    match_details: Optional[List[dict]]
+    patterns_checked: Optional[int]
+    alert_recipients: Optional[List[str]]
+    risk_score: Optional[float]
+
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
@@ -2641,7 +2710,9 @@ class CostBreakdown(TypedDict, total=False):
     )
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
-    additional_costs: Dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
+    additional_costs: Dict[
+        str, float
+    ]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
     discount_amount: float  # Discount amount in USD (optional)
@@ -2857,8 +2928,9 @@ all_litellm_params = (
         "api_key",
         "api_version",
         "prompt_id",
-        "provider_specific_header",
         "prompt_variables",
+        "litellm_system_prompt",
+        "provider_specific_header",
         "prompt_version",
         "api_base",
         "force_timeout",
@@ -3112,6 +3184,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
+    LITELLM_AGENT = "litellm_agent"
 
 
 # Create a set of all provider values for quick lookup
@@ -3122,6 +3195,12 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.OPENAI.value,
     LlmProviders.HOSTED_VLLM.value,
 }
+
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai"]
+
+LIST_BATCHES_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
+    get_args(ListBatchesSupportedProvider)
+)
 
 
 class SearchProviders(str, Enum):
@@ -3140,6 +3219,7 @@ class SearchProviders(str, Enum):
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
     LINKUP = "linkup"
+    DUCKDUCKGO = "duckduckgo"
 
 
 # Create a set of all search provider values for quick lookup
@@ -3355,6 +3435,7 @@ LLMResponseTypes = Union[
     LiteLLMFineTuningJob,
     AnthropicMessagesResponse,
     ResponsesAPIResponse,
+    LiteLLMSendMessageResponse,
 ]
 
 

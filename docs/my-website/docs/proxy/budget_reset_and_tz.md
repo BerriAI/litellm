@@ -22,6 +22,8 @@ litellm_settings:
 This ensures that all budget resets happen at midnight in your specified timezone rather than in UTC.
 If no timezone is specified, UTC will be used by default.
 
+Any valid [IANA timezone string](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) is supported (powered by Python's `zoneinfo` module). DST transitions are handled automatically.
+
 Common timezone values:
 
 - `UTC` - Coordinated Universal Time

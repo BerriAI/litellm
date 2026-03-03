@@ -15,7 +15,9 @@ else:
     LiteLLMLoggingObj = Any
 
 
-# DocumentType for OCR - Mistral format document dict
+# DocumentType for OCR - providers always receive a dict with
+# type="document_url" or type="image_url" (str values only).
+# File-type inputs are preprocessed to this format in litellm/ocr/main.py.
 DocumentType = Dict[str, str]
 
 
@@ -141,9 +143,13 @@ class BaseOCRConfig:
         Transform OCR request to provider-specific format.
         Override in provider-specific implementations.
         
+        Note: By the time this method is called, any file-type documents have already
+        been converted to document_url/image_url format with base64 data URIs by
+        the preprocessing in litellm/ocr/main.py.
+        
         Args:
             model: Model name
-            document: Document to process (Mistral format dict, or file path, bytes, etc.)
+            document: Document to process - always a dict with type="document_url" or type="image_url"
             optional_params: Optional parameters for the request
             headers: Request headers
             

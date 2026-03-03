@@ -16,6 +16,7 @@ export default function UISettings() {
   const property = schema?.properties?.disable_model_add_for_internal_users;
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
+  const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
@@ -58,6 +59,20 @@ export default function UISettings() {
         NotificationManager.fromBackend(error);
       },
     });
+  };
+
+  const handleToggleForwardClientHeaders = (checked: boolean) => {
+    updateSettings(
+      { forward_client_headers_to_llm_api: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
   };
 
   const handleToggleRequireAuthForPublicAIHub = (checked: boolean) => {
@@ -141,6 +156,23 @@ export default function UISettings() {
               {requireAuthForPublicAIHubProperty?.description && (
                 <Typography.Text type="secondary">{requireAuthForPublicAIHubProperty.description}</Typography.Text>
               )}
+            </Space>
+          </Space>
+
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.forward_client_headers_to_llm_api)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleForwardClientHeaders}
+              aria-label={forwardClientHeadersProperty?.description ?? "Forward client headers to LLM API"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Forward client headers to LLM API</Typography.Text>
+              <Typography.Text type="secondary">
+                {forwardClientHeadersProperty?.description ??
+                  "If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription."}
+              </Typography.Text>
             </Space>
           </Space>
 

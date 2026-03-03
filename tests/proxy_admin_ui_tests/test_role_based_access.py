@@ -132,6 +132,7 @@ RBAC Tests
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
     ],
 )
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_create_new_user_in_organization(prisma_client, user_role):
     """
 
@@ -193,6 +194,7 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_org_admin_create_team_permissions(prisma_client):
     """
     Create a new org admin
@@ -264,6 +266,7 @@ async def test_org_admin_create_team_permissions(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_org_admin_create_user_permissions(prisma_client):
     """
     1. Create a new org admin
@@ -337,6 +340,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     """
     Create a new org admin
@@ -486,6 +490,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
         ("/organization/member_add", LitellmUserRoles.INTERNAL_USER, False),
     ],
 )
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_user_role_permissions(prisma_client, route, user_role, expected_result):
     """Test user role based permissions for different routes"""
     try:

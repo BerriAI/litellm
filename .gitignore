@@ -2,6 +2,7 @@
 .venv
 .venv_policy_test
 .env
+.claude
 .newenv
 newenv/*
 litellm/proxy/myenv/*

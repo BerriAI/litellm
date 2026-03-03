@@ -4,9 +4,26 @@ import { Badge, Button } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
+import { TableHeaderSortDropdown } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { TimeCell } from "./time_cell";
 import { MCP_CALL_TYPES } from "./constants";
 import { LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
+
+/** API sort field mapping for /spend/logs/ui endpoint */
+export const LOGS_SORT_FIELD_MAP = {
+  startTime: "startTime",
+  spend: "spend",
+  total_tokens: "total_tokens",
+  request_duration_ms: "request_duration_ms",
+} as const;
+
+export type LogsSortField = keyof typeof LOGS_SORT_FIELD_MAP;
+
+export interface LogsSortProps {
+  sortBy: LogsSortField;
+  sortOrder: "asc" | "desc";
+  onSortChange: (sortBy: LogsSortField, sortOrder: "asc" | "desc") => void;
+}
 
 // Helper to get the appropriate logo URL
 const getLogoUrl = (row: LogEntry, provider: string) => {
@@ -45,7 +62,7 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   status?: string;
-  duration?: number;
+  request_duration_ms?: number;
   session_total_count?: number;
   session_total_spend?: number;
   mcp_tool_call_count?: number;
@@ -56,9 +73,47 @@ export type LogEntry = {
   onSessionClick?: (sessionId: string) => void;
 };
 
-export const columns: ColumnDef<LogEntry>[] = [
+const SortableHeader = ({
+  label,
+  field,
+  sortBy,
+  sortOrder,
+  onSortChange,
+}: {
+  label: string;
+  field: LogsSortField;
+  sortBy: LogsSortField;
+  sortOrder: "asc" | "desc";
+  onSortChange: (sortBy: LogsSortField, sortOrder: "asc" | "desc") => void;
+}) => (
+  <div className="flex items-center gap-1">
+    <span>{label}</span>
+    <TableHeaderSortDropdown
+      sortState={sortBy === field ? sortOrder : false}
+      onSortChange={(newState) => {
+        if (newState === false) {
+          onSortChange("startTime", "desc");
+        } else {
+          onSortChange(field, newState);
+        }
+      }}
+    />
+  </div>
+);
+
+export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] => [
   {
-    header: "Time",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Time"
+            field="startTime"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Time",
     accessorKey: "startTime",
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
@@ -145,7 +200,17 @@ export const columns: ColumnDef<LogEntry>[] = [
     ),
   },
   {
-    header: "Cost",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Cost"
+            field="spend"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Cost",
     accessorKey: "spend",
     cell: (info: any) => {
       const row = info.row.original;
@@ -167,13 +232,28 @@ export const columns: ColumnDef<LogEntry>[] = [
     },
   },
   {
-    header: "Duration (s)",
-    accessorKey: "duration",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
-        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
-    ),
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Duration (s)"
+            field="request_duration_ms"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Duration (s)",
+    accessorKey: "request_duration_ms",
+    cell: (info: any) => {
+      const ms = info.getValue();
+      if (ms == null) return <span>-</span>;
+      const seconds = (ms / 1000).toFixed(2);
+      return (
+        <Tooltip title={`${ms}ms`}>
+          <span className="max-w-[15ch] truncate block">{seconds}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Team Name",
@@ -240,7 +320,17 @@ export const columns: ColumnDef<LogEntry>[] = [
     },
   },
   {
-    header: "Tokens",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Tokens"
+            field="total_tokens"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Tokens",
     accessorKey: "total_tokens",
     cell: (info: any) => {
       const row = info.row.original;
@@ -307,6 +397,9 @@ export const columns: ColumnDef<LogEntry>[] = [
     },
   },
 ];
+
+/** Default columns without sort (for backward compatibility) */
+export const columns = createColumns();
 
 const formatMessage = (message: any): string => {
   if (!message) return "N/A";

@@ -9,9 +9,7 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 import litellm
 
 
@@ -119,9 +117,7 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
             function_call_output = item
             break
 
-    assert (
-        function_call_output is not None
-    ), "function_call_output not found in response"
+    assert function_call_output is not None, "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
     # Check that the output is correctly transformed
@@ -131,12 +127,8 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
 
     image_item = output[0]
     # Should be transformed to Responses API format
-    assert (
-        image_item["type"] == "input_image"
-    ), f"Expected type 'input_image', got '{image_item.get('type')}'"
-    assert (
-        image_item["image_url"] == test_image_base64
-    ), "image_url should be a flat string, not a nested object"
+    assert image_item["type"] == "input_image", f"Expected type 'input_image', got '{image_item.get('type')}'"
+    assert image_item["image_url"] == test_image_base64, "image_url should be a flat string, not a nested object"
     assert "detail" in image_item, "detail field should be present"
 
     print("✓ Tool result with image correctly transformed to Responses API format")
@@ -198,9 +190,7 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
             function_call_output = item
             break
 
-    assert (
-        function_call_output is not None
-    ), "function_call_output not found in response"
+    assert function_call_output is not None, "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
     # Check that the output is correctly transformed to use input_text, not output_text
@@ -210,12 +200,10 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
 
     text_item = output[0]
     # Should be transformed to use input_text for tool results in Responses API format
-    assert (
-        text_item["type"] == "input_text"
-    ), f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
-    assert (
-        text_item["text"] == "15 degrees"
-    ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
+    assert text_item["type"] == "input_text", (
+        f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
+    )
+    assert text_item["text"] == "15 degrees", f"Expected text '15 degrees', got '{text_item.get('text')}'"
 
     print("✓ Tool result with text correctly transformed to use input_text for Responses API format")
 
@@ -226,9 +214,7 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     )
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "delta": "**Compar",
@@ -260,9 +246,7 @@ def test_chunk_parser_string_output_text_delta_produces_text():
     )
     from litellm.types.utils import ModelResponseStream
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {"type": "response.output_text.delta", "delta": "literal text"}
 
@@ -283,9 +267,7 @@ def test_chunk_parser_enum_output_text_delta_produces_text():
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
     from litellm.types.utils import ModelResponseStream
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {"type": ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, "delta": "enum text"}
 
@@ -306,9 +288,7 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
     from litellm.types.utils import ModelResponseStream
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -393,9 +373,7 @@ Tomorrow will bring its petitions and promises,
 but for now the city breathes slow and wide,
 and I learn to carry this small calm home."""
 
-    output_text = ResponseOutputText(
-        annotations=[], text=poem_text, type="output_text", logprobs=[]
-    )
+    output_text = ResponseOutputText(annotations=[], text=poem_text, type="output_text", logprobs=[])
     output_message = ResponseOutputMessage(
         id="msg_04c8021b8b3188a00068e9ae0b92f4819dac64d85b4abb67ec",
         content=[output_text],
@@ -407,9 +385,7 @@ and I learn to carry this small calm home."""
     # Create usage information
     usage = ResponseAPIUsage(
         input_tokens=16,
-        input_tokens_details=InputTokensDetails(
-            audio_tokens=None, cached_tokens=0, text_tokens=None
-        ),
+        input_tokens_details=InputTokensDetails(audio_tokens=None, cached_tokens=0, text_tokens=None),
         output_tokens=195,
         output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
         total_tokens=211,
@@ -621,9 +597,7 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
 
-    print(
-        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
-    )
+    print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
 
 
 # =============================================================================
@@ -643,9 +617,7 @@ def test_message_done_does_not_emit_is_finished():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.output_item.done",
@@ -657,9 +629,9 @@ def test_message_done_does_not_emit_is_finished():
     # After the fix, message completion should NOT set finish_reason
     # ModelResponseStream doesn't have is_finished - check finish_reason instead
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason is None or result.choices[0].finish_reason == ""
-    ), "message completion should not emit finish_reason"
+    assert result.choices[0].finish_reason is None or result.choices[0].finish_reason == "", (
+        "message completion should not emit finish_reason"
+    )
 
 
 def test_response_completed_emits_is_finished():
@@ -671,9 +643,7 @@ def test_response_completed_emits_is_finished():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {"type": "response.completed"}
 
@@ -681,9 +651,91 @@ def test_response_completed_emits_is_finished():
 
     # response.completed should emit finish_reason='stop'
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason == "stop"
-    ), "response.completed should emit finish_reason='stop'"
+    assert result.choices[0].finish_reason == "stop", "response.completed should emit finish_reason='stop'"
+
+
+def test_response_completed_with_function_calls_emits_tool_calls_finish_reason():
+    """
+    Test that response.completed with function_call items in output emits finish_reason='tool_calls'.
+
+    This is a regression test for an issue where response.completed always returned
+    finish_reason='stop' even when the response contained tool calls, causing agents
+    like OpenCode to incorrectly conclude the stream ended without tools to execute.
+
+    When the response.completed event includes function_call items in its output,
+    the finish_reason should be 'tool_calls' to signal the client that tools need
+    to be executed.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    # Simulate a response.completed event with function_call in output
+    # This matches what Azure/OpenAI sends for gpt-5.1-codex-mini and similar models
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_123",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "call_abc123",
+                    "call_id": "call_abc123",
+                    "name": "read_file",
+                    "arguments": '{"path": "/tmp/test.py"}',
+                    "status": "completed",
+                }
+            ],
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    # response.completed with function_call should emit finish_reason='tool_calls'
+    assert len(result.choices) > 0, "result should have choices"
+    assert result.choices[0].finish_reason == "tool_calls", (
+        "response.completed with function_call output should emit finish_reason='tool_calls'"
+    )
+
+
+def test_response_completed_with_message_only_emits_stop_finish_reason():
+    """
+    Test that response.completed with only message output (no function_call) emits finish_reason='stop'.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    # Simulate a response.completed event with only message output
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_456",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_xyz",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello, world!"}],
+                    "status": "completed",
+                }
+            ],
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    # response.completed with only message should emit finish_reason='stop'
+    assert len(result.choices) > 0, "result should have choices"
+    assert result.choices[0].finish_reason == "stop", (
+        "response.completed with only message output should emit finish_reason='stop'"
+    )
 
 
 def test_function_call_done_emits_is_finished():
@@ -695,9 +747,7 @@ def test_function_call_done_emits_is_finished():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.output_item.done",
@@ -713,13 +763,10 @@ def test_function_call_done_emits_is_finished():
 
     # function_call completion should emit finish_reason='tool_calls'
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason == "tool_calls"
-    ), "function_call should emit finish_reason='tool_calls'"
-    assert (
-        result.choices[0].delta.tool_calls is not None
-        and len(result.choices[0].delta.tool_calls) > 0
-    ), "function_call should include tool_calls"
+    assert result.choices[0].finish_reason == "tool_calls", "function_call should emit finish_reason='tool_calls'"
+    assert result.choices[0].delta.tool_calls is not None and len(result.choices[0].delta.tool_calls) > 0, (
+        "function_call should include tool_calls"
+    )
 
 
 def test_text_plus_tool_calls_sequence():
@@ -734,9 +781,7 @@ def test_text_plus_tool_calls_sequence():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     # Simulate the sequence from OpenAI Responses API
     chunks = [
@@ -775,26 +820,21 @@ def test_text_plus_tool_calls_sequence():
     # Check message done (index 2) does NOT have finish_reason set
     message_done_result = results[2]
     assert len(message_done_result.choices) > 0, "message done should have choices"
-    assert (
-        message_done_result.choices[0].finish_reason is None
-        or message_done_result.choices[0].finish_reason == ""
-    ), "message done should not have finish_reason"
+    assert message_done_result.choices[0].finish_reason is None or message_done_result.choices[0].finish_reason == "", (
+        "message done should not have finish_reason"
+    )
 
     # Check function_call done (index 5) DOES have finish_reason='tool_calls'
     function_done_result = results[5]
-    assert (
-        len(function_done_result.choices) > 0
-    ), "function_call done should have choices"
-    assert (
-        function_done_result.choices[0].finish_reason == "tool_calls"
-    ), "function_call done should have finish_reason='tool_calls'"
+    assert len(function_done_result.choices) > 0, "function_call done should have choices"
+    assert function_done_result.choices[0].finish_reason == "tool_calls", (
+        "function_call done should have finish_reason='tool_calls'"
+    )
 
     # Check response.completed (index 6) has finish_reason='stop'
     completed_result = results[6]
     assert len(completed_result.choices) > 0, "response.completed should have choices"
-    assert (
-        completed_result.choices[0].finish_reason == "stop"
-    ), "response.completed should have finish_reason='stop'"
+    assert completed_result.choices[0].finish_reason == "stop", "response.completed should have finish_reason='stop'"
 
 
 # =============================================================================
@@ -1012,11 +1052,11 @@ def test_multiple_tool_calls_in_single_choice():
 def test_map_reasoning_effort_adds_summary_detailed():
     """
     Test that _map_reasoning_effort behavior with reasoning_auto_summary flag.
-    
+
     By default (flag=False), summary should NOT be added to avoid:
     1. Breaking for users without verified OpenAI orgs (400 errors)
     2. Making requests more expensive by including summary reasoning tokens
-    
+
     When flag is enabled (flag=True or env var), summary="detailed" is added.
     """
     import os
@@ -1030,64 +1070,68 @@ def test_map_reasoning_effort_adds_summary_detailed():
 
     # Test all string effort levels - DEFAULT BEHAVIOR (no summary)
     effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
-    
+
     # Save original flag value
     original_flag = litellm.reasoning_auto_summary
     original_env = os.environ.get("LITELLM_REASONING_AUTO_SUMMARY")
-    
+
     try:
         # Test 1: Default behavior (flag=False, no env var) - NO summary
         litellm.reasoning_auto_summary = False
         if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
-        
+
         for effort in effort_levels:
             result = handler._map_reasoning_effort(effort)
-            
+
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
             assert "summary" not in result, f"Summary should NOT be present by default for effort={effort}"
-            
+
             print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)")
-        
+
         # Test 2: With flag enabled - summary IS added
         litellm.reasoning_auto_summary = True
-        
+
         for effort in effort_levels:
             result = handler._map_reasoning_effort(effort)
-            
+
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
-            assert result["summary"] == "detailed", f"Summary should be 'detailed' when flag is enabled for effort={effort}"
-            
-            print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)")
-        
+            assert result["summary"] == "detailed", (
+                f"Summary should be 'detailed' when flag is enabled for effort={effort}"
+            )
+
+            print(
+                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)"
+            )
+
         # Test 3: With env var enabled (flag disabled) - summary IS added
         litellm.reasoning_auto_summary = False
         os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
-        
+
         result = handler._map_reasoning_effort("high")
         assert result["summary"] == "detailed", "Summary should be 'detailed' when env var is enabled"
         print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
-        
+
         # Test 4: Dict input is passed through as-is (no modification)
         litellm.reasoning_auto_summary = False
         if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
-        
+
         dict_input = {"effort": "high", "summary": "custom_summary"}
         result_dict = handler._map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
-        
+
         # Test 5: None/unknown values return None
         result_unknown = handler._map_reasoning_effort("unknown_value")
         assert result_unknown is None
         print("✓ Unknown reasoning_effort values return None")
-        
+
         print("✓ All reasoning_effort behaviors work correctly with flag/env var control")
-    
+
     finally:
         # Restore original values
         litellm.reasoning_auto_summary = original_flag
@@ -1100,10 +1144,10 @@ def test_map_reasoning_effort_adds_summary_detailed():
 def test_transform_response_preserves_annotations():
     """
     Test that annotations from Responses API are preserved when transforming to Chat Completions format.
-    
+
     This is a regression test for the bug where annotations (like url_citation) were being
     dropped during the transformation from ResponsesAPIResponse to ModelResponse.
-    
+
     The fix ensures annotations are extracted from ResponseOutputText content items and
     passed through to the Message object in the Chat Completions response.
     """
@@ -1162,13 +1206,9 @@ def test_transform_response_preserves_annotations():
     # Create usage information
     usage = ResponseAPIUsage(
         input_tokens=10,
-        input_tokens_details=InputTokensDetails(
-            audio_tokens=None, cached_tokens=0, text_tokens=None
-        ),
+        input_tokens_details=InputTokensDetails(audio_tokens=None, cached_tokens=0, text_tokens=None),
         output_tokens=20,
-        output_tokens_details=OutputTokensDetails(
-            reasoning_tokens=0, text_tokens=None
-        ),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
         total_tokens=30,
         cost=None,
     )

@@ -12,11 +12,13 @@ import { MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
-import { LogDetailContent } from "./LogDetailContent";
+import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
+import { normalizeGuardrailEntries } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
+import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 
 export interface LogDetailsDrawerProps {
   open: boolean;
@@ -27,6 +29,7 @@ export interface LogDetailsDrawerProps {
   onOpenSettings?: () => void;
   allLogs?: LogEntry[];
   onSelectLog?: (log: LogEntry) => void;
+  startTime?: string;
 }
 
 const SIDEBAR_WIDTH_PX = 224;
@@ -44,8 +47,8 @@ interface TraceEventRowProps {
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   const isMcp = MCP_CALL_TYPES.includes(row.call_type);
   const durationValue =
-    row.duration != null
-      ? row.duration.toFixed(3)
+    row.request_duration_ms != null
+      ? (row.request_duration_ms / 1000).toFixed(3)
       : row.startTime && row.endTime
         ? ((Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000).toFixed(3)
         : "-";
@@ -106,6 +109,7 @@ export function LogDetailsDrawer({
   onOpenSettings,
   allLogs = [],
   onSelectLog,
+  startTime,
 }: LogDetailsDrawerProps) {
   const isSessionMode = Boolean(sessionId);
   const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
@@ -121,7 +125,7 @@ export function LogDetailsDrawer({
       return allSessionLogs
         .map((row) => ({
           ...row,
-          duration: (Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000,
+          request_duration_ms: row.request_duration_ms ?? (Date.parse(row.endTime) - Date.parse(row.startTime)),
         }))
         .sort((a, b) => {
           const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
@@ -180,6 +184,25 @@ export function LogDetailsDrawer({
     },
   });
 
+  // Lazy-load log details (messages/response) only when drawer is open.
+  // This fetches data for a single log on-demand instead of prefetching all 50.
+  const logDetails = useLogDetails(currentLog?.request_id, startTime, open && !!currentLog?.request_id);
+  const detailsData = logDetails.data as any;
+  const isLoadingDetails = logDetails.isLoading;
+
+  // Build an enriched log entry that merges lazy-loaded details.
+  // The list endpoint may already include messages/response when store_prompts_in_spend_logs is enabled,
+  // while the detail endpoint fetches from custom loggers (S3, GCS, etc.) or DB fallback.
+  const enrichedLog = useMemo(() => {
+    if (!currentLog) return null;
+    return {
+      ...currentLog,
+      messages: detailsData?.messages || currentLog.messages,
+      response: detailsData?.response || currentLog.response,
+      proxy_server_request: detailsData?.proxy_server_request || currentLog.proxy_server_request,
+    };
+  }, [currentLog, detailsData]);
+
   const metadata = currentLog?.metadata || {};
 
   // Status display values
@@ -212,7 +235,7 @@ export function LogDetailsDrawer({
     } catch { /* clipboard unavailable in non-secure contexts */ }
   };
 
-  if (!currentLog) return null;
+  if (!currentLog || !enrichedLog) return null;
 
   return (
     <Drawer
@@ -301,6 +324,11 @@ export function LogDetailsDrawer({
             </div>
 
             <div className="flex-1 overflow-y-auto">
+              {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
+                <div className="px-3 pt-2">
+                  <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
+                </div>
+              )}
               {isSessionMode ? (
                 <div className="py-1">
                   {/* Child events — vertical tree line with horizontal connectors */}
@@ -352,7 +380,12 @@ export function LogDetailsDrawer({
               environment={environment}
             />
             <div className="flex-1 overflow-y-auto">
-              <LogDetailContent logEntry={currentLog} onOpenSettings={onOpenSettings} />
+              <LogDetailContent
+                logEntry={enrichedLog}
+                onOpenSettings={onOpenSettings}
+                isLoadingDetails={isLoadingDetails}
+                accessToken={accessToken ?? null}
+              />
             </div>
           </div>
         </div>

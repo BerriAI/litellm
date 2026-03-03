@@ -18,11 +18,11 @@ from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLog
 from litellm.integrations.bitbucket import BitBucketPromptManager
 from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
-from litellm.integrations.focus.focus_logger import FocusLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
 from litellm.integrations.dotprompt import DotpromptManager
+from litellm.integrations.focus.focus_logger import FocusLogger
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
@@ -33,6 +33,7 @@ from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
 from litellm.integrations.langsmith import LangsmithLogger
+from litellm.integrations.litellm_agent import LiteLLMAgentModelResolver
 from litellm.integrations.literal_ai import LiteralAILogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.openmeter import OpenMeterLogger
@@ -61,6 +62,7 @@ class CustomLoggerRegistry:
         "galileo": GalileoObserve,
         "langsmith": LangsmithLogger,
         "literalai": LiteralAILogger,
+        "litellm_agent": LiteLLMAgentModelResolver,
         "prometheus": PrometheusLogger,
         "datadog": DataDogLogger,
         "datadog_llm_observability": DataDogLLMObsLogger,

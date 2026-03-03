@@ -24,8 +24,15 @@ class TestAnthropicBetaHeadersFiltering:
     """Test beta header filtering and mapping for all providers."""
 
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, monkeypatch):
         """Load the beta headers config for testing."""
+        # Force use of local config file for tests
+        monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+        
+        # Clear the cached config to ensure fresh load with local config
+        from litellm import anthropic_beta_headers_manager
+        anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
+        
         config_path = os.path.join(
             os.path.dirname(litellm.__file__),
             "anthropic_beta_headers_config.json",

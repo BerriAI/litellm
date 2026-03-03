@@ -20,10 +20,10 @@ jobs:
           reaction: eyes
           comment: |
             **⚠️ Potential duplicate detected**
-            
+
             This issue appears similar to existing issue(s):
             {{#issues}}
             - [#{{number}}]({{html_url}}) - {{title}} ({{accuracy}}% similar)
             {{/issues}}
-            
+
             Please review the linked issue(s) to see if they address your concern. If this is not a duplicate, please provide additional context to help us understand the difference.

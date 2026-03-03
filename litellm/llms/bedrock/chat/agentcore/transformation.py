@@ -114,6 +114,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
+        # Set Accept header required by MCP servers on AgentCore
+        # Per MCP spec (Streamable HTTP transport): client MUST include Accept header
+        # listing both application/json and text/event-stream as supported content types
+        headers["Accept"] = "application/json, text/event-stream"
+
         # Check if api_key (bearer token) is provided for Cognito authentication
         # Priority: api_key parameter first, then optional_params
         jwt_token = api_key or optional_params.get("api_key")

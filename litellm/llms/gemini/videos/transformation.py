@@ -393,10 +393,11 @@ class GeminiVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        variant: Optional[str] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request for Veo API.
-        
+
         For Veo, we need to:
         1. Get operation status to extract video URI
         2. Return download URL for the video
