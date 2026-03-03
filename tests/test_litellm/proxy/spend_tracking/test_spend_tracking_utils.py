@@ -1045,6 +1045,301 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
         assert result is False, "Expected False (from env var) when key missing, got True"
 
 
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_on_guardrail_failure_true_any_guardrail(
+    mock_get_secret_bool,
+):
+    """
+    When store_prompts_on_guardrail_failure is True, prompts should be stored
+    if any guardrail has status 'guardrail_intervened' or 'guardrail_failed_to_respond'.
+    """
+    mock_get_secret_bool.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "guardrail_intervened",
+        }
+    ]
+
+    # Should store when guardrail intervened
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": True}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info)
+        assert result is True
+
+    # Should store when guardrail failed to respond
+    guardrail_info_failed = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "guardrail_failed_to_respond",
+        }
+    ]
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": True}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info_failed)
+        assert result is True
+
+    # Should NOT store when guardrail succeeded
+    guardrail_info_success = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "success",
+        }
+    ]
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": True}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info_success)
+        assert result is False
+
+    # Should NOT store when no guardrail info provided
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": True}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=None)
+        assert result is False
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_on_guardrail_failure_specific_guardrails(
+    mock_get_secret_bool,
+):
+    """
+    When store_prompts_on_guardrail_failure is a list of guardrail names,
+    prompts should only be stored when a named guardrail fails.
+    """
+    mock_get_secret_bool.return_value = False
+
+    # Should store when a listed guardrail fails
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "guardrail_intervened",
+        }
+    ]
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": ["content_filter", "pii-detector"]}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info)
+        assert result is True
+
+    # Should NOT store when a non-listed guardrail fails
+    guardrail_info_other = [
+        {
+            "guardrail_name": "some_other_guardrail",
+            "guardrail_status": "guardrail_intervened",
+        }
+    ]
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": ["content_filter", "pii-detector"]}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info_other)
+        assert result is False
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_on_guardrail_failure_disabled(
+    mock_get_secret_bool,
+):
+    """
+    When store_prompts_on_guardrail_failure is not set, guardrail failures
+    should not trigger prompt storage.
+    """
+    mock_get_secret_bool.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "guardrail_intervened",
+        }
+    ]
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info)
+        assert result is False
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_on_guardrail_failure_mixed_statuses(
+    mock_get_secret_bool,
+):
+    """
+    When multiple guardrails run and only one fails, prompts should still be stored.
+    """
+    mock_get_secret_bool.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "passing_guard",
+            "guardrail_status": "success",
+        },
+        {
+            "guardrail_name": "failing_guard",
+            "guardrail_status": "guardrail_intervened",
+        },
+    ]
+
+    # True mode: any failure triggers storage
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": True}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info)
+        assert result is True
+
+    # List mode: only matches named guardrail
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": ["failing_guard"]}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info)
+        assert result is True
+
+    # List mode: doesn't match the failing guardrail's name
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": ["passing_guard"]}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info)
+        assert result is False
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_on_guardrail_failure_not_run_status(
+    mock_get_secret_bool,
+):
+    """
+    Guardrails with 'not_run' status should not trigger prompt storage.
+    """
+    mock_get_secret_bool.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "not_run",
+        }
+    ]
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": True}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info)
+        assert result is False
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_on_guardrail_failure_empty_lists(
+    mock_get_secret_bool,
+):
+    """
+    Empty guardrail_information list and empty setting list should not trigger storage.
+    """
+    mock_get_secret_bool.return_value = False
+
+    # Empty guardrail_information list
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": True}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=[])
+        assert result is False
+
+    # Empty setting list
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "guardrail_intervened",
+        }
+    ]
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": []}):
+        result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info)
+        assert result is False
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_on_guardrail_failure_string_true_normalized(
+    mock_get_secret_bool,
+):
+    """
+    String 'true'/'True'/'TRUE' should be normalized to boolean True.
+    """
+    mock_get_secret_bool.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "guardrail_intervened",
+        }
+    ]
+
+    for true_value in ["true", "True", "TRUE"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": true_value}):
+            result = _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_info)
+            assert result is True, f"Expected True for string '{true_value}', got {result}"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_on_guardrail_failure": True})
+def test_get_logging_payload_stores_prompts_on_guardrail_failure():
+    """
+    Integration test: when store_prompts_on_guardrail_failure is True and a guardrail
+    intervenes, the proxy_server_request field in the spend log should contain
+    actual request content (not '{}').
+    """
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": "Content blocked",
+        }
+    ]
+
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "standard_logging_guardrail_information": guardrail_info,
+            },
+            "proxy_server_request": {
+                "body": {
+                    "messages": [{"role": "user", "content": "bad content"}],
+                    "model": "gpt-4",
+                }
+            },
+        },
+        # No standard_logging_object — guardrail blocked before LLM call
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={},
+        start_time=datetime.datetime.now(tz=timezone.utc),
+        end_time=datetime.datetime.now(tz=timezone.utc),
+    )
+
+    # proxy_server_request should contain actual content, not '{}'
+    proxy_request = json.loads(payload["proxy_server_request"])
+    assert proxy_request != {}
+    assert proxy_request["messages"][0]["content"] == "bad content"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_does_not_store_prompts_without_flag():
+    """
+    Integration test: when store_prompts_on_guardrail_failure is NOT set,
+    prompts should not be stored even if a guardrail fails.
+    """
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": "Content blocked",
+        }
+    ]
+
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "standard_logging_guardrail_information": guardrail_info,
+            },
+            "proxy_server_request": {
+                "body": {
+                    "messages": [{"role": "user", "content": "bad content"}],
+                    "model": "gpt-4",
+                }
+            },
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={},
+        start_time=datetime.datetime.now(tz=timezone.utc),
+        end_time=datetime.datetime.now(tz=timezone.utc),
+    )
+
+    # proxy_server_request should be empty
+    assert payload["proxy_server_request"] == "{}"
+
+
 def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
     """
     When standard_logging_payload is None (e.g. guardrail blocks before LLM call),

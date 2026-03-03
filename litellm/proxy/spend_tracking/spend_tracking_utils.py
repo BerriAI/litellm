@@ -125,7 +125,7 @@ def _get_spend_logs_metadata(
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata[
         "vector_store_request_metadata"
-    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata, guardrail_information=guardrail_information)
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -334,6 +334,15 @@ def get_logging_payload(  # noqa: PLR0915
         hidden_params = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
 
+    # Extract guardrail_information once — used for both metadata and conditional prompt storage
+    _guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = (
+        standard_logging_payload.get("guardrail_information", None)
+        if standard_logging_payload is not None
+        else metadata.get("standard_logging_guardrail_information", None)
+        if metadata is not None
+        else None
+    )
+
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         metadata,
@@ -369,13 +378,7 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
-        guardrail_information=(
-            standard_logging_payload.get("guardrail_information", None)
-            if standard_logging_payload is not None
-            else metadata.get("standard_logging_guardrail_information", None)
-            if metadata is not None
-            else None
-        ),
+        guardrail_information=_guardrail_information,
         cold_storage_object_key=(
             standard_logging_payload["metadata"].get("cold_storage_object_key", None)
             if standard_logging_payload is not None
@@ -453,13 +456,16 @@ def get_logging_payload(  # noqa: PLR0915
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
             messages=_get_messages_for_spend_logs_payload(
-                standard_logging_payload=standard_logging_payload, metadata=metadata
+                standard_logging_payload=standard_logging_payload, metadata=metadata,
+                guardrail_information=_guardrail_information,
             ),
             response=_get_response_for_spend_logs_payload(
-                payload=standard_logging_payload, kwargs=kwargs
+                payload=standard_logging_payload, kwargs=kwargs,
+                guardrail_information=_guardrail_information,
             ),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
-                metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
+                metadata=metadata, litellm_params=litellm_params, kwargs=kwargs,
+                guardrail_information=_guardrail_information,
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
@@ -610,8 +616,9 @@ async def get_spend_by_team_and_customer(
 def _get_messages_for_spend_logs_payload(
     standard_logging_payload: Optional[StandardLoggingPayload],
     metadata: Optional[dict] = None,
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = None,
 ) -> str:
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_information):
         if standard_logging_payload is not None:
             call_type = standard_logging_payload.get("call_type", "")
             if call_type == "_arealtime":
@@ -755,13 +762,14 @@ def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
     kwargs: Optional[dict] = None,
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = None,
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
 
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_information):
         _proxy_server_request = cast(
             Optional[dict], litellm_params.get("proxy_server_request", {})
         )
@@ -802,11 +810,12 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
 def _get_vector_store_request_for_spend_logs_payload(
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]],
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = None,
 ) -> Optional[List[StandardLoggingVectorStoreRequest]]:
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_information):
         return vector_store_request_metadata
 
     # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
@@ -828,10 +837,11 @@ def _get_vector_store_request_for_spend_logs_payload(
 def _get_response_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
     kwargs: Optional[dict] = None,
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = None,
 ) -> str:
     if payload is None:
         return "{}"
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if _should_store_prompts_and_responses_in_spend_logs(guardrail_information=guardrail_information):
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
@@ -876,13 +886,15 @@ def _get_response_for_spend_logs_payload(
     return "{}"
 
 
-def _should_store_prompts_and_responses_in_spend_logs() -> bool:
+def _should_store_prompts_and_responses_in_spend_logs(
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = None,
+) -> bool:
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
 
     # Check general_settings (from DB or proxy_config.yaml)
     store_prompts_value = general_settings.get("store_prompts_in_spend_logs")
-    
+
     # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
     if store_prompts_value is True:
         return True
@@ -890,9 +902,29 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
         # Case-insensitive string comparison
         if store_prompts_value.lower() == "true":
             return True
-    
+
     # Also check environment variable
-    return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+    if get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True:
+        return True
+
+    # Check if we should store prompts only when a guardrail failed
+    store_on_failure = general_settings.get("store_prompts_on_guardrail_failure")
+    # Normalize: handle string "true"/"false" from YAML/env vars,
+    # and wrap a bare guardrail name string into a list
+    if isinstance(store_on_failure, str):
+        if store_on_failure.lower() == "true":
+            store_on_failure = True
+        elif store_on_failure.lower() == "false":
+            store_on_failure = False
+        else:
+            store_on_failure = [store_on_failure]
+    if store_on_failure and guardrail_information:
+        for guardrail in guardrail_information:
+            if guardrail.get("guardrail_status") in ("guardrail_intervened", "guardrail_failed_to_respond"):
+                if store_on_failure is True or (isinstance(store_on_failure, list) and guardrail.get("guardrail_name") in store_on_failure):
+                    return True
+
+    return False
 
 
 def _get_status_for_spend_log(
