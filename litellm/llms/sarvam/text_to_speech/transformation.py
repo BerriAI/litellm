@@ -241,7 +241,14 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
 
         # Decode the first audio (Sarvam returns one audio per input)
         audio_base64 = audios[0]
-        audio_bytes = base64.b64decode(audio_base64)
+        try:
+            audio_bytes = base64.b64decode(audio_base64)
+        except Exception as e:
+            raise self.get_error_class(
+                error_message=f"Failed to decode Sarvam TTS audio data: {str(e)}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            ) from e
 
         # Create synthetic httpx.Response with decoded audio bytes
         # (same pattern as MiniMax TTS)
