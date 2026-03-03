@@ -82,7 +82,7 @@ COPY docker/supervisord.conf /etc/supervisord.conf
 
 # 添加自定义方法
 RUN mkdir -p /etc/litellm/litellm/proxy/zx/
-COPY litellm/proxy/zx/zx_custom_auth_app.py /etc/litellm/litellm/proxy/zx/zx_custom_auth_app.py
+COPY litellm/proxy/zx/plugins /etc/litellm/litellm/proxy/zx/plugins
 COPY litellm/proxy/zx/zx_security_validator.py /etc/litellm/litellm/proxy/zx/zx_security_validator.py
 
 ENTRYPOINT ["docker/prod_entrypoint.sh"]

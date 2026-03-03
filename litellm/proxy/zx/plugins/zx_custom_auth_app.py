@@ -12,7 +12,7 @@ from litellm.proxy.proxy_server import (
     proxy_logging_obj,
     user_api_key_cache,
 )
-from .zx_security_validator import security_validator
+from ..zx_security_validator import security_validator
 
 ttl = 24 * 60 * 60
 user_key_hashed_token_cache = DualCache(
