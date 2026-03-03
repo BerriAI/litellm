@@ -1,8 +1,8 @@
-import { EditOutlined, InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
+import { CopyOutlined, EditOutlined, InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
 import { TrashIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Button, Icon } from "@tremor/react";
-import { Divider, Flex, Popover, Space, Tooltip, Typography } from "antd";
+import { Checkbox, Divider, Flex, Popover, Space, Tooltip, Typography } from "antd";
 import { ModelData } from "../../model_dashboard/types";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -52,7 +52,31 @@ export const columns = (
   handleRefreshClick: () => void,
   expandedRows: Set<string>,
   setExpandedRows: (expandedRows: Set<string>) => void,
+  handleCloneClick?: (model: ModelData) => void,
 ): ColumnDef<ModelData>[] => [
+    {
+      id: "select",
+      size: 40,
+      minSize: 40,
+      enableResizing: false,
+      enableSorting: false,
+      header: ({ table }) => (
+        <Checkbox
+          checked={table.getIsAllRowsSelected()}
+          indeterminate={table.getIsSomeRowsSelected()}
+          onChange={(e) => table.toggleAllRowsSelected(e.target.checked)}
+          aria-label="Select all"
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={row.getIsSelected()}
+          disabled={!row.getCanSelect()}
+          onChange={(e) => row.toggleSelected(e.target.checked)}
+          aria-label="Select row"
+        />
+      ),
+    },
     {
       header: () => <span className="text-sm font-semibold">Model ID</span>,
       accessorKey: "model_info.id",
@@ -400,6 +424,15 @@ export const columns = (
         const isConfigModel = !model.model_info?.db_model;
         return (
           <div className="flex items-center justify-end gap-2 pr-4">
+            {handleCloneClick && model.model_info?.db_model && (
+              <Tooltip title="Clone model">
+                <CopyOutlined
+                  className="cursor-pointer text-gray-500 hover:text-blue-600"
+                  style={{ fontSize: 14 }}
+                  onClick={() => handleCloneClick(model)}
+                />
+              </Tooltip>
+            )}
             {isConfigModel ? (
               <Tooltip title="Config model cannot be deleted on the dashboard. Please delete it from the config file.">
                 <Icon icon={TrashIcon} size="sm" className="opacity-50 cursor-not-allowed" />

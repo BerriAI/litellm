@@ -1,5 +1,6 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
 import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
+import { act, fireEvent } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AllModelsTab from "./AllModelsTab";
 
@@ -47,6 +48,19 @@ const mockUseTeams = vi.fn(() => ({
 vi.mock("../../hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
 }));
+
+// Mock networking calls for bulk delete and clone
+const mockModelDeleteCall = vi.fn().mockResolvedValue({ message: "Model deleted successfully" });
+const mockModelCreateCall = vi.fn().mockResolvedValue({ model_id: "new-model-id" });
+
+vi.mock("@/components/networking", async () => {
+  const actual = await vi.importActual("@/components/networking");
+  return {
+    ...actual,
+    modelDeleteCall: (...args: any[]) => mockModelDeleteCall(...args),
+    modelCreateCall: (...args: any[]) => mockModelCreateCall(...args),
+  };
+});
 
 // Helper function to create model cost map mock return value
 const createModelCostMapMock = (data: Record<string, any>) => ({
@@ -492,5 +506,357 @@ describe("AllModelsTab", () => {
     // Previous should also be disabled on the first (and only) page
     const previousButton = screen.getByRole("button", { name: /previous/i });
     expect(previousButton).toBeDisabled();
+  });
+
+  it("should show select checkboxes for DB models and enable bulk delete", async () => {
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(
+      createModelCostMapMock({
+        "gpt-4-db": { litellm_provider: "openai" },
+      }),
+    );
+
+    const modelData = createPaginatedModelData([
+      {
+        model_name: "gpt-4-db",
+        litellm_model_name: "openai/gpt-4",
+        provider: "openai",
+        model_info: {
+          id: "model-db-1",
+          db_model: true,
+          direct_access: true,
+          access_via_team_ids: [],
+          access_groups: [],
+          created_by: "user-123",
+          created_at: "2024-01-01",
+          updated_at: "2024-01-01",
+        },
+        litellm_params: { model: "openai/gpt-4" },
+      },
+    ], 1, 1, 1, 50);
+
+    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
+
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+    // Wait for the table to render
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4-db")).toBeInTheDocument();
+    });
+
+    // Find select checkboxes - there should be a header checkbox and a row checkbox
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes.length).toBeGreaterThanOrEqual(2);
+
+    // Select the row checkbox (the second one, first is the header "select all")
+    await act(async () => {
+      fireEvent.click(checkboxes[1]);
+    });
+
+    // After selection, bulk delete toolbar should appear
+    await waitFor(() => {
+      expect(screen.getByText(/1 DB model selected/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /delete selected/i })).toBeInTheDocument();
+    });
+  });
+
+  it("should show clone button for DB models in actions column", async () => {
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(
+      createModelCostMapMock({
+        "gpt-4-db": { litellm_provider: "openai" },
+      }),
+    );
+
+    const modelData = createPaginatedModelData([
+      {
+        model_name: "gpt-4-db",
+        litellm_model_name: "openai/gpt-4",
+        provider: "openai",
+        model_info: {
+          id: "model-db-1",
+          db_model: true,
+          direct_access: true,
+          access_via_team_ids: [],
+          access_groups: [],
+          created_by: "user-123",
+          created_at: "2024-01-01",
+          updated_at: "2024-01-01",
+        },
+        litellm_params: { model: "openai/gpt-4" },
+      },
+    ], 1, 1, 1, 50);
+
+    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
+
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4-db")).toBeInTheDocument();
+    });
+
+    // The clone button should be visible for DB models (identified by tooltip)
+    const cloneButton = screen.getByLabelText("copy");
+    expect(cloneButton).toBeInTheDocument();
+  });
+
+  it("should not show clone button for config models", async () => {
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(
+      createModelCostMapMock({
+        "gpt-4-config": { litellm_provider: "openai" },
+      }),
+    );
+
+    const modelData = createPaginatedModelData([
+      {
+        model_name: "gpt-4-config",
+        litellm_model_name: "openai/gpt-4",
+        provider: "openai",
+        model_info: {
+          id: "model-config-1",
+          db_model: false,
+          direct_access: true,
+          access_via_team_ids: [],
+          access_groups: [],
+          created_by: "user-123",
+          created_at: "2024-01-01",
+          updated_at: "2024-01-01",
+        },
+        litellm_params: { model: "openai/gpt-4" },
+      },
+    ], 1, 1, 1, 50);
+
+    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
+
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4-config")).toBeInTheDocument();
+    });
+
+    // The clone button should NOT be visible for config models
+    expect(screen.queryByLabelText("copy")).not.toBeInTheDocument();
+  });
+
+  it("should disable checkbox for config models (non-DB models)", async () => {
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(
+      createModelCostMapMock({
+        "gpt-4-config": { litellm_provider: "openai" },
+      }),
+    );
+
+    const modelData = createPaginatedModelData([
+      {
+        model_name: "gpt-4-config",
+        litellm_model_name: "openai/gpt-4",
+        provider: "openai",
+        model_info: {
+          id: "model-config-1",
+          db_model: false,
+          direct_access: true,
+          access_via_team_ids: [],
+          access_groups: [],
+          created_by: "user-123",
+          created_at: "2024-01-01",
+          updated_at: "2024-01-01",
+        },
+        litellm_params: { model: "openai/gpt-4" },
+      },
+    ], 1, 1, 1, 50);
+
+    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
+
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4-config")).toBeInTheDocument();
+    });
+
+    // The row checkbox should be disabled for config models
+    const checkboxes = screen.getAllByRole("checkbox");
+    // Find the row-level checkbox (not the header one)
+    const rowCheckbox = checkboxes.find((cb) => cb.getAttribute("disabled") !== null);
+    expect(rowCheckbox).toBeDefined();
+  });
+
+  it("should call modelDeleteCall for each selected model on bulk delete confirm", async () => {
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(
+      createModelCostMapMock({
+        "gpt-4-db-1": { litellm_provider: "openai" },
+        "gpt-4-db-2": { litellm_provider: "openai" },
+      }),
+    );
+
+    const modelData = createPaginatedModelData([
+      {
+        model_name: "gpt-4-db-1",
+        litellm_model_name: "openai/gpt-4",
+        provider: "openai",
+        model_info: {
+          id: "model-db-1",
+          db_model: true,
+          direct_access: true,
+          access_via_team_ids: [],
+          access_groups: [],
+          created_by: "user-123",
+          created_at: "2024-01-01",
+          updated_at: "2024-01-01",
+        },
+        litellm_params: { model: "openai/gpt-4" },
+      },
+      {
+        model_name: "gpt-4-db-2",
+        litellm_model_name: "openai/gpt-4",
+        provider: "openai",
+        model_info: {
+          id: "model-db-2",
+          db_model: true,
+          direct_access: true,
+          access_via_team_ids: [],
+          access_groups: [],
+          created_by: "user-123",
+          created_at: "2024-01-01",
+          updated_at: "2024-01-01",
+        },
+        litellm_params: { model: "openai/gpt-4" },
+      },
+    ], 2, 1, 1, 50);
+
+    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
+
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4-db-1")).toBeInTheDocument();
+    });
+
+    // Select all via the header checkbox
+    const checkboxes = screen.getAllByRole("checkbox");
+    await act(async () => {
+      fireEvent.click(checkboxes[0]); // header "select all"
+    });
+
+    // Click "Delete Selected" button
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /delete selected/i })).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /delete selected/i }));
+    });
+
+    // Confirmation modal should appear
+    await waitFor(() => {
+      expect(screen.getByText("Delete 2 Models")).toBeInTheDocument();
+    });
+
+    // Confirm delete
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    });
+
+    // Both models should have been deleted
+    await waitFor(() => {
+      expect(mockModelDeleteCall).toHaveBeenCalledTimes(2);
+      expect(mockModelDeleteCall).toHaveBeenCalledWith("mock-access-token", "model-db-1");
+      expect(mockModelDeleteCall).toHaveBeenCalledWith("mock-access-token", "model-db-2");
+    });
+  });
+
+  it("should call modelCreateCall with correct params on clone", async () => {
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(
+      createModelCostMapMock({
+        "gpt-4-db": { litellm_provider: "openai" },
+      }),
+    );
+
+    const modelData = createPaginatedModelData([
+      {
+        model_name: "gpt-4-db",
+        litellm_model_name: "openai/gpt-4",
+        provider: "openai",
+        model_info: {
+          id: "model-db-1",
+          db_model: true,
+          direct_access: true,
+          access_via_team_ids: [],
+          access_groups: [],
+          created_by: "user-123",
+          created_at: "2024-01-01",
+          updated_at: "2024-01-01",
+        },
+        litellm_params: { model: "openai/gpt-4", api_base: "https://api.openai.com" },
+      },
+    ], 1, 1, 1, 50);
+
+    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
+
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4-db")).toBeInTheDocument();
+    });
+
+    // Click the clone button (CopyOutlined icon)
+    const cloneButton = screen.getByLabelText("copy");
+    await act(async () => {
+      fireEvent.click(cloneButton);
+    });
+
+    // Verify modelCreateCall was called with the correct payload
+    await waitFor(() => {
+      expect(mockModelCreateCall).toHaveBeenCalledTimes(1);
+      expect(mockModelCreateCall).toHaveBeenCalledWith(
+        "mock-access-token",
+        expect.objectContaining({
+          model_name: "gpt-4-db",
+          litellm_params: expect.objectContaining({
+            model: "openai/gpt-4",
+            api_base: "https://api.openai.com",
+          }),
+          model_info: {},
+        }),
+      );
+    });
   });
 });

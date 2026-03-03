@@ -4,3 +4,6 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app
+
+general_settings:
+  master_key: sk-dev-master-key

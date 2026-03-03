@@ -9,6 +9,7 @@ import {
   VisibilityState,
   PaginationState,
   OnChangeFn,
+  RowSelectionState,
 } from "@tanstack/react-table";
 import React from "react";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
@@ -30,6 +31,9 @@ interface AllModelsDataTableProps<TData, TValue> {
   pagination?: PaginationState;
   onPaginationChange?: OnChangeFn<PaginationState>;
   enablePagination?: boolean;
+  rowSelection?: RowSelectionState;
+  onRowSelectionChange?: OnChangeFn<RowSelectionState>;
+  enableRowSelection?: boolean | ((row: any) => boolean);
 }
 
 export function AllModelsDataTable<TData, TValue>({
@@ -41,6 +45,9 @@ export function AllModelsDataTable<TData, TValue>({
   pagination,
   onPaginationChange,
   enablePagination = false,
+  rowSelection,
+  onRowSelectionChange,
+  enableRowSelection = false,
 }: AllModelsDataTableProps<TData, TValue>) {
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [columnSizing, setColumnSizing] = React.useState({});
@@ -54,18 +61,21 @@ export function AllModelsDataTable<TData, TValue>({
       columnSizing,
       columnVisibility,
       ...(enablePagination && pagination ? { pagination } : {}),
+      ...(rowSelection !== undefined ? { rowSelection } : {}),
     },
     columnResizeMode,
     onSortingChange: onSortingChange,
     onColumnSizingChange: setColumnSizing,
     onColumnVisibilityChange: setColumnVisibility,
     ...(enablePagination && onPaginationChange ? { onPaginationChange } : {}),
+    ...(onRowSelectionChange ? { onRowSelectionChange } : {}),
     getCoreRowModel: getCoreRowModel(),
     // NO getSortedRowModel - sorting is handled server-side
     ...(enablePagination ? { getPaginationRowModel: getPaginationRowModel() } : {}),
     enableSorting: true,
     enableColumnResizing: true,
     manualSorting: true, // Enable manual sorting for server-side sorting
+    enableRowSelection: enableRowSelection,
     defaultColumn: {
       minSize: 40,
       maxSize: 500,

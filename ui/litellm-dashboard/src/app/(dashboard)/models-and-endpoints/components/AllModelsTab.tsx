@@ -3,10 +3,15 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { AllModelsDataTable } from "@/components/model_dashboard/all_models_table";
+import { ModelData } from "@/components/model_dashboard/types";
 import { columns } from "@/components/molecules/models/columns";
+import { modelCreateCall, modelDeleteCall } from "@/components/networking";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
-import { InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
-import { PaginationState, SortingState } from "@tanstack/react-table";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { DeleteOutlined, InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
+import { PaginationState, RowSelectionState, SortingState } from "@tanstack/react-table";
+import { useQueryClient } from "@tanstack/react-query";
 import { Grid, TabPanel } from "@tremor/react";
 import { Badge, Button, Select, Skeleton, Space, Typography } from "antd";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
@@ -35,8 +40,9 @@ const AllModelsTab = ({
   setSelectedTeamId,
 }: AllModelsTabProps) => {
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
-  const { userId, userRole, premiumUser } = useAuthorized();
+  const { accessToken, userId, userRole, premiumUser } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
+  const queryClient = useQueryClient();
 
   const [modelNameSearch, setModelNameSearch] = useState<string>("");
   const [debouncedSearch, setDebouncedSearch] = useState<string>("");
@@ -53,6 +59,9 @@ const AllModelsTab = ({
   });
   const [sorting, setSorting] = useState<SortingState>([]);
   const [isModelSettingsModalVisible, setIsModelSettingsModalVisible] = useState(false);
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // Debounce search input
   const debouncedUpdateSearch = useMemo(
@@ -179,6 +188,67 @@ const AllModelsTab = ({
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
   }, [sorting]);
 
+  const selectedModels = useMemo(() => {
+    return Object.keys(rowSelection)
+      .filter((key) => rowSelection[key])
+      .map((key) => filteredData[parseInt(key)])
+      .filter(Boolean);
+  }, [rowSelection, filteredData]);
+
+  const selectedDbModels = useMemo(() => {
+    return selectedModels.filter((m) => m.model_info?.db_model);
+  }, [selectedModels]);
+
+  const handleBulkDelete = async () => {
+    if (!accessToken || selectedDbModels.length === 0) return;
+    setIsBulkDeleting(true);
+    let successCount = 0;
+    let failCount = 0;
+    for (const model of selectedDbModels) {
+      try {
+        await modelDeleteCall(accessToken, model.model_info.id);
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    setIsBulkDeleting(false);
+    setIsBulkDeleteModalOpen(false);
+    setRowSelection({});
+    queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+    if (successCount > 0) {
+      NotificationsManager.success(`Deleted ${successCount} model${successCount > 1 ? "s" : ""} successfully`);
+    }
+    if (failCount > 0) {
+      NotificationsManager.fromBackend(`Failed to delete ${failCount} model${failCount > 1 ? "s" : ""}`);
+    }
+  };
+
+  const handleCloneModel = async (model: ModelData) => {
+    if (!accessToken) return;
+    try {
+      const { litellm_credential_name, ...restParams } = model.litellm_params || {};
+      const createPayload: any = {
+        model_name: model.model_name,
+        litellm_params: {
+          ...restParams,
+          model: model.litellm_params?.model || model.litellm_model_name,
+        },
+        model_info: {},
+      };
+      if (litellm_credential_name) {
+        createPayload.litellm_params.litellm_credential_name = litellm_credential_name;
+      }
+      if (model.model_info?.team_id) {
+        createPayload.model_info.team_id = model.model_info.team_id;
+      }
+      await modelCreateCall(accessToken, createPayload);
+      queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+    } catch {
+      // modelCreateCall already shows error notification
+    }
+  };
+
   const resetFilters = () => {
     setModelNameSearch("");
     setSelectedModelGroup("all");
@@ -188,6 +258,7 @@ const AllModelsTab = ({
     setCurrentPage(1);
     setPagination({ pageIndex: 0, pageSize: 50 });
     setSorting([]);
+    setRowSelection({});
   };
 
   return (
@@ -492,6 +563,34 @@ const AllModelsTab = ({
               </div>
             </div>
 
+            {selectedDbModels.length > 0 && (
+              <div className="flex items-center gap-3 px-6 py-3 bg-blue-50 border-b">
+                <span className="text-sm font-medium text-blue-700">
+                  {selectedDbModels.length} DB model{selectedDbModels.length > 1 ? "s" : ""} selected
+                  {selectedModels.length > selectedDbModels.length && (
+                    <span className="text-gray-500 font-normal">
+                      {" "}({selectedModels.length - selectedDbModels.length} config model{selectedModels.length - selectedDbModels.length > 1 ? "s" : ""} excluded)
+                    </span>
+                  )}
+                </span>
+                <Button
+                  size="small"
+                  danger
+                  type="primary"
+                  icon={<DeleteOutlined />}
+                  onClick={() => setIsBulkDeleteModalOpen(true)}
+                >
+                  Delete Selected
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => setRowSelection({})}
+                >
+                  Clear Selection
+                </Button>
+              </div>
+            )}
+
             <AllModelsDataTable
               columns={columns(
                 userRole,
@@ -504,6 +603,7 @@ const AllModelsTab = ({
                 () => { },
                 expandedRows,
                 setExpandedRows,
+                handleCloneModel,
               )}
               data={filteredData}
               isLoading={isLoadingModelsInfo}
@@ -512,6 +612,9 @@ const AllModelsTab = ({
               pagination={pagination}
               onPaginationChange={setPagination}
               enablePagination={true}
+              rowSelection={rowSelection}
+              onRowSelectionChange={setRowSelection}
+              enableRowSelection={(row: any) => row.original?.model_info?.db_model === true}
             />
           </div>
         </div>
@@ -520,6 +623,24 @@ const AllModelsTab = ({
         isVisible={isModelSettingsModalVisible}
         onCancel={() => setIsModelSettingsModalVisible(false)}
         onSuccess={() => setIsModelSettingsModalVisible(false)}
+      />
+      <DeleteResourceModal
+        isOpen={isBulkDeleteModalOpen}
+        title={`Delete ${selectedDbModels.length} Model${selectedDbModels.length > 1 ? "s" : ""}`}
+        message="This action cannot be undone. The selected models will be permanently removed."
+        resourceInformationTitle="Models to delete"
+        resourceInformation={selectedDbModels.slice(0, 5).map((m) => ({
+          label: m.model_name,
+          value: m.model_info.id,
+          copyable: true,
+        })).concat(
+          selectedDbModels.length > 5
+            ? [{ label: "And more...", value: `${selectedDbModels.length - 5} additional model(s)`, copyable: false }]
+            : []
+        )}
+        onCancel={() => setIsBulkDeleteModalOpen(false)}
+        onOk={handleBulkDelete}
+        confirmLoading={isBulkDeleting}
       />
     </TabPanel>
   );
