@@ -66,10 +66,10 @@ async def batch_upsert_tools(
             await prisma_client.db.execute_raw(
                 'INSERT INTO "LiteLLM_ToolTable" '
                 "(tool_id, tool_name, origin, call_policy, call_count, created_by, updated_by, key_hash, team_id, key_alias, created_at, updated_at) "
-                "VALUES ($7, $1, $2, 'untrusted', 1, $3, $3, $4, $5, $6, $8, $8) "
+                "VALUES ($7, $1, $2, 'untrusted', 1, $3, $3, $4, $5, $6, $8::timestamp, $8::timestamp) "
                 "ON CONFLICT (tool_name) DO UPDATE SET "
                 "call_count = \"LiteLLM_ToolTable\".call_count + 1, "
-                "updated_at = $8",
+                "updated_at = $8::timestamp",
                 tool_name,
                 origin,
                 created_by,
@@ -143,8 +143,8 @@ async def update_tool_policy(
         now = datetime.now(timezone.utc)
         await prisma_client.db.execute_raw(
             'INSERT INTO "LiteLLM_ToolTable" (tool_id, tool_name, call_policy, created_by, updated_by, created_at, updated_at) '
-            "VALUES ($4, $1, $2, $3, $3, $5, $5) "
-            "ON CONFLICT (tool_name) DO UPDATE SET call_policy = $2, updated_by = $3, updated_at = $5",
+            "VALUES ($4, $1, $2, $3, $3, $5::timestamp, $5::timestamp) "
+            "ON CONFLICT (tool_name) DO UPDATE SET call_policy = $2, updated_by = $3, updated_at = $5::timestamp",
             tool_name,
             call_policy,
             _updated_by,
