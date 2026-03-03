@@ -4453,8 +4453,11 @@ class BaseLLMHTTPHandler:
                         return agentic_response
 
             except Exception as e:
+                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.exception(
-                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks: {str(e)}"
+                    "LiteLLM.AgenticHookError: Exception in agentic completion hooks "
+                    "[call_id=%s model=%s]: %s",
+                    _call_id, model, str(e),
                 )
 
         # Check if we need to convert response to fake stream

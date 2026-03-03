@@ -557,6 +557,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             f"WebSearchInterception: Last message (tool_result): {user_message}"
         )
 
+        # Correlation context for structured logging
+        _call_id = (
+            getattr(logging_obj, "litellm_call_id", None)
+            or kwargs.get("litellm_call_id", "unknown")
+        )
+
         # Use anthropic_messages.acreate for follow-up request
         try:
             # Extract max_tokens from optional params or kwargs
@@ -631,7 +637,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             return final_response
         except Exception as e:
             verbose_logger.exception(
-                f"WebSearchInterception: Follow-up request failed: {str(e)}"
+                "WebSearchInterception: Follow-up request failed "
+                "[call_id=%s model=%s messages=%d searches=%d]: %s",
+                _call_id, full_model_name, len(follow_up_messages),
+                len(final_search_results), str(e),
             )
             raise
 
