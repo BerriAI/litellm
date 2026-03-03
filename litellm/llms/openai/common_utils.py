@@ -246,7 +246,7 @@ class BaseOpenAILLM:
 
 
 class OpenAICredentials(NamedTuple):
-    api_base: Optional[str]
+    api_base: str
     api_key: Optional[str]
     organization: Optional[str]
 

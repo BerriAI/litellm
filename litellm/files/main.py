@@ -216,32 +216,6 @@ def create_file(
                 create_file_data=_create_file_request,
                 litellm_params=litellm_params_dict,
             )
-        elif custom_llm_provider == "vertex_ai":
-            api_base = optional_params.api_base or ""
-            vertex_ai_project = (
-                optional_params.vertex_project
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_ai_location = (
-                optional_params.vertex_location
-                or litellm.vertex_location
-                or get_secret_str("VERTEXAI_LOCATION")
-            )
-            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
-                "VERTEXAI_CREDENTIALS"
-            )
-
-            response = vertex_ai_files_instance.create_file(
-                _is_async=_is_async,
-                api_base=api_base,
-                vertex_project=vertex_ai_project,
-                vertex_location=vertex_ai_location,
-                vertex_credentials=vertex_credentials,
-                timeout=timeout,
-                max_retries=optional_params.max_retries,
-                create_file_data=_create_file_request,
-            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai', 'manus'] are supported.".format(
