@@ -31,6 +31,12 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_HEALTH_CHECK_TIMEOUT,
+    MCP_METADATA_TIMEOUT,
+    MCP_TOOL_LISTING_TIMEOUT,
+)
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -943,7 +949,7 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=60.0,
+                timeout=MCP_CLIENT_TIMEOUT,
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
             )
@@ -955,7 +961,7 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=60.0,
+                timeout=MCP_CLIENT_TIMEOUT,
                 extra_headers=extra_headers,
             )
 
@@ -1334,7 +1340,7 @@ class MCPServerManager:
         try:
             client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": 10.0},
+                params={"timeout": MCP_METADATA_TIMEOUT},
             )
             response = await client.get(resource_metadata_url)
             response.raise_for_status()
@@ -1430,7 +1436,7 @@ class MCPServerManager:
             try:
                 client = get_async_httpx_client(
                     llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": 10.0},
+                    params={"timeout": MCP_METADATA_TIMEOUT},
                 )
                 response = await client.get(url)
                 response.raise_for_status()
@@ -1489,7 +1495,7 @@ class MCPServerManager:
             List of tools from the server
         """
         try:
-            with anyio.fail_after(30.0):
+            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
@@ -2508,10 +2514,14 @@ class MCPServerManager:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=10.0)
+                await asyncio.wait_for(
+                    client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
+                )
                 status = "healthy"
             except asyncio.TimeoutError:
-                health_check_error = "Health check timed out after 10 seconds"
+                health_check_error = (
+                    f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"
+                )
                 status = "unhealthy"
             except asyncio.CancelledError:
                 health_check_error = "Health check was cancelled"

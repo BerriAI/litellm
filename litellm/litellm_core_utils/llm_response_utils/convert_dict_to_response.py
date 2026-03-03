@@ -760,6 +760,12 @@ def convert_to_model_response_object(  # noqa: PLR0915
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
 
+            # Store internally-calculated duration in _hidden_params for cost
+            # tracking without exposing it in the response body. Must be set
+            # after hidden_params assignment to avoid being overwritten.
+            if "_audio_transcription_duration" in response_object:
+                model_response_object._hidden_params["audio_transcription_duration"] = response_object["_audio_transcription_duration"]
+
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
 

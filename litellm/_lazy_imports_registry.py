@@ -219,6 +219,7 @@ LLM_CONFIG_NAMES = (
     "VoyageEmbeddingConfig",
     "VoyageContextualEmbeddingConfig",
     "InfinityEmbeddingConfig",
+    "PerplexityEmbeddingConfig",
     "AzureAIStudioConfig",
     "MistralConfig",
     "OpenAIResponsesAPIConfig",
@@ -226,6 +227,7 @@ LLM_CONFIG_NAMES = (
     "AzureOpenAIOSeriesResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
+    "HostedVLLMResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
@@ -873,6 +875,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.infinity.embedding.transformation",
         "InfinityEmbeddingConfig",
     ),
+    "PerplexityEmbeddingConfig": (
+        ".llms.perplexity.embedding.transformation",
+        "PerplexityEmbeddingConfig",
+    ),
     "AzureAIStudioConfig": (
         ".llms.azure_ai.chat.transformation",
         "AzureAIStudioConfig",
@@ -897,6 +903,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "LiteLLMProxyResponsesAPIConfig": (
         ".llms.litellm_proxy.responses.transformation",
         "LiteLLMProxyResponsesAPIConfig",
+    ),
+    "HostedVLLMResponsesAPIConfig": (
+        ".llms.hosted_vllm.responses.transformation",
+        "HostedVLLMResponsesAPIConfig",
     ),
     "VolcEngineResponsesAPIConfig": (
         ".llms.volcengine.responses.transformation",

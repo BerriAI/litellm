@@ -383,6 +383,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vertex-ai",
         "/vertex_ai",
         "/cohere",
+        "/cursor",
         "/gemini",
         "/anthropic",
         "/langfuse",
@@ -2860,6 +2861,9 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     """
     Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
     """
+
+    tools: Optional[List[dict]] = None
+    system: Optional[Any] = None
 
 
 class CallInfo(LiteLLMPydanticObjectBase):

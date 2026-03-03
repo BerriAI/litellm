@@ -24,6 +24,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
 )
 
+pytestmark = pytest.mark.xdist_group("proxy_heavy")
+
 
 @pytest.fixture
 def mock_request(monkeypatch):

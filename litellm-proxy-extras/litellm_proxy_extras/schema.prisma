@@ -1097,3 +1097,18 @@ model LiteLLM_AccessGroupTable {
   updated_at         DateTime @default(now()) @updatedAt
   updated_by         String?
 }
+// Claude Code Plugin Marketplace table
+model LiteLLM_ClaudeCodePluginTable {
+  id            String    @id @default(uuid())
+  name          String    @unique
+  version       String?
+  description   String?
+  manifest_json String?
+  files_json    String?   @default("{}")
+  enabled       Boolean   @default(true)
+  created_at    DateTime? @default(now())
+  updated_at    DateTime? @default(now()) @updatedAt
+  created_by    String?
+
+  @@map("LiteLLM_ClaudeCodePluginTable")
+}
