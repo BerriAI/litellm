@@ -6,6 +6,7 @@ import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
 import CacheControlSettings from "./cache_control_settings";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { Tag } from "../tag_management/types";
 import { formItemValidateJSON } from "../../utils/textUtils";
 const { Link } = Typography;
@@ -16,6 +17,7 @@ interface AdvancedSettingsProps {
   teams?: Team[] | null;
   guardrailsList: string[];
   tagsList: Record<string, Tag>;
+  accessToken: string;
 }
 
 const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
@@ -24,6 +26,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   teams,
   guardrailsList,
   tagsList,
+  accessToken,
 }) => {
   const [form] = Form.useForm();
   const [customPricing, setCustomPricing] = React.useState(false);
@@ -107,6 +110,33 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
           <div className="bg-white rounded-lg">
             <Form.Item label="Custom Pricing" name="custom_pricing" valuePropName="checked" className="mb-4">
               <Switch onChange={handleCustomPricingChange} className="bg-gray-600" />
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span>
+                  Attached Knowledge Bases (RAG){" "}
+                  <Tooltip title="Vector stores to use for RAG. Every request to this model will automatically retrieve context from these knowledge bases.">
+                    <a
+                      href="https://docs.litellm.ai/docs/completion/knowledgebase"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </a>
+                  </Tooltip>
+                </span>
+              }
+              name="vector_store_ids"
+              className="mt-4"
+              help="Select vector stores to attach. Requests to this model will automatically use these for RAG. Set up vector stores in Tools > Vector Stores."
+            >
+              <VectorStoreSelector
+                onChange={() => {}}
+                accessToken={accessToken}
+                placeholder="Select knowledge bases (optional)"
+              />
             </Form.Item>
 
             <Form.Item
