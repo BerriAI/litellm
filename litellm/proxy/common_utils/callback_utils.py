@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
 import litellm
 from litellm import get_secret
@@ -583,6 +583,20 @@ def process_callback(
     }
     if callback_params is not None:
         result["params"] = callback_params
+    return result
+
+
+def _dedupe_callbacks_preserve_dict_entries(
+    callbacks: Sequence[Any],
+) -> List[Union[str, Dict[str, Any]]]:
+    """Deduplicate callbacks by name. Safe for unhashable dicts."""
+    seen: set = set()
+    result: List[Union[str, Dict[str, Any]]] = []
+    for c in callbacks:
+        name = c if isinstance(c, str) else next(iter(c.keys()))
+        if name not in seen:
+            seen.add(name)
+            result.append(c)
     return result
 
 

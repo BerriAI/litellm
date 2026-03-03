@@ -87,6 +87,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.callback_utils import (
+    _dedupe_callbacks_preserve_dict_entries,
     get_callbacks_from_callback_settings,
     normalize_callback_names,
     process_callback,
@@ -2675,26 +2676,29 @@ class ProxyConfig:
                             DeprecationWarning,
                             stacklevel=2,
                         )
-                    merged_success = list(
-                        dict.fromkeys(success_from_settings + litellm_success)
+                    merged_success = _dedupe_callbacks_preserve_dict_entries(
+                        success_from_settings + litellm_success
                     )
                     for callback in merged_success:
+                        callback_name = (
+                            callback if isinstance(callback, str) else next(iter(callback.keys()))
+                        )
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
-                        if "." in callback:
+                        if "." in callback_name:
                             litellm.logging_callback_manager.add_litellm_success_callback(
-                                get_instance_fn(value=callback)
+                                get_instance_fn(value=callback_name)
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             resolved = (
                                 litellm.logging_callback_manager._add_custom_callback_generic_api_str(
-                                    callback
+                                    callback_name
                                 )
                             )
                             litellm.logging_callback_manager.add_litellm_success_callback(
                                 resolved
                             )
-                            if "prometheus" in callback:
+                            if "prometheus" in callback_name:
                                 from litellm.integrations.prometheus import (
                                     PrometheusLogger,
                                 )
@@ -2717,20 +2721,23 @@ class ProxyConfig:
                             DeprecationWarning,
                             stacklevel=2,
                         )
-                    merged_failure = list(
-                        dict.fromkeys(failure_from_settings + litellm_failure)
+                    merged_failure = _dedupe_callbacks_preserve_dict_entries(
+                        failure_from_settings + litellm_failure
                     )
                     for callback in merged_failure:
+                        callback_name = (
+                            callback if isinstance(callback, str) else next(iter(callback.keys()))
+                        )
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
-                        if "." in callback:
+                        if "." in callback_name:
                             litellm.logging_callback_manager.add_litellm_failure_callback(
-                                get_instance_fn(value=callback)
+                                get_instance_fn(value=callback_name)
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             resolved = (
                                 litellm.logging_callback_manager._add_custom_callback_generic_api_str(
-                                    callback
+                                    callback_name
                                 )
                             )
                             litellm.logging_callback_manager.add_litellm_failure_callback(
@@ -3614,11 +3621,11 @@ class ProxyConfig:
         failure_callbacks = litellm_settings.get("failure_callback", None)
         callbacks = litellm_settings.get("callbacks", None)
 
-        merged_success = list(
-            dict.fromkeys(success_from_settings + (success_callbacks or []))
+        merged_success = _dedupe_callbacks_preserve_dict_entries(
+            success_from_settings + (success_callbacks or [])
         )
-        merged_failure = list(
-            dict.fromkeys(failure_from_settings + (failure_callbacks or []))
+        merged_failure = _dedupe_callbacks_preserve_dict_entries(
+            failure_from_settings + (failure_callbacks or [])
         )
         seen_both = {c if isinstance(c, str) else next(iter(c)) for c in callbacks_from_settings}
         merged_callbacks: list = list(callbacks_from_settings)
@@ -3629,15 +3636,25 @@ class ProxyConfig:
                 seen_both.add(name)
 
         for success_callback in merged_success:
+            _name = (
+                success_callback
+                if isinstance(success_callback, str)
+                else next(iter(success_callback.keys()))
+            )
             self._add_callback_from_db_to_in_memory_litellm_callbacks(
-                callback=success_callback,
+                callback=_name,
                 event_types=["success"],
                 existing_callbacks=litellm.success_callback,
             )
 
         for failure_callback in merged_failure:
+            _name = (
+                failure_callback
+                if isinstance(failure_callback, str)
+                else next(iter(failure_callback.keys()))
+            )
             self._add_callback_from_db_to_in_memory_litellm_callbacks(
-                callback=failure_callback,
+                callback=_name,
                 event_types=["failure"],
                 existing_callbacks=litellm.failure_callback,
             )
@@ -11613,20 +11630,16 @@ async def get_config():  # noqa: PLR0915
                 return [val]
             return list(val) if val else []
 
-        _success_callbacks = list(
-            dict.fromkeys(
-                _success_from_settings
-                + normalize_callback_names(
-                    _to_list(_litellm_settings.get("success_callback"))
-                )
+        _success_callbacks = _dedupe_callbacks_preserve_dict_entries(
+            _success_from_settings
+            + normalize_callback_names(
+                _to_list(_litellm_settings.get("success_callback"))
             )
         )
-        _failure_callbacks = list(
-            dict.fromkeys(
-                _failure_from_settings
-                + normalize_callback_names(
-                    _to_list(_litellm_settings.get("failure_callback"))
-                )
+        _failure_callbacks = _dedupe_callbacks_preserve_dict_entries(
+            _failure_from_settings
+            + normalize_callback_names(
+                _to_list(_litellm_settings.get("failure_callback"))
             )
         )
         _litellm_callbacks = _litellm_settings.get("callbacks", []) or []
@@ -11655,29 +11668,40 @@ async def get_config():  # noqa: PLR0915
         """
 
         for _callback in _success_callbacks:
+            _name = (
+                _callback if isinstance(_callback, str) else next(iter(_callback.keys()))
+            )
             _data_to_return.append(
-                process_callback(_callback, "success", environment_variables)
+                process_callback(_name, "success", environment_variables)
             )
 
         for _callback in _failure_callbacks:
+            _name = (
+                _callback if isinstance(_callback, str) else next(iter(_callback.keys()))
+            )
             _data_to_return.append(
-                process_callback(_callback, "failure", environment_variables)
+                process_callback(_name, "failure", environment_variables)
             )
 
         for _callback in _success_and_failure_callbacks:
             _callback_params = None
+            _callback_name: str
             if isinstance(_callback, dict) and len(_callback) == 1:
                 (_callback_name, _callback_params), = _callback.items()
-                _callback = _callback_name
             elif isinstance(_callback, str) and _callback in _callback_settings:
+                _callback_name = _callback
                 _raw = _callback_settings.get(_callback) or {}
                 _callback_params = (
                     {k: v for k, v in _raw.items() if k not in ("callback_type", "event_types")}
                     or None
                 )
+            else:
+                _callback_name = (
+                    _callback if isinstance(_callback, str) else next(iter(_callback.keys()))
+                )
             _data_to_return.append(
                 process_callback(
-                    _callback,
+                    _callback_name,
                     "success_and_failure",
                     environment_variables,
                     callback_params=_callback_params,

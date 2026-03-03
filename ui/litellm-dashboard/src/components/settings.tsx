@@ -272,6 +272,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         ...normalized,
         ...paramFields,
         callback: selectedEditCallback.name,
+        callback_type: selectedEditCallback.type ?? "success",
       });
     }
   }, [showEditCallback, selectedEditCallback, editForm]);
@@ -340,7 +341,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setIsAddingCallback(true);
     }
 
-    const payload = buildCallbackPayload(formValues, callbackName, callbacks, isEdit, selectedEditCallback?.type as "success" | "failure" | "success_and_failure" | undefined, callbackSettings);
+    const callbackType = (isEdit ? formValues.callback_type : undefined) ?? selectedEditCallback?.type as "success" | "failure" | "success_and_failure" | undefined;
+    const payload = buildCallbackPayload(formValues, callbackName, callbacks, isEdit, callbackType, callbackSettings);
 
     try {
       await setCallbacksCall(accessToken, payload);
@@ -782,6 +784,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         >
           {selectedEditCallback && (
             <>
+              <FormItem name="callback_type" hidden>
+                <input type="hidden" />
+              </FormItem>
               <CallbackSelector
                 callbackConfigs={callbackConfigs}
                 selectedCallback={selectedEditCallback.name}

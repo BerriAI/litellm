@@ -6,6 +6,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
+    _dedupe_callbacks_preserve_dict_entries,
     get_callbacks_from_callback_settings,
     get_model_group_from_request_data,
     get_remaining_tokens_and_requests_from_request_data,
@@ -126,6 +127,27 @@ def test_normalize_callback_names_none_returns_empty_list():
     """None and empty list return [] to support callers that may pass unguarded None."""
     assert normalize_callback_names(None) == []
     assert normalize_callback_names([]) == []
+
+
+def test_dedupe_callbacks_preserve_dict_entries_handles_dict_style():
+    """dict.fromkeys would crash on unhashable dicts; _dedupe_callbacks_preserve_dict_entries is safe."""
+    callbacks = [
+        "langfuse",
+        {"websearch_interception": {"enabled_providers": ["bedrock"]}},
+        "langfuse",
+        "sentry",
+    ]
+    result = _dedupe_callbacks_preserve_dict_entries(callbacks)
+    assert result == [
+        "langfuse",
+        {"websearch_interception": {"enabled_providers": ["bedrock"]}},
+        "sentry",
+    ]
+
+
+def test_dedupe_callbacks_preserve_dict_entries_strings_only():
+    """Strings-only input dedupes correctly."""
+    assert _dedupe_callbacks_preserve_dict_entries(["a", "b", "a"]) == ["a", "b"]
 
 
 def test_remaining_tokens_requests_returns_empty_when_metadata_empty_or_missing():
