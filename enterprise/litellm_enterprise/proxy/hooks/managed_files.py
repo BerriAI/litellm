@@ -809,7 +809,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             first_model = target_model_names_list[0] if target_model_names_list else None
             first_provider = ""
             if responses:
-                first_provider = responses[0]._hidden_params.get("custom_llm_provider") or ""
+                first_provider = getattr(responses[0], "_hidden_params", {}).get("custom_llm_provider") or ""
             prom_logger.record_managed_file_created(
                 model=first_model or "",
                 api_provider=first_provider,

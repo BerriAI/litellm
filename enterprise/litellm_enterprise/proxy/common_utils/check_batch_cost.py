@@ -4,7 +4,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 
 from litellm._uuid import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 
@@ -70,8 +70,13 @@ class CheckBatchCost:
             get_model_id_from_unified_batch_id,
         )
 
-        from litellm.integrations.prometheus import PrometheusLogger
-        prom_logger = PrometheusLogger.get_instance()
+        try:
+            from litellm.integrations.prometheus import PrometheusLogger
+            prom_logger = PrometheusLogger.get_instance()
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not get Prometheus logger: {e}")
+            prom_logger = None
+
 
         # Look for all batches that have not yet been processed by CheckBatchCost
         jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
@@ -83,7 +88,7 @@ class CheckBatchCost:
         )
         completed_jobs = []
         # Track (model, provider) for each successfully processed job
-        processed_models: list[Tuple[Optional[str], Optional[str]]] = []
+        processed_models: List[Tuple[Optional[str], Optional[str]]] = []
 
         for job in jobs:
             # get the model from the job
@@ -193,7 +198,7 @@ class CheckBatchCost:
                 # Record output file size
                 if prom_logger and content_bytes:
                     prom_logger.record_managed_file_size(
-                        size_bytes=len(content_bytes) if content_bytes else 0,
+                        size_bytes=len(content_bytes),
                         purpose="batch",
                         file_type="output",
                         model=model_id,
