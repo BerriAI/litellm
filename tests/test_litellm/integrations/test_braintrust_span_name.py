@@ -4,8 +4,11 @@ import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, Mock, patch
 
+import pytest
+
 import litellm
 from litellm.integrations.braintrust_logging import BraintrustLogger
+from unittest.mock import AsyncMock
 
 
 class TestBraintrustSpanName(unittest.TestCase):
@@ -174,55 +177,6 @@ class TestBraintrustSpanName(unittest.TestCase):
 
         # Span name should be in span_attributes, not in metadata
         self.assertIn("span_name", event_metadata)  # span_name is also kept in metadata
-
-    @patch("litellm.integrations.braintrust_logging.get_async_httpx_client")
-    async def test_async_custom_span_name(self, mock_get_http_handler):
-        """Test async logging with custom span name."""
-        # Mock async HTTP response
-        mock_http_handler = MagicMock()
-        mock_http_handler.post = MagicMock(return_value=Mock())
-        mock_get_http_handler.return_value = mock_http_handler
-
-        # Setup
-        logger = BraintrustLogger(api_key="test-key")
-        logger.default_project_id = "test-project-id"
-
-        # Create a properly structured mock response
-        response_obj = litellm.ModelResponse(
-            id="test-id",
-            object="chat.completion",
-            created=1234567890,
-            model="gpt-3.5-turbo",
-            choices=[
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "test response"},
-                    "finish_reason": "stop",
-                }
-            ],
-            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-        )
-
-        kwargs = {
-            "litellm_call_id": "test-call-id",
-            "messages": [{"role": "user", "content": "test"}],
-            "litellm_params": {"metadata": {"span_name": "Async Custom Operation"}},
-            "model": "gpt-3.5-turbo",
-            "response_cost": 0.001,
-        }
-
-        # Execute
-        await logger.async_log_success_event(
-            kwargs, response_obj, datetime.now(), datetime.now()
-        )
-
-        # Verify
-        call_args = mock_http_handler.post.call_args
-        self.assertIsNotNone(call_args)
-        json_data = call_args.kwargs["json"]
-        self.assertEqual(
-            json_data["events"][0]["span_attributes"]["name"], "Async Custom Operation"
-        )
 
     @patch('litellm.integrations.braintrust_logging.HTTPHandler')
     def test_span_attributes_with_multiple_metadata_fields(self, MockHTTPHandler):
@@ -464,63 +418,103 @@ class TestBraintrustSpanName(unittest.TestCase):
         self.assertEqual(event_metadata["user_id"], "user123")
         self.assertEqual(event_metadata["session_id"], "session456")
 
-    @patch("litellm.integrations.braintrust_logging.get_async_httpx_client")
-    async def test_async_prompt_id_is_set_in_metadata(self, mock_get_http_handler):
-        """Test async logging sets prompt fields in metadata when prompt info is provided."""
-        # Mock async HTTP response
-        mock_http_handler = MagicMock()
-        mock_http_handler.post = MagicMock(return_value=Mock())
-        mock_get_http_handler.return_value = mock_http_handler
-
-        # Setup
-        logger = BraintrustLogger(api_key="test-key")
-        logger.default_project_id = "test-project-id"
-
-        # Create a properly structured mock response
-        response_obj = litellm.ModelResponse(
-            id="test-id",
-            object="chat.completion",
-            created=1234567890,
-            model="gpt-3.5-turbo",
-            choices=[
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "test response"},
-                    "finish_reason": "stop",
-                }
-            ],
-            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-        )
-
-        kwargs = {
-            "litellm_call_id": "test-call-id",
-            "messages": [{"role": "user", "content": "test"}],
-            "litellm_params": {
-                "metadata": {
-                    "prompt_id": "async-prompt-id",
-                    "prompt_slug": "async-prompt-slug",
-                    "project_id": "async-project-id",
-                }
-            },
-            "model": "gpt-3.5-turbo",
-            "response_cost": 0.001,
-        }
-
-        # Execute
-        await logger.async_log_success_event(
-            kwargs, response_obj, datetime.now(), datetime.now()
-        )
-
-        # Verify
-        call_args = mock_http_handler.post.call_args
-        self.assertIsNotNone(call_args)
-        json_data = call_args.kwargs["json"]
-        event_metadata = json_data["events"][0]["metadata"]
-        self.assertIn("prompt", event_metadata)
-        self.assertEqual(event_metadata["prompt"]["id"], "async-prompt-id")
-        self.assertEqual(event_metadata["prompt"]["project_id"], "async-project-id")
-        self.assertEqual(event_metadata["prompt"]["slug"], "async-prompt-slug")
-
-
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.asyncio
+@patch("litellm.integrations.braintrust_logging.get_async_httpx_client")
+async def test_async_custom_span_name(mock_get_http_handler):
+    """Test async logging with custom span name."""
+    mock_http_handler = MagicMock()
+    mock_http_handler.post = AsyncMock(return_value=Mock())
+    mock_get_http_handler.return_value = mock_http_handler
+
+    logger = BraintrustLogger(api_key="test-key")
+    logger.default_project_id = "test-project-id"
+
+    response_obj = litellm.ModelResponse(
+        id="test-id",
+        object="chat.completion",
+        created=1234567890,
+        model="gpt-3.5-turbo",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "test response"},
+                "finish_reason": "stop",
+            }
+        ],
+        usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    )
+
+    kwargs = {
+        "litellm_call_id": "test-call-id",
+        "messages": [{"role": "user", "content": "test"}],
+        "litellm_params": {"metadata": {"span_name": "Async Custom Operation"}},
+        "model": "gpt-3.5-turbo",
+        "response_cost": 0.001,
+    }
+
+    await logger.async_log_success_event(
+        kwargs, response_obj, datetime.now(), datetime.now()
+    )
+
+    call_args = mock_http_handler.post.call_args
+    assert call_args is not None
+    json_data = call_args.kwargs["json"]
+    assert json_data["events"][0]["span_attributes"]["name"] == "Async Custom Operation"
+
+
+@pytest.mark.asyncio
+@patch("litellm.integrations.braintrust_logging.get_async_httpx_client")
+async def test_async_prompt_id_is_set_in_metadata(mock_get_http_handler):
+    """Test async logging sets prompt fields in metadata when prompt info is provided."""
+    mock_http_handler = MagicMock()
+    mock_http_handler.post = AsyncMock(return_value=Mock())
+    mock_get_http_handler.return_value = mock_http_handler
+
+    logger = BraintrustLogger(api_key="test-key")
+    logger.default_project_id = "test-project-id"
+
+    response_obj = litellm.ModelResponse(
+        id="test-id",
+        object="chat.completion",
+        created=1234567890,
+        model="gpt-3.5-turbo",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "test response"},
+                "finish_reason": "stop",
+            }
+        ],
+        usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    )
+
+    kwargs = {
+        "litellm_call_id": "test-call-id",
+        "messages": [{"role": "user", "content": "test"}],
+        "litellm_params": {
+            "metadata": {
+                "prompt_id": "async-prompt-id",
+                "prompt_slug": "async-prompt-slug",
+                "project_id": "async-project-id",
+            }
+        },
+        "model": "gpt-3.5-turbo",
+        "response_cost": 0.001,
+    }
+
+    await logger.async_log_success_event(
+        kwargs, response_obj, datetime.now(), datetime.now()
+    )
+
+    call_args = mock_http_handler.post.call_args
+    assert call_args is not None
+    json_data = call_args.kwargs["json"]
+    event_metadata = json_data["events"][0]["metadata"]
+    assert "prompt" in event_metadata
+    assert event_metadata["prompt"]["id"] == "async-prompt-id"
+    assert event_metadata["prompt"]["project_id"] == "async-project-id"
+    assert event_metadata["prompt"]["slug"] == "async-prompt-slug"
