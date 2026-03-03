@@ -168,7 +168,7 @@ async def cli_get_key(type: Optional[str] = None, token: Annotated[str | None, H
         dept_id = user_info.get('deptIdList')[0]
     key_alias = None
     if type is not None and type.strip().startswith("assistant-"):
-        key_alias = f"{type.strip()}--{org_email.split('@')[0]}"
+        key_alias = f"{org_email.split('@')[0]}--{type.strip()}"
     (created, key_or_key_id) = await create_or_get_user_key('ai_developer', user_id, user_name, org_email, dept_id, user_api_key_dict, key_alias)
     key = None
     if created:
