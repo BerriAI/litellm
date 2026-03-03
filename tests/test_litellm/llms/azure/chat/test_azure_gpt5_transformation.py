@@ -120,11 +120,17 @@ def test_responses_api_bridge_check_azure_gpt_53_codex_uses_chat():
 
     Azure recommends openai/v1/chat/completions for gpt-5.3-codex; the Responses API
     (openai/responses?api-version=...) returns 'API version not supported'.
+    Mode is driven by model_prices_and_context_window.json (azure/gpt-5.3-codex has mode "chat").
+    We mock _get_model_info_helper so the test passes regardless of which cost map was
+    loaded (remote vs local backup).
     """
     from litellm.main import responses_api_bridge_check
 
+    # Mock so the test is independent of remote vs local model cost map
+    chat_mode_info = {"mode": "chat", "max_tokens": 128000, "litellm_provider": "azure"}
+
     with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
-        mock_get_model_info.return_value = {"mode": "responses", "max_tokens": 128000}
+        mock_get_model_info.return_value = chat_mode_info
 
         model_info, model = responses_api_bridge_check(
             model="gpt-5.3-codex",
@@ -293,12 +299,12 @@ def test_azure_gpt5_base_does_not_support_logprobs(config: AzureOpenAIGPT5Config
     assert "top_logprobs" not in supported_params
 
 
-def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
-    """Test that Azure GPT-5.1 does not support logprobs parameters.
+def test_azure_gpt5_1_supports_logprobs(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.1 supports logprobs parameters.
 
-    Only gpt-5.2 has been verified to support logprobs on Azure.
+    Azure has added logprobs support for gpt-5.1; the config exposes it.
     """
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
-    assert "logprobs" not in supported_params
-    assert "top_logprobs" not in supported_params
+    assert "logprobs" in supported_params
+    assert "top_logprobs" in supported_params
 
