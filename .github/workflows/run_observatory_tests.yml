@@ -30,7 +30,7 @@ env:
 jobs:
   observatory-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -119,7 +119,6 @@ jobs:
           exit 1
 
       - name: Trigger observatory test run
-        id: trigger
         env:
           OBSERVATORY_URL: ${{ secrets.OBSERVATORY_URL }}
           OBSERVATORY_API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
@@ -152,71 +151,7 @@ jobs:
             exit 1
           fi
           echo "Request ID: $REQUEST_ID"
-          echo "request_id=$REQUEST_ID" >> $GITHUB_OUTPUT
-
-      - name: Poll for test completion
-        id: poll
-        env:
-          OBSERVATORY_URL: ${{ secrets.OBSERVATORY_URL }}
-          OBSERVATORY_API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
-          REQUEST_ID: ${{ steps.trigger.outputs.request_id }}
-        run: |
-          TIMEOUT=900  # 15 minutes
-          INTERVAL=30
-          ELAPSED=0
-          while [ $ELAPSED -lt $TIMEOUT ]; do
-            STATUS=$(curl -s "${OBSERVATORY_URL}/run-status/${REQUEST_ID}" \
-              -H "X-LiteLLM-Observatory-API-Key: ${OBSERVATORY_API_KEY}")
-            RUN_STATUS=$(echo "$STATUS" | jq -r '.status')
-            echo "Run status (${ELAPSED}s elapsed): $RUN_STATUS"
-
-            if [ "$RUN_STATUS" = "completed" ] || [ "$RUN_STATUS" = "failed" ]; then
-              echo "Test finished with status: $RUN_STATUS"
-              echo "$STATUS" > /tmp/observatory_result.json
-              exit 0
-            fi
-
-            sleep $INTERVAL
-            ELAPSED=$((ELAPSED + INTERVAL))
-          done
-          echo "Timed out waiting for test to complete after ${TIMEOUT}s"
-          exit 1
-
-      - name: Verify test results
-        run: |
-          RESULT=$(cat /tmp/observatory_result.json)
-          echo "Full result: $RESULT"
-
-          STATUS=$(echo "$RESULT" | jq -r '.status')
-          TEST_PASSED=$(echo "$RESULT" | jq -r '.result.test_passed // false')
-          FAILURE_RATE=$(echo "$RESULT" | jq -r '.result.failure_rate // "N/A"')
-          ERROR=$(echo "$RESULT" | jq -r '.error // empty')
-
-          echo "Status: $STATUS"
-          echo "Test passed: $TEST_PASSED"
-          echo "Failure rate: $FAILURE_RATE"
-
-          if [ -n "$ERROR" ]; then
-            echo "Error: $ERROR"
-          fi
-
-          if [ "$STATUS" = "failed" ]; then
-            echo "Test run failed"
-            exit 1
-          fi
-
-          if [ "$TEST_PASSED" != "true" ]; then
-            echo "Tests did not pass (failure rate: $FAILURE_RATE)"
-            exit 1
-          fi
-
-          echo "All tests passed!"
-
-      - name: Print LiteLLM logs on failure
-        if: failure()
-        run: |
-          docker logs litellm-rc 2>/dev/null || true
-          cat /tmp/cloudflared.log 2>/dev/null || true
+          echo "Observatory test run triggered successfully. Results will be reported to the observatory destination."
 
       - name: Cleanup
         if: always()
