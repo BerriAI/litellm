@@ -1623,6 +1623,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         response_tokens: Optional[int] = None
         response_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         usage_metadata = completion_response["usageMetadata"]
+
+        def _get_token_count(detail: dict) -> int:
+            raw_token_count = detail.get("tokenCount", detail.get("token_count", 0))
+            return raw_token_count if isinstance(raw_token_count, int) else 0
+
         if "cachedContentTokenCount" in usage_metadata:
             cached_tokens = usage_metadata["cachedContentTokenCount"]
 
@@ -1633,7 +1638,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             response_tokens_details = CompletionTokensDetailsWrapper()
             for detail in usage_metadata["responseTokensDetails"]:
                 modality = str(detail.get("modality", "")).upper()
-                token_count = detail.get("tokenCount", detail.get("token_count", 0))
+                token_count = _get_token_count(detail)
                 if modality == "TEXT":
                     response_tokens_details.text_tokens = (
                         response_tokens_details.text_tokens or 0
@@ -1651,7 +1656,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_tokens_details = CompletionTokensDetailsWrapper()
             for detail in usage_metadata["candidatesTokensDetails"]:
                 modality = str(detail.get("modality", "")).upper()
-                token_count = detail.get("tokenCount", detail.get("token_count", 0))
+                token_count = _get_token_count(detail)
                 if modality == "TEXT":
                     response_tokens_details.text_tokens = (
                         response_tokens_details.text_tokens or 0
@@ -1692,7 +1697,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
                 modality = str(detail.get("modality", "")).upper()
-                token_count = detail.get("tokenCount", detail.get("token_count", 0))
+                token_count = _get_token_count(detail)
                 if modality == "AUDIO":
                     prompt_audio_tokens = (prompt_audio_tokens or 0) + token_count
                 elif modality == "TEXT":
@@ -1712,7 +1717,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if "cacheTokensDetails" in usage_metadata:
             for detail in usage_metadata["cacheTokensDetails"]:
                 modality = str(detail.get("modality", "")).upper()
-                token_count = detail.get("tokenCount", detail.get("token_count", 0))
+                token_count = _get_token_count(detail)
                 if modality == "AUDIO":
                     cached_audio_tokens = (cached_audio_tokens or 0) + token_count
                 elif modality == "TEXT":

@@ -93,7 +93,10 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         for details in tokens_details:
             if isinstance(details, dict):
                 modality = str(details.get("modality", "")).upper()
-                token_count = details.get("tokenCount", details.get("token_count", 0))
+                raw_token_count = details.get(
+                    "tokenCount", details.get("token_count", 0)
+                )
+                token_count = raw_token_count if isinstance(raw_token_count, int) else 0
                 if modality == "TEXT":
                     input_tokens_details.text_tokens += token_count
                 elif modality == "IMAGE":
