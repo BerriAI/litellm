@@ -53,6 +53,7 @@ _PG_STATES = [
     "idle in transaction (aborted)",
     "fastpath function call",
     "disabled",
+    "unknown",
 ]
 
 _MIN_COLLECTION_INTERVAL = 5
