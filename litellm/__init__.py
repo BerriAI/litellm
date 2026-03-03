@@ -1429,6 +1429,7 @@ if TYPE_CHECKING:
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
     from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
+    from .llms.perplexity.embedding.transformation import PerplexityEmbeddingConfig as PerplexityEmbeddingConfig
     from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as AzureAIStudioConfig
     from .llms.mistral.chat.transformation import MistralConfig as MistralConfig
     from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig as OpenAIResponsesAPIConfig
@@ -1440,6 +1441,7 @@ if TYPE_CHECKING:
     from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
     from .llms.perplexity.responses.transformation import PerplexityResponsesConfig as PerplexityResponsesConfig
     from .llms.databricks.responses.transformation import DatabricksResponsesAPIConfig as DatabricksResponsesAPIConfig
+    from .llms.openrouter.responses.transformation import OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
@@ -1521,6 +1523,7 @@ if TYPE_CHECKING:
     from .llms.azure.completion.transformation import AzureOpenAITextConfig as AzureOpenAITextConfig
     from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig as HostedVLLMChatConfig
     from .llms.hosted_vllm.embedding.transformation import HostedVLLMEmbeddingConfig as HostedVLLMEmbeddingConfig
+    from .llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig as HostedVLLMResponsesAPIConfig
     from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
     from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
     from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig

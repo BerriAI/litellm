@@ -4635,7 +4635,7 @@ class ProxyConfig:
                                 }
                             ),
                         },
-                        "update": {"param_value": safe_dumps({"force_reload": False})},
+                        "update": {"param_value": safe_dumps({"interval_hours": interval_hours, "force_reload": False})},
                     },
                 )
 
@@ -4736,7 +4736,7 @@ class ProxyConfig:
                                 }
                             ),
                         },
-                        "update": {"param_value": safe_dumps({"force_reload": False})},
+                        "update": {"param_value": safe_dumps({"interval_hours": interval_hours, "force_reload": False})},
                     },
                 )
 
@@ -8389,6 +8389,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     prompt = request.prompt
     messages = request.messages
     contents = request.contents
+    tools = request.tools
+    system = request.system
 
     #########################################################
     # Validate request
@@ -8449,6 +8451,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
                 contents=contents,
                 deployment=deployment,
                 request_model=request.model,
+                tools=tools,
+                system=system,
             )
             #########################################################
             # Transfrom the Response to the well known format
@@ -12261,7 +12265,14 @@ async def reload_model_cost_map(
         current_time = datetime.utcnow()
         last_model_cost_map_reload = current_time.isoformat()
 
-        # Set force reload flag in database for other pods
+        # Set force reload flag in database for other pods, preserving existing interval_hours
+        existing_config = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "model_cost_map_reload_config"}
+        )
+        existing_interval = None
+        if existing_config and existing_config.param_value:
+            existing_interval = existing_config.param_value.get("interval_hours")
+
         await prisma_client.db.litellm_config.upsert(
             where={"param_name": "model_cost_map_reload_config"},
             data={
@@ -12271,7 +12282,7 @@ async def reload_model_cost_map(
                         {"interval_hours": None, "force_reload": True}
                     ),
                 },
-                "update": {"param_value": safe_dumps({"force_reload": True})},
+                "update": {"param_value": safe_dumps({"interval_hours": existing_interval, "force_reload": True})},
             },
         )
 
@@ -12600,7 +12611,14 @@ async def reload_anthropic_beta_headers(
         current_time = datetime.utcnow()
         last_anthropic_beta_headers_reload = current_time.isoformat()
 
-        # Set force reload flag in database for other pods
+        # Set force reload flag in database for other pods, preserving existing interval_hours
+        existing_beta_config = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "anthropic_beta_headers_reload_config"}
+        )
+        existing_beta_interval = None
+        if existing_beta_config and existing_beta_config.param_value:
+            existing_beta_interval = existing_beta_config.param_value.get("interval_hours")
+
         await prisma_client.db.litellm_config.upsert(
             where={"param_name": "anthropic_beta_headers_reload_config"},
             data={
@@ -12610,7 +12628,7 @@ async def reload_anthropic_beta_headers(
                         {"interval_hours": None, "force_reload": True}
                     ),
                 },
-                "update": {"param_value": safe_dumps({"force_reload": True})},
+                "update": {"param_value": safe_dumps({"interval_hours": existing_beta_interval, "force_reload": True})},
             },
         )
 

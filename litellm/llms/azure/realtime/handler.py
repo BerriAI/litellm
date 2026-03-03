@@ -33,7 +33,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         self,
         api_base: str,
         model: str,
-        api_version: str,
+        api_version: Optional[str],
         realtime_protocol: Optional[str] = None,
     ) -> str:
         """
@@ -56,8 +56,9 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         """
         api_base = api_base.replace("https://", "wss://")
 
-        # Determine path based on realtime_protocol
-        if realtime_protocol in ("GA", "v1"):
+        # Determine path based on realtime_protocol (case-insensitive)
+        _is_ga = realtime_protocol is not None and realtime_protocol.upper() in ("GA", "V1")
+        if _is_ga:
             path = "/openai/v1/realtime" 
             return f"{api_base}{path}?model={model}"
         else:
@@ -85,7 +86,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         if api_base is None:
             raise ValueError("api_base is required for Azure OpenAI calls")
-        if api_version is None:
+        if api_version is None and (realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")):
             raise ValueError("api_version is required for Azure OpenAI calls")
 
         url = self._construct_url(

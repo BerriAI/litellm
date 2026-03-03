@@ -1,5 +1,6 @@
 """Abstraction function for OpenAI's realtime API"""
 
+import os
 from typing import Any, Optional, cast
 
 import litellm
@@ -132,6 +133,8 @@ async def _arealtime(  # noqa: PLR0915
         
         realtime_protocol = (
             kwargs.get("realtime_protocol")
+            or litellm_params.get("realtime_protocol")
+            or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
             or "beta"
         )
         await azure_realtime.async_realtime(
