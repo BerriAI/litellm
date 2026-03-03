@@ -464,8 +464,30 @@ async def retrieve_batch( # noqa: PLR0915
                 custom_llm_provider=credentials["custom_llm_provider"],
                 **data  # type: ignore
             )
-            
-            
+
+            # Re-encode response IDs so the client always sees encoded IDs.
+            # The provider returns raw IDs (e.g. output_file_id, error_file_id)
+            # which the client needs encoded to route future file downloads.
+            if response and hasattr(response, "id") and response.id:
+                response.id = encode_file_id_with_model(
+                    file_id=response.id, model=model_from_id, id_type="batch",
+                )
+
+                if hasattr(response, "output_file_id") and response.output_file_id:
+                    response.output_file_id = encode_file_id_with_model(
+                        file_id=response.output_file_id, model=model_from_id
+                    )
+
+                if hasattr(response, "error_file_id") and response.error_file_id:
+                    response.error_file_id = encode_file_id_with_model(
+                        file_id=response.error_file_id, model=model_from_id
+                    )
+
+                if hasattr(response, "input_file_id") and response.input_file_id:
+                    response.input_file_id = encode_file_id_with_model(
+                        file_id=response.input_file_id, model=model_from_id
+                    )
+
             verbose_proxy_logger.debug(
                 f"Retrieved batch using model: {model_from_id}, original_id: {original_batch_id}"
             )
