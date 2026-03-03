@@ -237,57 +237,59 @@ async def create_response(
     )
 
 
-def _add_dd_apm_tags_for_litellm_call_id(litellm_call_id: Optional[str]) -> None:
-    """
-    Attach LiteLLM call id to the active Datadog APM span.
+class DDSpanTagger:
+    """Best-effort helpers for tagging the active Datadog APM span with LiteLLM request metadata."""
 
-    This enables searching APM traces by LiteLLM call id returned in
-    `x-litellm-call-id`.
-    """
-    if not litellm_call_id:
-        return
+    @staticmethod
+    def tag_call_id(litellm_call_id: Optional[str]) -> None:
+        """
+        Attach LiteLLM call id to the active Datadog APM span.
 
-    try:
-        set_active_span_tag("litellm.call_id", str(litellm_call_id))
-    except Exception:
-        # Tagging is best-effort and should never impact request processing.
-        verbose_proxy_logger.debug(
-            "Failed to tag active ddtrace span with litellm.call_id",
-            exc_info=True,
-        )
+        This enables searching APM traces by LiteLLM call id returned in
+        `x-litellm-call-id`.
+        """
+        if not litellm_call_id:
+            return
+        try:
+            set_active_span_tag("litellm.call_id", str(litellm_call_id))
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Failed to tag active ddtrace span with litellm.call_id",
+                exc_info=True,
+            )
 
+    @staticmethod
+    def tag_request(
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: Optional[str],
+    ) -> None:
+        """
+        Attach key and model tags to the active Datadog APM span.
 
-def _add_dd_apm_tags_for_request(
-    user_api_key_dict: UserAPIKeyAuth,
-    requested_model: Optional[str],
-) -> None:
-    """
-    Attach key and model tags to the active Datadog APM span.
+        Tags set (all best-effort, skipped when value is absent):
+        - ``litellm.key_alias``      — human-readable alias for the API key
+        - ``litellm.key_hash``       — hashed API key (safe to log; never the raw secret)
+        - ``litellm.requested_model``— model name as sent by the client
 
-    Tags set (all best-effort, skipped when value is absent):
-    - ``litellm.key_alias``      — human-readable alias for the API key
-    - ``litellm.key_hash``       — hashed API key (safe to log; never the raw secret)
-    - ``litellm.requested_model``— model name as sent by the client
+        Use cases:
+        - Trace all requests from a specific user/key: filter by ``litellm.key_alias`` or
+          ``litellm.key_hash``.
+        - Trace all requests for a specific model: filter by ``litellm.requested_model``.
 
-    Use cases:
-    - Trace all requests from a specific user/key: filter by ``litellm.key_alias`` or
-      ``litellm.key_hash``.
-    - Trace all requests for a specific model: filter by ``litellm.requested_model``.
-
-    Note: key_alias / key_hash are not available for unauthenticated (e.g. 401) requests.
-    """
-    try:
-        if user_api_key_dict.key_alias:
-            set_active_span_tag("litellm.key_alias", str(user_api_key_dict.key_alias))
-        if user_api_key_dict.token:
-            set_active_span_tag("litellm.key_hash", str(user_api_key_dict.token))
-        if requested_model:
-            set_active_span_tag("litellm.requested_model", str(requested_model))
-    except Exception:
-        verbose_proxy_logger.debug(
-            "Failed to tag active ddtrace span with key/model tags",
-            exc_info=True,
-        )
+        Note: key_alias / key_hash are not available for unauthenticated (e.g. 401) requests.
+        """
+        try:
+            if user_api_key_dict.key_alias:
+                set_active_span_tag("litellm.key_alias", str(user_api_key_dict.key_alias))
+            if user_api_key_dict.token:
+                set_active_span_tag("litellm.key_hash", str(user_api_key_dict.token))
+            if requested_model:
+                set_active_span_tag("litellm.requested_model", str(requested_model))
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Failed to tag active ddtrace span with key/model tags",
+                exc_info=True,
+            )
 
 
 def _override_openai_response_model(
@@ -652,8 +654,8 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
-        _add_dd_apm_tags_for_litellm_call_id(self.data.get("litellm_call_id"))
-        _add_dd_apm_tags_for_request(
+        DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
+        DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
             requested_model=self.data.get("model"),
         )
