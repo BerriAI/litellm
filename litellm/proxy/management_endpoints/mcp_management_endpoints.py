@@ -673,6 +673,7 @@ if MCP_AVAILABLE:
         response_model=LiteLLM_MCPServerTable,
     )
     async def fetch_mcp_server(
+        request: Request,
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
@@ -695,11 +696,14 @@ if MCP_AVAILABLE:
 
         if mcp_server is None:
             # Fallback: check registry (config-based servers) - list endpoint uses get_registry()
+            from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+            client_ip = IPAddressUtils.get_mcp_client_ip(request)
             registry_server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
             if registry_server is None:
                 # Try lookup by server_name or alias (client may use display name in URL)
                 registry_server = global_mcp_server_manager.get_mcp_server_by_name(
-                    server_id, client_ip=None
+                    server_id, client_ip=client_ip
                 )
             if registry_server is not None:
                 mcp_server = global_mcp_server_manager._build_mcp_server_table(
