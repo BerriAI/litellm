@@ -256,6 +256,23 @@ def detect_first_expected_role(
     return None
 
 
+def _counts_in_alternation(msg: AllMessageValues) -> bool:
+    """
+    Returns True if a message should be counted when checking role alternation.
+
+    Matches llamacpp's Jinja2 template logic: only user messages and assistant
+    messages WITHOUT tool_calls are counted. Tool messages and assistant messages
+    with tool_calls are skipped.
+    """
+    role = msg.get("role")
+    if role == "user":
+        return True
+    if role == "assistant":
+        tool_calls = msg.get("tool_calls")
+        return not tool_calls or len(tool_calls) == 0
+    return False  # Skip tool messages and others
+
+
 def _insert_user_continue_message(
     messages: List[AllMessageValues],
     user_continue_message: Optional[ChatCompletionUserMessage],
@@ -268,8 +285,8 @@ def _insert_user_continue_message(
     2. Final assistant message
     3. Consecutive assistant messages
 
-    Only inserts messages between consecutive assistant messages,
-    ignoring all other role types.
+    Skips 'tool' messages and assistant messages with tool_calls when checking
+    for alternation, matching llamacpp's Jinja2 template validation logic.
     """
     if not messages:
         return messages
@@ -277,26 +294,42 @@ def _insert_user_continue_message(
     result_messages = messages.copy()  # Don't modify the input list
     continue_message = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
 
-    # Handle first message if it's an assistant message
-    if result_messages[0]["role"] == "assistant":
+    # Handle first message if it's an assistant message (without tool calls)
+    if result_messages[0]["role"] == "assistant" and _counts_in_alternation(
+        result_messages[0]
+    ):
         result_messages.insert(0, continue_message)
 
-    # Handle consecutive assistant messages and final message
-    i = 1  # Start from second message since we handled first message
+    # Handle consecutive assistant messages (without tool calls)
+    i = 1
     while i < len(result_messages):
         curr_message = result_messages[i]
-        prev_message = result_messages[i - 1]
 
-        # Only check for consecutive assistant messages
-        # Ignore all other role types
-        if curr_message["role"] == "assistant" and prev_message["role"] == "assistant":
-            result_messages.insert(i, continue_message)
-            i += 2  # Skip over the message we just inserted
-        else:
+        # Check if current is assistant without tool_calls
+        if curr_message["role"] == "assistant" and _counts_in_alternation(
+            curr_message
+        ):
+            # Look backwards for previous message that counts, skipping tool messages
+            j = i - 1
+            while j >= 0:
+                prev_msg = result_messages[j]
+                if _counts_in_alternation(prev_msg):
+                    # Found a message that counts — if it's also assistant, insert user
+                    if prev_msg["role"] == "assistant":
+                        result_messages.insert(i, continue_message)
+                        i += 2  # Skip over inserted message
+                    break
+                j -= 1
+
+        if i < len(result_messages):
             i += 1
 
     # Handle final message
-    if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
+    if (
+        result_messages[-1]["role"] == "assistant"
+        and _counts_in_alternation(result_messages[-1])
+        and ensure_alternating_roles
+    ):
         result_messages.append(continue_message)
 
     return result_messages
@@ -309,6 +342,9 @@ def _insert_assistant_continue_message(
 ) -> List[AllMessageValues]:
     """
     Add assistant continuation messages between consecutive user messages.
+
+    Follows llamacpp's Jinja2 template logic: skips 'tool' messages and
+    'assistant' messages with tool_calls when checking for alternation.
 
     Args:
         messages: List of message dictionaries
@@ -327,17 +363,24 @@ def _insert_assistant_continue_message(
     for i, message in enumerate(messages):
         modified_messages.append(message)
 
-        # Check if we need to insert an assistant message
-        if (
-            i < len(messages) - 1  # Not the last message
-            and message.get("role") == "user"  # Current is user
-            and messages[i + 1].get("role") == "user"
-        ):  # Next is user
-            # Insert assistant message
-            continue_message = (
-                assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
-            )
-            modified_messages.append(continue_message)
+        # Only act on user messages that count in alternation
+        if message.get("role") == "user" and _counts_in_alternation(message):
+            # Find the next message that counts in alternation
+            next_counting_idx = i + 1
+            while next_counting_idx < len(messages) and not _counts_in_alternation(
+                messages[next_counting_idx]
+            ):
+                next_counting_idx += 1
+
+            # If the next counting message is also a user message, insert assistant
+            if (
+                next_counting_idx < len(messages)
+                and messages[next_counting_idx].get("role") == "user"
+            ):
+                continue_message = (
+                    assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
+                )
+                modified_messages.append(continue_message)
 
     return modified_messages
 

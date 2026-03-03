@@ -758,6 +758,77 @@ def test_azure_tool_call_invoke_helper():
                 "content": "Please continue",
             },
         ),
+        # Tool call scenario: assistant with tool_calls + tool result messages
+        # should be skipped when checking alternation (matches llamacpp Jinja2 logic)
+        (
+            [
+                {"role": "user", "content": "What's the weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "Sunny, 72F", "tool_call_id": "call_1"},
+                {"role": "assistant", "content": "It's sunny and 72F."},
+                {"role": "user", "content": "What about tomorrow?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "Rainy, 60F", "tool_call_id": "call_2"},
+                {"role": "assistant", "content": "Tomorrow will be rainy and 60F."},
+                {"role": "user", "content": "Thanks!"},
+                {"role": "user", "content": "One more question."},
+            ],
+            [
+                {"role": "user", "content": "What's the weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "Sunny, 72F", "tool_call_id": "call_1"},
+                {"role": "assistant", "content": "It's sunny and 72F."},
+                {"role": "user", "content": "What about tomorrow?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "Rainy, 60F", "tool_call_id": "call_2"},
+                {"role": "assistant", "content": "Tomorrow will be rainy and 60F."},
+                {"role": "user", "content": "Thanks!"},
+                {"role": "assistant", "content": "Please continue."},
+                {"role": "user", "content": "One more question."},
+            ],
+            None,
+            None,
+        ),
     ],
 )
 def test_ensure_alternating_roles(
