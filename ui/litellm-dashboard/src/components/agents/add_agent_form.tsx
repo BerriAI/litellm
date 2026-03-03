@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Form, message, Select, Input, Steps, Radio, Tag, Divider } from "antd";
 import { Button } from "@tremor/react";
-import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined, InfoCircleOutlined, TeamOutlined, LockOutlined } from "@ant-design/icons";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import {
   createAgentCall,
@@ -9,6 +9,8 @@ import {
   keyCreateForAgentCall,
   keyListCall,
   keyUpdateCall,
+  teamListCall,
+  teamUpdateCall,
   modelAvailableCall,
   AgentCreateInfo,
 } from "../networking";
@@ -45,7 +47,15 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const [agentTypeMetadata, setAgentTypeMetadata] = useState<AgentCreateInfo[]>([]);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
 
-  // Step 1: key assignment state
+  // Step 2: allowed teams/keys state
+  const [allowedTeams, setAllowedTeams] = useState<string[]>([]);
+  const [allowedKeys, setAllowedKeys] = useState<string[]>([]);
+  const [teamsData, setTeamsData] = useState<any[]>([]);
+  const [keysData, setKeysData] = useState<any[]>([]);
+  const [loadingTeams, setLoadingTeams] = useState(false);
+  const [loadingKeysForPerms, setLoadingKeysForPerms] = useState(false);
+
+  // Step 3: key assignment state
   const [keyAssignOption, setKeyAssignOption] = useState<"create_new" | "existing_key" | "skip">("create_new");
   const [newKeyName, setNewKeyName] = useState<string>("");
   const [newKeyModels, setNewKeyModels] = useState<string[]>([]);
@@ -55,7 +65,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
 
-  // Step 2: results
+  // Step 4: results
   const [createdAgentName, setCreatedAgentName] = useState<string>("");
   const [createdKeyValue, setCreatedKeyValue] = useState<string | null>(null);
   const [assignedKeyAlias, setAssignedKeyAlias] = useState<string | null>(null);
@@ -76,9 +86,29 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     fetchMetadata();
   }, []);
 
-  // Fetch existing keys when assign key step becomes active (step 2)
+  // Fetch teams and keys when Allowed Teams & Keys step becomes active (step 2)
   useEffect(() => {
-    if (currentStep === 2 && accessToken && existingKeys.length === 0) {
+    if (currentStep === 2 && accessToken) {
+      if (teamsData.length === 0) {
+        setLoadingTeams(true);
+        teamListCall(accessToken, null)
+          .then((data) => setTeamsData(data || []))
+          .catch((err) => console.error("Error fetching teams:", err))
+          .finally(() => setLoadingTeams(false));
+      }
+      if (keysData.length === 0) {
+        setLoadingKeysForPerms(true);
+        keyListCall(accessToken, null, null, null, null, null, 1, 200)
+          .then((result) => setKeysData(result?.keys || []))
+          .catch((err) => console.error("Error fetching keys:", err))
+          .finally(() => setLoadingKeysForPerms(false));
+      }
+    }
+  }, [currentStep, accessToken]);
+
+  // Fetch existing keys when assign key step becomes active (step 3)
+  useEffect(() => {
+    if (currentStep === 3 && accessToken && existingKeys.length === 0) {
       const fetchKeys = async () => {
         setLoadingKeys(true);
         try {
@@ -96,7 +126,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
 
   // Fetch available models when Assign Key step is active (same list as key generation)
   useEffect(() => {
-    if (currentStep !== 2 || !accessToken || !userId || !userRole) return;
+    if (currentStep !== 3 || !accessToken || !userId || !userRole) return;
     let cancelled = false;
     setLoadingModels(true);
     modelAvailableCall(accessToken, userId, userRole)
@@ -245,7 +275,39 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         setAssignedKeyAlias(keyInfo?.key_alias || selectedExistingKey.slice(0, 12) + "…");
       }
 
-      setCurrentStep(3);
+      // Update allowed keys' object_permission to include this agent
+      for (const keyToken of allowedKeys) {
+        try {
+          const keyInfo = keysData.find((k: any) => k.token === keyToken);
+          const existingAgents = keyInfo?.object_permission?.agents || [];
+          await keyUpdateCall(accessToken, {
+            key: keyToken,
+            object_permission: {
+              agents: [...existingAgents, agentId],
+            },
+          });
+        } catch (err) {
+          console.error(`Failed to update key ${keyToken} permissions:`, err);
+        }
+      }
+
+      // Update allowed teams' object_permission to include this agent
+      for (const teamId of allowedTeams) {
+        try {
+          const teamInfo = teamsData.find((t: any) => t.team_id === teamId);
+          const existingAgents = teamInfo?.object_permission?.agents || [];
+          await teamUpdateCall(accessToken, {
+            team_id: teamId,
+            object_permission: {
+              agents: [...existingAgents, agentId],
+            },
+          });
+        } catch (err) {
+          console.error(`Failed to update team ${teamId} permissions:`, err);
+        }
+      }
+
+      setCurrentStep(4);
       onSuccess();
     } catch (error) {
       console.error("Error creating agent:", error);
@@ -260,6 +322,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     form.resetFields();
     setAgentType("a2a");
     setCurrentStep(0);
+    setAllowedTeams([]);
+    setAllowedKeys([]);
     setKeyAssignOption("create_new");
     setNewKeyName("");
     setNewKeyModels([]);
@@ -315,6 +379,81 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           </div>
         )}
       </Form.Item>
+    </div>
+  );
+
+  const renderAllowedTeamsKeysStep = () => (
+    <div className="space-y-6">
+      <p className="text-sm text-gray-600">
+        Control which teams and keys are allowed to invoke this agent. Leave empty to allow all (no restrictions).
+      </p>
+
+      <div>
+        <Form.Item
+          label={
+            <span className="text-sm font-medium text-gray-700">
+              <TeamOutlined style={{ marginRight: 6 }} />
+              Allowed Teams
+            </span>
+          }
+          tooltip="Only these teams will be able to invoke this agent. Leave empty for unrestricted access."
+        >
+          <Select
+            mode="multiple"
+            style={{ width: "100%" }}
+            placeholder={loadingTeams ? "Loading teams..." : "Select teams allowed to invoke this agent"}
+            loading={loadingTeams}
+            value={allowedTeams}
+            onChange={(val) => setAllowedTeams(val)}
+            filterOption={(input, option) =>
+              (option?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
+            }
+            options={teamsData.map((t: any) => ({
+              label: t.team_alias || t.team_id,
+              value: t.team_id,
+            }))}
+            showSearch
+            allowClear
+          />
+        </Form.Item>
+      </div>
+
+      <div>
+        <Form.Item
+          label={
+            <span className="text-sm font-medium text-gray-700">
+              <LockOutlined style={{ marginRight: 6 }} />
+              Allowed Keys
+            </span>
+          }
+          tooltip="Only these keys will be able to invoke this agent. Leave empty for unrestricted access."
+        >
+          <Select
+            mode="multiple"
+            style={{ width: "100%" }}
+            placeholder={loadingKeysForPerms ? "Loading keys..." : "Select keys allowed to invoke this agent"}
+            loading={loadingKeysForPerms}
+            value={allowedKeys}
+            onChange={(val) => setAllowedKeys(val)}
+            filterOption={(input, option) =>
+              (option?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
+            }
+            options={keysData.map((k: any) => ({
+              label: k.key_alias || (k.token ? k.token.slice(0, 12) + "…" : k.key_name || "unnamed"),
+              value: k.token,
+            }))}
+            showSearch
+            allowClear
+          />
+        </Form.Item>
+      </div>
+
+      {allowedTeams.length === 0 && allowedKeys.length === 0 && (
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+          <InfoCircleOutlined style={{ marginRight: 6 }} />
+          No restrictions set — all teams and keys will be able to invoke this agent.
+        </div>
+      )}
     </div>
   );
 
@@ -623,7 +762,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     <Modal
       title={
         <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-          {selectedLogo && currentStep < 1 && (
+          {selectedLogo && currentStep === 0 && (
             <img src={selectedLogo} alt="Agent" className="w-6 h-6 object-contain" />
           )}
           <h2 className="text-xl font-semibold text-gray-900">Add New Agent</h2>
@@ -644,6 +783,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         <Steps current={currentStep} size="small" className="mb-8">
           <Step title="Configure" />
           <Step title="MCP Tools" />
+          <Step title="Permissions" />
           <Step title="Assign Key" />
           <Step title="Ready" />
         </Steps>
@@ -660,14 +800,15 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         >
           {currentStep === 0 && renderConfigureStep()}
           {currentStep === 1 && renderMCPToolsStep()}
-          {currentStep === 2 && renderAssignKeyStep()}
-          {currentStep === 3 && renderReadyStep()}
+          {currentStep === 2 && renderAllowedTeamsKeysStep()}
+          {currentStep === 3 && renderAssignKeyStep()}
+          {currentStep === 4 && renderReadyStep()}
         </Form>
 
         {/* Footer navigation */}
         <div className="flex items-center justify-between pt-6 border-t border-gray-100 mt-6">
           <div>
-            {currentStep > 0 && currentStep < 3 && (
+            {currentStep > 0 && currentStep < 4 && (
               <button
                 type="button"
                 onClick={handleBack}
@@ -678,7 +819,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
             )}
           </div>
           <div className="flex gap-3">
-            {currentStep < 3 && (
+            {currentStep < 4 && (
               <Button variant="secondary" onClick={handleClose}>
                 Cancel
               </Button>
@@ -694,11 +835,16 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
               </Button>
             )}
             {currentStep === 2 && (
+              <Button variant="primary" onClick={handleNext}>
+                Next →
+              </Button>
+            )}
+            {currentStep === 3 && (
               <Button variant="primary" loading={isSubmitting} onClick={handleCreateAgent}>
                 {isSubmitting ? "Creating..." : "Create Agent →"}
               </Button>
             )}
-            {currentStep === 3 && (
+            {currentStep === 4 && (
               <Button variant="primary" onClick={handleClose}>
                 Done
               </Button>
