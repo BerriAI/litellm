@@ -4078,6 +4078,11 @@ class PrismaClient:
             verbose_proxy_logger.debug(
                 "Prisma DB health watchdog disabled via PRISMA_HEALTH_WATCHDOG_ENABLED"
             )
+            if PrismaMetricsCollector.should_enable():
+                verbose_proxy_logger.warning(
+                    "prometheus_system is enabled but PRISMA_HEALTH_WATCHDOG_ENABLED=false — "
+                    "DB pool and engine metrics will not be collected"
+                )
             return
         if self._db_health_watchdog_task is not None:
             return
