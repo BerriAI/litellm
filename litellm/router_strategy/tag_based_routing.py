@@ -59,7 +59,17 @@ async def get_deployments_for_tag(
 
     Executes tag based filtering based on the tags in request metadata and the tags on the deployments
     """
-    if llm_router_instance.enable_tag_filtering is not True:
+    # Three-state behavior for enable_tag_filtering:
+    #   False  → opt-out: never apply tag filtering
+    #   None   → auto: apply when request carries tags, graceful fallthrough on no match
+    #   True   → strict: apply always, ValueError on no match
+    if llm_router_instance.enable_tag_filtering is False:
+        return healthy_deployments
+
+    request_tags = _get_tags_from_request_kwargs(
+        request_kwargs, metadata_variable_name
+    )
+    if not request_tags and llm_router_instance.enable_tag_filtering is not True:
         return healthy_deployments
 
     if request_kwargs is None:
@@ -77,13 +87,20 @@ async def get_deployments_for_tag(
 
     verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
     if metadata_variable_name in request_kwargs:
-        metadata = request_kwargs[metadata_variable_name]
-        request_tags = metadata.get("tags")
+        # reuse request_tags extracted by _get_tags_from_request_kwargs above
         match_any = llm_router_instance.tag_filtering_match_any
 
         new_healthy_deployments = []
         default_deployments = []
         if request_tags:
+            if llm_router_instance.enable_tag_filtering is not True:
+                if not getattr(llm_router_instance, "_tag_filtering_auto_logged", False):
+                    verbose_logger.info(
+                        "Tag filtering auto-enabled: request carries tags but "
+                        "enable_tag_filtering is not set. Set enable_tag_filtering=False "
+                        "in router_settings to disable. This message is logged once.",
+                    )
+                    llm_router_instance._tag_filtering_auto_logged = True  # type: ignore[attr-defined]
             verbose_logger.debug(
                 "get_deployments_for_tag routing: router_keys: %s", request_tags
             )
@@ -108,9 +125,14 @@ async def get_deployments_for_tag(
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
-                raise ValueError(
-                    f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
-                )
+                if llm_router_instance.enable_tag_filtering is True:
+                    raise ValueError(
+                        f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
+                    )
+                # Without explicit enable_tag_filtering, fall through
+                # gracefully to avoid breaking users who have tags on
+                # teams/keys for non-routing purposes (e.g. budget tracking).
+                return healthy_deployments
 
             return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
 

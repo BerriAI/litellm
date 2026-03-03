@@ -446,3 +446,175 @@ def test_get_tags_from_request_kwargs_various_inputs():
 
     # No relevant keys present
     assert _get_tags_from_request_kwargs({"foo": "bar"}) == []
+
+
+@pytest.mark.asyncio()
+async def test_tag_filtering_without_global_flag():
+    """
+    Test that tag filtering works automatically when the request carries tags,
+    even without enable_tag_filtering=True on the router.
+
+    This is the Tag Management workflow: create tag → select models → set tag
+    on team → routing just works. No global flag needed.
+
+    Regression test for: tag filtering required enable_tag_filtering global flag
+    even when tags were present in the request.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["team-a"],
+                },
+                "model_info": {"id": "model-team-a"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["team-b"],
+                },
+                "model_info": {"id": "model-team-b"},
+            },
+        ],
+        # NOTE: enable_tag_filtering is NOT set (defaults to None)
+    )
+
+    # Request with team-a tag should route to model-team-a
+    for _ in range(3):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            metadata={"tags": ["team-a"]},
+            mock_response="Hello from team A",
+        )
+        assert response._hidden_params["model_id"] == "model-team-a"
+
+    # Request with team-b tag should route to model-team-b
+    for _ in range(3):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            metadata={"tags": ["team-b"]},
+            mock_response="Hello from team B",
+        )
+        assert response._hidden_params["model_id"] == "model-team-b"
+
+    # Untagged request should load-balance across both (no default-deployment filtering)
+    model_ids_seen = set()
+    for _ in range(20):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            mock_response="Hello",
+        )
+        model_ids_seen.add(response._hidden_params["model_id"])
+    # With 20 requests and 2 deployments, we should see both
+    assert "model-team-a" in model_ids_seen and "model-team-b" in model_ids_seen
+
+
+@pytest.mark.asyncio()
+async def test_tag_filtering_graceful_fallthrough_without_global_flag():
+    """
+    Test that when request has tags but no deployment matches, the router
+    falls through gracefully (load-balances) instead of erroring — when
+    enable_tag_filtering is NOT explicitly set.
+
+    This prevents breaking users who have tags on teams/keys for non-routing
+    purposes (e.g., budget tracking) and whose deployments have unrelated tags.
+
+    With enable_tag_filtering=True, the error IS raised (tested in
+    test_error_from_tag_routing).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["team-a"],
+                },
+                "model_info": {"id": "model-team-a"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+                "model_info": {"id": "model-no-tags"},
+            },
+        ],
+        # NOTE: enable_tag_filtering is NOT set
+    )
+
+    # Request with a non-matching tag should fall through and load-balance,
+    # NOT raise an error
+    model_ids_seen = set()
+    for _ in range(20):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            metadata={"tags": ["nonexistent-tag"]},
+            mock_response="Hello",
+        )
+        model_ids_seen.add(response._hidden_params["model_id"])
+
+    # Should see both deployments (graceful fallthrough = load-balanced)
+    assert "model-team-a" in model_ids_seen and "model-no-tags" in model_ids_seen
+
+
+@pytest.mark.asyncio
+async def test_tag_filtering_explicit_false_disables():
+    """
+    When enable_tag_filtering is explicitly set to False, tag filtering is
+    completely disabled — even if the request carries tags, all deployments
+    should be used (no filtering applied).
+
+    This tests the opt-out path: users who have tags on teams/keys for
+    non-routing purposes can set enable_tag_filtering=False to ensure
+    tag-based routing never activates.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["team-a"],
+                },
+                "model_info": {"id": "model-team-a"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["team-b"],
+                },
+                "model_info": {"id": "model-team-b"},
+            },
+        ],
+        enable_tag_filtering=False,  # Explicitly disabled
+    )
+
+    # Even though request carries tags that match a specific deployment,
+    # filtering should NOT be applied — both deployments should be used
+    model_ids_seen = set()
+    for _ in range(20):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            metadata={"tags": ["team-a"]},
+            mock_response="Hello",
+        )
+        model_ids_seen.add(response._hidden_params["model_id"])
+
+    # Should see BOTH deployments (filtering disabled)
+    assert "model-team-a" in model_ids_seen and "model-team-b" in model_ids_seen
