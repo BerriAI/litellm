@@ -23,6 +23,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     decode_model_from_file_id,
+    encode_batch_response_ids,
     encode_file_id_with_model,
     get_batch_from_database,
     get_credentials_for_model,
@@ -243,29 +244,7 @@ async def create_batch(  # noqa: PLR0915
                     **_create_batch_data  # type: ignore
                 )
 
-                # Encode response IDs with model info so retrieve_batch
-                # can route back to the correct provider/credentials.
-                if response and hasattr(response, "id") and response.id:
-                    response.id = encode_file_id_with_model(
-                        file_id=response.id,
-                        model=model_param,
-                        id_type="batch",
-                    )
-
-                    if hasattr(response, "output_file_id") and response.output_file_id:
-                        response.output_file_id = encode_file_id_with_model(
-                            file_id=response.output_file_id, model=model_param
-                        )
-
-                    if hasattr(response, "error_file_id") and response.error_file_id:
-                        response.error_file_id = encode_file_id_with_model(
-                            file_id=response.error_file_id, model=model_param
-                        )
-
-                    if hasattr(response, "input_file_id") and response.input_file_id:
-                        response.input_file_id = encode_file_id_with_model(
-                            file_id=response.input_file_id, model=model_param
-                        )
+                encode_batch_response_ids(response, model=model_param)
 
                 verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
             else:
@@ -465,28 +444,7 @@ async def retrieve_batch( # noqa: PLR0915
                 **data  # type: ignore
             )
 
-            # Re-encode response IDs so the client always sees encoded IDs.
-            # The provider returns raw IDs (e.g. output_file_id, error_file_id)
-            # which the client needs encoded to route future file downloads.
-            if response and hasattr(response, "id") and response.id:
-                response.id = encode_file_id_with_model(
-                    file_id=response.id, model=model_from_id, id_type="batch",
-                )
-
-                if hasattr(response, "output_file_id") and response.output_file_id:
-                    response.output_file_id = encode_file_id_with_model(
-                        file_id=response.output_file_id, model=model_from_id
-                    )
-
-                if hasattr(response, "error_file_id") and response.error_file_id:
-                    response.error_file_id = encode_file_id_with_model(
-                        file_id=response.error_file_id, model=model_from_id
-                    )
-
-                if hasattr(response, "input_file_id") and response.input_file_id:
-                    response.input_file_id = encode_file_id_with_model(
-                        file_id=response.input_file_id, model=model_from_id
-                    )
+            encode_batch_response_ids(response, model=model_from_id)
 
             verbose_proxy_logger.debug(
                 f"Retrieved batch using model: {model_from_id}, original_id: {original_batch_id}"
@@ -679,7 +637,13 @@ async def list_batches(
                 limit=limit,
                 **data  # type: ignore
             )
-            
+
+            # Encode batch IDs in the list response so clients can use
+            # them for retrieve/cancel/file downloads through the proxy.
+            if response and hasattr(response, "data") and response.data:
+                for batch in response.data:
+                    encode_batch_response_ids(batch, model=model_param)
+
             verbose_proxy_logger.debug(f"Listed batches using model: {model_param}")
         
         # SCENARIO 2 (alternative): target_model_names based routing
@@ -856,26 +820,7 @@ async def cancel_batch(
                 **data  # type: ignore
             )
 
-            # Re-encode response IDs so the client always sees encoded IDs.
-            if response and hasattr(response, "id") and response.id:
-                response.id = encode_file_id_with_model(
-                    file_id=response.id, model=model_from_id, id_type="batch",
-                )
-
-                if hasattr(response, "output_file_id") and response.output_file_id:
-                    response.output_file_id = encode_file_id_with_model(
-                        file_id=response.output_file_id, model=model_from_id
-                    )
-
-                if hasattr(response, "error_file_id") and response.error_file_id:
-                    response.error_file_id = encode_file_id_with_model(
-                        file_id=response.error_file_id, model=model_from_id
-                    )
-
-                if hasattr(response, "input_file_id") and response.input_file_id:
-                    response.input_file_id = encode_file_id_with_model(
-                        file_id=response.input_file_id, model=model_from_id
-                    )
+            encode_batch_response_ids(response, model=model_from_id)
 
             verbose_proxy_logger.debug(
                 f"Cancelled batch using model: {model_from_id}, original_id: {original_batch_id}"
