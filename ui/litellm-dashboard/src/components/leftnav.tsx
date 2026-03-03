@@ -556,7 +556,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
     <Layout>
       <Sider
         theme="light"
-        width={220}
+        width={240}
         collapsed={collapsed}
         collapsedWidth={80}
         collapsible
@@ -598,7 +598,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
             items={buildMenuItems()}
           />
         </ConfigProvider>
-        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
+        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={240} />}
       </Sider>
     </Layout>
   );
