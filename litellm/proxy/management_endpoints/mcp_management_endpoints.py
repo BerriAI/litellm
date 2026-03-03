@@ -700,6 +700,10 @@ if MCP_AVAILABLE:
 
             client_ip = IPAddressUtils.get_mcp_client_ip(request)
             registry_server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+            if registry_server is not None and not global_mcp_server_manager._is_server_accessible_from_ip(
+                registry_server, client_ip
+            ):
+                registry_server = None
             if registry_server is None:
                 # Try lookup by server_name or alias (client may use display name in URL)
                 registry_server = global_mcp_server_manager.get_mcp_server_by_name(
