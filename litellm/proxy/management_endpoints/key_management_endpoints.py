@@ -547,6 +547,27 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                                 },
                             )
 
+    # Validate key duration against the team's max key duration
+    if (
+        team_table is not None
+        and team_table.metadata is not None
+        and team_table.metadata.get("team_member_key_duration")
+        and data.duration is not None
+    ):
+        team_max_duration = team_table.metadata["team_member_key_duration"]
+        team_max_seconds = duration_in_seconds(duration=team_max_duration)
+        if data.duration == "-1":
+            user_key_duration: float = float("inf")
+        else:
+            user_key_duration = duration_in_seconds(duration=data.duration)
+        if user_key_duration > team_max_seconds:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Key duration exceeds team maximum. Requested: {data.duration}; Team maximum: {team_max_duration}"
+                },
+            )
+
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
         from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
@@ -3372,6 +3393,55 @@ async def _insert_deprecated_key(
             "Failed to insert deprecated key for grace period: %s",
             deprecated_err,
         )
+async def _validate_regenerate_key_duration_against_team(
+    data: Optional[RegenerateKeyRequest],
+    key_in_db: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+) -> None:
+    """Raise HTTP 400 if the requested duration exceeds the team's max key duration."""
+    if data is None or not data.duration:
+        return
+
+    team_id = getattr(key_in_db, "team_id", None)
+    if not team_id:
+        return
+
+    try:
+        team_table = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            check_db_only=True,
+        )
+    except Exception:
+        return
+
+    if (
+        team_table is None
+        or team_table.metadata is None
+        or not team_table.metadata.get("team_member_key_duration")
+    ):
+        return
+
+    team_max_duration = team_table.metadata["team_member_key_duration"]
+    team_max_seconds = duration_in_seconds(duration=team_max_duration)
+
+    if data.duration == "-1":
+        user_seconds: float = float("inf")
+    else:
+        user_seconds = duration_in_seconds(duration=data.duration)
+
+    if user_seconds > team_max_seconds:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Key duration exceeds team maximum. Requested: {data.duration}; Team maximum: {team_max_duration}"
+            },
+        )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -3386,6 +3456,13 @@ async def _execute_virtual_key_regeneration(
 ) -> GenerateKeyResponse:
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy.proxy_server import hash_token
+
+    await _validate_regenerate_key_duration_against_team(
+        data=data,
+        key_in_db=key_in_db,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
 
     new_token = get_new_token(data=data)
     new_token_hash = hash_token(new_token)

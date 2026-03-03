@@ -6436,7 +6436,7 @@ class TestValidateKeyAliasFormat:
     def test_validate_key_alias_format_invalid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
         from litellm.proxy._types import ProxyException
-        
+
         invalid_aliases = [
             "",               # empty
             " ",              # whitespace
@@ -6449,9 +6449,273 @@ class TestValidateKeyAliasFormat:
             "  leading",
             "trailing  ",
         ]
-        
+
         for alias in invalid_aliases:
             with pytest.raises(ProxyException) as exc:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+
+
+class TestCommonKeyGenerationHelperTeamDurationValidation:
+    """Tests for team duration validation inside _common_key_generation_helper."""
+
+    @pytest.mark.asyncio
+    async def test_duration_exceeds_team_max_raises(self):
+        """Raises HTTP 400 when the requested duration exceeds the team's max."""
+        team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
+        team.metadata = {"team_member_key_duration": "5d"}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(user_id="user-1", duration="10d"),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+                ),
+                litellm_changed_by=None,
+                team_table=team,
+            )
+        assert exc_info.value.status_code == 400
+        assert "Team maximum" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_never_expires_exceeds_team_max_raises(self):
+        """Duration '-1' (never expires) exceeds any finite team max."""
+        team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
+        team.metadata = {"team_member_key_duration": "30d"}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(user_id="user-1", duration="-1"),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+                ),
+                litellm_changed_by=None,
+                team_table=team,
+            )
+        assert exc_info.value.status_code == 400
+        assert "Team maximum" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_duration_within_team_max_passes(self):
+        """Duration within the team max proceeds past the validation block."""
+        team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
+        team.metadata = {"team_member_key_duration": "5d"}
+
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"key": "sk-test", "expires": None, "user_id": "user-1"},
+        ), patch("litellm.proxy.proxy_server.prisma_client"), patch(
+            "litellm.proxy.proxy_server.llm_router"
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", False
+        ):
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(user_id="user-1", duration="3d"),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+                ),
+                litellm_changed_by=None,
+                team_table=team,
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_duration_skips_team_validation(self):
+        """No duration provided — team validation is skipped."""
+        team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
+        team.metadata = {"team_member_key_duration": "5d"}
+
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"key": "sk-test", "expires": None, "user_id": "user-1"},
+        ), patch("litellm.proxy.proxy_server.prisma_client"), patch(
+            "litellm.proxy.proxy_server.llm_router"
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", False
+        ):
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(user_id="user-1", duration=None),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+                ),
+                litellm_changed_by=None,
+                team_table=team,
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_team_skips_team_validation(self):
+        """No team_table — team duration validation is skipped."""
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"key": "sk-test", "expires": None, "user_id": "user-1"},
+        ), patch("litellm.proxy.proxy_server.prisma_client"), patch(
+            "litellm.proxy.proxy_server.llm_router"
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", False
+        ):
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(user_id="user-1", duration="100d"),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+
+
+class TestValidateRegenerateKeyDurationAgainstTeam:
+    """Tests for _validate_regenerate_key_duration_against_team."""
+
+    @pytest.mark.asyncio
+    async def test_no_data_skips_validation(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_regenerate_key_duration_against_team,
+        )
+
+        mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+        mock_key.team_id = "team-123"
+        mock_prisma = AsyncMock()
+        mock_cache = MagicMock()
+        # Should not raise
+        await _validate_regenerate_key_duration_against_team(
+            data=None,
+            key_in_db=mock_key,
+            prisma_client=mock_prisma,
+            user_api_key_cache=mock_cache,
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_duration_skips_validation(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_regenerate_key_duration_against_team,
+        )
+        from litellm.proxy._types import RegenerateKeyRequest
+
+        mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+        mock_key.team_id = "team-123"
+        data = RegenerateKeyRequest(duration=None)
+        mock_prisma = AsyncMock()
+        mock_cache = MagicMock()
+        # Should not raise
+        await _validate_regenerate_key_duration_against_team(
+            data=data,
+            key_in_db=mock_key,
+            prisma_client=mock_prisma,
+            user_api_key_cache=mock_cache,
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_team_id_skips_validation(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_regenerate_key_duration_against_team,
+        )
+        from litellm.proxy._types import RegenerateKeyRequest
+
+        mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+        mock_key.team_id = None
+        data = RegenerateKeyRequest(duration="10d")
+        mock_prisma = AsyncMock()
+        mock_cache = MagicMock()
+        # Should not raise
+        await _validate_regenerate_key_duration_against_team(
+            data=data,
+            key_in_db=mock_key,
+            prisma_client=mock_prisma,
+            user_api_key_cache=mock_cache,
+        )
+
+    @pytest.mark.asyncio
+    async def test_duration_within_team_max_passes(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_regenerate_key_duration_against_team,
+        )
+        from litellm.proxy._types import RegenerateKeyRequest, LiteLLM_TeamTableCachedObj
+
+        mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+        mock_key.team_id = "team-123"
+        data = RegenerateKeyRequest(duration="3d")
+
+        mock_team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
+        mock_team.metadata = {"team_member_key_duration": "5d"}
+
+        mock_prisma = AsyncMock()
+        mock_cache = MagicMock()
+
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team,
+        ):
+            # Should not raise
+            await _validate_regenerate_key_duration_against_team(
+                data=data,
+                key_in_db=mock_key,
+                prisma_client=mock_prisma,
+                user_api_key_cache=mock_cache,
+            )
+
+    @pytest.mark.asyncio
+    async def test_duration_exceeds_team_max_raises(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_regenerate_key_duration_against_team,
+        )
+        from litellm.proxy._types import RegenerateKeyRequest, LiteLLM_TeamTableCachedObj
+
+        mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+        mock_key.team_id = "team-123"
+        data = RegenerateKeyRequest(duration="10d")
+
+        mock_team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
+        mock_team.metadata = {"team_member_key_duration": "5d"}
+
+        mock_prisma = AsyncMock()
+        mock_cache = MagicMock()
+
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _validate_regenerate_key_duration_against_team(
+                    data=data,
+                    key_in_db=mock_key,
+                    prisma_client=mock_prisma,
+                    user_api_key_cache=mock_cache,
+                )
+        assert exc_info.value.status_code == 400
+        assert "Team maximum" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_never_expires_duration_exceeds_team_max_raises(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_regenerate_key_duration_against_team,
+        )
+        from litellm.proxy._types import RegenerateKeyRequest, LiteLLM_TeamTableCachedObj
+
+        mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+        mock_key.team_id = "team-123"
+        data = RegenerateKeyRequest(duration="-1")
+
+        mock_team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
+        mock_team.metadata = {"team_member_key_duration": "30d"}
+
+        mock_prisma = AsyncMock()
+        mock_cache = MagicMock()
+
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _validate_regenerate_key_duration_against_team(
+                    data=data,
+                    key_in_db=mock_key,
+                    prisma_client=mock_prisma,
+                    user_api_key_cache=mock_cache,
+                )
+        assert exc_info.value.status_code == 400
