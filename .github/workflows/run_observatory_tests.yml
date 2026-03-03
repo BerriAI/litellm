@@ -118,7 +118,7 @@ jobs:
           cat /tmp/cloudflared.log
           exit 1
 
-      - name: Trigger observatory test run
+      - name: Trigger observatory TestFakeBedrockRelease run
         env:
           OBSERVATORY_URL: ${{ secrets.OBSERVATORY_URL }}
           OBSERVATORY_API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
@@ -129,8 +129,43 @@ jobs:
             '{
               deployment_url: $url,
               api_key: $key,
-              test_suite: "TestOAIAzureRelease",
-              models: ["gpt-4o-mini", "gpt-4o"]
+              test_suite: "TestFakeBedrockRelease",
+              duration_hours: 2.0
+            }')
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${OBSERVATORY_URL}/run-test" \
+            -H "Content-Type: application/json" \
+            -H "X-LiteLLM-Observatory-API-Key: ${OBSERVATORY_API_KEY}" \
+            -d "$PAYLOAD")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          echo "Response ($HTTP_CODE): $BODY"
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "Failed to trigger test run"
+            exit 1
+          fi
+
+          # Extract request_id for polling this specific run
+          REQUEST_ID=$(echo "$BODY" | jq -r '.results.request_id')
+          if [ -z "$REQUEST_ID" ] || [ "$REQUEST_ID" = "null" ]; then
+            echo "Failed to extract request_id from response"
+            exit 1
+          fi
+          echo "Request ID: $REQUEST_ID"
+          echo "Observatory test run triggered successfully. Results will be reported to the observatory destination."
+
+      - name: Trigger observatory TestFakeVertexAIRelease run
+        env:
+          OBSERVATORY_URL: ${{ secrets.OBSERVATORY_URL }}
+          OBSERVATORY_API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg url "${TUNNEL_URL}" \
+            --arg key "${LITELLM_MASTER_KEY}" \
+            '{
+              deployment_url: $url,
+              api_key: $key,
+              test_suite: "TestFakeVertexAIRelease",
+              duration_hours: 2.0
             }')
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${OBSERVATORY_URL}/run-test" \
             -H "Content-Type: application/json" \
