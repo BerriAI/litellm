@@ -242,15 +242,15 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                                 )
                             )
 
-            self._set_usage_and_cost(model_response, response_json, model)
-            return model_response
-
         except Exception as e:
             raise OpenRouterException(
                 message=f"Error transforming OpenRouter image edit response: {str(e)}",
                 status_code=500,
                 headers={},
             )
+
+        self._set_usage_and_cost(model_response, response_json, model)
+        return model_response
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
