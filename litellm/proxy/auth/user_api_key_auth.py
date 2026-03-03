@@ -1766,6 +1766,7 @@ async def _run_post_custom_auth_checks(
         valid_token=valid_token,
         skip_budget_checks=False,
         project_object=_project_obj,
+        skip_route_check=True,
     )
 
     return valid_token

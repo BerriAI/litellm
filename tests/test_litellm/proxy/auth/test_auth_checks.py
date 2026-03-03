@@ -1475,3 +1475,55 @@ async def test_get_fuzzy_user_object_case_insensitive_email():
     assert call_args.kwargs["where"]["user_email"]["equals"] == "test@example.com"
     assert call_args.kwargs["where"]["user_email"]["mode"] == "insensitive"
     assert call_args.kwargs["include"] == {"organization_memberships": True}
+
+
+@pytest.mark.asyncio
+async def test_common_checks_skip_route_check_for_custom_auth():
+    """
+    Test that custom routes (e.g. /ldap/ngs/ready) pass common_checks when
+    skip_route_check=True, which is the case for custom auth flows.
+
+    Regression test for: custom user-added routes being rejected as admin-only
+    after _run_post_custom_auth_checks was introduced.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    mock_request = MagicMock(spec=Request)
+    valid_token = UserAPIKeyAuth(token="test-token")
+
+    # Without skip_route_check, a custom route with unknown user should fail
+    with pytest.raises(Exception):
+        await common_checks(
+            request_body={},
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/ldap/ngs/ready",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=mock_request,
+            skip_route_check=False,
+        )
+
+    # With skip_route_check=True (custom auth path), the same route should pass
+    result = await common_checks(
+        request_body={},
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/ldap/ngs/ready",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+        request=mock_request,
+        skip_route_check=True,
+    )
+
+    assert result is True
