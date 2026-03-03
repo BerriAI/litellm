@@ -1255,6 +1255,10 @@ class Router:
         # Encrypted content affinity
         # ---------------------------------------------------------------------
         if "encrypted_content_affinity" in optional_pre_call_checks:
+            from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+                EncryptedContentAffinityCheck,
+            )
+
             if self.optional_callbacks is None:
                 self.optional_callbacks = []
 
@@ -1289,11 +1293,6 @@ class Router:
                 )
             elif pre_call_check == "enforce_model_rate_limits":
                 _callback = ModelRateLimitingCheck(dual_cache=self.cache)
-            elif pre_call_check == "encrypted_content_affinity":
-                from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-                    EncryptedContentAffinityCheck,
-                )
-                _callback = EncryptedContentAffinityCheck()
 
             if _callback is None:
                 continue
