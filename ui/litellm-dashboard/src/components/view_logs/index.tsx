@@ -714,7 +714,6 @@ export default function SpendLogsTable({
               accessToken={accessToken}
               isActive={activeTab === "audit logs"}
               premiumUser={premiumUser}
-              allTeams={allTeams}
             />
           </TabPanel>
           <TabPanel><DeletedKeysPage /></TabPanel>

@@ -22,19 +22,25 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 router = APIRouter()
 
 
-def _build_json_field_conditions(
-    field: str, json_key: str, value: str
-) -> List[Dict[str, Any]]:
+def _build_json_field_or_condition(json_key: str, value: str) -> Dict[str, Any]:
     """
-    Build OR conditions to match a value inside a JSON column at the given key.
+    Build an OR condition that matches a value inside a JSON column at the
+    given key, checking both before_value and updated_values.
 
-    Uses Prisma's JSON path filtering (PostgreSQL only). Returns a list of
-    two conditions — one for `before_value` and one for `updated_values` — to
-    be merged into the caller's top-level OR list.
+    Uses Prisma's JSON path filtering (PostgreSQL only).
+
+    Example result (team_id="t1"):
+      {"OR": [
+          {"before_value":    {"path": ["team_id"], "string_contains": "t1"}},
+          {"updated_values":  {"path": ["team_id"], "string_contains": "t1"}},
+      ]}
     """
-    return [
-        {field: {"path": [json_key], "string_contains": value}},
-    ]
+    return {
+        "OR": [
+            {"before_value": {"path": [json_key], "string_contains": value}},
+            {"updated_values": {"path": [json_key], "string_contains": value}},
+        ]
+    }
 
 
 @router.get(
@@ -115,19 +121,15 @@ async def get_audit_logs(
             date_filter["lte"] = end_date
         where_conditions["updated_at"] = date_filter
 
-    # JSON field filters (PostgreSQL only) — search inside before_value and
-    # updated_values for a matching key/value pair.
+    # JSON field filters (PostgreSQL only) — each filter is AND'd with the
+    # others, but checks both before_value and updated_values internally (OR).
     if object_team_id:
-        where_conditions["OR"] = [
-            *_build_json_field_conditions("before_value", "team_id", object_team_id),
-            *_build_json_field_conditions("updated_values", "team_id", object_team_id),
+        where_conditions["AND"] = where_conditions.get("AND", []) + [
+            _build_json_field_or_condition("team_id", object_team_id)
         ]
     if object_key_hash:
-        existing_or: List[Dict[str, Any]] = where_conditions.get("OR", [])
-        where_conditions["OR"] = [
-            *existing_or,
-            *_build_json_field_conditions("before_value", "token", object_key_hash),
-            *_build_json_field_conditions("updated_values", "token", object_key_hash),
+        where_conditions["AND"] = where_conditions.get("AND", []) + [
+            _build_json_field_or_condition("token", object_key_hash)
         ]
 
     # Build sort conditions
