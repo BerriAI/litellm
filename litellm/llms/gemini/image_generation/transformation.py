@@ -92,12 +92,12 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         tokens_details = usage_metadata.get("promptTokensDetails", [])
         for details in tokens_details:
             if isinstance(details, dict):
-                modality = details.get("modality")
-                token_count = details.get("tokenCount", 0)
+                modality = str(details.get("modality", "")).upper()
+                token_count = details.get("tokenCount", details.get("token_count", 0))
                 if modality == "TEXT":
-                    input_tokens_details.text_tokens = token_count
+                    input_tokens_details.text_tokens += token_count
                 elif modality == "IMAGE":
-                    input_tokens_details.image_tokens = token_count
+                    input_tokens_details.image_tokens += token_count
         
         return ImageUsage(
             input_tokens=usage_metadata.get("promptTokenCount", 0),
