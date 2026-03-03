@@ -266,6 +266,62 @@ class TestCalculateRequestDuration:
         ), "File position should be restored to original position"
 
 
+    def test_rejects_sentinel_frame_count(self):
+        """
+        Test that calculate_request_duration rejects sentinel frame counts
+        returned by buggy libsndfile versions (e.g. 2^63-1 for OPUS files).
+
+        Regression test for https://github.com/BerriAI/litellm/issues/22622
+        """
+        mock_audio = type("MockAudio", (), {
+            "__len__": lambda self: 2**63 - 1,
+            "samplerate": 48000,
+            "__enter__": lambda self: self,
+            "__exit__": lambda self, *a: None,
+        })()
+
+        with patch("soundfile.SoundFile", return_value=mock_audio):
+            duration = calculate_request_duration(b"fake audio bytes")
+
+        assert duration is None, (
+            "Should return None for sentinel frame count (2^63-1)"
+        )
+
+    def test_rejects_zero_frame_count(self):
+        """Test that calculate_request_duration rejects zero-length audio."""
+        mock_audio = type("MockAudio", (), {
+            "__len__": lambda self: 0,
+            "samplerate": 48000,
+            "__enter__": lambda self: self,
+            "__exit__": lambda self, *a: None,
+        })()
+
+        with patch("soundfile.SoundFile", return_value=mock_audio):
+            duration = calculate_request_duration(b"fake audio bytes")
+
+        assert duration is None, "Should return None for zero frames"
+
+    def test_rejects_extreme_duration(self):
+        """
+        Test that calculate_request_duration rejects durations exceeding
+        24 hours (86400 seconds) as implausible.
+        """
+        # 100000 seconds at 1 Hz samplerate = 100000 frames
+        mock_audio = type("MockAudio", (), {
+            "__len__": lambda self: 100000,
+            "samplerate": 1,
+            "__enter__": lambda self: self,
+            "__exit__": lambda self, *a: None,
+        })()
+
+        with patch("soundfile.SoundFile", return_value=mock_audio):
+            duration = calculate_request_duration(b"fake audio bytes")
+
+        assert duration is None, (
+            "Should return None for durations exceeding 24 hours"
+        )
+
+
 class TestGetAudioFileContentHash:
     """Test the get_audio_file_content_hash function for cache key generation"""
 

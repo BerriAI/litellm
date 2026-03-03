@@ -263,7 +263,15 @@ def calculate_request_duration(file: FileTypes) -> Optional[float]:
         # Extract duration using soundfile
         file_object = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            duration = len(audio) / audio.samplerate
+            frames = len(audio)
+            # Reject sentinel values returned by buggy libsndfile versions
+            # (e.g. libsndfile 1.2.0 returns 2^63-1 for some OPUS files)
+            if frames <= 0 or frames >= 2**63 - 1:
+                return None
+            duration = frames / audio.samplerate
+            # Sanity-check: reject durations longer than 24 hours
+            if duration > 86400:
+                return None
             return duration
 
     except Exception:
