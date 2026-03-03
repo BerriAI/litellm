@@ -571,14 +571,38 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
     return schema_dict
 
 
+def _is_any_type_schema(schema: dict) -> bool:
+    """
+    Detect schemas that represent "any JSON value" (no type constraints).
+
+    In JSON Schema, an empty schema {} means "any value is valid".
+    Schemas with only metadata keys (title, description, default, examples)
+    but no type-constraining keywords also represent "any type".
+
+    Gemini's Schema proto uses TYPE_UNSPECIFIED (0) as default,
+    so omitting the type field is valid and means "any type".
+    """
+    type_constraining_keys = {
+        "type",
+        "properties",
+        "items",
+        "anyOf",
+        "oneOf",
+        "allOf",
+        "enum",
+        "required",
+        "$ref",
+        "$schema",
+    }
+    return not any(key in type_constraining_keys for key in schema.keys())
+
+
 def process_items(schema, depth=0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     if isinstance(schema, dict):
-        if "items" in schema and schema["items"] == {}:
-            schema["items"] = {"type": "object"}
         for key, value in schema.items():
             if isinstance(value, dict):
                 process_items(value, depth + 1)
@@ -677,9 +701,8 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
-            elif "type" not in atype and len(atype) == 0:
-                # Handle empty object case
-                atype["type"] = "object"
+            elif isinstance(atype, dict) and _is_any_type_schema(atype):
+                pass  # preserve "any type" semantics — don't coerce to object
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
@@ -714,7 +737,8 @@ def add_object_type(schema):
     # Gemini requires all function parameters to be type OBJECT
     # Handle case where schema has no properties and no type (e.g. tools with no arguments)
     if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema and "allOf" not in schema:
-        schema["type"] = "object"
+        if not _is_any_type_schema(schema):
+            schema["type"] = "object"
 
     properties = schema.get("properties", None)
     if properties is not None:
