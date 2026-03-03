@@ -8566,6 +8566,35 @@ export const validateBlockedWordsFile = async (accessToken: string, fileContent:
   }
 };
 
+export const validatePatternsFile = async (accessToken: string, fileContent: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/validate_patterns_file`
+      : `/guardrails/validate_patterns_file`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ file_content: fileContent }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to validate patterns file");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to validate patterns file:", error);
+    throw error;
+  }
+};
+
 export const getSSOSettings = async (accessToken: string) => {
   try {
     // Construct base URL
