@@ -3088,6 +3088,9 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: Optional[
         CostBreakdown
     ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    routing_strategy: Optional[str]  # Routing strategy used by the router
+    model_group_size: Optional[int]  # Number of deployments in the model group
+    model_group_candidates: Optional[List[dict]]  # Candidate deployments considered
 
 
 class SpendLogsPayload(TypedDict):

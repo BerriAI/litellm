@@ -454,6 +454,7 @@ class Router:
         ] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
+        self.routing_group_strategies: Dict[str, str] = {}
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -2094,8 +2095,9 @@ class Router:
         model_group_alias: Optional[str] = None
         if self._get_model_from_alias(model=model):
             model_group_alias = model
+        effective_strategy = self.routing_group_strategies.get(model, self.routing_strategy)
         kwargs.setdefault(metadata_variable_name, {}).update(
-            {"model_group": model, "model_group_alias": model_group_alias}
+            {"model_group": model, "model_group_alias": model_group_alias, "routing_strategy": effective_strategy}
         )
 
     def _set_deployment_num_retries_on_exception(
@@ -5365,12 +5367,30 @@ class Router:
         model_group: Optional[str] = kwargs.get("model")
         num_retries = kwargs.pop("num_retries")
 
-        ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
+        _group_strategy = self.routing_group_strategies.get(model_group or "")
+        if _group_strategy == "priority-failover":
+            _group_size = len(self.get_model_list(model_name=model_group) or [])
+            if _group_size > 1:
+                num_retries = max(num_retries, _group_size - 1)
+
+        ## ADD MODEL GROUP SIZE + CANDIDATES TO METADATA
         _metadata: dict = kwargs.get("litellm_metadata", kwargs.get("metadata")) or {}
         if "model_group" in _metadata and isinstance(_metadata["model_group"], str):
             model_list = self.get_model_list(model_name=_metadata["model_group"])
             if model_list is not None:
-                _metadata.update({"model_group_size": len(model_list)})
+                candidates = []
+                for _dep in model_list:
+                    dep_info = _dep.get("model_info", {})
+                    candidates.append({
+                        "model_id": dep_info.get("id"),
+                        "model_name": _dep.get("model_name"),
+                        "litellm_model": _dep.get("litellm_params", {}).get("model"),
+                        "priority": dep_info.get("priority"),
+                    })
+                _metadata.update({
+                    "model_group_size": len(model_list),
+                    "model_group_candidates": candidates,
+                })
 
         verbose_router_logger.debug(
             f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
@@ -5399,14 +5419,25 @@ class Router:
                 deployment_num_retries, int
             ):
                 num_retries = deployment_num_retries
+
+            # For priority-failover: track the deployment that just failed so
+            # the next retry skips it and picks the next-priority deployment.
+            if _group_strategy == "priority-failover":
+                _failed_id = _metadata.get("model_info", {}).get("id")
+                if _failed_id:
+                    _tried = _metadata.setdefault("_pf_tried_ids", [])
+                    if _failed_id not in _tried:
+                        _tried.append(_failed_id)
+
             """
             Retry Logic
             """
+            _retry_model = kwargs.get("model") or ""
             (
                 _healthy_deployments,
                 _all_deployments,
             ) = await self._async_get_healthy_deployments(
-                model=kwargs.get("model") or "",
+                model=_retry_model,
                 parent_otel_span=parent_otel_span,
             )
 
@@ -5431,9 +5462,12 @@ class Router:
                     num_retries = _retry_policy_retries
                     _retry_policy_applies = True
 
-            # raises an exception if this error should not be retries
+            # raises an exception if this error should not be retried
             # Skip this check if retry policy applies (retry policy takes precedence)
-            if not _retry_policy_applies:
+            # For priority-failover groups, always retry — there are other
+            # deployments to try and the error may be deployment-specific
+            # (e.g. 404 on one provider but model exists on another).
+            if not _retry_policy_applies and _group_strategy != "priority-failover":
                 self.should_retry_this_error(
                     error=e,
                     healthy_deployments=_healthy_deployments,
@@ -5467,10 +5501,8 @@ class Router:
 
             for current_attempt in range(num_retries):
                 try:
-                    # Update retry tracking metadata before each retry attempt
                     _metadata["attempted_retries"] = current_attempt + 1
                     _metadata["max_retries"] = num_retries
-                    # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await self.make_call(original_function, *args, **kwargs)
                     if coroutine_checker.is_async_callable(
                         response
@@ -5487,6 +5519,15 @@ class Router:
                 except Exception as e:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
+
+                    # For priority-failover: track the deployment that just failed
+                    if _group_strategy == "priority-failover":
+                        _failed_id = _metadata.get("model_info", {}).get("id")
+                        if _failed_id:
+                            _tried = _metadata.setdefault("_pf_tried_ids", [])
+                            if _failed_id not in _tried:
+                                _tried.append(_failed_id)
+
                     remaining_retries = num_retries - current_attempt - 1
                     _model: Optional[str] = kwargs.get("model")  # type: ignore
                     if _model is not None:
@@ -8825,9 +8866,18 @@ class Router:
                 input=input,
                 specific_deployment=specific_deployment,
             )
+            _complexity_target_model: Optional[str] = None
             if pre_routing_hook_response is not None:
-                model = pre_routing_hook_response.model
-                messages = pre_routing_hook_response.messages
+                # For complexity-router routing groups, the hook returns a tier
+                # model (e.g. "gpt-4o") but deployments are registered under
+                # the group name.  Keep the group name for the deployment
+                # lookup and filter by the classified model afterwards.
+                if self.routing_group_strategies.get(model) == "complexity-router":
+                    _complexity_target_model = pre_routing_hook_response.model
+                    messages = pre_routing_hook_response.messages
+                else:
+                    model = pre_routing_hook_response.model
+                    messages = pre_routing_hook_response.messages
             #########################################################
 
             healthy_deployments = await self.async_get_healthy_deployments(
@@ -8842,7 +8892,46 @@ class Router:
                 return healthy_deployments
 
             start_time = time.time()
-            if (
+
+            group_strategy = self.routing_group_strategies.get(model)
+            if group_strategy == "priority-failover" and isinstance(healthy_deployments, list):
+                _tried_ids = (request_kwargs or {}).get("metadata", {}).get("_pf_tried_ids") or []
+                if not _tried_ids:
+                    _tried_ids = (request_kwargs or {}).get("litellm_metadata", {}).get("_pf_tried_ids") or []
+                untried = [
+                    d for d in healthy_deployments
+                    if d.get("model_info", {}).get("id") not in _tried_ids
+                ]
+                candidates = untried if untried else healthy_deployments
+                sorted_deps = sorted(
+                    candidates,
+                    key=lambda d: d.get("model_info", {}).get("priority") or 999,
+                )
+                deployment = sorted_deps[0]
+                verbose_router_logger.info(
+                    "priority-failover: picked %s (priority=%s, tried=%s, remaining=%d)",
+                    deployment.get("model_info", {}).get("id"),
+                    deployment.get("model_info", {}).get("priority"),
+                    _tried_ids,
+                    len(candidates),
+                )
+            elif group_strategy == "complexity-router" and _complexity_target_model and isinstance(healthy_deployments, list):
+                matching = [
+                    d for d in healthy_deployments
+                    if d.get("litellm_params", {}).get("model") == _complexity_target_model
+                ]
+                if matching:
+                    deployment = matching[0]
+                else:
+                    deployment = healthy_deployments[0]
+                verbose_router_logger.info(
+                    "complexity-router: target=%s, picked=%s (matched=%d/%d)",
+                    _complexity_target_model,
+                    deployment.get("model_info", {}).get("id"),
+                    len(matching),
+                    len(healthy_deployments),
+                )
+            elif (
                 self.routing_strategy == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
             ):
@@ -9186,13 +9275,36 @@ class Router:
                 cooldown_list=_cooldown_list,
             )
 
-        if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
+        group_strategy = self.routing_group_strategies.get(model)
+        if group_strategy == "priority-failover" and isinstance(healthy_deployments, list):
+            _tried_ids = (request_kwargs or {}).get("metadata", {}).get("_pf_tried_ids") or []
+            if not _tried_ids:
+                _tried_ids = (request_kwargs or {}).get("litellm_metadata", {}).get("_pf_tried_ids") or []
+            untried = [
+                d for d in healthy_deployments
+                if d.get("model_info", {}).get("id") not in _tried_ids
+            ]
+            candidates = untried if untried else healthy_deployments
+            sorted_deps = sorted(
+                candidates,
+                key=lambda d: d.get("model_info", {}).get("priority") or 999,
+            )
+            deployment = sorted_deps[0]
+        elif group_strategy == "complexity-router" and model in self.complexity_routers and isinstance(healthy_deployments, list):
+            _cr = self.complexity_routers[model]
+            _target = _cr.get_model_for_tier(_cr.classify(
+                (messages or [{}])[-1].get("content", "") if messages else "",
+            )[0])
+            matching = [
+                d for d in healthy_deployments
+                if d.get("litellm_params", {}).get("model") == _target
+            ]
+            deployment = matching[0] if matching else healthy_deployments[0]
+        elif self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
             deployment = self.leastbusy_logger.get_available_deployments(
                 model_group=model, healthy_deployments=healthy_deployments  # type: ignore
             )
         elif self.routing_strategy == "simple-shuffle":
-            # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
-            ############## Check 'weight' param set for weighted pick #################
             return simple_shuffle(
                 llm_router_instance=self,
                 healthy_deployments=healthy_deployments,

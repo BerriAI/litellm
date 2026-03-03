@@ -4456,6 +4456,7 @@ class ProxyConfig:
                     deployments=[
                         RoutingGroupDeployment(**d) for d in (g.deployments or [])
                     ],
+                    settings=g.settings if hasattr(g, "settings") else None,
                 )
                 await _sync_routing_group_to_router(config)
             verbose_proxy_logger.debug(

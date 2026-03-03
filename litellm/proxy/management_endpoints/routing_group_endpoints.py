@@ -10,6 +10,8 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+import prisma
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
@@ -65,6 +67,7 @@ VALID_ROUTING_STRATEGIES = frozenset(
         "cost-based-routing",
         "usage-based-routing-v2",
         "weighted",
+        "complexity-router",
     }
 )
 
@@ -88,26 +91,85 @@ async def _sync_routing_group_to_router(config: RoutingGroupConfig) -> None:
 
     group_name = config.routing_group_name
 
+    if config.routing_strategy:
+        llm_router.routing_group_strategies[group_name] = config.routing_strategy
+
     for dep in config.deployments:
         try:
-            litellm_params: dict = {"model": dep.model_name}
+            # Resolve the actual litellm model string by looking up the
+            # existing deployment.  The routing group stores the user-facing
+            # model_name (e.g. "gpt-4..1") but the router needs the
+            # provider-prefixed string (e.g. "azure/gpt-4..1") plus creds.
+            resolved_model = dep.model_name
+            litellm_params: dict = {"model": resolved_model}
+            existing = llm_router.get_model_list(model_name=dep.model_name)
+            if existing:
+                src = existing[0].get("litellm_params", {})
+                resolved_model = src.get("model", dep.model_name)
+                litellm_params["model"] = resolved_model
+                for key in ("api_key", "api_base", "api_version"):
+                    if key in src:
+                        litellm_params[key] = src[key]
+
             if dep.weight is not None:
                 litellm_params["weight"] = dep.weight
+
+            namespaced_id = f"rg:{group_name}:{dep.model_id}"
+            model_info: dict = {"id": namespaced_id}
+            if dep.priority is not None:
+                model_info["priority"] = dep.priority
 
             deployment_dict = {
                 "model_name": group_name,
                 "litellm_params": litellm_params,
-                "model_info": {
-                    "id": dep.model_id,
-                },
+                "model_info": model_info,
             }
-            llm_router.add_deployment(
+            print(f"[RG-SYNC] {group_name}: adding {dep.model_id} resolved={resolved_model} existing={len(existing or [])}")
+            result = llm_router.add_deployment(
                 deployment=litellm.types.router.Deployment(**deployment_dict)
             )
+            print(f"[RG-SYNC] {group_name}: {dep.model_id} -> {'ADDED' if result else 'SKIPPED (dup)'}")
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Could not add deployment {dep.model_id} to router: {e}"
-            )
+            print(f"[RG-SYNC] {group_name}: {dep.model_id} -> FAILED: {e}")
+
+    # For complexity-router groups, initialize the ComplexityRouter so it can
+    # classify requests and pick the right deployment by tier.
+    if config.routing_strategy == "complexity-router":
+        _init_complexity_router_for_group(llm_router, config)
+
+
+def _init_complexity_router_for_group(llm_router, config: RoutingGroupConfig) -> None:
+    """Initialize a ComplexityRouter for a routing group."""
+    from litellm.router_strategy.complexity_router.complexity_router import (
+        ComplexityRouter,
+    )
+
+    group_name = config.routing_group_name
+    settings = config.settings or {}
+    tiers = settings.get("tiers", {})
+
+    # Filter out empty tier values
+    tiers = {k: v for k, v in tiers.items() if v}
+
+    if not tiers:
+        verbose_proxy_logger.warning(
+            f"complexity-router group '{group_name}' has no tier mappings in settings; "
+            "using default tier config"
+        )
+
+    complexity_config: dict = {"tiers": tiers} if tiers else {}
+    default_model = tiers.get("MEDIUM") or tiers.get("SIMPLE") or None
+
+    complexity_router = ComplexityRouter(
+        model_name=group_name,
+        default_model=default_model,
+        litellm_router_instance=llm_router,
+        complexity_router_config=complexity_config or None,
+    )
+    llm_router.complexity_routers[group_name] = complexity_router
+    verbose_proxy_logger.info(
+        f"Initialized complexity-router for group '{group_name}' with tiers={tiers}"
+    )
 
 
 
@@ -148,6 +210,7 @@ async def create_routing_group(
     caller = user_api_key_dict.user_id or "unknown"
     routing_group_id = str(uuid.uuid4())
 
+    deployments_json = prisma.Json([d.model_dump() for d in data.deployments])  # type: ignore[attr-defined]
     try:
         created = await prisma_client.db.litellm_routinggrouptable.create(
             data={
@@ -155,11 +218,11 @@ async def create_routing_group(
                 "routing_group_name": data.routing_group_name,
                 "description": data.description,
                 "routing_strategy": data.routing_strategy,
-                "deployments": [d.model_dump() for d in data.deployments],
-                "fallback_config": data.fallback_config or {},
-                "retry_config": data.retry_config or {},
-                "cooldown_config": data.cooldown_config or {},
-                "settings": data.settings or {},
+                "deployments": deployments_json,
+                "fallback_config": prisma.Json(data.fallback_config or {}),  # type: ignore[attr-defined]
+                "retry_config": prisma.Json(data.retry_config or {}),  # type: ignore[attr-defined]
+                "cooldown_config": prisma.Json(data.cooldown_config or {}),  # type: ignore[attr-defined]
+                "settings": prisma.Json(data.settings or {}),  # type: ignore[attr-defined]
                 "assigned_team_ids": data.assigned_team_ids or [],
                 "assigned_key_ids": data.assigned_key_ids or [],
                 "is_active": data.is_active,
