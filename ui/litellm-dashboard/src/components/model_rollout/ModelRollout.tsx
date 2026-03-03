@@ -12,8 +12,11 @@ import {
 } from "antd";
 import {
   ArrowRightOutlined,
+  CheckCircleOutlined,
   DeleteOutlined,
+  PauseCircleOutlined,
   PlusOutlined,
+  PlayCircleOutlined,
 } from "@ant-design/icons";
 import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 
@@ -24,6 +27,7 @@ export interface RolloutConfig {
   canaryPercent: number;
   autoRollback: boolean;
   errorThreshold: number;
+  active: boolean;
 }
 
 const ROLLOUT_STORAGE_KEY = "litellm_model_rollout_configs";
@@ -43,6 +47,7 @@ export function findRolloutForModel(model: string): RolloutConfig | null {
   const configs = getRolloutConfigs();
   return configs.find(
     (c) =>
+      c.active &&
       c.liveModel &&
       c.candidateModel &&
       c.liveModel !== c.candidateModel &&
@@ -97,6 +102,7 @@ const ModelRollout: React.FC<ModelRolloutProps> = ({ accessToken }) => {
         canaryPercent: 10,
         autoRollback: true,
         errorThreshold: 5,
+        active: false,
       },
     ]);
   };
@@ -111,10 +117,13 @@ const ModelRollout: React.FC<ModelRolloutProps> = ({ accessToken }) => {
 
   const statusFor = (c: RolloutConfig) => {
     if (!c.liveModel || !c.candidateModel) return { label: "Not Configured", color: "default" as const };
+    if (!c.active) return { label: "Draft", color: "default" as const };
     if (c.canaryPercent === 100) return { label: "Fully Promoted", color: "green" as const };
     if (c.canaryPercent === 0) return { label: "Not Started", color: "default" as const };
     return { label: `${c.canaryPercent}% canary`, color: "blue" as const };
   };
+
+  const canActivate = (c: RolloutConfig) => !!c.liveModel && !!c.candidateModel && c.liveModel !== c.candidateModel;
 
   return (
     <div className="w-full max-w-screen p-6 overflow-x-hidden box-border">
@@ -122,7 +131,7 @@ const ModelRollout: React.FC<ModelRolloutProps> = ({ accessToken }) => {
         <div>
           <h1 className="text-xl font-semibold">Model Rollout</h1>
           <span className="text-sm text-gray-500">
-            Manage A/B tests across your models &middot; {configs.length} active
+            Manage A/B tests across your models &middot; {configs.filter((c) => c.active).length} active
           </span>
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={addNew}>
@@ -141,7 +150,7 @@ const ModelRollout: React.FC<ModelRolloutProps> = ({ accessToken }) => {
           const status = statusFor(config);
           const livePercent = 100 - config.canaryPercent;
           return (
-            <div key={config.id} className="bg-white rounded-lg shadow">
+            <div key={config.id} className="bg-white rounded-lg shadow" style={config.active ? { borderLeft: "3px solid #52c41a" } : { borderLeft: "3px solid #d9d9d9" }}>
               {/* Header */}
               <div className="px-6 py-4 border-b flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -160,14 +169,35 @@ const ModelRollout: React.FC<ModelRolloutProps> = ({ accessToken }) => {
                   </Tag>
                   <Tag color={status.color}>{status.label}</Tag>
                 </div>
-                <Popconfirm
-                  title="Delete this A/B test?"
-                  onConfirm={() => remove(config.id)}
-                  okText="Delete"
-                  okButtonProps={{ danger: true }}
-                >
-                  <Button type="text" danger icon={<DeleteOutlined />} size="small" />
-                </Popconfirm>
+                <div className="flex items-center gap-2">
+                  {config.active ? (
+                    <Button
+                      size="small"
+                      icon={<PauseCircleOutlined />}
+                      onClick={() => update(config.id, { active: false })}
+                    >
+                      Deactivate
+                    </Button>
+                  ) : (
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<PlayCircleOutlined />}
+                      disabled={!canActivate(config)}
+                      onClick={() => update(config.id, { active: true })}
+                    >
+                      Activate
+                    </Button>
+                  )}
+                  <Popconfirm
+                    title="Delete this A/B test?"
+                    onConfirm={() => remove(config.id)}
+                    okText="Delete"
+                    okButtonProps={{ danger: true }}
+                  >
+                    <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+                  </Popconfirm>
+                </div>
               </div>
 
               {/* Body */}

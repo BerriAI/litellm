@@ -240,7 +240,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
   const [mockTestFallbacks, setMockTestFallbacks] = useState<boolean>(false);
-  const [lastRolloutInfo, setLastRolloutInfo] = useState<{ requestedModel: string; actualModel: string } | null>(null);
+  const [lastRolloutInfo, setLastRolloutInfo] = useState<{
+    requestedModel: string;
+    actualModel: string;
+    liveModel: string;
+    candidateModel: string;
+    canaryPercent: number;
+  } | null>(null);
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
@@ -981,7 +987,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
         effectiveModel = rolloutConfig.liveModel;
       }
       rolloutApplied = effectiveModel !== selectedModel;
-      setLastRolloutInfo({ requestedModel: selectedModel!, actualModel: effectiveModel! });
+      setLastRolloutInfo({
+        requestedModel: selectedModel!,
+        actualModel: effectiveModel!,
+        liveModel: rolloutConfig.liveModel,
+        candidateModel: rolloutConfig.candidateModel,
+        canaryPercent: rolloutConfig.canaryPercent,
+      });
     } else {
       setLastRolloutInfo(null);
     }
@@ -1545,24 +1557,48 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <div
                   style={{
                     marginTop: 8,
-                    padding: "8px 10px",
+                    padding: "10px 12px",
                     borderRadius: 8,
-                    background: lastRolloutInfo.requestedModel !== lastRolloutInfo.actualModel ? "#e6f7ff" : "#f6ffed",
-                    border: lastRolloutInfo.requestedModel !== lastRolloutInfo.actualModel ? "1px solid #91d5ff" : "1px solid #b7eb8f",
+                    background: "#f8f9fc",
+                    border: "1px solid #e5e7eb",
                     fontSize: 12,
                   }}
                 >
-                  <div style={{ fontWeight: 600, marginBottom: 2, color: "#333" }}>
-                    <SwapOutlined style={{ marginRight: 4 }} /> Model Rollout Active
+                  <div style={{ fontWeight: 600, marginBottom: 6, color: "#333", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span><SwapOutlined style={{ marginRight: 4 }} /> A/B Test Active</span>
+                    <span style={{
+                      fontSize: 11,
+                      fontWeight: 500,
+                      padding: "1px 8px",
+                      borderRadius: 10,
+                      background: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "#f6ffed" : "#e6f7ff",
+                      color: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "#52c41a" : "#1677ff",
+                      border: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "1px solid #b7eb8f" : "1px solid #91d5ff",
+                    }}>
+                      Routed → {lastRolloutInfo.actualModel}
+                    </span>
+                  </div>
+                  {/* Split bar */}
+                  <div style={{ display: "flex", borderRadius: 4, overflow: "hidden", height: 6, marginBottom: 6 }}>
+                    <div style={{ width: `${100 - lastRolloutInfo.canaryPercent}%`, background: "#52c41a" }} />
+                    <div style={{ width: `${lastRolloutInfo.canaryPercent}%`, background: "#1677ff" }} />
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ color: "#666" }}>Requested:</span>
-                    <span style={{ fontWeight: 500 }}>{lastRolloutInfo.requestedModel}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ color: "#666" }}>Sent to:</span>
-                    <span style={{ fontWeight: 600, color: lastRolloutInfo.requestedModel !== lastRolloutInfo.actualModel ? "#1677ff" : "#52c41a" }}>
-                      {lastRolloutInfo.actualModel}
+                    <span style={{
+                      fontWeight: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? 600 : 400,
+                      color: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "#52c41a" : "#888",
+                    }}>
+                      {lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "● " : ""}
+                      {lastRolloutInfo.liveModel}
+                      <span style={{ fontWeight: 500, color: "#52c41a", marginLeft: 4 }}>{100 - lastRolloutInfo.canaryPercent}%</span>
+                    </span>
+                    <span style={{
+                      fontWeight: lastRolloutInfo.actualModel === lastRolloutInfo.candidateModel ? 600 : 400,
+                      color: lastRolloutInfo.actualModel === lastRolloutInfo.candidateModel ? "#1677ff" : "#888",
+                    }}>
+                      {lastRolloutInfo.actualModel === lastRolloutInfo.candidateModel ? "● " : ""}
+                      {lastRolloutInfo.candidateModel}
+                      <span style={{ fontWeight: 500, color: "#1677ff", marginLeft: 4 }}>{lastRolloutInfo.canaryPercent}%</span>
                     </span>
                   </div>
                 </div>
