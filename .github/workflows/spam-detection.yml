@@ -61,31 +61,39 @@ jobs:
               }
             }
 
-            // 5. Check how many issues this user opened in last 24h
-            const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+            // 5. Check how many issues this user created in last 24h
+            // Note: the `since` API param filters by updated_at, not created_at,
+            // so we fetch recent issues and filter by created_at client-side.
             const recentIssues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               creator: user.login,
-              since: since,
               state: 'all',
-              per_page: 20,
+              per_page: 30,
+              sort: 'created',
+              direction: 'desc',
             });
-            if (recentIssues.data.length > 5) {
+            const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+            const createdInLast24h = recentIssues.data.filter(
+              i => new Date(i.created_at).getTime() > oneDayAgo
+            ).length;
+            if (createdInLast24h > 5) {
               spamScore += 5;
-              reasons.push(`User opened ${recentIssues.data.length} issues in 24h`);
-            } else if (recentIssues.data.length > 3) {
+              reasons.push(`User created ${createdInLast24h} issues in 24h`);
+            } else if (createdInLast24h > 3) {
               spamScore += 2;
-              reasons.push(`User opened ${recentIssues.data.length} issues in 24h`);
+              reasons.push(`User created ${createdInLast24h} issues in 24h`);
             }
 
-            // 6. Didn't use a template (no required fields filled)
+            // 6. Didn't use a template (check for labels from actual template fields)
+            // bug_report.yml: "What happened?", "Steps to Reproduce", "Relevant log output"
+            // feature_request.yml: "The Feature", "Motivation, pitch"
             const templateMarkers = [
-              'What happened',
+              'What happened?',
               'Steps to Reproduce',
               'Relevant log output',
-              'Describe the feature',
-              'Motivation',
+              'The Feature',
+              'Motivation, pitch',
             ];
             const usedTemplate = templateMarkers.some(marker => body.includes(marker));
             if (!usedTemplate && body.length > 0) {
@@ -130,13 +138,7 @@ jobs:
                 state_reason: 'not_planned',
               });
 
-              await github.rest.issues.lock({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                lock_reason: 'spam',
-              });
-
+              // Post comment BEFORE locking — comments on locked issues silently fail
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -151,5 +153,12 @@ jobs:
                 ].join('\n'),
               });
 
-              console.log(`Closed and locked issue #${issue.number} as spam`);
+              await github.rest.issues.lock({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                lock_reason: 'spam',
+              });
+
+              console.log(`Closed, commented, and locked issue #${issue.number} as spam`);
             }

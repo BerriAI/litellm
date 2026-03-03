@@ -32,9 +32,10 @@ jobs:
             console.log(`User @${user} has ${spamCount} spam-labeled issues`);
 
             if (spamCount >= 3) {
-              // Block user from the organization
+              // Block user from the BerriAI organization
               try {
-                await github.rest.users.block({
+                await github.rest.orgs.blockUser({
+                  org: context.repo.owner,
                   username: user,
                 });
                 console.log(`Blocked user: ${user}`);
