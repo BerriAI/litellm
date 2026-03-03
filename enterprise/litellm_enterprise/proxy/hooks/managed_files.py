@@ -1302,10 +1302,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             file_id, litellm_parent_otel_span
         )
 
-        # Record successful deletion metric
-        prom_logger = self._get_prometheus_logger()
-        if prom_logger:
-            prom_logger.record_managed_file_deleted(result="success")
+        # Record successful deletion metric only on actual success
+        if stored_file_object or delete_response:
+            prom_logger = self._get_prometheus_logger()
+            if prom_logger:
+                prom_logger.record_managed_file_deleted(result="success")
 
         if stored_file_object:
             return stored_file_object

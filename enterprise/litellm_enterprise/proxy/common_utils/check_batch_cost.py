@@ -299,6 +299,5 @@ class CheckBatchCost:
         if prom_logger:
             prom_logger.record_check_batch_cost_run(
                 jobs_polled=len(jobs),
-                jobs_processed=len(completed_jobs),
                 processed_models=processed_models if processed_models else None,
             )

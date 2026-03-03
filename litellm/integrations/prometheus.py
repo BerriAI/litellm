@@ -2308,7 +2308,6 @@ class PrometheusLogger(CustomLogger):
     def record_check_batch_cost_run(
         self,
         jobs_polled: int,
-        jobs_processed: int,
         processed_models: Optional[List[Tuple[Optional[str], Optional[str]]]] = None,
     ):
         """
@@ -2316,7 +2315,6 @@ class PrometheusLogger(CustomLogger):
 
         Args:
             jobs_polled: Number of unprocessed batches found
-            jobs_processed: Number of batches successfully cost-tracked
             processed_models: List of (model, api_provider) tuples for processed jobs
         """
         import time
