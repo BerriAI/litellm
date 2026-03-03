@@ -100,6 +100,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
         self.apply_to_output = apply_to_output
+
+        # When output_parse_pii or apply_to_output is enabled, the guardrail must
+        # also run on post_call to unmask/mask the response.  Expand the event_hook
+        # so should_run_guardrail returns True for both pre_call and post_call.
+        if (self.output_parse_pii or self.apply_to_output) and not logging_only:
+            current_hook = self.event_hook
+            if isinstance(current_hook, str) and current_hook == "pre_call":
+                self.event_hook = ["pre_call", "post_call"]
+            elif isinstance(current_hook, list) and "post_call" not in current_hook:
+                self.event_hook = current_hook + ["post_call"]
         self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
             pii_entities_config or {}
         )
@@ -489,9 +499,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 "This may indicate a missing caller update."
                             )
                             request_data = {}
-                        if "pii_tokens" not in request_data:
-                            request_data["pii_tokens"] = {}
-                        pii_tokens = request_data["pii_tokens"]
+                        # Store pii_tokens in metadata to avoid leaking to LLM providers.
+                        # Providers like Anthropic reject unknown top-level fields.
+                        if "metadata" not in request_data:
+                            request_data["metadata"] = {}
+                        if "pii_tokens" not in request_data["metadata"]:
+                            request_data["metadata"]["pii_tokens"] = {}
+                        pii_tokens = request_data["metadata"]["pii_tokens"]
 
                         # Always append a UUID to ensure the replacement token is unique to this request and session.
                         # This prevents collisions where the LLM might hallucinate a generic token like [PHONE_NUMBER].
@@ -544,8 +558,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         filtered_results: List[PresidioAnalyzeResponseItem] = []
         deny_list_strings = [
-            getattr(x, "value", str(x))
-            for x in self.presidio_entities_deny_list
+            getattr(x, "value", str(x)) for x in self.presidio_entities_deny_list
         ]
         for item in analyze_results:
             entity_type = item.get("entity_type")
@@ -937,10 +950,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Helper to recursively process a ModelResponse for PII.
         Handles all choices and tool calls.
         """
-        pii_tokens = request_data.get("pii_tokens", {}) if request_data else {}
+        metadata = request_data.get("metadata", {}) if request_data else {}
+        pii_tokens = metadata.get("pii_tokens", {})
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
-                "No pii_tokens found in request_data — nothing to unmask"
+                "No pii_tokens found in request_data['metadata'] — nothing to unmask"
             )
         presidio_config = self.get_presidio_settings_from_request_data(
             request_data or {}
@@ -1099,10 +1113,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return
 
         # --- PII unmasking path (output_parse_pii=True) ---
-        pii_tokens = request_data.get("pii_tokens", {}) if request_data else {}
+        metadata = request_data.get("metadata", {}) if request_data else {}
+        pii_tokens = metadata.get("pii_tokens", {})
         if not pii_tokens and request_data:
             verbose_proxy_logger.debug(
-                "No pii_tokens in request_data for streaming unmask path"
+                "No pii_tokens in request_data['metadata'] for streaming unmask path"
             )
         if not (self.output_parse_pii and pii_tokens):
             async for chunk in response:
