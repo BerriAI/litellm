@@ -1044,7 +1044,7 @@ OpenAIImageGenerationOptionalParams = Literal[
 OpenAIImageEditOptionalParams = Literal[
     "background",
     "n",
-    "mask"
+    "mask",
     "output_compression",
     "output_format",
     "quality",
