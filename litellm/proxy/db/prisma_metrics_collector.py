@@ -121,11 +121,14 @@ class PrismaMetricsCollector:
             try:
                 await self._collect_pool_metrics()
                 self._collect_engine_health()
-                await asyncio.sleep(self._interval)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 verbose_proxy_logger.warning("PrismaMetricsCollector loop error: %s", e)
+            try:
+                await asyncio.sleep(self._interval)
+            except asyncio.CancelledError:
+                break
 
     async def _collect_pool_metrics(self) -> None:
         try:
