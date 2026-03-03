@@ -829,6 +829,26 @@ def test_azure_tool_call_invoke_helper():
             None,
             None,
         ),
+        # Triple consecutive assistant messages — all three should get user separators
+        (
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "A1"},
+                {"role": "assistant", "content": "A2"},
+                {"role": "assistant", "content": "A3"},
+            ],
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "A1"},
+                {"role": "user", "content": "Please continue."},
+                {"role": "assistant", "content": "A2"},
+                {"role": "user", "content": "Please continue."},
+                {"role": "assistant", "content": "A3"},
+                {"role": "user", "content": "Please continue."},
+            ],
+            None,
+            None,
+        ),
     ],
 )
 def test_ensure_alternating_roles(

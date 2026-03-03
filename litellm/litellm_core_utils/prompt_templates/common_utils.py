@@ -269,7 +269,7 @@ def _counts_in_alternation(msg: AllMessageValues) -> bool:
         return True
     if role == "assistant":
         tool_calls = msg.get("tool_calls")
-        return not tool_calls or len(tool_calls) == 0
+        return not tool_calls
     return False  # Skip tool messages and others
 
 
@@ -304,6 +304,7 @@ def _insert_user_continue_message(
     i = 1
     while i < len(result_messages):
         curr_message = result_messages[i]
+        inserted = False
 
         # Check if current is assistant without tool_calls
         if curr_message["role"] == "assistant" and _counts_in_alternation(
@@ -317,11 +318,12 @@ def _insert_user_continue_message(
                     # Found a message that counts — if it's also assistant, insert user
                     if prev_msg["role"] == "assistant":
                         result_messages.insert(i, continue_message)
-                        i += 2  # Skip over inserted message
+                        i += 2  # Skip inserted + curr; process next message
+                        inserted = True
                     break
                 j -= 1
 
-        if i < len(result_messages):
+        if not inserted:
             i += 1
 
     # Handle final message
