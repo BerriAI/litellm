@@ -82,6 +82,25 @@ def _get_metadata_variable_name(request: Request) -> str:
     return "metadata"
 
 
+def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str]:
+    """
+    Extract chain id for call chaining from request headers.
+
+    x-litellm-trace-id and x-litellm-session-id are interchangeable; when both
+    are present, x-litellm-trace-id takes precedence. Header keys are matched
+    case-insensitively so this works with raw header dicts from any transport.
+
+    Used by MCP (and other paths that have raw_headers but no Request) to set
+    litellm_trace_id/litellm_session_id for spend logs and logging consistency.
+    """
+    if not headers:
+        return None
+    normalized = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
+    return normalized.get("x-litellm-trace-id") or normalized.get(
+        "x-litellm-session-id"
+    )
+
+
 def safe_add_api_version_from_query_params(data: dict, request: Request):
     try:
         if hasattr(request, "query_params"):

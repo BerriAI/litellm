@@ -20,6 +20,7 @@ class LiteLLM_ToolTableRow(BaseModel):
     key_hash: Optional[str] = None
     team_id: Optional[str] = None
     key_alias: Optional[str] = None
+    agent_id: Optional[str] = None  # resolved from key table (key_hash -> key.agent_id)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None

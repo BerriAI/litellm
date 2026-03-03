@@ -86,11 +86,35 @@ async def batch_upsert_tools(
         verbose_proxy_logger.error("tool_registry_writer batch_upsert_tools error: %s", e)
 
 
+async def _get_agent_ids_for_key_hashes(
+    prisma_client: "PrismaClient",
+    key_hashes: List[str],
+) -> Dict[str, str]:
+    """Resolve agent_id from key table for each key_hash. Returns map token -> agent_id."""
+    if not key_hashes:
+        return {}
+    try:
+        key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"token": {"in": key_hashes}},
+            select={"token": True, "agent_id": True},
+        )
+        return {
+            k.token: k.agent_id
+            for k in key_records
+            if k.agent_id is not None
+        }
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "tool_registry_writer _get_agent_ids_for_key_hashes error: %s", e
+        )
+        return {}
+
+
 async def list_tools(
     prisma_client: "PrismaClient",
     call_policy: Optional[ToolCallPolicy] = None,
 ) -> List[LiteLLM_ToolTableRow]:
-    """Return all tools, optionally filtered by call_policy."""
+    """Return all tools, optionally filtered by call_policy. Enriches each row with agent_id from key table."""
     try:
         if call_policy is not None:
             rows = await prisma_client.db.query_raw(
@@ -105,7 +129,12 @@ async def list_tools(
                 'key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by '
                 'FROM "LiteLLM_ToolTable" ORDER BY created_at DESC',
             )
-        return [_row_to_model(row) for row in rows]
+        tools = [_row_to_model(row) for row in rows]
+        key_hashes = list({t.key_hash for t in tools if t.key_hash})
+        key_to_agent = await _get_agent_ids_for_key_hashes(prisma_client, key_hashes)
+        for t in tools:
+            t.agent_id = key_to_agent.get(t.key_hash) if t.key_hash else None
+        return tools
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer list_tools error: %s", e)
         return []
@@ -115,7 +144,7 @@ async def get_tool(
     prisma_client: "PrismaClient",
     tool_name: str,
 ) -> Optional[LiteLLM_ToolTableRow]:
-    """Return a single tool row by tool_name."""
+    """Return a single tool row by tool_name. Enriches with agent_id from key table if key_hash is set."""
     try:
         rows = await prisma_client.db.query_raw(
             'SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, '
@@ -125,7 +154,13 @@ async def get_tool(
         )
         if not rows:
             return None
-        return _row_to_model(rows[0])
+        tool = _row_to_model(rows[0])
+        if tool.key_hash:
+            key_to_agent = await _get_agent_ids_for_key_hashes(
+                prisma_client, [tool.key_hash]
+            )
+            tool.agent_id = key_to_agent.get(tool.key_hash)
+        return tool
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer get_tool error: %s", e)
         return None
