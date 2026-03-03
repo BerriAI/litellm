@@ -46,11 +46,8 @@ STRICT_SCHEMA = {
     },
 }
 
-# Response that does NOT match the schema (wrong field names)
-INVALID_RESPONSE = _make_response({"name": "test", "age": 25})
-
-# Response that matches the schema
-VALID_RESPONSE = _make_response({"title": "Inception", "rating": 9})
+INVALID_CONTENT = {"name": "test", "age": 25}  # Does NOT match the schema
+VALID_CONTENT = {"title": "Inception", "rating": 9}  # Matches the schema
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +67,7 @@ class TestPerRequestJsonSchemaValidation:
         litellm.enable_json_schema_validation = False
         # Should NOT raise even though response doesn't match schema
         post_call_processing(
-            INVALID_RESPONSE,
+            _make_response(INVALID_CONTENT),
             "test-model",
             {"response_format": STRICT_SCHEMA},
             _mock_completion,
@@ -82,7 +79,7 @@ class TestPerRequestJsonSchemaValidation:
         litellm.enable_json_schema_validation = False
         with pytest.raises(litellm.JSONSchemaValidationError):
             post_call_processing(
-                INVALID_RESPONSE,
+                _make_response(INVALID_CONTENT),
                 "test-model",
                 {
                     "response_format": STRICT_SCHEMA,
@@ -97,7 +94,7 @@ class TestPerRequestJsonSchemaValidation:
         litellm.enable_json_schema_validation = True
         # Should NOT raise because per-request says False
         post_call_processing(
-            INVALID_RESPONSE,
+            _make_response(INVALID_CONTENT),
             "test-model",
             {
                 "response_format": STRICT_SCHEMA,
@@ -112,7 +109,7 @@ class TestPerRequestJsonSchemaValidation:
         litellm.enable_json_schema_validation = True
         with pytest.raises(litellm.JSONSchemaValidationError):
             post_call_processing(
-                INVALID_RESPONSE,
+                _make_response(INVALID_CONTENT),
                 "test-model",
                 {"response_format": STRICT_SCHEMA},
                 _mock_completion,
@@ -122,7 +119,7 @@ class TestPerRequestJsonSchemaValidation:
     def test_valid_response_passes_with_per_request_on(self):
         """Per-request ON + valid response -> no error raised."""
         post_call_processing(
-            VALID_RESPONSE,
+            _make_response(VALID_CONTENT),
             "test-model",
             {
                 "response_format": STRICT_SCHEMA,
