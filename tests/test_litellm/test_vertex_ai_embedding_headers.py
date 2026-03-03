@@ -3,9 +3,9 @@ from unittest.mock import patch, MagicMock
 from litellm import embedding
 
 def test_vertex_ai_embedding_extra_headers():
-    """Test standard vertex embedding header forwarding."""
-    with patch("litellm.main.vertex_embedding.embedding") as mock_vertex:
-        mock_vertex.return_value = MagicMock()
+    """Test that extra_headers are forwarded to vertex_ai embedding provider via mocks."""
+    with patch("litellm.main.vertex_embedding.embedding") as mock_vertex_embedding:
+        mock_vertex_embedding.return_value = MagicMock()
         try:
             embedding(
                 model="vertex_ai/text-embedding-004",
@@ -14,23 +14,22 @@ def test_vertex_ai_embedding_extra_headers():
             )
         except Exception:
             pass
-        mock_vertex.assert_called_once()
-        assert mock_vertex.call_args.kwargs.get("extra_headers") == {"X-Custom-Header": "test-value"}
+        mock_vertex_embedding.assert_called_once()
+        call_kwargs = mock_vertex_embedding.call_args.kwargs
+        assert call_kwargs.get("extra_headers") == {"X-Custom-Header": "test-value"}
 
 def test_vertex_multimodal_embedding_headers():
-    """Test multimodal vertex embedding header forwarding."""
-    with patch("litellm.main.vertex_multimodal_embedding.multimodal_embedding") as mock_multimodal:
-        mock_multimodal.return_value = MagicMock()
+    """Test that headers are forwarded to vertex_ai multimodal embedding provider."""
+    with patch("litellm.main.vertex_multimodal_embedding.multimodal_embedding") as mock_vertex_multi:
+        mock_vertex_multi.return_value = MagicMock()
         try:
-            # Using a multimodal model triggers the different provider path
             embedding(
                 model="vertex_ai/multimodalembedding@001",
                 input=["hello"],
-                extra_headers={"X-Custom-Header": "multi-value"},
+                extra_headers={"X-Custom-Header": "multi-test"}
             )
         except Exception:
             pass
-        mock_multimodal.assert_called_once()
-        # NOTE: The multimodal handler uses 'headers' as the parameter name
-        assert mock_multimodal.call_args.kwargs.get("headers") == {"X-Custom-Header": "multi-value"}
-        print("\n✅ Success: Headers forwarded for both standard and multimodal Vertex AI!")
+        mock_vertex_multi.assert_called_once()
+        call_kwargs = mock_vertex_multi.call_args.kwargs
+        assert call_kwargs.get("headers") == {"X-Custom-Header": "multi-test"}
