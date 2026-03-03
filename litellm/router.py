@@ -1720,9 +1720,7 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                self._combine_fallback_usage(
-                                    fallback_item, complete_response_object_usage
-                                )
+                                self._combine_fallback_usage(fallback_item, complete_response_object_usage)
                             yield fallback_item
                     else:
                         # If fallback returns a non-streaming response, yield None
@@ -1801,7 +1799,7 @@ class Router:
             try:
                 for item in model_response:
                     yield item
-            except litellm.ContextWindowExceededError:
+            except litellm.ContextWindowExceededError as e:
                 # Handle ContextWindowExceededError raised mid-stream
                 # (e.g. by sglang frameworks that return context window
                 # errors during streaming instead of at request time).
@@ -1824,11 +1822,13 @@ class Router:
                     router_self._update_kwargs_before_fallbacks(
                         model=model_group, kwargs=initial_kwargs
                     )
-                    fallback_response = router_self.function_with_fallbacks(
-                        **initial_kwargs,
-                        fallbacks=fallbacks,
-                        context_window_fallbacks=context_window_fallbacks,
-                        content_policy_fallbacks=content_policy_fallbacks,
+                    fallback_response = (
+                        router_self.function_with_fallbacks(
+                            **initial_kwargs,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                        )
                     )
 
                     if hasattr(fallback_response, "__iter__"):
@@ -1883,11 +1883,13 @@ class Router:
                     router_self._update_kwargs_before_fallbacks(
                         model=model_group, kwargs=initial_kwargs
                     )
-                    fallback_response = router_self.function_with_fallbacks(
-                        **initial_kwargs,
-                        fallbacks=fallbacks,
-                        context_window_fallbacks=context_window_fallbacks,
-                        content_policy_fallbacks=content_policy_fallbacks,
+                    fallback_response = (
+                        router_self.function_with_fallbacks(
+                            **initial_kwargs,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                        )
                     )
 
                     if hasattr(fallback_response, "__iter__"):
@@ -1897,9 +1899,7 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                router_self._combine_fallback_usage(
-                                    fallback_item, complete_response_object_usage
-                                )
+                                router_self._combine_fallback_usage(fallback_item, complete_response_object_usage)
                             yield fallback_item
                     else:
                         yield None
@@ -2811,9 +2811,10 @@ class Router:
         litellm_model = data.get("model", None)
 
         # litellm_agent/ prefix only strips the model name, no prompt_id needed
-        is_litellm_agent_model = isinstance(
-            litellm_model, str
-        ) and litellm_model.startswith("litellm_agent/")
+        is_litellm_agent_model = (
+            isinstance(litellm_model, str)
+            and litellm_model.startswith("litellm_agent/")
+        )
 
         prompt_id = kwargs.get("prompt_id") or prompt_management_deployment[
             "litellm_params"
@@ -6593,7 +6594,7 @@ class Router:
             tiers = complexity_router_config.get("tiers", {})
             # Use MEDIUM tier as fallback default
             default_model = tiers.get("MEDIUM") or tiers.get("SIMPLE")
-
+        
         if default_model is None:
             raise ValueError(
                 "complexity_router_default_model is required for complexity-router deployments, "
@@ -6826,9 +6827,7 @@ class Router:
         #########################################################
         # Check if this is a complexity-router deployment
         #########################################################
-        if self._is_complexity_router_deployment(
-            litellm_params=deployment.litellm_params
-        ):
+        if self._is_complexity_router_deployment(litellm_params=deployment.litellm_params):
             self.init_complexity_router_deployment(deployment=deployment)
 
         return deployment
@@ -6920,7 +6919,9 @@ class Router:
         # zero-cost models, causing budget checks to block free models.
         _model_id = deployment.model_info.id
         if _model_id is not None:
-            _model_info_dict: dict = deployment.model_info.model_dump(exclude_none=True)
+            _model_info_dict: dict = deployment.model_info.model_dump(
+                exclude_none=True
+            )
             for field in CustomPricingLiteLLMParams.model_fields.keys():
                 field_value = deployment.litellm_params.get(field)
                 if field_value is not None:
@@ -7201,10 +7202,7 @@ class Router:
 
     @overload
     def get_router_model_info(
-        self,
-        deployment: Union[dict, "Deployment"],
-        received_model_name: str,
-        id: None = None,
+        self, deployment: Union[dict, "Deployment"], received_model_name: str, id: None = None
     ) -> ModelMapInfo:
         pass
 
@@ -7244,9 +7242,7 @@ class Router:
         ## GET BASE MODEL
         base_model = (deployment.get("model_info") or {}).get("base_model", None)
         if base_model is None:
-            base_model = (deployment.get("litellm_params") or {}).get(
-                "base_model", None
-            )
+            base_model = (deployment.get("litellm_params") or {}).get("base_model", None)
 
         model = base_model
 
@@ -7281,12 +7277,12 @@ class Router:
                 if potential_models is not None:
                     for potential_model in potential_models:
                         try:
-                            if (potential_model.get("model_info") or {}).get("id") == (
-                                deployment.get("model_info") or {}
-                            ).get("id"):
-                                model = (
-                                    potential_model.get("litellm_params") or {}
-                                ).get("model")
+                            if (potential_model.get("model_info") or {}).get(
+                                "id"
+                            ) == (deployment.get("model_info") or {}).get("id"):
+                                model = (potential_model.get("litellm_params") or {}).get(
+                                    "model"
+                                )
                                 break
                         except Exception:
                             pass
@@ -8209,9 +8205,7 @@ class Router:
         - team_id: Optional[str] - the team id, to resolve team-specific models
         """
         # Check if this is the no-args hot path (cacheable)
-        _use_cache = (
-            model_name is None and model_access_group is None and team_id is None
-        )
+        _use_cache = model_name is None and model_access_group is None and team_id is None
 
         # Return cached result for the no-args hot path
         if _use_cache and self._access_groups_cache is not None:
