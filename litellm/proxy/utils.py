@@ -2122,13 +2122,15 @@ class ProxyLogging:
                             current_response = _new_response
                     elif "apply_guardrail" in type(_callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
-                        current_response = (
+                        _new_response = (
                             unified_guardrail.async_post_call_streaming_iterator_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 request_data=request_data,
                                 response=current_response,
                             )
                         )
+                        if _new_response is not None:
+                            current_response = _new_response
                     else:
                         _new_response = (
                             _callback.async_post_call_streaming_iterator_hook(
