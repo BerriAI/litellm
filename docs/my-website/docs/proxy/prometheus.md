@@ -570,7 +570,7 @@ Monitor PostgreSQL connection pool utilization and Prisma query engine health. T
 | `litellm_db_pool_active_connections`     | Gauge   | Number of active (non-idle) connections in the DB pool     |
 | `litellm_db_pool_idle_connections`       | Gauge   | Number of idle connections in the DB pool                  |
 | `litellm_db_pool_total_connections`      | Gauge   | Total number of connections in the DB pool                 |
-| `litellm_db_pool_waiting_connections`    | Gauge   | Number of connections waiting on locks in the DB pool      |
+| `litellm_db_pool_lock_waiting_connections`    | Gauge   | Number of connections blocked on row/table locks           |
 | `litellm_db_engine_up`                   | Gauge   | Whether the Prisma query engine is alive (1=up, 0=down)   |
 | `litellm_db_engine_restarts_total`       | Counter | Total number of Prisma query engine restarts               |
 

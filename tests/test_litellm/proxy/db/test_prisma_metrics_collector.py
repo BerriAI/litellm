@@ -89,7 +89,7 @@ def test_collector_creates_prometheus_metrics():
         "litellm_db_pool_active_connections",
         "litellm_db_pool_idle_connections",
         "litellm_db_pool_total_connections",
-        "litellm_db_pool_waiting_connections",
+        "litellm_db_pool_lock_waiting_connections",
         "litellm_db_engine_up",
         "litellm_db_engine_restarts",  # counter exposes _total suffix but name is base
     }
@@ -117,7 +117,7 @@ async def test_collect_pool_metrics_sets_gauges():
     assert registry.get_sample_value("litellm_db_pool_active_connections") == 5
     assert registry.get_sample_value("litellm_db_pool_idle_connections") == 10
     assert registry.get_sample_value("litellm_db_pool_total_connections") == 15
-    assert registry.get_sample_value("litellm_db_pool_waiting_connections") == 2
+    assert registry.get_sample_value("litellm_db_pool_lock_waiting_connections") == 2
 
 
 @pytest.mark.asyncio

@@ -26,15 +26,17 @@ def _is_metric_registered(metric_name: str) -> bool:
 
 def _get_or_create_gauge(name: str, description: str) -> Gauge:
     if _is_metric_registered(name):
-        names_to_collectors = getattr(REGISTRY, "_names_to_collectors", {})
-        return names_to_collectors[name]
+        names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
+        if names_to_collectors is not None and name in names_to_collectors:
+            return names_to_collectors[name]
     return Gauge(name, description)
 
 
 def _get_or_create_counter(name: str, description: str) -> Counter:
     if _is_metric_registered(name):
-        names_to_collectors = getattr(REGISTRY, "_names_to_collectors", {})
-        return names_to_collectors[name]
+        names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
+        if names_to_collectors is not None and name in names_to_collectors:
+            return names_to_collectors[name]
     return Counter(name, description)
 
 
@@ -86,8 +88,8 @@ class PrismaMetricsCollector:
             "Total number of connections in the DB pool",
         )
         self._pool_waiting = _get_or_create_gauge(
-            "litellm_db_pool_waiting_connections",
-            "Number of connections waiting on locks in the DB pool",
+            "litellm_db_pool_lock_waiting_connections",
+            "Number of connections blocked on row/table locks in the DB pool",
         )
         self._engine_up = _get_or_create_gauge(
             "litellm_db_engine_up",

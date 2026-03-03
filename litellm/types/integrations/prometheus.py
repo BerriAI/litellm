@@ -242,7 +242,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_db_pool_active_connections",
     "litellm_db_pool_idle_connections",
     "litellm_db_pool_total_connections",
-    "litellm_db_pool_waiting_connections",
+    "litellm_db_pool_lock_waiting_connections",
     "litellm_db_engine_up",
     "litellm_db_engine_restarts_total",
 ]
@@ -629,7 +629,7 @@ class PrometheusMetricLabels:
     litellm_db_pool_active_connections: List[str] = []
     litellm_db_pool_idle_connections: List[str] = []
     litellm_db_pool_total_connections: List[str] = []
-    litellm_db_pool_waiting_connections: List[str] = []
+    litellm_db_pool_lock_waiting_connections: List[str] = []
     litellm_db_engine_up: List[str] = []
     litellm_db_engine_restarts_total: List[str] = []
 
