@@ -60,7 +60,7 @@ class SpendLogCleanup:
             )
             return True
         except ValueError as e:
-            verbose_proxy_logger.error(
+            verbose_proxy_logger.warning(
                 f"Invalid maximum_spend_logs_retention_period value: {retention_setting}, error: {str(e)}"
             )
             return False
@@ -121,9 +121,6 @@ class SpendLogCleanup:
             verbose_proxy_logger.info(f"Cleanup job triggered at {datetime.now()}")
 
             if not self._should_delete_spend_logs():
-                verbose_proxy_logger.error(
-                    "Skipping cleanup — invalid or missing retention setting."
-                )
                 return
 
             if self.retention_seconds is None:
