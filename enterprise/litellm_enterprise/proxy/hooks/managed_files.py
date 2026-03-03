@@ -929,7 +929,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "unified_batch_id"
             )  # managed batch id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
-            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            model_name = cast(Optional[str], response._hidden_params.get("litellm_model_name"))
             original_response_id = response.id
 
             if (unified_batch_id or unified_file_id) and model_id:
@@ -1000,8 +1000,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 prom_logger = self._get_prometheus_logger()
                 if prom_logger:
                     batch_provider = ""
-                    if model_name and "/" in model_name:
-                        batch_provider = model_name.split("/")[0]
+                    if model_name:
+                        try:
+                            from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+                            _, batch_provider, _, _ = get_llm_provider(model=model_name)
+                        except Exception:
+                            if "/" in model_name:
+                                batch_provider = model_name.split("/")[0]
                     prom_logger.record_managed_batch_created(
                         model=model_name or "",
                         api_provider=batch_provider,
@@ -1019,7 +1024,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "unified_finetuning_job_id"
             )  # managed finetuning job id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
-            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            model_name = cast(Optional[str], response._hidden_params.get("litellm_model_name"))
             original_response_id = response.id
             if (unified_file_id or unified_finetuning_job_id) and model_id:
                 response.id = self.get_unified_generic_response_id(

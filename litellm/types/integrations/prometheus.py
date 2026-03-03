@@ -257,7 +257,6 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_in_flight_requests",
     # Managed batch metrics
     "litellm_managed_batch_created_total",
-    "litellm_managed_batches_by_state",
     "litellm_managed_file_size_bytes",
     "litellm_managed_batch_duration_seconds",
     "litellm_managed_file_created_total",
@@ -656,8 +655,6 @@ class PrometheusMetricLabels:
     ]
 
     litellm_managed_batch_created_total = _batch_user_labels
-
-    litellm_managed_batches_by_state: List[str] = []  # labels: status, model, api_provider (custom, not from enum)
 
     litellm_managed_file_size_bytes: List[str] = []  # labels: purpose, file_type, model, api_provider, user, team (custom)
 

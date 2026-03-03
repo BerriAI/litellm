@@ -460,12 +460,6 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_managed_batch_created_total"),
             )
 
-            self.litellm_managed_batches_by_state = self._gauge_factory(
-                "litellm_managed_batches_by_state",
-                "Number of managed batches in each state",
-                labelnames=["status", "model", "api_provider"],
-            )
-
             self.litellm_managed_file_size_bytes = self._gauge_factory(
                 "litellm_managed_file_size_bytes",
                 "Size of the most recent managed batch file in bytes (last-seen value per label combination)",
@@ -2249,35 +2243,6 @@ class PrometheusLogger(CustomLogger):
             ).inc()
         except Exception as e:
             verbose_logger.warning(f"Error recording batch created metric: {e}")
-
-    # Batch statuses tracked by the CheckBatchCost poller.
-    # Only includes statuses that the DB query can return (it excludes failed/expired/cancelled).
-    _BATCH_STATUSES = [
-        "validating", "in_progress", "finalizing", "completed",
-        "complete", "unknown",
-    ]
-
-    def record_managed_batches_by_state(
-        self,
-        state_counts: Dict[str, int],
-        model: Optional[str] = None,
-        api_provider: Optional[str] = None,
-    ):
-        """Set gauge values for each tracked batch state, zeroing any not present in state_counts.
-
-        Only includes states that the CheckBatchCost DB query can return.
-        Terminal failure states (failed/expired/cancelled) are excluded from the query
-        and therefore not tracked here.
-        """
-        try:
-            for status in self._BATCH_STATUSES:
-                self.litellm_managed_batches_by_state.labels(
-                    status=status,
-                    model=model or "",
-                    api_provider=api_provider or "",
-                ).set(state_counts.get(status, 0))
-        except Exception as e:
-            verbose_logger.warning(f"Error recording batches by state metric: {e}")
 
     def record_managed_file_size(
         self,

@@ -85,14 +85,6 @@ class CheckBatchCost:
         # Track (model, provider) for each successfully processed job
         processed_models: list[Tuple[Optional[str], Optional[str]]] = []
 
-        # Record batch state distribution gauge
-        if prom_logger:
-            state_counts: dict[str, int] = {}
-            for j in jobs:
-                st = j.status or "unknown"
-                state_counts[st] = state_counts.get(st, 0) + 1
-            prom_logger.record_managed_batches_by_state(state_counts)
-
         for job in jobs:
             # get the model from the job
             unified_object_id = job.unified_object_id
