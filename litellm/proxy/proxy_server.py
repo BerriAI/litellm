@@ -2238,6 +2238,7 @@ class ProxyConfig:
     def __init__(self) -> None:
         self.config: Dict[str, Any] = {}
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
+        self._last_hashicorp_vault_config: Optional[Dict[str, Any]] = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -4558,8 +4559,10 @@ class ProxyConfig:
         Called periodically via _init_non_llm_objects_in_db to sync config across pods.
         """
         from litellm.proxy.management_endpoints.config_override_endpoints import (
+            HASHICORP_ENV_VAR_MAPPING,
             HASHICORP_SENSITIVE_FIELDS,
             _decrypt_sensitive_fields,
+            _get_current_env_values,
             _parse_config_value,
             _set_env_vars,
         )
@@ -4574,10 +4577,17 @@ class ProxyConfig:
 
             config_data = _parse_config_value(db_record.config_value)
 
+            # Skip reinit if config hasn't changed since last poll
+            if self._last_hashicorp_vault_config == config_data:
+                return
+
             # Decrypt sensitive fields and set env vars
             decrypted_data = _decrypt_sensitive_fields(
                 config_data, HASHICORP_SENSITIVE_FIELDS
             )
+
+            # Snapshot current env vars so we can restore on failure
+            previous_env = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
             _set_env_vars(decrypted_data)
 
             # Reinitialize the secret manager
@@ -4586,10 +4596,11 @@ class ProxyConfig:
                     key_management_system="hashicorp_vault"
                 )
             except Exception:
-                # Roll back env vars so the broken config doesn't affect secret lookups
-                _set_env_vars({})
+                # Restore previous working env vars instead of wiping all
+                _set_env_vars(previous_env)
                 raise
 
+            self._last_hashicorp_vault_config = config_data.copy()
             verbose_proxy_logger.debug(
                 "Hashicorp Vault config override loaded from DB"
             )

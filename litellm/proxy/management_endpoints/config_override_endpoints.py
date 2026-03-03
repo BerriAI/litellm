@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -41,6 +42,8 @@ HASHICORP_SENSITIVE_FIELDS: Set[str] = {
     "client_key",
 }
 
+_sensitive_masker = SensitiveDataMasker()
+
 
 # --- Shared helpers (reusable by future config types) ---
 
@@ -75,6 +78,19 @@ def _decrypt_sensitive_fields(
         else:
             decrypted[key] = value
     return decrypted
+
+
+def _mask_sensitive_fields(
+    data: Dict[str, Any], sensitive_fields: Set[str]
+) -> Dict[str, Any]:
+    """Mask sensitive fields for API responses. Non-sensitive fields are left as-is."""
+    masked = {}
+    for key, value in data.items():
+        if value is not None and key in sensitive_fields and isinstance(value, str):
+            masked[key] = _sensitive_masker._mask_value(value)
+        else:
+            masked[key] = value
+    return masked
 
 
 def _get_current_env_values(env_var_mapping: Dict[str, str]) -> Dict[str, Any]:
@@ -161,6 +177,19 @@ async def update_hashicorp_vault_config(
 
     config_data = config.model_dump(exclude_none=True)
 
+    # Merge with existing DB record: preserve sensitive fields the user didn't re-enter
+    existing_record = await prisma_client.db.litellm_configoverrides.find_unique(
+        where={"config_type": "hashicorp_vault"}
+    )
+    if existing_record is not None and existing_record.config_value is not None:
+        existing_data = _parse_config_value(existing_record.config_value)
+        existing_decrypted = _decrypt_sensitive_fields(
+            existing_data, HASHICORP_SENSITIVE_FIELDS
+        )
+        for field in HASHICORP_SENSITIVE_FIELDS:
+            if field not in config_data and existing_decrypted.get(field):
+                config_data[field] = existing_decrypted[field]
+
     # Validate that the config has enough fields to initialize
     has_vault_addr = bool(config_data.get("vault_addr"))
     has_token_auth = bool(config_data.get("vault_token"))
@@ -183,6 +212,9 @@ async def update_hashicorp_vault_config(
             },
         )
 
+    # Snapshot current env vars so we can restore on failure
+    previous_env = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+
     # Set env vars and verify the secret manager can initialize before persisting
     _set_env_vars(config_data)
 
@@ -191,7 +223,7 @@ async def update_hashicorp_vault_config(
             key_management_system="hashicorp_vault"
         )
     except Exception as e:
-        _set_env_vars({})
+        _set_env_vars(previous_env)
         verbose_proxy_logger.exception(
             "Error reinitializing Hashicorp Vault secret manager: %s", str(e)
         )
@@ -204,18 +236,22 @@ async def update_hashicorp_vault_config(
 
     # Only persist to DB after successful init
     encrypted_data = _encrypt_sensitive_fields(config_data, HASHICORP_SENSITIVE_FIELDS)
+    config_value = json.dumps(encrypted_data)
     await prisma_client.db.litellm_configoverrides.upsert(
         where={"config_type": "hashicorp_vault"},
         data={
             "create": {
                 "config_type": "hashicorp_vault",
-                "config_value": json.dumps(encrypted_data),
+                "config_value": config_value,
             },
             "update": {
-                "config_value": json.dumps(encrypted_data),
+                "config_value": config_value,
             },
         },
     )
+
+    # Update change-detection cache so the background reload doesn't redundantly re-init
+    proxy_config._last_hashicorp_vault_config = json.loads(config_value)
 
     return {
         "message": "Hashicorp Vault configuration updated successfully",
@@ -260,22 +296,28 @@ async def get_hashicorp_vault_config(
     if db_record is not None and db_record.config_value is not None:
         config_data = _parse_config_value(db_record.config_value)
 
-        # Decrypt sensitive fields
+        # Decrypt then mask sensitive fields so plaintext secrets are never sent to the UI
         decrypted_data = _decrypt_sensitive_fields(
             config_data, HASHICORP_SENSITIVE_FIELDS
+        )
+        masked_data = _mask_sensitive_fields(
+            decrypted_data, HASHICORP_SENSITIVE_FIELDS
         )
 
         return ConfigOverrideSettingsResponse(
             config_type="hashicorp_vault",
-            values=decrypted_data,
+            values=masked_data,
             field_schema=field_schema,
         )
 
-    # Fallback to env vars
+    # Fallback to env vars — also mask sensitive values
     env_values = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+    masked_env_values = _mask_sensitive_fields(
+        env_values, HASHICORP_SENSITIVE_FIELDS
+    )
 
     return ConfigOverrideSettingsResponse(
         config_type="hashicorp_vault",
-        values=env_values,
+        values=masked_env_values,
         field_schema=field_schema,
     )

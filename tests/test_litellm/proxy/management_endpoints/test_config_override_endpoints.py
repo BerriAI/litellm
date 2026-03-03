@@ -119,7 +119,7 @@ async def test_get_hashicorp_config_fallback_to_env(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_hashicorp_config_from_db(client, monkeypatch):
-    """When a DB record exists, GET should return decrypted values."""
+    """When a DB record exists, GET should return masked sensitive values."""
     mock_record = MagicMock()
     mock_record.config_value = {
         "vault_addr": "https://vault.db.com",
@@ -139,7 +139,7 @@ async def test_get_hashicorp_config_from_db(client, monkeypatch):
     with patch(
         "litellm.proxy.management_endpoints.config_override_endpoints.decrypt_value_helper"
     ) as mock_decrypt:
-        mock_decrypt.return_value = "decrypted_token"
+        mock_decrypt.return_value = "decrypted_token_value"
 
         app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
@@ -150,9 +150,13 @@ async def test_get_hashicorp_config_from_db(client, monkeypatch):
             assert response.status_code == 200
             data = response.json()
             assert data["config_type"] == "hashicorp_vault"
+            # Non-sensitive fields returned as-is
             assert data["values"]["vault_addr"] == "https://vault.db.com"
-            assert data["values"]["vault_token"] == "decrypted_token"
             assert data["values"]["vault_namespace"] == "db-ns"
+            # Sensitive fields should be masked, not plaintext
+            vault_token_value = data["values"]["vault_token"]
+            assert "*" in vault_token_value
+            assert vault_token_value != "decrypted_token_value"
         finally:
             app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -161,6 +165,7 @@ async def test_get_hashicorp_config_from_db(client, monkeypatch):
 async def test_update_hashicorp_config_success(client, monkeypatch):
     """POST should set env vars, encrypt sensitive fields, upsert DB, and reinit secret manager."""
     mock_configoverrides = MagicMock()
+    mock_configoverrides.find_unique = AsyncMock(return_value=None)
     mock_configoverrides.upsert = AsyncMock(return_value=None)
 
     mock_prisma = MagicMock()
@@ -169,6 +174,7 @@ async def test_update_hashicorp_config_success(client, monkeypatch):
 
     mock_proxy_config = MagicMock()
     mock_proxy_config.initialize_secret_manager = MagicMock()
+    mock_proxy_config._last_hashicorp_vault_config = None
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(ps, "proxy_config", mock_proxy_config)
@@ -215,6 +221,9 @@ async def test_update_hashicorp_config_success(client, monkeypatch):
             mock_proxy_config.initialize_secret_manager.assert_called_once_with(
                 key_management_system="hashicorp_vault"
             )
+
+            # Verify change-detection cache was updated
+            assert mock_proxy_config._last_hashicorp_vault_config is not None
         finally:
             app.dependency_overrides.pop(ps.user_api_key_auth, None)
             # Clean up env vars
@@ -227,6 +236,7 @@ async def test_update_hashicorp_config_success(client, monkeypatch):
 async def test_update_hashicorp_config_excludes_none_fields(client, monkeypatch):
     """POST with partial fields should only store provided fields (None fields excluded)."""
     mock_configoverrides = MagicMock()
+    mock_configoverrides.find_unique = AsyncMock(return_value=None)
     mock_configoverrides.upsert = AsyncMock(return_value=None)
 
     mock_prisma = MagicMock()
@@ -235,6 +245,7 @@ async def test_update_hashicorp_config_excludes_none_fields(client, monkeypatch)
 
     mock_proxy_config = MagicMock()
     mock_proxy_config.initialize_secret_manager = MagicMock()
+    mock_proxy_config._last_hashicorp_vault_config = None
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(ps, "proxy_config", mock_proxy_config)
@@ -274,10 +285,64 @@ async def test_update_hashicorp_config_excludes_none_fields(client, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_update_hashicorp_config_missing_vault_addr(client, monkeypatch):
-    """POST without vault_addr should return 400."""
+async def test_update_hashicorp_config_init_failure_restores_env_vars(
+    client, monkeypatch
+):
+    """When initialize_secret_manager fails, env vars should be restored to previous values and DB should not be updated."""
+    mock_configoverrides = MagicMock()
+    mock_configoverrides.find_unique = AsyncMock(return_value=None)
+    mock_configoverrides.upsert = AsyncMock(return_value=None)
+
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_configoverrides = mock_configoverrides
+
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.initialize_secret_manager = MagicMock(
+        side_effect=Exception("Vault connection refused")
+    )
+
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "proxy_config", mock_proxy_config)
+
+    # Set pre-existing env vars that should be restored on failure
+    monkeypatch.setenv("HCP_VAULT_ADDR", "https://vault.old.com")
+    monkeypatch.setenv("HCP_VAULT_TOKEN", "old-token")
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.post(
+            "/config_overrides/hashicorp_vault",
+            json={
+                "vault_addr": "https://vault.bad.com",
+                "vault_token": "bad-token",
+            },
+        )
+        assert response.status_code == 500
+        assert "Vault connection refused" in response.json()["detail"]["error"]
+
+        # Env vars should be restored to previous values, not wiped
+        assert os.environ.get("HCP_VAULT_ADDR") == "https://vault.old.com"
+        assert os.environ.get("HCP_VAULT_TOKEN") == "old-token"
+
+        # DB should NOT have been updated
+        mock_configoverrides.upsert.assert_not_awaited()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_update_hashicorp_config_missing_vault_addr(client, monkeypatch):
+    """POST without vault_addr should return 400."""
+    mock_configoverrides = MagicMock()
+    mock_configoverrides.find_unique = AsyncMock(return_value=None)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_configoverrides = mock_configoverrides
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -298,8 +363,12 @@ async def test_update_hashicorp_config_missing_vault_addr(client, monkeypatch):
 @pytest.mark.asyncio
 async def test_update_hashicorp_config_missing_auth(client, monkeypatch):
     """POST with vault_addr but no auth method should return 400."""
+    mock_configoverrides = MagicMock()
+    mock_configoverrides.find_unique = AsyncMock(return_value=None)
+
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_configoverrides = mock_configoverrides
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(

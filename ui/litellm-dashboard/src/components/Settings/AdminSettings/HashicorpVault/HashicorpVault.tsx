@@ -64,7 +64,17 @@ export default function HashicorpVault() {
 
   const schema = data?.field_schema;
   const properties = schema?.properties ?? {};
-  const values = data?.values ?? {};
+  const rawValues = data?.values ?? {};
+
+  // Strip masked sensitive values so form inputs start empty — users enter new values or leave blank to keep existing
+  const values: Record<string, any> = {};
+  for (const [key, value] of Object.entries(rawValues)) {
+    if (SENSITIVE_FIELDS.has(key) && typeof value === "string" && value.includes("*")) {
+      // Don't populate form with masked value — it would be saved literally
+      continue;
+    }
+    values[key] = value;
+  }
 
   const handleSave = (formValues: Record<string, any>) => {
     // Only send fields that have a value
@@ -94,6 +104,13 @@ export default function HashicorpVault() {
         ? [{ type: "url" as const, message: "Please enter a valid URL" }]
         : undefined;
 
+    const isSensitive = SENSITIVE_FIELDS.has(fieldName);
+    const maskedValue = rawValues[fieldName];
+    const hasExistingValue = isSensitive && typeof maskedValue === "string" && maskedValue.includes("*");
+    const placeholder = hasExistingValue
+      ? `Current: ${maskedValue}`
+      : fieldSchema?.description;
+
     return (
       <Form.Item
         key={fieldName}
@@ -101,8 +118,8 @@ export default function HashicorpVault() {
         label={FIELD_LABELS[fieldName] ?? fieldName}
         rules={rules}
       >
-        {SENSITIVE_FIELDS.has(fieldName) ? (
-          <Input.Password placeholder={fieldSchema?.description} />
+        {isSensitive ? (
+          <Input.Password placeholder={placeholder} />
         ) : (
           <Input placeholder={fieldSchema?.description} />
         )}
@@ -128,7 +145,7 @@ export default function HashicorpVault() {
             </Typography.Paragraph>
           )}
 
-          <Form layout="vertical" initialValues={values} onFinish={handleSave}>
+          <Form key={JSON.stringify(values)} layout="vertical" initialValues={values} onFinish={handleSave}>
             {FIELD_GROUPS.map((group, index) => (
               <div key={group.title}>
                 {index > 0 && <Divider />}
