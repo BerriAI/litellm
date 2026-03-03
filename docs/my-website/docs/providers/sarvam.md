@@ -175,7 +175,7 @@ curl http://0.0.0.0:4000/v1/audio/speech \
   -d '{
     "model": "bulbul:v3",
     "input": "Welcome to Sarvam AI!",
-    "voice": "anushka",
+    "voice": "shubh",
     "response_format": "wav"
   }' \
   --output output.wav
