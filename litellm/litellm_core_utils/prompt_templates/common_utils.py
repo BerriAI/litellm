@@ -359,30 +359,24 @@ def _insert_assistant_continue_message(
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
-    # Create a new list to store modified messages
     modified_messages: List[AllMessageValues] = []
+    continue_message = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
     for i, message in enumerate(messages):
-        modified_messages.append(message)
-
-        # Only act on user messages that count in alternation
+        # Before appending a counting user message, check if the previous counting
+        # message was also a user — if so, insert an assistant continue right here.
+        # This mirrors the backward-scan pattern in _insert_user_continue_message and
+        # ensures we never insert inside a tool-call sequence.
         if message.get("role") == "user" and _counts_in_alternation(message):
-            # Find the next message that counts in alternation
-            next_counting_idx = i + 1
-            while next_counting_idx < len(messages) and not _counts_in_alternation(
-                messages[next_counting_idx]
-            ):
-                next_counting_idx += 1
+            j = i - 1
+            while j >= 0:
+                if _counts_in_alternation(messages[j]):
+                    if messages[j].get("role") == "user":
+                        modified_messages.append(continue_message)
+                    break
+                j -= 1
 
-            # If the next counting message is also a user message, insert assistant
-            if (
-                next_counting_idx < len(messages)
-                and messages[next_counting_idx].get("role") == "user"
-            ):
-                continue_message = (
-                    assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
-                )
-                modified_messages.append(continue_message)
+        modified_messages.append(message)
 
     return modified_messages
 

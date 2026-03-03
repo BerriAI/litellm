@@ -849,6 +849,48 @@ def test_azure_tool_call_invoke_helper():
             None,
             None,
         ),
+        # Consecutive users after a tool-call sequence — assistant continue must go
+        # between the two user messages, NOT inside the tool-call sequence
+        (
+            [
+                {"role": "user", "content": "Q1"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "result", "tool_call_id": "c1"},
+                {"role": "user", "content": "Q2"},
+                {"role": "user", "content": "Q3"},
+            ],
+            [
+                {"role": "user", "content": "Q1"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "result", "tool_call_id": "c1"},
+                {"role": "assistant", "content": "Please continue."},
+                {"role": "user", "content": "Q2"},
+                {"role": "assistant", "content": "Please continue."},
+                {"role": "user", "content": "Q3"},
+            ],
+            None,
+            None,
+        ),
     ],
 )
 def test_ensure_alternating_roles(
