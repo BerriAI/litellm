@@ -97,9 +97,12 @@ jobs:
         pytest tests/litellm/test_no_hardcoded_secrets.py -v
 
     - name: Run ggshield secret scan
-      if: ${{ secrets.GITGUARDIAN_API_KEY != '' }}
       env:
         GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
       run: |
-        pip install ggshield
-        ggshield secret scan repo .
+        if [ -n "$GITGUARDIAN_API_KEY" ]; then
+          pip install ggshield
+          ggshield secret scan repo .
+        else
+          echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
+        fi

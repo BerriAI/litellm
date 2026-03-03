@@ -115,6 +115,9 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
+from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+    EncryptedContentAffinityCheck,
+)
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -1250,6 +1253,26 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
         # ---------------------------------------------------------------------
+        # Encrypted content affinity
+        # ---------------------------------------------------------------------
+        if "encrypted_content_affinity" in optional_pre_call_checks:
+            from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+                EncryptedContentAffinityCheck,
+            )
+
+            if self.optional_callbacks is None:
+                self.optional_callbacks = []
+
+            already_registered = any(
+                isinstance(cb, EncryptedContentAffinityCheck)
+                for cb in self.optional_callbacks
+            )
+            if not already_registered:
+                ec_callback = EncryptedContentAffinityCheck()
+                self.optional_callbacks.append(ec_callback)
+                litellm.logging_callback_manager.add_litellm_callback(ec_callback)
+
+        # ---------------------------------------------------------------------
         # Remaining optional pre-call checks
         # ---------------------------------------------------------------------
         for pre_call_check in optional_pre_call_checks:
@@ -1258,6 +1281,7 @@ class Router:
                 "deployment_affinity",
                 "responses_api_deployment_check",
                 "session_affinity",
+                "encrypted_content_affinity",
             ):
                 continue
             if pre_call_check == "prompt_caching":
@@ -1552,7 +1576,28 @@ class Router:
             )
             raise e
 
-    async def _acompletion_streaming_iterator(  # noqa: PLR0915
+    @staticmethod
+    def _combine_fallback_usage(
+        fallback_item: ModelResponseStream,
+        complete_response_object_usage: Optional[Usage],
+    ) -> None:
+        """Merge partial-stream usage with fallback-stream usage on the chunk."""
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+
+        usage = cast(Optional[Usage], getattr(fallback_item, "usage", None))
+        usage_objects = [usage] if usage is not None else []
+        if (
+            complete_response_object_usage is not None
+            and hasattr(complete_response_object_usage, "usage")
+            and complete_response_object_usage.usage is not None  # type: ignore
+        ):
+            usage_objects.append(complete_response_object_usage)
+        combined_usage = BaseTokenUsageProcessor.combine_usage_objects(
+            usage_objects=usage_objects
+        )
+        setattr(fallback_item, "usage", combined_usage)
+
+    async def _acompletion_streaming_iterator(
         self,
         model_response: CustomStreamWrapper,
         messages: List[Dict[str, str]],
@@ -1655,32 +1700,7 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                from litellm.cost_calculator import (
-                                    BaseTokenUsageProcessor,
-                                )
-
-                                usage = cast(
-                                    Optional[Usage],
-                                    getattr(fallback_item, "usage", None),
-                                )
-                                if usage is not None:
-                                    usage_objects = [usage]
-                                else:
-                                    usage_objects = []
-
-                                if (
-                                    complete_response_object_usage is not None
-                                    and hasattr(complete_response_object_usage, "usage")
-                                    and complete_response_object_usage.usage is not None  # type: ignore
-                                ):
-                                    usage_objects.append(complete_response_object_usage)
-
-                                combined_usage = (
-                                    BaseTokenUsageProcessor.combine_usage_objects(
-                                        usage_objects=usage_objects
-                                    )
-                                )
-                                setattr(fallback_item, "usage", combined_usage)
+                                self._combine_fallback_usage(fallback_item, complete_response_object_usage)
                             yield fallback_item
                     else:
                         # If fallback returns a non-streaming response, yield None
@@ -1719,7 +1739,7 @@ class Router:
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
-    def _completion_streaming_iterator(
+    def _completion_streaming_iterator(  # noqa: PLR0915
         self,
         model_response: CustomStreamWrapper,
         messages: List[Dict[str, str]],
@@ -1816,36 +1836,7 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                from litellm.cost_calculator import (
-                                    BaseTokenUsageProcessor,
-                                )
-
-                                usage = cast(
-                                    Optional[Usage],
-                                    getattr(fallback_item, "usage", None),
-                                )
-                                if usage is not None:
-                                    usage_objects = [usage]
-                                else:
-                                    usage_objects = []
-
-                                if (
-                                    complete_response_object_usage is not None
-                                    and hasattr(
-                                        complete_response_object_usage, "usage"
-                                    )
-                                    and complete_response_object_usage.usage is not None  # type: ignore
-                                ):
-                                    usage_objects.append(
-                                        complete_response_object_usage
-                                    )
-
-                                combined_usage = (
-                                    BaseTokenUsageProcessor.combine_usage_objects(
-                                        usage_objects=usage_objects
-                                    )
-                                )
-                                setattr(fallback_item, "usage", combined_usage)
+                                router_self._combine_fallback_usage(fallback_item, complete_response_object_usage)
                             yield fallback_item
                     else:
                         yield None
@@ -8890,6 +8881,13 @@ class Router:
             )
             if isinstance(healthy_deployments, dict):
                 return healthy_deployments
+
+            # When encrypted content affinity pins to a specific deployment,
+            if (
+                request_kwargs.get("_encrypted_content_affinity_pinned")
+                and len(healthy_deployments) == 1
+            ):
+                return healthy_deployments[0]
 
             start_time = time.time()
 

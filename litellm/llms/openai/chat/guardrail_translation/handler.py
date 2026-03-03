@@ -542,16 +542,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         if len(choice.message.tool_calls) > 0:
                             return True
         elif isinstance(response, ModelResponseStream):
-            for choice in response.choices:
-                if isinstance(choice, litellm.StreamingChoices):
+            for streaming_choice in response.choices:
+                if isinstance(streaming_choice, litellm.StreamingChoices):
                     # Check for text content
-                    if choice.delta.content and isinstance(choice.delta.content, str):
+                    if streaming_choice.delta.content and isinstance(streaming_choice.delta.content, str):
                         return True
                     # Check for tool calls
-                    if choice.delta.tool_calls and isinstance(
-                        choice.delta.tool_calls, list
+                    if streaming_choice.delta.tool_calls and isinstance(
+                        streaming_choice.delta.tool_calls, list
                     ):
-                        if len(choice.delta.tool_calls) > 0:
+                        if len(streaming_choice.delta.tool_calls) > 0:
                             return True
         return False
 

@@ -234,6 +234,7 @@ async def common_checks(
     request: Request,
     skip_budget_checks: bool = False,
     project_object: Optional[LiteLLM_ProjectTableCachedObj] = None,
+    skip_route_check: bool = False,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -453,18 +454,21 @@ async def common_checks(
         user_object=user_object, route=route, request_body=request_body
     )
 
-    token_team = getattr(valid_token, "team_id", None)
-    token_type: Literal["ui", "api"] = (
-        "ui" if token_team is not None and token_team == "litellm-dashboard" else "api"
-    )
-    _is_route_allowed = _is_allowed_route(
-        route=route,
-        token_type=token_type,
-        user_obj=user_object,
-        request=request,
-        request_data=request_body,
-        valid_token=valid_token,
-    )
+    if not skip_route_check:
+        token_team = getattr(valid_token, "team_id", None)
+        token_type: Literal["ui", "api"] = (
+            "ui"
+            if token_team is not None and token_team == "litellm-dashboard"
+            else "api"
+        )
+        _is_route_allowed = _is_allowed_route(
+            route=route,
+            token_type=token_type,
+            user_obj=user_object,
+            request=request,
+            request_data=request_body,
+            valid_token=valid_token,
+        )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     await vector_store_access_check(
@@ -1884,7 +1888,7 @@ class ExperimentalUIJWTToken:
         if user_info.user_role is None:
             raise Exception("User role is required for experimental UI login")
 
-        # Calculate expiration time (10 minutes from now)
+        # Experimental UI flow uses fixed 10-min expiry for security (does not use LITELLM_UI_SESSION_DURATION)
         expiration_time = get_utc_datetime() + timedelta(minutes=10)
 
         # Format the expiration time as ISO 8601 string
