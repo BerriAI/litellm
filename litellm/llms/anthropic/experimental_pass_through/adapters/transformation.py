@@ -776,15 +776,16 @@ class LiteLLMAnthropicMessagesAdapter:
             return None
 
         # Fix for #20997: Ensure schema is compatible with OpenAI Strict Mode
-        # Recursively adds "additionalProperties": false to all object nodes
+        # Recursively enforces to strict mode rules on all object nodes
         def _make_strict(obj: Any):
             if isinstance(obj, dict):
                 if obj.get("type") == "object":
-                    # Enforce additionalProperties: false
+                    # DIRECT ASSIGNMENT: Force additional properties to False
+                    # Overrides existing true values to ensure compliance 
                     obj["additionalProperties"] = False
                     
-                    # Enforce all properties are in the 'required' array
-                    if "properties" in obj and "required" not in obj:
+                    # ENFORCE ALL REQUIRED : every propery must be in required array
+                    if "properties" in obj:
                         obj["required"] = list(obj["properties"].keys())
                 
                 # Recursively traverse dictionaries
