@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from fastapi import HTTPException, Request
 
@@ -14,7 +14,7 @@ def test_info_route_identification():
 
     # Non-info routes should return False
     assert RouteChecks.is_info_route("/chat/completions") is False
-    assert RouteChecks.is_info_route("/v1/models") is False
+    assert RouteChecks.is_info_route("/key/generate") is False
 
 
 def test_key_info_route_access():

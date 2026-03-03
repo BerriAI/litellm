@@ -1781,9 +1781,9 @@ class ProxyLogging:
         #########################################################
         if route is None:
             return False
-        if (
-            RouteChecks.is_llm_api_route(route) is not True or
-            RouteChecks.is_info_route(route) is not True
+        if not (
+            RouteChecks.is_llm_api_route(route) or
+            RouteChecks.is_info_route(route)
         ):
             return False
 
