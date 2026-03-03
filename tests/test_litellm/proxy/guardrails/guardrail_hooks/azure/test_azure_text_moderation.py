@@ -54,7 +54,10 @@ async def test_azure_text_moderation_guardrail_pre_call_hook():
 
 @pytest.mark.asyncio
 async def test_azure_text_moderation_guardrail_violation_detected():
-
+    """async_make_request is the single enforcement point — it raises
+    HTTPException when severity thresholds are exceeded.  The caller
+    (pre_call_hook) simply propagates the exception.
+    """
     azure_text_moderation_guardrail = AzureContentSafetyTextModerationGuardrail(
         guardrail_name="azure_text_moderation",
         api_key="azure_text_moderation_api_key",
@@ -63,12 +66,12 @@ async def test_azure_text_moderation_guardrail_violation_detected():
     with patch.object(
         azure_text_moderation_guardrail, "async_make_request"
     ) as mock_async_make_request:
-        mock_async_make_request.return_value = {
-            "blocklistsMatch": [],
-            "categoriesAnalysis": [
-                {"category": "Hate", "severity": 2},
-            ],
-        }
+        mock_async_make_request.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Azure Content Safety Guardrail: Hate crossed severity 2, Got severity: 2"
+            },
+        )
         with pytest.raises(HTTPException):
             await azure_text_moderation_guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(

@@ -227,13 +227,13 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         Raises HTTPException if content should be blocked.
         """
         verbose_proxy_logger.info(
-            "Azure Prompt Shield: Running pre-call prompt scan, on call_type: %s",
+            "Azure Text Moderation: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
         new_messages: Optional[List[AllMessageValues]] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning(
-                "Lakera AI: not running guardrail. No messages in data"
+                "Azure Text Moderation: not running guardrail. No messages in data"
             )
             return data
         user_prompt = self.get_user_prompt(new_messages)
@@ -242,10 +242,9 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             verbose_proxy_logger.info(
                 f"Azure Text Moderation: User prompt: {user_prompt}"
             )
-            azure_text_moderation_response = await self.async_make_request(
+            await self.async_make_request(
                 text=user_prompt,
             )
-            self.check_severity_threshold(response=azure_text_moderation_response)
         else:
             verbose_proxy_logger.warning("Azure Text Moderation: No text found")
         return None
@@ -264,10 +263,9 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             and isinstance(response.choices[0], Choices)
         ):
             content = response.choices[0].message.content or ""
-            azure_text_moderation_response = await self.async_make_request(
+            await self.async_make_request(
                 text=content,
             )
-            self.check_severity_threshold(response=azure_text_moderation_response)
         return response
 
     async def async_post_call_streaming_hook(
@@ -275,10 +273,9 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
     ) -> Any:
         try:
             if response is not None and len(response) > 0:
-                azure_text_moderation_response = await self.async_make_request(
+                await self.async_make_request(
                     text=response,
                 )
-                self.check_severity_threshold(response=azure_text_moderation_response)
             return response
         except HTTPException as e:
             import json

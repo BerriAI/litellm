@@ -51,21 +51,29 @@ async def test_azure_prompt_shield_guardrail_pre_call_hook():
 
 @pytest.mark.asyncio
 async def test_azure_prompt_shield_guardrail_attack_detected():
-    """Test that HTTPException is raised when an attack is detected."""
+    """Test that HTTPException is raised when an attack is detected.
+
+    async_make_request is the single enforcement point — it raises
+    HTTPException when attackDetected is True.  The caller (pre_call_hook)
+    simply propagates the exception.
+    """
     azure_prompt_shield_guardrail = AzureContentSafetyPromptShieldGuardrail(
         guardrail_name="azure_prompt_shield",
         api_key="azure_prompt_shield_api_key",
         api_base="azure_prompt_shield_api_base",
     )
-    
+
     with patch.object(
         azure_prompt_shield_guardrail, "async_make_request"
     ) as mock_async_make_request:
-        mock_async_make_request.return_value = {
-            "userPromptAnalysis": {"attackDetected": True},
-            "documentsAnalysis": [],
-        }
-        
+        mock_async_make_request.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated Azure Prompt Shield guardrail policy",
+                "detection_message": "Attack detected: {'attackDetected': True}",
+            },
+        )
+
         with pytest.raises(HTTPException) as exc_info:
             await azure_prompt_shield_guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="azure_prompt_shield_api_key"),
@@ -80,7 +88,7 @@ async def test_azure_prompt_shield_guardrail_attack_detected():
                 },
                 call_type="completion",
             )
-        
+
         assert exc_info.value.status_code == 400
         assert "Violated Azure Prompt Shield guardrail policy" in str(exc_info.value.detail)
 
