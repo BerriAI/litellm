@@ -1,0 +1,64 @@
+name: Ban Spam Users
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  check-ban:
+    if: github.event.label.name == 'spam'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Check if user should be blocked
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ADMIN_PAT }}
+          script: |
+            const user = context.payload.issue.user.login;
+
+            // Count spam-labeled issues from this user
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              creator: user,
+              labels: 'spam',
+              state: 'all',
+              per_page: 100,
+            });
+
+            const spamCount = issues.data.length;
+            console.log(`User @${user} has ${spamCount} spam-labeled issues`);
+
+            if (spamCount >= 3) {
+              // Block user from the organization
+              try {
+                await github.rest.users.block({
+                  username: user,
+                });
+                console.log(`Blocked user: ${user}`);
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.issue.number,
+                  body: `User \`${user}\` has been automatically blocked after ${spamCount} spam issues.`,
+                });
+              } catch (e) {
+                console.log(`Could not block user ${user}: ${e.message}`);
+
+                // Leave a comment for maintainers to manually block
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.issue.number,
+                  body: [
+                    `**Action needed:** User \`${user}\` has ${spamCount} spam-labeled issues and should be blocked.`,
+                    '',
+                    'Automatic blocking failed. A maintainer should manually block this user:',
+                    `https://github.com/${user}`,
+                  ].join('\n'),
+                });
+              }
+            }
