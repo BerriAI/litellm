@@ -217,7 +217,203 @@ class ResponsesAPIRequestUtils:
             responses_api_response["id"] = updated_id
         else:
             responses_api_response.id = updated_id
+
+        if litellm_metadata.get("encrypted_content_affinity_enabled"):
+            responses_api_response = (
+                ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+                    response=responses_api_response,
+                    model_id=model_id,
+                )
+            )
+
         return responses_api_response
+
+    @staticmethod
+    def _build_encrypted_item_id(model_id: str, item_id: str) -> str:
+        """Encode model_id into an output item ID for encrypted-content items.
+
+        Format: ``encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}``
+        """
+        assembled = f"litellm:model_id:{model_id};item_id:{item_id}"
+        encoded = base64.b64encode(assembled.encode("utf-8")).decode("utf-8")
+        return f"encitem_{encoded}"
+
+    @staticmethod
+    def _decode_encrypted_item_id(encoded_id: str) -> Optional[Dict[str, str]]:
+        """Decode a litellm-encoded encrypted-content item ID.
+
+        Returns a dict with ``model_id`` and ``item_id`` keys, or ``None`` if
+        the string is not a litellm-encoded item ID.
+        """
+        if not encoded_id.startswith("encitem_"):
+            return None
+        try:
+            cleaned = encoded_id[len("encitem_"):]
+            # Restore any padding that may have been stripped in transit
+            missing = len(cleaned) % 4
+            if missing:
+                cleaned += "=" * (4 - missing)
+            decoded = base64.b64decode(cleaned.encode("utf-8")).decode("utf-8")
+            # Split on first ";" only so that semicolons inside item_id are preserved
+            parts = decoded.split(";", 1)
+            if len(parts) < 2:
+                return None
+            model_id = parts[0].replace("litellm:model_id:", "")
+            item_id = parts[1].replace("item_id:", "")
+            return {"model_id": model_id, "item_id": item_id}
+        except Exception:
+            return None
+
+    @staticmethod
+    def _wrap_encrypted_content_with_model_id(
+        encrypted_content: str, model_id: str
+    ) -> str:
+        """Wrap encrypted_content with model_id metadata for affinity routing.
+
+        When Codex or other clients send items with encrypted_content but no ID,
+        we encode the model_id directly into the encrypted_content itself.
+
+        Format: ``litellm_enc:{base64("model_id:{model_id}")};{original_encrypted_content}``
+        """
+        metadata = f"model_id:{model_id}"
+        encoded_metadata = base64.b64encode(metadata.encode("utf-8")).decode("utf-8")
+        return f"litellm_enc:{encoded_metadata};{encrypted_content}"
+
+    @staticmethod
+    def _unwrap_encrypted_content_with_model_id(
+        wrapped_content: str,
+    ) -> tuple[Optional[str], str]:
+        """Unwrap encrypted_content to extract model_id and original content.
+
+        Returns:
+            Tuple of (model_id, original_encrypted_content).
+            If not wrapped, returns (None, original_content).
+        """
+        if not wrapped_content.startswith("litellm_enc:"):
+            return None, wrapped_content
+
+        try:
+            # Split on first ";" to separate metadata from content
+            parts = wrapped_content.split(";", 1)
+            if len(parts) < 2:
+                return None, wrapped_content
+
+            metadata_b64 = parts[0].replace("litellm_enc:", "")
+            original_content = parts[1]
+
+            # Restore padding if needed
+            missing = len(metadata_b64) % 4
+            if missing:
+                metadata_b64 += "=" * (4 - missing)
+
+            decoded_metadata = base64.b64decode(metadata_b64.encode("utf-8")).decode(
+                "utf-8"
+            )
+            model_id = decoded_metadata.replace("model_id:", "")
+            return model_id, original_content
+        except Exception:
+            return None, wrapped_content
+
+    @staticmethod
+    def _update_encrypted_content_item_ids_in_response(
+        response: Union["ResponsesAPIResponse", Dict[str, Any]],
+        model_id: Optional[str],
+    ) -> Union["ResponsesAPIResponse", Dict[str, Any]]:
+        """Rewrite item IDs for output items that contain ``encrypted_content``.
+
+        Encodes ``model_id`` into the item ID so that follow-up requests can be
+        routed back to the originating deployment without any cache lookup.
+
+        For items without an ID (e.g., from Codex), encodes model_id directly
+        into the encrypted_content itself.
+        """
+        if not model_id:
+            return response
+
+        output: Optional[list] = None
+        if isinstance(response, dict):
+            output = response.get("output")
+        else:
+            output = getattr(response, "output", None)
+
+        if not isinstance(output, list):
+            return response
+
+        for item in output:
+            if isinstance(item, dict):
+                item_id = item.get("id")
+                encrypted_content = item.get("encrypted_content")
+
+                if encrypted_content and isinstance(encrypted_content, str):
+                    # Always wrap encrypted_content with model_id for redundancy
+                    item["encrypted_content"] = (
+                        ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                            encrypted_content, model_id
+                        )
+                    )
+                    # Also encode the ID if present
+                    if item_id and isinstance(item_id, str):
+                        item["id"] = ResponsesAPIRequestUtils._build_encrypted_item_id(
+                            model_id, item_id
+                        )
+            else:
+                item_id = getattr(item, "id", None)
+                encrypted_content = getattr(item, "encrypted_content", None)
+
+                if encrypted_content and isinstance(encrypted_content, str):
+                    # Always wrap encrypted_content with model_id for redundancy
+                    try:
+                        item.encrypted_content = (
+                            ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                                encrypted_content, model_id
+                            )
+                        )
+                    except AttributeError:
+                        pass
+                    # Also encode the ID if present
+                    if item_id and isinstance(item_id, str):
+                        try:
+                            item.id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+                                model_id, item_id
+                            )
+                        except AttributeError:
+                            pass
+
+        return response
+
+    @staticmethod
+    def _restore_encrypted_content_item_ids_in_input(request_input: Any) -> Any:
+        """Decode litellm-encoded item IDs in request input back to original IDs.
+
+        Called before forwarding the request to the upstream provider so the
+        provider receives the original item IDs and unwrapped encrypted_content.
+
+        Handles both:
+        1. Items with encoded IDs (encitem_...)
+        2. Items with wrapped encrypted_content (litellm_enc:...)
+        """
+        if not isinstance(request_input, list):
+            return request_input
+
+        for item in request_input:
+            if isinstance(item, dict):
+                item_id = item.get("id")
+                if item_id and isinstance(item_id, str):
+                    decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
+                    if decoded:
+                        item["id"] = decoded["item_id"]
+
+                encrypted_content = item.get("encrypted_content")
+                if encrypted_content and isinstance(encrypted_content, str):
+                    _, unwrapped = (
+                        ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
+                            encrypted_content
+                        )
+                    )
+                    if unwrapped != encrypted_content:
+                        item["encrypted_content"] = unwrapped
+
+        return request_input
 
     @staticmethod
     def _build_responses_api_response_id(
