@@ -1,7 +1,7 @@
 
 import pytest
 from litellm.litellm_core_utils.prompt_templates.factory import _get_thought_signature_from_tool
-from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
+
 
 def test_get_thought_signature_from_tool_normalization():
     """
