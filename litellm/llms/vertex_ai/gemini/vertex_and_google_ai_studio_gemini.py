@@ -1635,9 +1635,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 modality = str(detail.get("modality", "")).upper()
                 token_count = detail.get("tokenCount", detail.get("token_count", 0))
                 if modality == "TEXT":
-                    response_tokens_details.text_tokens = token_count
+                    response_tokens_details.text_tokens = (
+                        response_tokens_details.text_tokens or 0
+                    ) + token_count
                 elif modality == "AUDIO":
-                    response_tokens_details.audio_tokens = token_count
+                    response_tokens_details.audio_tokens = (
+                        response_tokens_details.audio_tokens or 0
+                    ) + token_count
 
         #########################################################
 
