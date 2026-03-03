@@ -257,7 +257,7 @@ async def create_batch(  # noqa: PLR0915
                             file_id=response.output_file_id, model=model_param
                         )
 
-                if hasattr(response, "error_file_id") and response.error_file_id:
+                    if hasattr(response, "error_file_id") and response.error_file_id:
                         response.error_file_id = encode_file_id_with_model(
                             file_id=response.error_file_id, model=model_param
                         )
