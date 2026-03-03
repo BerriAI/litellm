@@ -33,7 +33,7 @@ class TestProxyExceptionStr:
 
     def test_proxy_exception_str_unicode(self):
         """str() should handle unicode messages correctly."""
-        msg = "Error: \u2018invalid key\u2019 \u2014 please retry \U0001f512"
+        msg = "Error: \u2018invalid key\u2019 please retry \U0001f512"
         exc = ProxyException(
             message=msg,
             type="bad_request_error",
