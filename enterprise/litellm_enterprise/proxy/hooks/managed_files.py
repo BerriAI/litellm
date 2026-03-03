@@ -589,7 +589,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_file_id_mapping = cast(
                 Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping")
             )
+            # model_info may be at top-level or nested under litellm_metadata
+            # (batch/file operations use litellm_metadata)
             model_id = cast(Optional[str], kwargs.get("model_info", {}).get("id", None))
+            if model_id is None:
+                model_id = cast(
+                    Optional[str],
+                    kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id", None),
+                )
             mapped_file_id: Optional[str] = None
             if input_file_id and model_file_id_mapping and model_id:
                 mapped_file_id = model_file_id_mapping.get(input_file_id, {}).get(

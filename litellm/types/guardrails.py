@@ -52,6 +52,7 @@ class SupportedGuardrailIntegrations(Enum):
     HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
     PANGEA = "pangea"
+    CROWDSTRIKE_AIDR = "crowdstrike_aidr"
     LASSO = "lasso"
     PILLAR = "pillar"
     GRAYSWAN = "grayswan"
@@ -694,6 +695,15 @@ class BaseLitellmParams(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
             "NOTE: This is currently only implemented by guardrail='generic_guardrail_api'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+        ),
+    )
+
+    extra_headers: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Header names to forward from the client request to the guardrail (e.g. x-request-id). "
+            "Only these headers' values are sent; others may be omitted or sent as [present]. "
+            "Used by generic_guardrail_api (similar to MCP extra_headers)."
         ),
     )
 

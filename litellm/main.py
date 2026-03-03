@@ -418,6 +418,8 @@ async def acompletion(  # noqa: PLR0915
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
+    # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
+    enable_json_schema_validation: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -562,6 +564,7 @@ async def acompletion(  # noqa: PLR0915
         "thinking": thinking,
         "web_search_options": web_search_options,
         "shared_session": shared_session,
+        "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -1047,6 +1050,8 @@ def completion(  # type: ignore # noqa: PLR0915
     thinking: Optional[AnthropicThinkingParam] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
+    # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
+    enable_json_schema_validation: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -1167,6 +1172,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 thinking=thinking,
                 web_search_options=web_search_options,
                 shared_session=shared_session,
+                enable_json_schema_validation=enable_json_schema_validation,
                 **kwargs,
             )
     api_base = kwargs.get("api_base", None)
@@ -5626,6 +5632,21 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
+            )
+        elif custom_llm_provider == "perplexity":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
             )
         else:
             raise LiteLLMUnknownProvider(

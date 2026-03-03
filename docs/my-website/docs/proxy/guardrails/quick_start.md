@@ -73,6 +73,7 @@ guardrails:
         plr_scanners: true
 ```
 
+For generic guardrail APIs you can also set **static headers** (`headers`: key/value sent on every request) and **dynamic headers** (`extra_headers`: list of client header names to forward). See [Generic Guardrail API - Static and dynamic headers](/docs/adding_provider/generic_guardrail_api#static-and-dynamic-headers).
 
 ### Supported values for `mode` (Event Hooks)
 
