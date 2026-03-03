@@ -107,12 +107,11 @@ async def test_collect_pool_metrics_sets_gauges():
     client = _make_prisma_client()
 
     pool_rows = [
-        {"state": "active", "count": 5},
-        {"state": "idle", "count": 10},
-        {"state": "idle in transaction", "count": 3},
+        {"state": "active", "count": 5, "lock_waiting": 1},
+        {"state": "idle", "count": 10, "lock_waiting": 0},
+        {"state": "idle in transaction", "count": 3, "lock_waiting": 1},
     ]
-    lock_rows = [{"waiting": 2}]
-    client.db.query_raw = AsyncMock(side_effect=[pool_rows, lock_rows])
+    client.db.query_raw = AsyncMock(return_value=pool_rows)
     collector, registry = _make_collector(prisma_client=client)
 
     await collector._collect_pool_metrics()
@@ -136,11 +135,9 @@ async def test_collect_pool_metrics_sets_gauges():
 
 @pytest.mark.asyncio
 async def test_collect_pool_metrics_handles_empty_result():
-    """When query_raw returns empty lists, known states should be zeroed."""
+    """When query_raw returns empty list, known states should be zeroed."""
     client = _make_prisma_client()
-    pool_rows: list = []
-    lock_rows = [{"waiting": 0}]
-    client.db.query_raw = AsyncMock(side_effect=[pool_rows, lock_rows])
+    client.db.query_raw = AsyncMock(return_value=[])
     collector, registry = _make_collector(prisma_client=client)
 
     await collector._collect_pool_metrics()
@@ -159,9 +156,8 @@ async def test_collect_pool_metrics_handles_empty_result():
 async def test_collect_pool_metrics_handles_null_state():
     """When pg_stat_activity returns a NULL state, it should be mapped to 'unknown'."""
     client = _make_prisma_client()
-    pool_rows = [{"state": None, "count": 1}]
-    lock_rows = [{"waiting": 0}]
-    client.db.query_raw = AsyncMock(side_effect=[pool_rows, lock_rows])
+    pool_rows = [{"state": None, "count": 1, "lock_waiting": 0}]
+    client.db.query_raw = AsyncMock(return_value=pool_rows)
     collector, registry = _make_collector(prisma_client=client)
 
     await collector._collect_pool_metrics()
@@ -178,9 +174,8 @@ async def test_collect_pool_metrics_clears_stale_states():
     client = _make_prisma_client()
 
     # Cycle 1: active=5
-    pool_rows_1 = [{"state": "active", "count": 5}]
-    lock_rows = [{"waiting": 0}]
-    client.db.query_raw = AsyncMock(side_effect=[pool_rows_1, lock_rows])
+    pool_rows_1 = [{"state": "active", "count": 5, "lock_waiting": 0}]
+    client.db.query_raw = AsyncMock(return_value=pool_rows_1)
     collector, registry = _make_collector(prisma_client=client)
 
     await collector._collect_pool_metrics()
@@ -190,8 +185,8 @@ async def test_collect_pool_metrics_clears_stale_states():
     )
 
     # Cycle 2: only idle connections, active should be zeroed
-    pool_rows_2 = [{"state": "idle", "count": 3}]
-    client.db.query_raw = AsyncMock(side_effect=[pool_rows_2, lock_rows])
+    pool_rows_2 = [{"state": "idle", "count": 3, "lock_waiting": 0}]
+    client.db.query_raw = AsyncMock(return_value=pool_rows_2)
 
     await collector._collect_pool_metrics()
     assert (

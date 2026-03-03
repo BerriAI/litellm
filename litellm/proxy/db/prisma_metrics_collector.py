@@ -32,17 +32,12 @@ def _get_or_create_counter(name: str, description: str) -> Counter:
 
 
 _POOL_METRICS_SQL = """
-SELECT state, count(*) as count
+SELECT state,
+       count(*) as count,
+       count(*) FILTER (WHERE wait_event_type = 'Lock') as lock_waiting
 FROM pg_stat_activity
 WHERE pid != pg_backend_pid() AND datname = current_database() AND usename = current_user
 GROUP BY state
-"""
-
-_LOCK_WAITING_SQL = """
-SELECT count(*) as waiting
-FROM pg_stat_activity
-WHERE pid != pg_backend_pid() AND datname = current_database() AND usename = current_user
-  AND wait_event_type = 'Lock'
 """
 
 # All possible pg_stat_activity states — used to zero out stale labels
@@ -124,9 +119,9 @@ class PrismaMetricsCollector:
     async def _collection_loop(self) -> None:
         while True:
             try:
-                await asyncio.sleep(self._interval)
                 await self._collect_pool_metrics()
                 self._collect_engine_health()
+                await asyncio.sleep(self._interval)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -136,19 +131,20 @@ class PrismaMetricsCollector:
         try:
             rows = await self.prisma_client.db.query_raw(_POOL_METRICS_SQL)
 
-            # Zero out all known states first to clear stale values
             seen_states: Set[str] = set()
+            total_lock_waiting = 0
             for row in rows:
                 state = row.get("state") or "unknown"
                 self._pool_connections.labels(state=state).set(row.get("count", 0))
+                total_lock_waiting += row.get("lock_waiting", 0)
                 seen_states.add(state)
+
+            # Zero out states absent from this cycle to clear stale values
             for state in _PG_STATES:
                 if state not in seen_states:
                     self._pool_connections.labels(state=state).set(0)
 
-            lock_rows = await self.prisma_client.db.query_raw(_LOCK_WAITING_SQL)
-            if lock_rows:
-                self._pool_waiting.set(lock_rows[0].get("waiting", 0))
+            self._pool_waiting.set(total_lock_waiting)
         except Exception as e:
             verbose_proxy_logger.warning(
                 "PrismaMetricsCollector failed to collect pool metrics: %s", e
