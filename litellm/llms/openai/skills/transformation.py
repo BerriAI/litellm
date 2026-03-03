@@ -16,9 +16,12 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.anthropic_skills import (
     CreateSkillRequest,
     DeleteSkillResponse,
+    DeleteSkillVersionResponse,
     ListSkillsParams,
     ListSkillsResponse,
+    ListSkillVersionsResponse,
     Skill,
+    SkillVersion,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -147,6 +150,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ListSkillsResponse:
         """Transform OpenAI SkillList response to canonical ListSkillsResponse."""
+        raw_response.raise_for_status()
         response_json = raw_response.json()
         verbose_logger.debug(
             "Transforming OpenAI list skills response: %s", response_json
@@ -182,6 +186,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Skill:
         """Transform OpenAI response to canonical Skill object."""
+        raw_response.raise_for_status()
         response_json = raw_response.json()
         verbose_logger.debug(
             "Transforming OpenAI get skill response: %s", response_json
@@ -299,9 +304,13 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Dict:
+    ) -> SkillVersion:
         """Transform create skill version response."""
-        return raw_response.json()
+        response_json = raw_response.json()
+        verbose_logger.debug(
+            "Transforming OpenAI create skill version response: %s", response_json
+        )
+        return self._openai_version_to_canonical(response_json)
 
     def transform_list_skill_versions_request(
         self,
@@ -329,9 +338,20 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Dict:
+    ) -> ListSkillVersionsResponse:
         """Transform list skill versions response."""
-        return raw_response.json()
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        versions = [
+            self._openai_version_to_canonical(v)
+            for v in response_json.get("data", [])
+        ]
+        return ListSkillVersionsResponse(
+            data=versions,
+            first_id=response_json.get("first_id"),
+            last_id=response_json.get("last_id"),
+            has_more=response_json.get("has_more", False),
+        )
 
     def transform_get_skill_version_request(
         self,
@@ -350,9 +370,14 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Dict:
+    ) -> SkillVersion:
         """Transform get skill version response."""
-        return raw_response.json()
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        verbose_logger.debug(
+            "Transforming OpenAI get skill version response: %s", response_json
+        )
+        return self._openai_version_to_canonical(response_json)
 
     def transform_delete_skill_version_request(
         self,
@@ -371,9 +396,16 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Dict:
+    ) -> DeleteSkillVersionResponse:
         """Transform delete skill version response."""
-        return raw_response.json()
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        return DeleteSkillVersionResponse(
+            id=response_json["id"],
+            object=response_json.get("object", "skill.version.deleted"),
+            deleted=response_json.get("deleted", True),
+            version=response_json.get("version"),
+        )
 
     def transform_get_skill_version_content_request(
         self,
@@ -394,6 +426,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Dict:
         """Transform get skill version content response. Content may be binary (zip) or JSON."""
+        raw_response.raise_for_status()
         content_type = raw_response.headers.get("content-type", "")
         if "json" in content_type:
             return raw_response.json()
@@ -451,4 +484,29 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             source="custom",
             type=data.get("object", "skill"),
             updated_at=updated_at_str,
+        )
+
+    @staticmethod
+    def _openai_version_to_canonical(data: dict) -> SkillVersion:
+        """Map OpenAI Skill Version JSON to canonical SkillVersion model."""
+        import datetime
+
+        created_ts = data.get("created_at", 0)
+        if isinstance(created_ts, (int, float)):
+            created_at_str = datetime.datetime.fromtimestamp(
+                created_ts, tz=datetime.timezone.utc
+            ).isoformat()
+        else:
+            created_at_str = str(created_ts)
+
+        return SkillVersion(
+            id=data["id"],
+            skill_id=data.get("skill_id", ""),
+            version=str(data["version"]) if data.get("version") is not None else None,
+            created_at=created_at_str,
+            display_title=data.get("name"),
+            description=data.get("description"),
+            instructions=data.get("instructions"),
+            metadata=data.get("metadata"),
+            type=data.get("object", "skill.version"),
         )
