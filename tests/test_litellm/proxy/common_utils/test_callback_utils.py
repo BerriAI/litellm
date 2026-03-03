@@ -122,6 +122,12 @@ def test_normalize_callback_names_lowercases_strings():
     assert normalize_callback_names(["SQS", "S3", "CUSTOM_CALLBACK"]) == ["sqs", "s3", "custom_callback"]
 
 
+def test_normalize_callback_names_none_returns_empty_list():
+    """None and empty list return [] to support callers that may pass unguarded None."""
+    assert normalize_callback_names(None) == []
+    assert normalize_callback_names([]) == []
+
+
 def test_remaining_tokens_requests_returns_empty_when_metadata_empty_or_missing():
     """Empty or missing metadata returns {}."""
     assert get_remaining_tokens_and_requests_from_request_data({}) == {}

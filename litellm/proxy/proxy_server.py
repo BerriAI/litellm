@@ -3620,9 +3620,13 @@ class ProxyConfig:
         merged_failure = list(
             dict.fromkeys(failure_from_settings + (failure_callbacks or []))
         )
-        merged_callbacks = list(
-            dict.fromkeys(callbacks_from_settings + (callbacks or []))
-        )
+        seen_both = {c if isinstance(c, str) else next(iter(c)) for c in callbacks_from_settings}
+        merged_callbacks: list = list(callbacks_from_settings)
+        for c in (callbacks or []):
+            name = c if isinstance(c, str) else next(iter(c.keys()))
+            if name not in seen_both:
+                merged_callbacks.append(c)
+                seen_both.add(name)
 
         for success_callback in merged_success:
             self._add_callback_from_db_to_in_memory_litellm_callbacks(
@@ -11666,7 +11670,11 @@ async def get_config():  # noqa: PLR0915
                 (_callback_name, _callback_params), = _callback.items()
                 _callback = _callback_name
             elif isinstance(_callback, str) and _callback in _callback_settings:
-                _callback_params = _callback_settings.get(_callback)
+                _raw = _callback_settings.get(_callback) or {}
+                _callback_params = (
+                    {k: v for k, v in _raw.items() if k not in ("callback_type", "event_types")}
+                    or None
+                )
             _data_to_return.append(
                 process_callback(
                     _callback,

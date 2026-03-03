@@ -587,7 +587,9 @@ def process_callback(
 
 
 def normalize_callback_names(
-    callbacks: Iterable[Union[str, object]],
+    callbacks: Iterable[Union[str, object]] | None,
 ) -> List[Union[str, object]]:
     """Lowercase string callback names; pass through non-strings (e.g. from config) unchanged."""
+    if callbacks is None:
+        return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]

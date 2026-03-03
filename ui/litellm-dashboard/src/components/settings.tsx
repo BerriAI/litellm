@@ -340,7 +340,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setIsAddingCallback(true);
     }
 
-    const payload = buildCallbackPayload(formValues, callbackName, callbacks, isEdit, undefined, callbackSettings);
+    const payload = buildCallbackPayload(formValues, callbackName, callbacks, isEdit, selectedEditCallback?.type as "success" | "failure" | "success_and_failure" | undefined, callbackSettings);
 
     try {
       await setCallbacksCall(accessToken, payload);
