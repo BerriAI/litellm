@@ -1514,7 +1514,7 @@ async def test_resolve_jwks_url_resolves_oidc_discovery_document():
     A .well-known/openid-configuration URL should be fetched and its
     jwks_uri returned.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.caching.dual_cache import DualCache
 
@@ -1533,8 +1533,10 @@ async def test_resolve_jwks_url_resolves_oidc_discovery_document():
     mock_response.status_code = 200
     mock_response.json.return_value = {"jwks_uri": jwks_url, "issuer": "https://..."}
 
-    with patch.object(handler.http_handler, "get", new_callable=AsyncMock, return_value=mock_response) as mock_get:
-        result = await handler._resolve_jwks_url(discovery_url)
+    mock_get = AsyncMock(return_value=mock_response)
+    handler.http_handler.get = mock_get
+
+    result = await handler._resolve_jwks_url(discovery_url)
 
     assert result == jwks_url
     mock_get.assert_called_once_with(discovery_url)
