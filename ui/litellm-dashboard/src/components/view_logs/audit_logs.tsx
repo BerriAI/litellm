@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { Table, Tag, Input, Select, Button, Tooltip } from "antd";
+import { Table, Tag, Input, Select, Button, Pagination } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
-import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
+import type { ColumnsType } from "antd/es/table";
 import moment from "moment";
 import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry } from "./columns";
 import { AuditLogDrawer } from "./AuditLogDrawer/AuditLogDrawer";
+import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 
 const { Search } = Input;
 
@@ -97,14 +98,7 @@ export default function AuditLogs({
     placeholderData: keepPreviousData,
   });
 
-  const handleFilterChange = () => {
-    // Reset to page 1 whenever a filter changes
-    setPage(1);
-  };
-
-  const handleTableChange = (pagination: TablePaginationConfig) => {
-    setPage(pagination.current ?? 1);
-  };
+  const resetPage = () => setPage(1);
 
   const handleRowClick = (log: AuditLogEntry) => {
     setSelectedLog(log);
@@ -146,9 +140,7 @@ export default function AuditLogs({
       dataIndex: "object_id",
       key: "object_id",
       render: (val: string) => (
-        <Tooltip title={val}>
-          <span className="font-mono text-xs">{val}</span>
-        </Tooltip>
+        <span className="font-mono text-xs">{val}</span>
       ),
     },
     {
@@ -156,18 +148,16 @@ export default function AuditLogs({
       dataIndex: "changed_by",
       key: "changed_by",
       width: 200,
-      render: (val: string) => val || "—",
+      render: (val: string) => <DefaultProxyAdminTag userId={val} />,
     },
     {
-      title: "API Key",
+      title: "API Key (Hash)",
       dataIndex: "changed_by_api_key",
       key: "changed_by_api_key",
       width: 140,
       render: (val: string) =>
         val ? (
-          <Tooltip title={val}>
-            <span className="font-mono text-xs">{val.slice(0, 12)}…</span>
-          </Tooltip>
+          <span className="font-mono text-xs">{val.slice(0, 12)}…</span>
         ) : (
           "—"
         ),
@@ -212,76 +202,37 @@ export default function AuditLogs({
         <div className="border-b px-6 py-4">
           <div className="flex items-center justify-between mb-4">
             <h1 className="text-xl font-semibold">Audit Logs</h1>
-            <Button
-              icon={<ReloadOutlined spin={query.isFetching} />}
-              onClick={() => query.refetch()}
-              disabled={query.isFetching}
-            >
-              Refresh
-            </Button>
           </div>
 
-          {/* Filters */}
-          <div className="flex flex-wrap gap-3">
+          {/* Filters + pagination on same row */}
+          <div className="flex flex-wrap items-center gap-3">
             <Search
               placeholder="Object ID"
               allowClear
               style={{ width: 200 }}
-              onSearch={(val) => {
-                setObjectId(val);
-                handleFilterChange();
-              }}
-              onChange={(e) => {
-                if (!e.target.value) {
-                  setObjectId("");
-                  handleFilterChange();
-                }
-              }}
+              onSearch={(val) => { setObjectId(val); resetPage(); }}
+              onChange={(e) => { if (!e.target.value) { setObjectId(""); resetPage(); } }}
             />
             <Search
               placeholder="Changed By"
               allowClear
               style={{ width: 180 }}
-              onSearch={(val) => {
-                setChangedBy(val);
-                handleFilterChange();
-              }}
-              onChange={(e) => {
-                if (!e.target.value) {
-                  setChangedBy("");
-                  handleFilterChange();
-                }
-              }}
+              onSearch={(val) => { setChangedBy(val); resetPage(); }}
+              onChange={(e) => { if (!e.target.value) { setChangedBy(""); resetPage(); } }}
             />
             <Search
               placeholder="Team ID"
               allowClear
               style={{ width: 180 }}
-              onSearch={(val) => {
-                setTeamId(val);
-                handleFilterChange();
-              }}
-              onChange={(e) => {
-                if (!e.target.value) {
-                  setTeamId("");
-                  handleFilterChange();
-                }
-              }}
+              onSearch={(val) => { setTeamId(val); resetPage(); }}
+              onChange={(e) => { if (!e.target.value) { setTeamId(""); resetPage(); } }}
             />
             <Search
               placeholder="Key Hash"
               allowClear
               style={{ width: 180 }}
-              onSearch={(val) => {
-                setKeyHash(val);
-                handleFilterChange();
-              }}
-              onChange={(e) => {
-                if (!e.target.value) {
-                  setKeyHash("");
-                  handleFilterChange();
-                }
-              }}
+              onSearch={(val) => { setKeyHash(val); resetPage(); }}
+              onChange={(e) => { if (!e.target.value) { setKeyHash(""); resetPage(); } }}
             />
             <Select
               placeholder="All Actions"
@@ -293,10 +244,7 @@ export default function AuditLogs({
                 { label: "Deleted", value: "deleted" },
                 { label: "Rotated", value: "rotated" },
               ]}
-              onChange={(val) => {
-                setAction(val);
-                handleFilterChange();
-              }}
+              onChange={(val) => { setAction(val); resetPage(); }}
             />
             <Select
               placeholder="All Tables"
@@ -309,34 +257,41 @@ export default function AuditLogs({
                 { label: "Organizations", value: "LiteLLM_OrganizationTable" },
                 { label: "Models", value: "LiteLLM_ProxyModelTable" },
               ]}
-              onChange={(val) => {
-                setTableName(val);
-                handleFilterChange();
-              }}
+              onChange={(val) => { setTableName(val); resetPage(); }}
             />
+
+            {/* Pagination + refresh pushed to the right */}
+            <div className="ml-auto flex items-center gap-2">
+              <Button
+                icon={<ReloadOutlined spin={query.isFetching} />}
+                onClick={() => query.refetch()}
+                disabled={query.isFetching}
+              />
+              <Pagination
+                current={page}
+                pageSize={PAGE_SIZE}
+                total={total}
+                showTotal={(t) => `${t} total`}
+                showSizeChanger={false}
+                size="small"
+                onChange={(p) => setPage(p)}
+              />
+            </div>
           </div>
         </div>
 
-        {/* Table */}
+        {/* Table — pagination handled in header */}
         <Table<AuditLogEntry>
           columns={columns}
           dataSource={auditLogs}
           rowKey="id"
           loading={query.isLoading}
           size="small"
+          pagination={false}
           onRow={(record) => ({
             onClick: () => handleRowClick(record),
             style: { cursor: "pointer" },
           })}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
-            total,
-            showTotal: (t) => `${t} total`,
-            showSizeChanger: false,
-            onChange: (p) => setPage(p),
-          }}
-          onChange={handleTableChange}
         />
       </div>
 

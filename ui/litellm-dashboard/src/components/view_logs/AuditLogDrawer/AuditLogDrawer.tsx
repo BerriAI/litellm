@@ -1,7 +1,10 @@
-import { Drawer, Tag, Tooltip } from "antd";
+import { Drawer, Tag, Typography } from "antd";
 import { CloseOutlined } from "@ant-design/icons";
 import moment from "moment";
 import { AuditLogEntry } from "../columns";
+import DefaultProxyAdminTag from "../../common_components/DefaultProxyAdminTag";
+
+const { Text } = Typography;
 
 interface AuditLogDrawerProps {
   open: boolean;
@@ -26,7 +29,7 @@ const ACTION_COLOR: Record<string, string> = {
 
 function JsonBlock({ value }: { value: Record<string, any> }) {
   return (
-    <pre className="p-3 bg-gray-50 border rounded text-xs font-mono overflow-auto max-h-72 whitespace-pre-wrap break-all">
+    <pre className="p-3 bg-gray-50 border rounded text-xs font-mono overflow-auto max-h-96 whitespace-pre-wrap break-all">
       {JSON.stringify(value, null, 2)}
     </pre>
   );
@@ -92,7 +95,7 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
         : { note: "No differing fields detected" };
   }
 
-  const renderValue = (value: Record<string, any> | null | undefined, label: string) => {
+  const renderValue = (value: Record<string, any> | null | undefined) => {
     if (!value || Object.keys(value).length === 0) {
       return <p className="text-xs text-gray-400 italic">N/A</p>;
     }
@@ -125,11 +128,11 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
       <div>
         <p className="text-xs font-semibold text-gray-600 mb-2">Before</p>
-        {renderValue(displayBefore, "before")}
+        {renderValue(displayBefore)}
       </div>
       <div>
         <p className="text-xs font-semibold text-gray-600 mb-2">After</p>
-        {renderValue(displayAfter, "after")}
+        {renderValue(displayAfter)}
       </div>
     </div>
   );
@@ -150,10 +153,10 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
       closable={false}
       mask={true}
       maskClosable={true}
-      styles={{ body: { padding: 0 }, header: { display: "none" } }}
+      styles={{ body: { padding: 0, display: "flex", flexDirection: "column" }, header: { display: "none" } }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b bg-white sticky top-0 z-10">
+      <div className="flex items-center justify-between px-6 py-4 border-b bg-white shrink-0">
         <div className="flex items-center gap-3">
           <Tag color={actionColor} className="capitalize m-0">
             {log.action}
@@ -172,7 +175,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
       </div>
 
       {/* Body */}
-      <div className="px-6 py-5 overflow-auto h-full">
+      <div className="px-6 py-5">
         {/* Metadata */}
         <div className="bg-gray-50 border rounded-lg p-4 mb-5">
           <p className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
@@ -182,21 +185,22 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
           <MetadataRow
             label="Object ID"
             value={
-              <Tooltip title={log.object_id}>
-                <span className="font-mono">{log.object_id}</span>
-              </Tooltip>
+              <Text copyable className="font-mono text-xs">
+                {log.object_id}
+              </Text>
             }
           />
-          <MetadataRow label="Changed By" value={log.changed_by || "—"} />
           <MetadataRow
-            label="API Key"
+            label="Changed By"
+            value={<DefaultProxyAdminTag userId={log.changed_by} />}
+          />
+          <MetadataRow
+            label="API Key (Hash)"
             value={
               log.changed_by_api_key ? (
-                <Tooltip title={log.changed_by_api_key}>
-                  <span className="font-mono">
-                    {log.changed_by_api_key.slice(0, 12)}…
-                  </span>
-                </Tooltip>
+                <Text copyable className="font-mono text-xs break-all">
+                  {log.changed_by_api_key}
+                </Text>
               ) : (
                 "—"
               )
