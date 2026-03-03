@@ -251,9 +251,6 @@ async def _get_vertex_ai_batch_output_with_custom_id(
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
 
-    if batch.input_file_id is None:
-        raise ValueError("Input file id is None cannot map vertex batch outputs")
-
     credentials = _extract_file_access_credentials(litellm_params)
 
     output_content = await afile_content(
