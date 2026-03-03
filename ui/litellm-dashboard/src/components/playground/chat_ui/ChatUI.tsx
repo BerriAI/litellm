@@ -1230,36 +1230,34 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   }, [pendingResend, inputMessage]);
 
-  const handleRetry = () => {
+  const handleRetry = (messageIndex: number) => {
     if (isLoading || chatHistory.length === 0) return;
 
-    // Find the last assistant message index
-    let lastAssistantIdx = -1;
-    for (let i = chatHistory.length - 1; i >= 0; i--) {
-      if (chatHistory[i].role === "assistant") {
-        lastAssistantIdx = i;
-        break;
+    const message = chatHistory[messageIndex];
+    if (!message) return;
+
+    if (message.role === "user") {
+      const userContent = typeof message.content === "string" ? message.content : "";
+      setChatHistory(chatHistory.slice(0, messageIndex));
+      setInputMessage(userContent);
+      setPendingResend(true);
+    } else if (message.role === "assistant") {
+      // Find the user message that preceded this assistant response
+      let userMsgIdx = -1;
+      for (let i = messageIndex - 1; i >= 0; i--) {
+        if (chatHistory[i].role === "user") {
+          userMsgIdx = i;
+          break;
+        }
       }
+      if (userMsgIdx === -1) return;
+
+      const userContent = typeof chatHistory[userMsgIdx].content === "string"
+        ? (chatHistory[userMsgIdx].content as string) : "";
+      setChatHistory(chatHistory.slice(0, userMsgIdx));
+      setInputMessage(userContent);
+      setPendingResend(true);
     }
-    if (lastAssistantIdx === -1) return;
-
-    // Find the user message right before the assistant message
-    let userMsgIdx = -1;
-    for (let i = lastAssistantIdx - 1; i >= 0; i--) {
-      if (chatHistory[i].role === "user") {
-        userMsgIdx = i;
-        break;
-      }
-    }
-    if (userMsgIdx === -1) return;
-
-    const userMessage = chatHistory[userMsgIdx];
-    const userContent = typeof userMessage.content === "string" ? userMessage.content : "";
-
-    // Truncate history: keep everything before the user message that triggered the response
-    setChatHistory(chatHistory.slice(0, userMsgIdx));
-    setInputMessage(userContent);
-    setPendingResend(true);
   };
 
   const handleEditSubmit = (messageIndex: number, newContent: string) => {
@@ -2081,22 +2079,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           />
                         )}
                       </div>
+                      <MessageActions
+                        role={message.role}
+                        content={typeof message.content === "string" ? message.content : ""}
+                        messageIndex={index}
+                        isLastAssistantMessage={
+                          message.role === "assistant" &&
+                          index === chatHistory.map((m) => m.role).lastIndexOf("assistant")
+                        }
+                        isLoading={isLoading}
+                        isImage={message.isImage}
+                        isAudio={message.isAudio}
+                        isEmbeddings={message.isEmbeddings}
+                        onRetry={handleRetry}
+                        onEditSubmit={handleEditSubmit}
+                      />
                     </div>
-                    <MessageActions
-                      role={message.role}
-                      content={typeof message.content === "string" ? message.content : ""}
-                      messageIndex={index}
-                      isLastAssistantMessage={
-                        message.role === "assistant" &&
-                        index === chatHistory.map((m) => m.role).lastIndexOf("assistant")
-                      }
-                      isLoading={isLoading}
-                      isImage={message.isImage}
-                      isAudio={message.isAudio}
-                      isEmbeddings={message.isEmbeddings}
-                      onRetry={handleRetry}
-                      onEditSubmit={handleEditSubmit}
-                    />
                   </div>
                 </div>
               ))}

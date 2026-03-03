@@ -4,7 +4,7 @@ import {
   EditOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
-import { Button, Input, Tooltip } from "antd";
+import { Input, Tooltip } from "antd";
 import React, { useEffect, useRef, useState } from "react";
 
 const { TextArea } = Input;
@@ -18,7 +18,7 @@ interface MessageActionsProps {
   isImage?: boolean;
   isAudio?: boolean;
   isEmbeddings?: boolean;
-  onRetry: () => void;
+  onRetry: (messageIndex: number) => void;
   onEditSubmit: (messageIndex: number, newContent: string) => void;
 }
 
@@ -76,55 +76,65 @@ const MessageActions: React.FC<MessageActionsProps> = ({
 
   const isSpecialMessage = isImage || isAudio || isEmbeddings;
   const canEdit = role === "user" && !isLoading && !isSpecialMessage;
-  const canRetry = role === "assistant" && isLastAssistantMessage && !isLoading && !isSpecialMessage;
+  const canRetryUser = role === "user" && !isLoading && !isSpecialMessage;
+  const canRetryAssistant = role === "assistant" && isLastAssistantMessage && !isLoading && !isSpecialMessage;
 
   if (isEditing) {
     return (
-      <div className="mt-2" data-testid="edit-message-container">
+      <div className="mt-2 pt-2 border-t border-gray-100" data-testid="edit-message-container">
         <TextArea
           ref={textAreaRef}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={handleEditKeyDown}
           autoSize={{ minRows: 1, maxRows: 8 }}
-          className="mb-2"
-          style={{ fontSize: "14px" }}
+          style={{
+            fontSize: "14px",
+            borderRadius: "8px",
+            border: "1px solid #d1d5db",
+            padding: "8px 12px",
+          }}
         />
-        <div className="flex gap-1.5 justify-end">
-          <Tooltip title="Cancel (Esc)">
-            <Button
-              size="small"
-              icon={<CloseOutlined />}
-              onClick={handleCancelEdit}
-              data-testid="cancel-edit-button"
-            />
-          </Tooltip>
-          <Tooltip title="Save & Submit (Enter)">
-            <Button
-              size="small"
-              type="primary"
-              icon={<CheckOutlined />}
-              onClick={handleConfirmEdit}
-              disabled={editValue.trim() === ""}
-              data-testid="confirm-edit-button"
-            />
-          </Tooltip>
+        <div className="flex gap-2 justify-end mt-2">
+          <button
+            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md
+                       text-gray-600 bg-gray-50 border border-gray-200
+                       hover:bg-gray-100 hover:border-gray-300 transition-all"
+            onClick={handleCancelEdit}
+            data-testid="cancel-edit-button"
+          >
+            <CloseOutlined style={{ fontSize: "10px" }} />
+            Cancel
+          </button>
+          <button
+            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md
+                       text-white bg-blue-600 border border-blue-600
+                       hover:bg-blue-700 transition-all
+                       disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={handleConfirmEdit}
+            disabled={editValue.trim() === ""}
+            data-testid="confirm-edit-button"
+          >
+            <CheckOutlined style={{ fontSize: "10px" }} />
+            Submit
+          </button>
         </div>
       </div>
     );
   }
 
-  if (!canEdit && !canRetry) return null;
+  if (!canEdit && !canRetryUser && !canRetryAssistant) return null;
 
   return (
     <div
-      className="message-actions mt-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+      className="message-actions flex gap-0.5 mt-1.5 pt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150"
       data-testid="message-actions"
     >
       {canEdit && (
-        <Tooltip title="Edit message">
+        <Tooltip title="Edit">
           <button
-            className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md
+                       text-gray-400 hover:text-gray-700 hover:bg-black/[0.05] transition-colors"
             onClick={handleStartEdit}
             data-testid="edit-message-button"
           >
@@ -132,11 +142,24 @@ const MessageActions: React.FC<MessageActionsProps> = ({
           </button>
         </Tooltip>
       )}
-      {canRetry && (
-        <Tooltip title="Retry">
+      {canRetryUser && (
+        <Tooltip title="Resend">
           <button
-            className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
-            onClick={onRetry}
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md
+                       text-gray-400 hover:text-gray-700 hover:bg-black/[0.05] transition-colors"
+            onClick={() => onRetry(messageIndex)}
+            data-testid="retry-message-button"
+          >
+            <ReloadOutlined style={{ fontSize: "13px" }} />
+          </button>
+        </Tooltip>
+      )}
+      {canRetryAssistant && (
+        <Tooltip title="Regenerate">
+          <button
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md
+                       text-gray-400 hover:text-gray-700 hover:bg-black/[0.05] transition-colors"
+            onClick={() => onRetry(messageIndex)}
             data-testid="retry-message-button"
           >
             <ReloadOutlined style={{ fontSize: "13px" }} />

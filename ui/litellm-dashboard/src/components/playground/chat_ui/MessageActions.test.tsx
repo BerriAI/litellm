@@ -13,13 +13,13 @@ describe("MessageActions", () => {
     onEditSubmit: vi.fn(),
   };
 
-  it("should render edit button for user messages on hover", () => {
+  it("should render edit and retry buttons for user messages on hover", () => {
     render(<MessageActions {...defaultProps} />);
-    const editButton = screen.getByTestId("edit-message-button");
-    expect(editButton).toBeInTheDocument();
+    expect(screen.getByTestId("edit-message-button")).toBeInTheDocument();
+    expect(screen.getByTestId("retry-message-button")).toBeInTheDocument();
   });
 
-  it("should not render any buttons for user messages when loading", () => {
+  it("should not render any buttons when loading", () => {
     render(<MessageActions {...defaultProps} isLoading={true} />);
     expect(screen.queryByTestId("edit-message-button")).toBeNull();
     expect(screen.queryByTestId("retry-message-button")).toBeNull();
@@ -33,8 +33,8 @@ describe("MessageActions", () => {
         isLastAssistantMessage={true}
       />,
     );
-    const retryButton = screen.getByTestId("retry-message-button");
-    expect(retryButton).toBeInTheDocument();
+    const retryButtons = screen.getAllByTestId("retry-message-button");
+    expect(retryButtons.length).toBeGreaterThan(0);
   });
 
   it("should not render retry button for non-last assistant messages", () => {
@@ -70,13 +70,12 @@ describe("MessageActions", () => {
     expect(screen.queryByTestId("message-actions")).toBeNull();
   });
 
-  it("should call onRetry when retry button is clicked", () => {
+  it("should call onRetry with messageIndex when retry button is clicked on user message", () => {
     const onRetry = vi.fn();
     render(
       <MessageActions
         {...defaultProps}
-        role="assistant"
-        isLastAssistantMessage={true}
+        messageIndex={2}
         onRetry={onRetry}
       />,
     );
@@ -85,7 +84,27 @@ describe("MessageActions", () => {
       fireEvent.click(screen.getByTestId("retry-message-button"));
     });
 
-    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onRetry).toHaveBeenCalledWith(2);
+  });
+
+  it("should call onRetry with messageIndex when retry button is clicked on assistant message", () => {
+    const onRetry = vi.fn();
+    render(
+      <MessageActions
+        {...defaultProps}
+        role="assistant"
+        messageIndex={3}
+        isLastAssistantMessage={true}
+        onRetry={onRetry}
+      />,
+    );
+
+    const retryButtons = screen.getAllByTestId("retry-message-button");
+    act(() => {
+      fireEvent.click(retryButtons[0]);
+    });
+
+    expect(onRetry).toHaveBeenCalledWith(3);
   });
 
   it("should show edit textarea when edit button is clicked", async () => {
