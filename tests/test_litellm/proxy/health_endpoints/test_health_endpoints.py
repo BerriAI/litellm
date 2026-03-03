@@ -148,7 +148,7 @@ async def test_db_health_error_flag_off_raises_no_reconnect(prisma_error):
 @pytest.mark.parametrize(
     "prisma_error",
     [
-        PrismaError(),
+        PrismaError("Can't reach database server"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
     ],
@@ -187,7 +187,7 @@ async def test_db_health_error_flag_on_reconnect_succeeds(prisma_error):
 @pytest.mark.parametrize(
     "prisma_error",
     [
-        PrismaError(),
+        PrismaError("Can't reach database server"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
     ],
@@ -217,6 +217,38 @@ async def test_db_health_error_flag_on_reconnect_fails(prisma_error):
     assert result["status"] == "disconnected"
     mock_prisma.disconnect.assert_called_once()
     mock_prisma.connect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_db_health_non_transport_error_skips_reconnect():
+    """
+    When health_check raises a non-transport error (e.g. data-layer),
+    skip the reconnect cycle since the DB is reachable.
+    A PrismaError without connection keywords is treated as non-transport.
+    handle_db_exception still re-raises non-connection errors, but the
+    cache is invalidated before the re-raise.
+    """
+    non_transport_error = PrismaError("UniqueViolationError")
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=non_transport_error)
+    mock_prisma.disconnect = AsyncMock()
+    mock_prisma.connect = AsyncMock()
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "connected",
+        "last_updated": datetime.now() - timedelta(seconds=20),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_requests_on_db_unavailable": False},
+    ):
+        with pytest.raises(PrismaError):
+            await _db_health_readiness_check()
+
+    assert _health_endpoints_module.db_health_cache["status"] == "disconnected"
+    mock_prisma.disconnect.assert_not_called()
+    mock_prisma.connect.assert_not_called()
 
 
 @pytest.mark.asyncio
