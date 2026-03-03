@@ -147,3 +147,13 @@ class BaseTextToSpeechConfig(ABC):
             headers=headers,
         )
 
+    @property
+    def supports_streaming(self) -> bool:
+        """
+        Whether this provider supports true streaming for TTS responses.
+
+        By default, this is True for most providers. Providers that don't support
+        streaming (e.g., Vertex AI which returns base64 JSON, RunwayML which uses
+        polling) should override this to return False.
+        """
+        return True
