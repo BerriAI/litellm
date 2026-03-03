@@ -105,6 +105,7 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.db.prisma_metrics_collector import PrismaMetricsCollector
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -2313,6 +2314,7 @@ class PrismaClient:
         self._watching_engine: bool = False
         self._engine_confirmed_dead: bool = False
         self._engine_wait_thread: Optional[threading.Thread] = None
+        self._metrics_collector: Optional[PrismaMetricsCollector] = None
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -3946,6 +3948,8 @@ class PrismaClient:
             verbose_proxy_logger.info(
                 "Prisma DB reconnect succeeded. reason=%s", reason
             )
+            if self._metrics_collector is not None:
+                self._metrics_collector.increment_engine_restarts()
         except Exception as reconnect_err:
             self._consecutive_reconnect_failures += 1
             verbose_proxy_logger.error(
@@ -4062,6 +4066,10 @@ class PrismaClient:
         )
         await self._start_engine_watcher()
 
+        if PrismaMetricsCollector.should_enable() and self._metrics_collector is None:
+            self._metrics_collector = PrismaMetricsCollector(self)
+            self._metrics_collector.start()
+
     async def stop_db_health_watchdog_task(self) -> None:
         """Stop DB health watchdog task and engine watcher gracefully."""
         self._stop_engine_watcher()
@@ -4074,6 +4082,10 @@ class PrismaClient:
             pass
         self._db_health_watchdog_task = None
         verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
+
+        if self._metrics_collector is not None:
+            await self._metrics_collector.stop()
+            self._metrics_collector = None
 
     async def _db_health_watchdog_loop(self) -> None:
         while True:
