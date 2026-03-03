@@ -346,6 +346,8 @@ class DualCache(BaseCache):
         )
         try:
             if self.in_memory_cache is not None:
+                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                    kwargs["ttl"] = self.default_in_memory_ttl
                 await self.in_memory_cache.async_set_cache(key, value, **kwargs)
 
             if self.redis_cache is not None and local_only is False:
@@ -367,6 +369,8 @@ class DualCache(BaseCache):
         )
         try:
             if self.in_memory_cache is not None:
+                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                    kwargs["ttl"] = self.default_in_memory_ttl
                 await self.in_memory_cache.async_set_cache_pipeline(
                     cache_list=cache_list, **kwargs
                 )
