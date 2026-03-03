@@ -133,8 +133,8 @@ from ..integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
-from ..integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+from ..integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from ..integrations.dotprompt import DotpromptManager
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
@@ -5045,8 +5045,15 @@ class StandardLoggingPayloadSetup:
             return str(dynamic_litellm_session_id)
         elif dynamic_litellm_trace_id:
             return str(dynamic_litellm_trace_id)
-        else:
-            return logging_obj.litellm_trace_id
+        # Fallback: use metadata.session_id or metadata.trace_id for call chaining
+        metadata = litellm_params.get("metadata") or {}
+        metadata_session_id = metadata.get("session_id")
+        metadata_trace_id = metadata.get("trace_id")
+        if metadata_session_id:
+            return str(metadata_session_id)
+        if metadata_trace_id:
+            return str(metadata_trace_id)
+        return logging_obj.litellm_trace_id
 
     @staticmethod
     def _get_user_agent_tags(proxy_server_request: dict) -> Optional[List[str]]:
