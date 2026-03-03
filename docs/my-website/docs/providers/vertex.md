@@ -1685,6 +1685,7 @@ litellm.vertex_location = "us-central1 # Your Location
 | gemini-2.5-pro   | `completion('gemini-2.5-pro', messages)`, `completion('vertex_ai/gemini-2.5-pro', messages)` |
 | gemini-2.5-flash-preview-09-2025   | `completion('gemini-2.5-flash-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-preview-09-2025', messages)` |
 | gemini-2.5-flash-lite-preview-09-2025   | `completion('gemini-2.5-flash-lite-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-lite-preview-09-2025', messages)` |
+| gemini-3.1-flash-lite-preview   | `completion('gemini-3.1-flash-lite-preview', messages)`, `completion('vertex_ai/gemini-3.1-flash-lite-preview', messages)` |
 
 ## Private Service Connect (PSC) Endpoints
 
