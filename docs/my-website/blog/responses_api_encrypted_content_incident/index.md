@@ -119,32 +119,36 @@ Implemented a new `encrypted_content_affinity` pre-call check that intelligently
 
 ### Implementation
 
-**1. Encoding `model_id` into output item IDs** ([`responses/utils.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/responses/utils.py))
+**1. Encoding `model_id` into output items** ([`responses/utils.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/responses/utils.py))
 
-The same approach used for `previous_response_id` affinity — no cache needed. When a response contains output items with `encrypted_content`, LiteLLM rewrites their IDs to embed the originating deployment's `model_id`:
+The same approach used for `previous_response_id` affinity — no cache needed. When a response contains output items with `encrypted_content`, LiteLLM encodes the originating deployment's `model_id` in **two places** for redundancy:
+
+1. **Into the item ID** (if present): `rs_abc123` → `encitem_{base64("litellm:model_id:{model_id};item_id:rs_abc123")}`
+2. **Into the encrypted_content itself**: Wraps the content with `litellm_enc:{base64("model_id:{model_id}")};{original_encrypted_content}`
 
 ```python
-# On response: rs_abc123 → encitem_{base64("litellm:model_id:{model_id};item_id:rs_abc123")}
+# Encoding item IDs (when present)
 def _build_encrypted_item_id(model_id: str, item_id: str) -> str:
     assembled = f"litellm:model_id:{model_id};item_id:{item_id}"
     encoded = base64.b64encode(assembled.encode("utf-8")).decode("utf-8")
     return f"encitem_{encoded}"
 
-# On request: decode encitem_... → extract model_id for routing
-def _decode_encrypted_item_id(encoded_id: str) -> Optional[Dict[str, str]]:
-    if not encoded_id.startswith("encitem_"):
-        return None
-    cleaned = encoded_id[len("encitem_"):]
-    missing = len(cleaned) % 4
-    if missing:
-        cleaned += "=" * (4 - missing)  # restore padding stripped in transit
-    decoded = base64.b64decode(cleaned).decode("utf-8")
-    model_id, item_id = decoded.split(";", 1)
-    return {"model_id": model_id.replace("litellm:model_id:", ""),
-            "item_id": item_id.replace("item_id:", "")}
+# Wrapping encrypted_content (always, for redundancy)
+def _wrap_encrypted_content_with_model_id(encrypted_content: str, model_id: str) -> str:
+    metadata = f"model_id:{model_id}"
+    encoded_metadata = base64.b64encode(metadata.encode("utf-8")).decode("utf-8")
+    return f"litellm_enc:{encoded_metadata};{encrypted_content}"
 ```
 
-Before forwarding to the upstream provider, LiteLLM restores the original item IDs so the provider never sees the encoded form:
+**Why wrap encrypted_content directly?** Some clients (like Codex) don't consistently send item IDs in follow-up requests, but they always send the `encrypted_content` itself. By embedding `model_id` into the content, affinity works even when IDs are missing.
+
+**Streaming responses:** The wrapping logic is applied to both:
+- Final response objects (non-streaming)
+- Individual streaming events (`response.output_item.added`, `response.output_item.done`)
+
+This ensures clients receiving streaming responses get wrapped content they can send back.
+
+Before forwarding to the upstream provider, LiteLLM restores the original item IDs and unwraps encrypted_content so the provider never sees the encoded form:
 
 ```python
 # In responses/main.py — before calling the handler
@@ -153,22 +157,43 @@ input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(in
 
 **2. `EncryptedContentAffinityCheck` — routing only** ([`encrypted_content_affinity_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router_utils/pre_call_checks/encrypted_content_affinity_check.py))
 
-No `async_log_success_event` or cache lookups — the `model_id` is decoded directly from the item ID:
+No `async_log_success_event` or cache lookups — the `model_id` is decoded directly from the item ID or encrypted_content:
 
 ```python
 class EncryptedContentAffinityCheck(CustomLogger):
     async def async_filter_deployments(self, model, healthy_deployments, ...):
-        """Decode encitem_ IDs in input to extract model_id and pin to that deployment."""
+        """Extract model_id from input items (ID or encrypted_content) and pin to that deployment."""
         for item in request_kwargs.get("input", []):
-            decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item.get("id", ""))
-            if decoded:
+            # Try to extract model_id from two sources:
+            model_id = self._extract_model_id_from_input(item)
+            
+            if model_id:
                 deployment = self._find_deployment_by_model_id(
-                    healthy_deployments, decoded["model_id"]
+                    healthy_deployments, model_id
                 )
                 if deployment:
                     request_kwargs["_encrypted_content_affinity_pinned"] = True
                     return [deployment]
         return healthy_deployments
+    
+    def _extract_model_id_from_input(self, item: dict) -> Optional[str]:
+        """Extract model_id from either encoded ID or wrapped encrypted_content."""
+        # 1. Try decoding from item ID (if present)
+        item_id = item.get("id", "")
+        if item_id:
+            decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
+            if decoded:
+                return decoded["model_id"]
+        
+        # 2. Try unwrapping from encrypted_content (fallback for clients that omit IDs)
+        encrypted_content = item.get("encrypted_content", "")
+        if encrypted_content and encrypted_content.startswith("litellm_enc:"):
+            model_id, _ = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
+                encrypted_content
+            )
+            return model_id
+        
+        return None
 ```
 
 **3. Rate Limit Bypass** ([`router.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router.py))
@@ -217,6 +242,57 @@ router_settings:
 | 5 | Implement rate limit bypass for affinity-pinned requests | ✅ Done | [`router.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router.py) |
 | 6 | Unit tests: encoding/decoding utilities, routing, RPM bypass | ✅ Done | [`test_encrypted_content_affinity_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/tests/test_litellm/router_utils/pre_call_checks/test_encrypted_content_affinity_check.py) |
 | 7 | Documentation: Responses API guide, load balancing guide, config reference | ✅ Done | [Docs](https://docs.litellm.ai/docs/response_api#encrypted-content-affinity-multi-region-load-balancing) |
+| 8 | **[Mar 3]** Fix streaming events to wrap encrypted_content | ✅ Done | [`responses/streaming_iterator.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/responses/streaming_iterator.py) |
+
+---
+
+## Follow-up Fix: Streaming Responses (Mar 3, 2026)
+
+### The Issue
+
+After the initial fix was deployed, users reported that the `invalid_encrypted_content` error **still occurred** when using streaming responses with clients like Codex. Investigation revealed:
+
+- ✅ Non-streaming responses: `encrypted_content` was correctly wrapped with `litellm_enc:` prefix
+- ❌ Streaming responses: Individual `response.output_item.added` and `response.output_item.done` events contained **raw, unwrapped** `encrypted_content`
+
+Since Codex and other clients consume responses as streams, they received unwrapped content in these events and sent it back in follow-up requests, causing the affinity check to fail.
+
+### The Root Cause
+
+The `_update_encrypted_content_item_ids_in_response` function only modified the **final** response object, which is used for non-streaming responses. For streaming responses, individual chunks are processed by `ResponsesAPIStreamingIterator._process_chunk`, which was **not** applying the wrapping logic to streaming events.
+
+### The Fix
+
+Modified `litellm/litellm/responses/streaming_iterator.py` to wrap `encrypted_content` in streaming events:
+
+```python
+# In ResponsesAPIStreamingIterator._process_chunk
+if (
+    self.litellm_metadata
+    and self.litellm_metadata.get("encrypted_content_affinity_enabled")
+):
+    event_type = getattr(openai_responses_api_chunk, "type", None)
+    if event_type in (
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+    ):
+        item = getattr(openai_responses_api_chunk, "item", None)
+        if item:
+            encrypted_content = getattr(item, "encrypted_content", None)
+            if encrypted_content and isinstance(encrypted_content, str):
+                model_id = (
+                    self.litellm_metadata.get("model_info", {}).get("id")
+                    if self.litellm_metadata
+                    else None
+                )
+                if model_id:
+                    wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                        encrypted_content, model_id
+                    )
+                    setattr(item, "encrypted_content", wrapped_content)
+```
+
+This ensures that **all** `encrypted_content` sent to clients (streaming or non-streaming) is wrapped with `model_id` metadata, enabling consistent affinity routing.
 
 ---
 

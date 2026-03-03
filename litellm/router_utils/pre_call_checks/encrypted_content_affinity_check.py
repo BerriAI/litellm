@@ -8,24 +8,29 @@ different deployment (different org), OpenAI rejects it with an `invalid_encrypt
 error because the organization_id doesn't match.
 
 This callback solves the problem by encoding the originating deployment's ``model_id``
-directly into the item IDs of output items that carry ``encrypted_content`` (the same
-approach used by the responses-API affinity for ``previous_response_id``).  The encoded
-ID is decoded on the next request so the router can pin to the correct deployment without
-any cache lookup.
+into the response output items that carry ``encrypted_content``. Two encoding strategies:
+
+1. **Items with IDs**: Encode model_id into the item ID itself (e.g., ``encitem_...``)
+2. **Items without IDs** (Codex): Wrap the encrypted_content with model_id metadata
+   (e.g., ``litellm_enc:{base64_metadata};{original_encrypted_content}``)
+
+The encoded model_id is decoded on the next request so the router can pin to the correct
+deployment without any cache lookup.
 
 Response post-processing (encoding) is handled by
 ``ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response`` which is
 called inside ``_update_responses_api_response_id_with_model_id`` in ``responses/utils.py``.
 
-Request pre-processing (ID restoration before forwarding to upstream) is handled by
+Request pre-processing (ID/content restoration before forwarding to upstream) is handled by
 ``ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input`` which is called
 in ``get_optional_params_responses_api``.
 
 This pre-call check is responsible only for the routing decision: it reads the encoded
-``model_id`` out of the item IDs and pins the request to the matching deployment.
+``model_id`` from either item IDs or wrapped encrypted_content and pins the request to
+the matching deployment.
 
 Safe to enable globally:
-- Only activates when encoded item IDs appear in the request ``input``.
+- Only activates when encoded markers appear in the request ``input``.
 - No effect on embedding models, chat completions, or first-time requests.
 - No quota reduction -- first requests are fully load balanced.
 - No cache required.
@@ -60,12 +65,16 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _extract_model_id_from_input(request_input: Any) -> Optional[str]:
         """
-        Scan ``input`` items for litellm-encoded encrypted-content item IDs and
+        Scan ``input`` items for litellm-encoded encrypted-content markers and
         return the ``model_id`` embedded in the first one found.
 
+        Checks both:
+        1. Encoded item IDs (encitem_...) - for clients that send IDs
+        2. Wrapped encrypted_content (litellm_enc:...) - for clients like Codex that don't send IDs
+
         ``input`` can be:
-        - a plain string  -> no encoded IDs
-        - a list of items -> check each item's ``id`` field
+        - a plain string  -> no encoded markers
+        - a list of items -> check each item's ``id`` and ``encrypted_content`` fields
         """
         if not isinstance(request_input, list):
             return None
@@ -73,12 +82,25 @@ class EncryptedContentAffinityCheck(CustomLogger):
         for item in request_input:
             if not isinstance(item, dict):
                 continue
+
+            # First, try to decode from item ID (if present)
             item_id = item.get("id")
-            if not item_id or not isinstance(item_id, str):
-                continue
-            decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
-            if decoded:
-                return decoded.get("model_id")
+            if item_id and isinstance(item_id, str):
+                decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
+                if decoded:
+                    return decoded.get("model_id")
+
+            # If no encoded ID, check if encrypted_content itself is wrapped
+            encrypted_content = item.get("encrypted_content")
+            if encrypted_content and isinstance(encrypted_content, str):
+                (
+                    model_id,
+                    _,
+                ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
+                    encrypted_content
+                )
+                if model_id:
+                    return model_id
 
         return None
 
