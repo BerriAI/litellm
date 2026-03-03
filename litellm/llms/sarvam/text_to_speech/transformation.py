@@ -273,11 +273,13 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
         (without /v1), unlike the chat completions endpoint which uses /v1.
         We ignore the api_base from providers.json if it contains /v1.
         """
-        # Use explicit api_base only if it doesn't end with /v1
-        if api_base and not api_base.rstrip("/").endswith("/v1"):
-            base_url = api_base
+        if api_base:
+            base_url = api_base.rstrip("/")
+            if base_url.endswith("/v1"):
+                base_url = base_url[:-3]
         else:
             base_url = self.SARVAM_API_BASE
+        base_url = base_url.rstrip("/")
         base_url = base_url.rstrip("/")
 
         return f"{base_url}{self.TTS_ENDPOINT_PATH}"
