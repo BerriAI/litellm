@@ -805,6 +805,7 @@ const sidebars = {
         "providers/anyscale",
         "providers/apertis",
         "providers/baseten",
+        "providers/black_forest_labs",
         "providers/black_forest_labs_img_edit",
         "providers/bytez",
         "providers/cerebras",
