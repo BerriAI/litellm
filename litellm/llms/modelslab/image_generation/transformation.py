@@ -182,11 +182,12 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
         if "/" in model_id:
             model_id = model_id.split("/", 1)[1]
 
+        # Put optional_params first, then critical fields to prevent override
         request_body: dict = {
+            **optional_params,
             "key": api_key,
             "prompt": prompt,
             "model_id": model_id,
-            **optional_params,
         }
         return request_body
 

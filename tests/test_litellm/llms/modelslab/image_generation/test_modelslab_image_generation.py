@@ -185,6 +185,21 @@ class TestModelsLabImageGenerationConfig:
         assert result["width"] == 1024
         assert result["height"] == 1024
 
+    def test_transform_request_optional_params_cannot_override_key(self):
+        """Test that optional_params cannot override the critical fields."""
+        result = self.config.transform_image_generation_request(
+            model="modelslab/flux",
+            prompt="Original prompt",
+            optional_params={"key": "hacked-key", "prompt": "hacked-prompt", "model_id": "hacked-model"},
+            litellm_params={"api_key": "real-key"},
+            headers={},
+        )
+
+        # Critical fields should be preserved from litellm_params, not optional_params
+        assert result["key"] == "real-key"
+        assert result["prompt"] == "Original prompt"
+        assert result["model_id"] == "flux"
+
     def test_transform_image_generation_request_strips_provider_prefix(self):
         result = self.config.transform_image_generation_request(
             model="modelslab/sdxl",
