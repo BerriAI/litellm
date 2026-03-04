@@ -1,7 +1,7 @@
 import os
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Union
+from typing import List, Optional, Set, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -201,6 +201,7 @@ class HangingRequestData(BaseModel):
     key_alias: Optional[str] = None
     team_alias: Optional[str] = None
     alerting_metadata: Optional[dict] = None
+    start_time: float = 0.0  # monotonic time when request was added
 
 
 class AlertTypeConfig(LiteLLMPydanticObjectBase):
