@@ -212,7 +212,8 @@ class BlackForestLabsImageEdit:
             headers.update(extra_headers)
 
         # Get complete URL
-        api_base = self.config.get_complete_url(
+        # Get complete URL
+        complete_url = self.config.get_complete_url(
             model=model,
             api_base=api_base,
             litellm_params=litellm_params_dict,
