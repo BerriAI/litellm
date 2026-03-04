@@ -69,3 +69,7 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return f"{api_base}/responses"
 
         return f"{api_base}/v1/responses"
+
+    def supports_native_websocket(self) -> bool:
+        """Hosted vLLM does not support native WebSocket for Responses API"""
+        return False

@@ -344,6 +344,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 )
         return False
 
+    def supports_native_websocket(self) -> bool:
+        """OpenAI supports native WebSocket for Responses API"""
+        return True
+
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
     #########################################################
