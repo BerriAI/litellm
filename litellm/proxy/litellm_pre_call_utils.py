@@ -799,7 +799,7 @@ class LiteLLMProxyRequestSetup:
         Add team-based callbacks from the config
         """
         team_config = proxy_config.load_team_config(team_id=team_id)
-        if not isinstance(team_config, dict) or len(team_config.keys()) == 0:
+        if len(team_config.keys()) == 0:
             return None
 
         callback_vars_dict = {**team_config.get("callback_vars", team_config)}
