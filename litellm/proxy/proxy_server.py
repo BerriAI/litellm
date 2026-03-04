@@ -3052,13 +3052,22 @@ class ProxyConfig:
                         litellm.logging_callback_manager.add_litellm_success_callback(
                             resolved
                         )
-                    if "prometheus" in callback:
-                        from litellm.integrations.prometheus import (
-                            PrometheusLogger,
+                    else:
+                        resolved = (
+                            litellm.logging_callback_manager._add_custom_callback_generic_api_str(
+                                callback
+                            )
                         )
+                        litellm.logging_callback_manager.add_litellm_success_callback(
+                            resolved
+                        )
+                        if "prometheus" in callback:
+                            from litellm.integrations.prometheus import (
+                                PrometheusLogger,
+                            )
 
-                        if PrometheusLogger is not None:
-                            PrometheusLogger._mount_metrics_endpoint()
+                            if PrometheusLogger is not None:
+                                PrometheusLogger._mount_metrics_endpoint()
             if failure_from_settings and "failure_callback" not in litellm_settings:
                 for callback in failure_from_settings:
                     if "." in callback:
