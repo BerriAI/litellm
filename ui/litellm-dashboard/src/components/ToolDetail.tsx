@@ -3,7 +3,7 @@
 import { ArrowLeftOutlined, HistoryOutlined, ToolOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Select, Spin } from "antd";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
 import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
@@ -11,10 +11,12 @@ import { PolicySelect } from "@/components/ToolPolicies/PolicySelect";
 import {
   deleteToolPolicyOverride,
   fetchToolDetail,
+  fetchToolPolicyOptions,
   getToolUsageLogs,
   keyListCall,
   teamListCall,
   updateToolPolicy,
+  type ToolPolicyOption,
   type ToolPolicyOverrideRow,
 } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
@@ -23,11 +25,6 @@ interface ToolDetailProps {
   toolName: string;
   onBack: () => void;
   accessToken: string | null;
-}
-
-interface TeamOption {
-  team_id: string;
-  team_alias?: string;
 }
 
 interface KeyOption {
@@ -51,7 +48,8 @@ function getDefaultLogsDateRange(): { start: string; end: string } {
 export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
   const queryClient = useQueryClient();
   const [overrideSaving, setOverrideSaving] = useState(false);
-  const [policySaving, setPolicySaving] = useState(false);
+  const [inputPolicySaving, setInputPolicySaving] = useState(false);
+  const [outputPolicySaving, setOutputPolicySaving] = useState(false);
   const [blockScope, setBlockScope] = useState<"team" | "key">("team");
   const [blockTeamId, setBlockTeamId] = useState<string | null>(null);
   const [blockKey, setBlockKey] = useState<KeyOption | null>(null);
@@ -62,6 +60,13 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     queryKey: [TOOL_DETAIL_QUERY_KEY, toolName],
     queryFn: () => fetchToolDetail(accessToken!, toolName),
     enabled: !!accessToken && !!toolName,
+  });
+
+  const { data: policyOptions } = useQuery({
+    queryKey: ["tool-policy-options"],
+    queryFn: () => fetchToolPolicyOptions(accessToken!),
+    enabled: !!accessToken,
+    staleTime: 60_000,
   });
 
   const { data: teamsData } = useQuery({
@@ -129,20 +134,36 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     queryClient.invalidateQueries({ queryKey: [TOOL_DETAIL_QUERY_KEY, toolName] });
   }, [queryClient, toolName]);
 
-  const handlePolicyChange = useCallback(
-    async (name: string, newPolicy: string) => {
+  const handleInputPolicyChange = useCallback(
+    async (_name: string, newPolicy: string) => {
       if (!accessToken) return;
-      setPolicySaving(true);
+      setInputPolicySaving(true);
       try {
-        await updateToolPolicy(accessToken, name, newPolicy);
+        await updateToolPolicy(accessToken, toolName, { input_policy: newPolicy });
         invalidateDetail();
       } catch (e: unknown) {
-        alert(`Failed to update policy: ${e instanceof Error ? e.message : String(e)}`);
+        alert(`Failed to update input policy: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
-        setPolicySaving(false);
+        setInputPolicySaving(false);
       }
     },
-    [accessToken, invalidateDetail]
+    [accessToken, toolName, invalidateDetail]
+  );
+
+  const handleOutputPolicyChange = useCallback(
+    async (_name: string, newPolicy: string) => {
+      if (!accessToken) return;
+      setOutputPolicySaving(true);
+      try {
+        await updateToolPolicy(accessToken, toolName, { output_policy: newPolicy });
+        invalidateDetail();
+      } catch (e: unknown) {
+        alert(`Failed to update output policy: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setOutputPolicySaving(false);
+      }
+    },
+    [accessToken, toolName, invalidateDetail]
   );
 
   const handleAddOverride = useCallback(async () => {
@@ -152,7 +173,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     if (!isTeam && !blockKey?.token) return;
     setOverrideSaving(true);
     try {
-      await updateToolPolicy(accessToken, toolName, "blocked", {
+      await updateToolPolicy(accessToken, toolName, { input_policy: "blocked" }, {
         team_id: isTeam ? blockTeamId : undefined,
         key_hash: !isTeam ? blockKey!.token : undefined,
         key_alias: !isTeam ? blockKey!.key_alias : undefined,
@@ -211,6 +232,13 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
 
   const { tool, overrides } = detail;
 
+  const inputDesc = policyOptions?.input_policies?.find(
+    (p) => p.value === tool.input_policy
+  )?.description;
+  const outputDesc = policyOptions?.output_policies?.find(
+    (p) => p.value === tool.output_policy
+  )?.description;
+
   return (
     <div>
       <div className="mb-6">
@@ -235,23 +263,67 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
                 {(tool.call_count ?? 0).toLocaleString()} calls
               </span>
             </div>
+            <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-600">
+              {tool.user_agent && (
+                <div className="flex items-center gap-1.5">
+                  <dt className="font-medium text-gray-500 whitespace-nowrap">User Agent:</dt>
+                  <dd className="font-mono truncate max-w-[40ch]" title={tool.user_agent}>{tool.user_agent}</dd>
+                </div>
+              )}
+              {tool.created_at && (
+                <div className="flex items-center gap-1.5">
+                  <dt className="font-medium text-gray-500 whitespace-nowrap">First Discovered:</dt>
+                  <dd>{new Date(tool.created_at).toLocaleString()}</dd>
+                </div>
+              )}
+              {tool.last_used_at && (
+                <div className="flex items-center gap-1.5">
+                  <dt className="font-medium text-gray-500 whitespace-nowrap">Last Used:</dt>
+                  <dd>{new Date(tool.last_used_at).toLocaleString()}</dd>
+                </div>
+              )}
+            </dl>
           </div>
         </div>
       </div>
 
       <div className="space-y-6">
-        <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">Global policy</h2>
-          <PolicySelect
-            value={tool.call_policy}
-            toolName={tool.tool_name}
-            saving={policySaving}
-            onChange={handlePolicyChange}
-            size="middle"
-            minWidth={140}
-            stopPropagation={false}
-          />
-        </section>
+        {/* Two-panel policy layout */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
+            <h2 className="text-sm font-semibold text-gray-700 mb-1">Input Policy</h2>
+            <p className="text-xs text-gray-500 mb-3">
+              {inputDesc ?? "Controls what data this tool is allowed to accept."}
+            </p>
+            <PolicySelect
+              value={tool.input_policy}
+              toolName={tool.tool_name}
+              saving={inputPolicySaving}
+              onChange={handleInputPolicyChange}
+              policyType="input"
+              size="middle"
+              minWidth={140}
+              stopPropagation={false}
+            />
+          </section>
+
+          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
+            <h2 className="text-sm font-semibold text-gray-700 mb-1">Output Policy</h2>
+            <p className="text-xs text-gray-500 mb-3">
+              {outputDesc ?? "Controls how this tool's output is trusted by downstream tools."}
+            </p>
+            <PolicySelect
+              value={tool.output_policy}
+              toolName={tool.tool_name}
+              saving={outputPolicySaving}
+              onChange={handleOutputPolicyChange}
+              policyType="output"
+              size="middle"
+              minWidth={140}
+              stopPropagation={false}
+            />
+          </section>
+        </div>
 
         {overrides.length > 0 && (
           <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
