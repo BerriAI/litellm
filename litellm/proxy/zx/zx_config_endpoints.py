@@ -10,7 +10,6 @@ from litellm.proxy.management_endpoints import key_management_endpoints
 from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
-    UpdateKeyRequest,
 )
 from . import zixun_auth
 from . import zx_development_data
@@ -243,26 +242,8 @@ async def cli_get_key(
         if key_res is not None:
             key = key_res.key
 
-        # 旧 key 的 metadata 动态更新：若 device_id 存在但旧 key 的 metadata 中缺少，则动态补充
-        if device_id and key_or_key_id:
-            try:
-                # 准备更新请求
-                update_request = UpdateKeyRequest(
-                    key=key_or_key_id, metadata=key_metadata
-                )
-                # 调用 update_key_fn 更新旧 key 的 metadata
-                await key_management_endpoints.update_key_fn(
-                    request=Request({"type": "http", "query_string": ""}),
-                    data=update_request,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_changed_by="ai_developer",
-                )
-                logger.info(
-                    f"user[{user_id}] key[{key_or_key_id}] metadata updated with device_id={device_id}"
-                )
-            except Exception as e:
-                logger.warning(f"user[{user_id}] failed to update key metadata: {e}")
-                # 不阻塞返回，继续返回 key
+        # 注：旧 key 的 metadata 已在 create_or_get_user_key 中合并完成
+        # 如果需要额外的元数据处理，可在此扩展
 
     return {"key": key}
 
