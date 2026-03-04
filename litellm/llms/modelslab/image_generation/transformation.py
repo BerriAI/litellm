@@ -36,6 +36,11 @@ else:
 MODELSLAB_POLLING_INTERVAL = 3  # seconds between polls
 MODELSLAB_POLLING_TIMEOUT = 300  # 5 minutes max
 
+# HTTP status codes that should be retried (transient errors)
+TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # seconds between retries
+
 # Fields that contain sensitive data and should be redacted from logs
 MODELSLAB_SENSITIVE_FIELDS: List[str] = ["key"]
 
@@ -223,12 +228,32 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                     f"Generation ID: {generation_id}"
                 )
 
-            response = client.post(
-                url=fetch_url,
-                json={"key": api_key},
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
+            # Retry logic for transient HTTP errors
+            last_error = None
+            response = None
+            for attempt in range(MAX_RETRIES):
+                try:
+                    response = client.post(
+                        url=fetch_url,
+                        json={"key": api_key},
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response.raise_for_status()
+                    break  # Success, exit retry loop
+                except httpx.HTTPStatusError as e:
+                    last_error = e
+                    if response is not None and response.status_code in TRANSIENT_HTTP_STATUSES and attempt < MAX_RETRIES - 1:
+                        verbose_logger.warning(
+                            f"ModelsLab: poll got {response.status_code}, retrying ({attempt + 1}/{MAX_RETRIES})..."
+                        )
+                        time.sleep(RETRY_DELAY)
+                        continue
+                    # Not a transient error or max retries reached, propagate
+                    raise
+
+            if response is None:
+                raise last_error or ValueError("Failed to get response from ModelsLab fetch endpoint")
+
             data = response.json()
             status = data.get("status", "")
 
