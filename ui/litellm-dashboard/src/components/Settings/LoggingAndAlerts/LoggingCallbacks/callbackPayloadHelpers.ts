@@ -73,7 +73,6 @@ export function buildCallbackPayload(
         event_types: eventTypes,
       }
     : { callback_type: callbackName, event_types: eventTypes };
-  const mergedCallbackSettings = { ...(currentCallbackSettings || {}), [callbackName]: callbackSettingsEntry };
   const { callback_type: _ct, callback: _cb, ...envVars } = formValues as Record<string, unknown>;
   const mergedCallbackSettings = { ...(currentCallbackSettings || {}), [callbackName]: callbackSettingsEntry };
   return {
