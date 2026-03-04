@@ -1099,7 +1099,14 @@ class CustomStreamWrapper:
                 and self.custom_llm_provider in litellm._custom_providers
             ):
                 if self.received_finish_reason is not None:
-                    if "provider_specific_fields" not in chunk:
+                    _chunk_has_content = isinstance(chunk, dict) and (
+                        bool(chunk.get("text", ""))
+                        or chunk.get("tool_use") is not None
+                    )
+                    if not _chunk_has_content and (
+                        not isinstance(chunk, dict)
+                        or "provider_specific_fields" not in chunk
+                    ):
                         raise StopIteration
                 anthropic_response_obj: GChunk = cast(GChunk, chunk)
                 completion_obj["content"] = anthropic_response_obj["text"]
