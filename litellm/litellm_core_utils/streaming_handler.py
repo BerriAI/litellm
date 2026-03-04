@@ -79,6 +79,45 @@ def print_verbose(print_statement):
         pass
 
 
+def _safe_model_deep_copy(model: "BaseModel") -> "BaseModel":
+    """Thread-safe deep copy of a Pydantic model.
+
+    ``model.model_copy(deep=True)`` delegates to ``copy.deepcopy`` which
+    iterates over ``pydantic_private``.  If another coroutine/thread
+    mutates the model while ``deepcopy`` is running, Python 3.13+ raises
+    ``RuntimeError: dictionary changed size during iteration``.
+
+    Fall back to ``model_validate(model_dump())`` which serialises to a
+    plain dict first — no shared mutable state to iterate over.
+    """
+    try:
+        return model.model_copy(deep=True)
+    except RuntimeError as e:
+        if "dictionary changed size" not in str(e):
+            raise
+        try:
+            copy = model.__class__.model_validate(model.model_dump(mode="json"))
+            # Preserve private attributes that model_dump() does not serialise
+            for attr in ("_hidden_params", "_response_headers"):
+                if hasattr(model, attr):
+                    try:
+                        val = getattr(model, attr)
+                        setattr(copy, attr, val.copy() if isinstance(val, dict) else val)
+                    except Exception:
+                        pass
+            return copy
+        except RuntimeError as fallback_err:
+            if "dictionary changed size" not in str(fallback_err):
+                raise
+            from litellm._logging import verbose_logger
+
+            verbose_logger.warning(
+                "model_validate fallback also hit concurrent mutation, returning original model reference: %s",
+                fallback_err,
+            )
+            return model
+
+
 class CustomStreamWrapper:
     def __init__(
         self,
@@ -1866,14 +1905,12 @@ class CustomStreamWrapper:
                         getattr(complete_streaming_response, "usage"),
                     )
                     self.cache_streaming_response(
-                        processed_chunk=complete_streaming_response.model_copy(
-                            deep=True
-                        ),
+                        processed_chunk=_safe_model_deep_copy(complete_streaming_response),
                         cache_hit=cache_hit,
                     )
                     executor.submit(
                         self.logging_obj.success_handler,
-                        complete_streaming_response.model_copy(deep=True),
+                        _safe_model_deep_copy(complete_streaming_response),
                         None,
                         None,
                         cache_hit,
@@ -2085,9 +2122,7 @@ class CustomStreamWrapper:
                     )
                     asyncio.create_task(
                         self.async_cache_streaming_response(
-                            processed_chunk=complete_streaming_response.model_copy(
-                                deep=True
-                            ),
+                            processed_chunk=_safe_model_deep_copy(complete_streaming_response),
                             cache_hit=cache_hit,
                         )
                     )
@@ -2108,9 +2143,10 @@ class CustomStreamWrapper:
                     self.sent_stream_usage = True
                     return response
 
+                _final_response = _safe_model_deep_copy(complete_streaming_response) if complete_streaming_response is not None else response
                 asyncio.create_task(
                     self.logging_obj.async_success_handler(
-                        complete_streaming_response,
+                        _final_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
@@ -2119,7 +2155,7 @@ class CustomStreamWrapper:
 
                 executor.submit(
                     self.logging_obj.success_handler,
-                    complete_streaming_response,
+                    _final_response,
                     cache_hit=cache_hit,
                     start_time=None,
                     end_time=None,
