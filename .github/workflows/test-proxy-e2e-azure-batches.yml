@@ -3,13 +3,14 @@ name: Proxy E2E Azure Batches Tests
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test-proxy-e2e-azure-batches:
+  proxy_e2e_azure_batches_tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -87,12 +88,3 @@ jobs:
             --maxfail=3 \
             --durations=10
 
-      - name: Upload test logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-logs-azure-batches
-          path: |
-            *.log
-            tests/proxy_e2e_azure_batches_tests/*.log
-          retention-days: 7
