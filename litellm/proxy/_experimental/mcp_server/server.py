@@ -2112,11 +2112,17 @@ if MCP_AVAILABLE:
                 status_code = int(e.code)
             except (ValueError, TypeError):
                 status_code = 500
-            error_response = JSONResponse(
-                status_code=status_code,
-                content={"error": e.message, "type": e.type},
-            )
-            await error_response(scope, receive, send)
+            try:
+                error_response = JSONResponse(
+                    status_code=status_code,
+                    content={"error": e.message, "type": e.type},
+                )
+                await error_response(scope, receive, send)
+            except Exception as response_error:
+                verbose_logger.exception(
+                    f"Failed to send ProxyException error response: {response_error}"
+                )
+                raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions
@@ -2176,18 +2182,21 @@ if MCP_AVAILABLE:
                 status_code = int(e.code)
             except (ValueError, TypeError):
                 status_code = 500
-            error_response = JSONResponse(
-                status_code=status_code,
-                content={"error": e.message, "type": e.type},
-            )
-            await error_response(scope, receive, send)
-
+            try:
+                error_response = JSONResponse(
+                    status_code=status_code,
+                    content={"error": e.message, "type": e.type},
+                )
+                await error_response(scope, receive, send)
+            except Exception as response_error:
+                verbose_logger.exception(
+                    f"Failed to send ProxyException error response: {response_error}"
+                )
+                raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            # Instead of re-raising, try to send a graceful error response
+            # Try to send a graceful error response for non-HTTP exceptions
             try:
-                # Send a proper HTTP error response instead of letting the exception bubble up
-
                 error_response = JSONResponse(
                     status_code=HTTP_500_INTERNAL_SERVER_ERROR,
                     content={"error": "MCP request failed", "details": str(e)},
