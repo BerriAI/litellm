@@ -27,7 +27,6 @@ import { ActivityMetrics, processActivityData } from "../../../activity_metrics"
 import { UsageExportHeader } from "../../../EntityUsageExport";
 import type { EntityType } from "../../../EntityUsageExport/types";
 import {
-  agentDailyActivityCall,
   customerDailyActivityCall,
   organizationDailyActivityCall,
   tagDailyActivityCall,
@@ -70,6 +69,220 @@ interface EntitySpendData {
     total_tokens: number;
   };
 }
+
+/** Stub data for agent usage until /agent/daily/activity is implemented. */
+const AGENT_USAGE_STUB: EntitySpendData = (() => {
+  const emptyMetrics = {
+    spend: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    api_requests: 0,
+    successful_requests: 0,
+    failed_requests: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  };
+  const makeMetrics = (overrides: Partial<typeof emptyMetrics>) => ({ ...emptyMetrics, ...overrides });
+  const days = 7;
+  const results: ExtendedDailyData[] = [];
+  let totalSpend = 0;
+  let totalRequests = 0;
+  let totalSuccessful = 0;
+  let totalFailed = 0;
+  let totalTokens = 0;
+
+  for (let d = days - 1; d >= 0; d--) {
+    const date = new Date();
+    date.setDate(date.getDate() - d);
+    const dateStr = date.toISOString().slice(0, 10);
+    const daySpend = 12 + d * 8 + (d % 3) * 5;
+    const dayRequests = 800 + d * 120 + (d % 2) * 200;
+    const daySuccessful = Math.floor(dayRequests * 0.94);
+    const dayFailed = dayRequests - daySuccessful;
+    const dayTokens = 45000 + d * 8000 + (d % 4) * 5000;
+
+    totalSpend += daySpend;
+    totalRequests += dayRequests;
+    totalSuccessful += daySuccessful;
+    totalFailed += dayFailed;
+    totalTokens += dayTokens;
+
+    const entitySpend1 = Math.round(daySpend * 0.4);
+    const entitySpend2 = Math.round(daySpend * 0.35);
+    const entitySpend3 = Math.round(daySpend * 0.25);
+
+    results.push({
+      date: dateStr,
+      metrics: makeMetrics({
+        spend: daySpend,
+        api_requests: dayRequests,
+        successful_requests: daySuccessful,
+        failed_requests: dayFailed,
+        total_tokens: dayTokens,
+        prompt_tokens: Math.floor(dayTokens * 0.6),
+        completion_tokens: Math.floor(dayTokens * 0.4),
+      }),
+      breakdown: {
+        model_groups: {},
+        mcp_servers: {},
+        entities: {
+          "agent-support-1": {
+            metrics: makeMetrics({
+              spend: entitySpend1,
+              api_requests: Math.floor(dayRequests * 0.45),
+              successful_requests: Math.floor(daySuccessful * 0.45),
+              failed_requests: Math.floor(dayFailed * 0.5),
+              total_tokens: Math.floor(dayTokens * 0.42),
+              prompt_tokens: Math.floor(dayTokens * 0.25),
+              completion_tokens: Math.floor(dayTokens * 0.17),
+            }),
+            metadata: { alias: "Support Agent" },
+            api_key_breakdown: {},
+          },
+          "agent-sales-1": {
+            metrics: makeMetrics({
+              spend: entitySpend2,
+              api_requests: Math.floor(dayRequests * 0.35),
+              successful_requests: Math.floor(daySuccessful * 0.35),
+              failed_requests: Math.floor(dayFailed * 0.3),
+              total_tokens: Math.floor(dayTokens * 0.35),
+              prompt_tokens: Math.floor(dayTokens * 0.21),
+              completion_tokens: Math.floor(dayTokens * 0.14),
+            }),
+            metadata: { alias: "Sales Bot" },
+            api_key_breakdown: {},
+          },
+          "agent-code-1": {
+            metrics: makeMetrics({
+              spend: entitySpend3,
+              api_requests: Math.floor(dayRequests * 0.2),
+              successful_requests: Math.floor(daySuccessful * 0.2),
+              failed_requests: Math.floor(dayFailed * 0.2),
+              total_tokens: Math.floor(dayTokens * 0.23),
+              prompt_tokens: Math.floor(dayTokens * 0.14),
+              completion_tokens: Math.floor(dayTokens * 0.09),
+            }),
+            metadata: { alias: "Code Reviewer" },
+            api_key_breakdown: {},
+          },
+        },
+        models: {
+          "gpt-4o": {
+            metrics: makeMetrics({
+              spend: Math.round(daySpend * 0.55),
+              api_requests: Math.floor(dayRequests * 0.5),
+              successful_requests: Math.floor(daySuccessful * 0.5),
+              failed_requests: Math.floor(dayFailed * 0.5),
+              total_tokens: Math.floor(dayTokens * 0.5),
+              prompt_tokens: Math.floor(dayTokens * 0.3),
+              completion_tokens: Math.floor(dayTokens * 0.2),
+            }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+          "claude-3-5-sonnet-20241022": {
+            metrics: makeMetrics({
+              spend: Math.round(daySpend * 0.35),
+              api_requests: Math.floor(dayRequests * 0.35),
+              successful_requests: Math.floor(daySuccessful * 0.35),
+              failed_requests: Math.floor(dayFailed * 0.35),
+              total_tokens: Math.floor(dayTokens * 0.35),
+              prompt_tokens: Math.floor(dayTokens * 0.21),
+              completion_tokens: Math.floor(dayTokens * 0.14),
+            }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+          "gpt-4o-mini": {
+            metrics: makeMetrics({
+              spend: Math.round(daySpend * 0.1),
+              api_requests: Math.floor(dayRequests * 0.15),
+              successful_requests: Math.floor(daySuccessful * 0.15),
+              failed_requests: Math.floor(dayFailed * 0.15),
+              total_tokens: Math.floor(dayTokens * 0.15),
+              prompt_tokens: Math.floor(dayTokens * 0.09),
+              completion_tokens: Math.floor(dayTokens * 0.06),
+            }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+        },
+        providers: {
+          openai: {
+            metrics: makeMetrics({
+              spend: Math.round(daySpend * 0.65),
+              api_requests: Math.floor(dayRequests * 0.65),
+              successful_requests: Math.floor(daySuccessful * 0.65),
+              failed_requests: Math.floor(dayFailed * 0.65),
+              total_tokens: Math.floor(dayTokens * 0.65),
+              prompt_tokens: Math.floor(dayTokens * 0.39),
+              completion_tokens: Math.floor(dayTokens * 0.26),
+            }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+          anthropic: {
+            metrics: makeMetrics({
+              spend: Math.round(daySpend * 0.35),
+              api_requests: Math.floor(dayRequests * 0.35),
+              successful_requests: Math.floor(daySuccessful * 0.35),
+              failed_requests: Math.floor(dayFailed * 0.35),
+              total_tokens: Math.floor(dayTokens * 0.35),
+              prompt_tokens: Math.floor(dayTokens * 0.21),
+              completion_tokens: Math.floor(dayTokens * 0.14),
+            }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+        },
+        api_keys: {
+          "sk-agent-dashboard-1": {
+            metrics: makeMetrics({
+              spend: Math.round(daySpend * 0.5),
+              api_requests: Math.floor(dayRequests * 0.5),
+              successful_requests: Math.floor(daySuccessful * 0.5),
+              failed_requests: Math.floor(dayFailed * 0.5),
+              total_tokens: Math.floor(dayTokens * 0.5),
+            }),
+            metadata: { key_alias: "Dashboard Key", team_id: null },
+          },
+          "sk-agent-integration-2": {
+            metrics: makeMetrics({
+              spend: Math.round(daySpend * 0.3),
+              api_requests: Math.floor(dayRequests * 0.3),
+              successful_requests: Math.floor(daySuccessful * 0.3),
+              failed_requests: Math.floor(dayFailed * 0.3),
+              total_tokens: Math.floor(dayTokens * 0.3),
+            }),
+            metadata: { key_alias: "Integration Key", team_id: null },
+          },
+          "sk-agent-dev-3": {
+            metrics: makeMetrics({
+              spend: Math.round(daySpend * 0.2),
+              api_requests: Math.floor(dayRequests * 0.2),
+              successful_requests: Math.floor(daySuccessful * 0.2),
+              failed_requests: Math.floor(dayFailed * 0.2),
+              total_tokens: Math.floor(dayTokens * 0.2),
+            }),
+            metadata: { key_alias: "Dev Key", team_id: null },
+          },
+        },
+      },
+    });
+  }
+
+  return {
+    results,
+    metadata: {
+      total_spend: totalSpend,
+      total_api_requests: totalRequests,
+      total_successful_requests: totalSuccessful,
+      total_failed_requests: totalFailed,
+      total_tokens: totalTokens,
+    },
+  };
+})();
 
 export interface EntityList {
   label: string;
@@ -149,14 +362,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
       );
       setSpendData(data);
     } else if (entityType === "agent") {
-      const data = await agentDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
-      );
-      setSpendData(data);
+      setSpendData(AGENT_USAGE_STUB);
+      return;
     } else if (entityType === "user") {
       const data = await userDailyActivityCall(
         accessToken,

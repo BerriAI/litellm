@@ -37,7 +37,7 @@ function getTrendSubtitle(newToday: number, newYesterday: number): string | unde
   return `${diff} since yesterday`;
 }
 
-type SortField = "tool_name" | "call_policy" | "team_id" | "key_alias" | "created_at" | "call_count";
+type SortField = "tool_name" | "call_policy" | "team_id" | "key_alias" | "created_at" | "call_count" | "agent_id";
 
 interface FilterValues {
   [key: string]: string;
@@ -135,6 +135,10 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
     label: v as string,
     value: v as string,
   }));
+  const agentIdOptions = Array.from(new Set(tools.map((t) => t.agent_id).filter(Boolean))).map((v) => ({
+    label: v as string,
+    value: v as string,
+  }));
 
   const filterOptions: FilterOption[] = [
     {
@@ -151,6 +155,11 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
       name: "Key Name",
       label: "Key Name",
       options: keyAliasOptions,
+    },
+    {
+      name: "Agent ID",
+      label: "Agent ID",
+      options: agentIdOptions,
     },
   ];
 
@@ -207,12 +216,14 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
         (t.team_id ?? "").toLowerCase().includes(q) ||
         (t.key_alias ?? "").toLowerCase().includes(q) ||
         (t.key_hash ?? "").toLowerCase().includes(q) ||
+        (t.agent_id ?? "").toLowerCase().includes(q) ||
         t.call_policy.toLowerCase().includes(q);
       if (!matchesSearch) return false;
     }
     if (activeFilters["Policy"] && t.call_policy !== activeFilters["Policy"]) return false;
     if (activeFilters["Team Name"] && t.team_id !== activeFilters["Team Name"]) return false;
     if (activeFilters["Key Name"] && t.key_alias !== activeFilters["Key Name"]) return false;
+    if (activeFilters["Agent ID"] && t.agent_id !== activeFilters["Agent ID"]) return false;
     return true;
   });
 
@@ -424,6 +435,9 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                 <SortHeader label="# Calls" field="call_count" />
               </TableHeaderCell>
               <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Agent ID" field="agent_id" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
                 <SortHeader label="Team Name" field="team_id" />
               </TableHeaderCell>
               <TableHeaderCell className="py-1 h-8">Key Hash</TableHeaderCell>
@@ -436,13 +450,13 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-8 text-center text-gray-500">
+                <TableCell colSpan={9} className="h-8 text-center text-gray-500">
                   Loading tools…
                 </TableCell>
               </TableRow>
             ) : paginated.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-8 text-center text-gray-500">
+                <TableCell colSpan={9} className="h-8 text-center text-gray-500">
                   No tools discovered yet. Make a chat completion that returns tool_calls to start auto-discovery.
                 </TableCell>
               </TableRow>
@@ -475,6 +489,13 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                     <div className="flex items-center justify-end h-8 tabular-nums text-sm font-mono text-gray-700">
                       {(tool.call_count ?? 0).toLocaleString()}
                     </div>
+                  </TableCell>
+                  <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
+                    <Tooltip title={tool.agent_id || "current weather agent"}>
+                      <span className="max-w-[15ch] truncate block font-mono text-xs">
+                        {tool.agent_id || "current weather agent"}
+                      </span>
+                    </Tooltip>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <Tooltip title={tool.team_id ?? "-"}>

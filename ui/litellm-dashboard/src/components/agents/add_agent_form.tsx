@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Form, message, Select, Input, Steps, Radio, Tag, Divider } from "antd";
+import { Modal, Form, message, Select, Input, InputNumber, Steps, Radio, Tag, Divider, Switch } from "antd";
 import { Button } from "@tremor/react";
 import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
@@ -218,6 +218,14 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         }
       }
 
+      agentData.require_trace_id_on_outgoing = values.require_trace_id_on_outgoing ?? false;
+      agentData.require_trace_id_on_incoming = values.require_trace_id_on_incoming ?? false;
+
+      if (values.require_trace_id_on_outgoing && values.max_iteration_cap != null && values.max_iteration_cap > 0) {
+        agentData.litellm_params = agentData.litellm_params ?? {};
+        agentData.litellm_params.max_iterations = Number(values.max_iteration_cap);
+      }
+
       const agentResponse = await createAgentCall(accessToken, agentData);
       const agentId: string = agentResponse.agent_id;
       const agentName: string = agentResponse.agent_name || values.agent_name || agentId;
@@ -315,6 +323,55 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           </div>
         )}
       </Form.Item>
+
+      <Divider />
+
+      <div className="mt-4">
+        <h4 className="text-sm font-medium text-gray-700 mb-1">Agent tracing</h4>
+        <p className="text-sm text-gray-600 mb-3">
+          Require x-litellm-trace-id for observability. When enabled, requests without the header will be rejected.
+        </p>
+        <Form.Item
+          label="Require trace ID on outgoing calls"
+          name="require_trace_id_on_outgoing"
+          valuePropName="checked"
+          tooltip="When on, the agent's requests to LiteLLM/MCP must include this header."
+        >
+          <Switch />
+        </Form.Item>
+        <Form.Item
+          label="Require trace ID on incoming calls"
+          name="require_trace_id_on_incoming"
+          valuePropName="checked"
+          tooltip="When on, callers must send this header when calling this agent."
+        >
+          <Switch />
+        </Form.Item>
+        <Form.Item
+          noStyle
+          shouldUpdate={(prev, curr) => prev.require_trace_id_on_outgoing !== curr.require_trace_id_on_outgoing}
+        >
+          {() => {
+            const tracingOutgoing = form.getFieldValue("require_trace_id_on_outgoing");
+            return (
+              <Form.Item
+                label="Max iteration cap"
+                name="max_iteration_cap"
+                tooltip="Limits how many iterations (e.g. tool-call rounds) an agent can perform per trace. Only applied when agent tracing is enabled for outgoing calls."
+                help={!tracingOutgoing ? "Only available when agent tracing is enabled for outgoing calls above." : undefined}
+              >
+                <InputNumber
+                  min={1}
+                  max={1000}
+                  placeholder="e.g. 25"
+                  style={{ width: "100%" }}
+                  disabled={!tracingOutgoing}
+                />
+              </Form.Item>
+            );
+          }}
+        </Form.Item>
+      </div>
     </div>
   );
 
@@ -653,8 +710,21 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           layout="vertical"
           initialValues={
             agentType === "a2a"
-              ? { ...getDefaultFormValues(), allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {} }
-              : { allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {} }
+              ? {
+                  ...getDefaultFormValues(),
+                  allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] },
+                  mcp_tool_permissions: {},
+                  require_trace_id_on_outgoing: false,
+                  require_trace_id_on_incoming: false,
+                  max_iteration_cap: undefined,
+                }
+              : {
+                  allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] },
+                  mcp_tool_permissions: {},
+                  require_trace_id_on_outgoing: false,
+                  require_trace_id_on_incoming: false,
+                  max_iteration_cap: undefined,
+                }
           }
           className="space-y-4"
         >

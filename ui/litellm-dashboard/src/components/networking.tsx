@@ -9996,6 +9996,7 @@ export interface ToolRow {
   key_hash?: string;
   team_id?: string;
   key_alias?: string;
+  agent_id?: string;
   created_at?: string;
   updated_at?: string;
   created_by?: string;
