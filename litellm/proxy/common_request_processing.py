@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.task_registry import tracked_create_task
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
@@ -841,7 +842,7 @@ class ProxyBaseLLMRequestProcessing:
         # Start the moderation check (during_call_hook) as early as possible
         # This gives it a head start to mask/validate input while the proxy handles routing
         tasks.append(
-            asyncio.create_task(
+            tracked_create_task(
                 proxy_logging_obj.during_call_hook(
                     data=self.data,
                     user_api_key_dict=user_api_key_dict,
@@ -889,7 +890,7 @@ class ProxyBaseLLMRequestProcessing:
         # Post Call Processing
         if llm_router is not None:
             self.data["deployment"] = llm_router.get_deployment(model_id=model_id)
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=self.data.get("litellm_call_id", ""), status="success"
             )

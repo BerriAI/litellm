@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime
 from typing import List, Optional
 
@@ -7,6 +6,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.task_registry import tracked_create_task
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -73,7 +73,7 @@ class PassThroughStreamingHandler:
             # After all chunks are processed, handle post-processing
             end_time = datetime.now()
 
-            asyncio.create_task(
+            tracked_create_task(
                 PassThroughStreamingHandler._route_streaming_logging_to_handler(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
@@ -83,7 +83,8 @@ class PassThroughStreamingHandler:
                     start_time=start_time,
                     raw_bytes=raw_bytes,
                     end_time=end_time,
-                )
+                ),
+                name="passthrough-streaming-log",
             )
         except Exception as e:
             verbose_proxy_logger.error(f"Error in chunk_processor: {str(e)}")

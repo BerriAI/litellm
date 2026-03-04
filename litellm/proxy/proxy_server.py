@@ -58,6 +58,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.task_registry import TaskRegistry, tracked_create_task
 from litellm.proxy._types import (
     CallbackDelete,
     CallInfo,
@@ -697,6 +698,10 @@ def cleanup_router_config_variables():
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+
+    # Cancel and await all tracked background tasks before tearing down shared resources.
+    await TaskRegistry.get_instance().shutdown()
+
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -867,7 +872,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         ProxyStartupEvent._add_proxy_budget_to_db(
             litellm_proxy_budget_name=litellm_proxy_admin_name
         )
-        asyncio.create_task(
+        tracked_create_task(
             ProxyStartupEvent._warm_global_spend_cache(
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 user_api_key_cache=user_api_key_cache,
@@ -890,7 +895,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:
-        asyncio.create_task(
+        tracked_create_task(
             _run_background_health_check()
         )  # start the background health check coroutine.
 
@@ -1710,7 +1715,7 @@ async def update_cache(  # noqa: PLR0915
                 event_group=Litellm_EntityType.KEY,
             )
             # alert user
-            asyncio.create_task(
+            tracked_create_task(
                 proxy_logging_obj.budget_alerts(
                     type="projected_limit_exceeded",
                     user_info=call_info,
@@ -1953,7 +1958,7 @@ async def update_cache(  # noqa: PLR0915
     if tags is not None:
         await _update_tag_cache()
 
-    asyncio.create_task(
+    tracked_create_task(
         user_api_key_cache.async_set_cache_pipeline(
             cache_list=values_to_update_in_cache,
             ttl=60,
@@ -2046,7 +2051,7 @@ def _schedule_background_health_check_db_save(
         else "background_health_check"
     )
     start_time = time_module.time()
-    asyncio.create_task(
+    tracked_create_task(
         _save_background_health_checks_to_db(
             prisma_client,
             model_list,
@@ -5585,7 +5590,7 @@ class ProxyStartupEvent:
             )
 
         # add proxy budget to db in the user table
-        asyncio.create_task(
+        tracked_create_task(
             generate_key_helper_fn(  # type: ignore
                 request_type="user",
                 table_name="user",
@@ -5730,7 +5735,7 @@ class ProxyStartupEvent:
             from litellm.proxy.utils import _monitor_spend_logs_queue
 
             # Start background task to monitor spend logs queue size
-            asyncio.create_task(
+            tracked_create_task(
                 _monitor_spend_logs_queue(
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,
@@ -6111,11 +6116,11 @@ class ProxyStartupEvent:
                     await prisma_client.db.start_token_refresh_task()
 
                 ## Add necessary views to proxy ##
-                asyncio.create_task(
+                tracked_create_task(
                     prisma_client.check_view_exists()
                 )  # check if all necessary views exist. Don't block execution
 
-                asyncio.create_task(
+                tracked_create_task(
                     prisma_client._set_spend_logs_row_count_in_proxy_state()
                 )  # set the spend logs row count in proxy state. Don't block execution
 
@@ -7019,7 +7024,7 @@ async def moderations(
         response = await llm_call
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -7141,7 +7146,7 @@ async def audio_speech(
         response = await llm_call
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -7295,7 +7300,7 @@ async def audio_transcriptions(
             file_object.close()  # close the file read in by io library
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -7581,7 +7586,7 @@ async def get_assistants(
         response = await llm_router.aget_assistants(**data)
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -7680,7 +7685,7 @@ async def create_assistant(
         response = await llm_router.acreate_assistants(**data)
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -7777,7 +7782,7 @@ async def delete_assistant(
         response = await llm_router.adelete_assistant(assistant_id=assistant_id, **data)
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -7874,7 +7879,7 @@ async def create_threads(
         response = await llm_router.acreate_thread(**data)
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -7969,7 +7974,7 @@ async def get_thread(
         response = await llm_router.aget_thread(thread_id=thread_id, **data)
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -8068,7 +8073,7 @@ async def add_messages(
         response = await llm_router.a_add_message(thread_id=thread_id, **data)
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -8163,7 +8168,7 @@ async def get_messages(
         response = await llm_router.aget_messages(thread_id=thread_id, **data)
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -8273,7 +8278,7 @@ async def run_thread(
             )
 
         ### ALERTING ###
-        asyncio.create_task(
+        tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
