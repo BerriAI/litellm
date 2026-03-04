@@ -138,16 +138,72 @@ class TestGithubCopilotResponsesAPITransformation:
         assert initiator == "agent", "Should return 'agent' for assistant role"
 
     def test_get_initiator_with_no_role(self):
-        """Test _get_initiator returns 'agent' for items without role"""
+        """Test _get_initiator returns 'agent' for last item with agent-related type"""
         config = GithubCopilotResponsesAPIConfig()
 
         input_without_role = [
             {"role": "user", "content": "Hello"},
-            {"type": "reasoning", "content": "thinking..."},  # No role field
+            {"type": "reasoning", "content": "thinking..."},  # Agent-related type
         ]
 
         initiator = config._get_initiator(input_without_role)
-        assert initiator == "agent", "Should return 'agent' for items without role"
+        assert initiator == "agent", "Should return 'agent' for reasoning type"
+
+    def test_get_initiator_with_function_call_output(self):
+        """Test _get_initiator returns 'agent' for function_call_output type"""
+        config = GithubCopilotResponsesAPIConfig()
+
+        input_with_fn = [
+            {"role": "user", "content": "Search for files"},
+            {"type": "function_call_output", "call_id": "fc1", "output": "Found 3 files"},
+        ]
+
+        initiator = config._get_initiator(input_with_fn)
+        assert initiator == "agent", "Should return 'agent' for function_call_output type"
+
+    def test_get_initiator_with_function_call(self):
+        """Test _get_initiator returns 'agent' for function_call type"""
+        config = GithubCopilotResponsesAPIConfig()
+
+        input_with_fn = [
+            {"role": "user", "content": "Search"},
+            {"type": "function_call", "name": "search", "arguments": "{}"},
+        ]
+
+        initiator = config._get_initiator(input_with_fn)
+        assert initiator == "agent", "Should return 'agent' for function_call type"
+
+    def test_get_initiator_with_mcp_call(self):
+        """Test _get_initiator returns 'agent' for mcp_call type"""
+        config = GithubCopilotResponsesAPIConfig()
+
+        input_with_mcp = [
+            {"role": "user", "content": "Use tool"},
+            {"type": "mcp_call", "server_label": "test"},
+        ]
+
+        initiator = config._get_initiator(input_with_mcp)
+        assert initiator == "agent", "Should return 'agent' for mcp_call type"
+
+    def test_get_initiator_checks_last_item_only(self):
+        """Test that _get_initiator checks only the last input item.
+        
+        When a user sends a new message after an agentic exchange,
+        the last item has role 'user', so it should return 'user'.
+        This is the key fix for issue #18155.
+        """
+        config = GithubCopilotResponsesAPIConfig()
+
+        input_with_user_last = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "New question"},
+        ]
+
+        initiator = config._get_initiator(input_with_user_last)
+        assert initiator == "user", (
+            "Should return 'user' when last item is user (new user turn)"
+        )
 
     def test_get_initiator_with_user_only(self):
         """Test _get_initiator returns 'user' for user-only messages"""
@@ -370,3 +426,76 @@ class TestGithubCopilotResponsesAPITransformation:
 
         # Non-reasoning items should pass through unchanged
         assert result == message_item
+
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    def test_transform_responses_api_request_sets_x_initiator(self, mock_authenticator_class):
+        """Test that transform_responses_api_request sets X-Initiator based on input.
+        
+        This is the primary fix for issue #18155: validate_environment cannot access
+        the input parameter (it's not in litellm_params), so X-Initiator is set
+        in transform_responses_api_request where input IS available.
+        """
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "test-api-key"
+        mock_authenticator_class.return_value = mock_auth_instance
+
+        config = GithubCopilotResponsesAPIConfig()
+        headers = {}
+
+        # User-initiated request
+        config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=[{"role": "user", "content": "Hello"}],
+            response_api_optional_request_params={},
+            litellm_params=MagicMock(),
+            headers=headers,
+        )
+        assert headers["X-Initiator"] == "user"
+
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    def test_transform_responses_api_request_agent_initiator(self, mock_authenticator_class):
+        """Test that transform_responses_api_request sets X-Initiator: agent for agent calls"""
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "test-api-key"
+        mock_authenticator_class.return_value = mock_auth_instance
+
+        config = GithubCopilotResponsesAPIConfig()
+        headers = {}
+
+        # Agent-initiated request (function_call_output as last item)
+        config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=[
+                {"role": "user", "content": "Search"},
+                {"type": "function_call_output", "call_id": "fc1", "output": "results"},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=MagicMock(),
+            headers=headers,
+        )
+        assert headers["X-Initiator"] == "agent"
+
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    def test_transform_responses_api_request_respects_explicit_header(self, mock_authenticator_class):
+        """Test that transform_responses_api_request doesn't override explicit X-Initiator"""
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "test-api-key"
+        mock_authenticator_class.return_value = mock_auth_instance
+
+        config = GithubCopilotResponsesAPIConfig()
+        headers = {"X-Initiator": "user"}  # Explicitly set by caller
+
+        # Even though input suggests agent, explicit header should be preserved
+        config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=[
+                {"role": "user", "content": "Search"},
+                {"type": "function_call_output", "call_id": "fc1", "output": "results"},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=MagicMock(),
+            headers=headers,
+        )
+        assert headers["X-Initiator"] == "user", (
+            "Should respect explicitly set X-Initiator header"
+        )

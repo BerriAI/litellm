@@ -126,13 +126,22 @@ class GithubCopilotConfig(OpenAIConfig):
 
     def _determine_initiator(self, messages: List[AllMessageValues]) -> str:
         """
-        Determine if request is user or agent initiated based on message roles.
-        Returns 'agent' if any message has role 'tool' or 'assistant', otherwise 'user'.
+        Determine if request is user or agent initiated based on the last message role.
+
+        Only the initial user-prompted message should consume a premium request
+        (X-Initiator: user). Follow-up agentic calls (tool results, assistant
+        continuations) should not (X-Initiator: agent).
+
+        Checks the last message in the conversation to determine this, matching
+        the behavior of reference implementations (opencode, copilot-api).
         """
-        for message in messages:
-            role = message.get("role")
-            if role in ["tool", "assistant"]:
-                return "agent"
+        if not messages:
+            return "user"
+
+        last_message = messages[-1]
+        role = last_message.get("role")
+        if role in ("tool", "assistant"):
+            return "agent"
         return "user"
 
     def _has_vision_content(self, messages: List[AllMessageValues]) -> bool:

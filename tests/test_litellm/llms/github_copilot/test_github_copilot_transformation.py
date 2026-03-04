@@ -259,7 +259,13 @@ def test_x_initiator_header_agent_request_with_tool():
 
 
 def test_x_initiator_header_mixed_messages_with_agent_roles():
-    """Test that mixed messages with agent roles (assistant/tool) result in X-Initiator: agent header"""
+    """Test that when last message is user (new user turn after agentic exchange), X-Initiator is 'user'.
+    
+    This is the key fix for issue #18155: only the initial user-prompted message
+    should consume a premium request. When a user sends a new follow-up message,
+    it's a new premium request. But when the agent is processing autonomously
+    (last message is assistant/tool), it should not consume a premium request.
+    """
     config = GithubCopilotConfig()
     
     # Mock the authenticator  
@@ -267,6 +273,7 @@ def test_x_initiator_header_mixed_messages_with_agent_roles():
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
     config.authenticator.get_api_base.return_value = None
 
+    # User sends a new follow-up message after an agentic exchange
     messages = [
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Previous response."},
@@ -277,6 +284,68 @@ def test_x_initiator_header_mixed_messages_with_agent_roles():
         headers={},
         model="github_copilot/gpt-4",
         messages=messages, 
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    # Last message is user → should be "user" (new user turn = new premium request)
+    assert headers["X-Initiator"] == "user"
+
+
+def test_x_initiator_header_agentic_followup_tool():
+    """Test that agent follow-up with tool result as last message returns 'agent'.
+    
+    In agentic flows, after the assistant makes tool calls and gets results,
+    the last message is a tool result. This should NOT consume a premium request.
+    """
+    config = GithubCopilotConfig()
+    
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "user", "content": "Search for files"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "search", "arguments": "{}"}}]},
+        {"role": "tool", "content": "Found 3 files", "tool_call_id": "tc1"},
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["X-Initiator"] == "agent"
+
+
+def test_x_initiator_header_agentic_followup_assistant():
+    """Test that agent follow-up with assistant as last message returns 'agent'.
+    
+    When the assistant is continuing autonomously (e.g., multi-step planning),
+    the last message is an assistant message. This should NOT consume a premium request.
+    """
+    config = GithubCopilotConfig()
+    
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "user", "content": "Build a web app"},
+        {"role": "assistant", "content": "I'll start by creating the project structure."},
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
         optional_params={},
         litellm_params={},
         api_key=None,

@@ -7,7 +7,7 @@ which is required for models like gpt-5.1-codex that only support the /responses
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -19,6 +19,26 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+# Input types that indicate an agent-initiated request (not user-initiated).
+# Based on the OpenCode reference implementation for GitHub Copilot premium billing.
+RESPONSES_API_AGENT_INPUT_TYPES: FrozenSet[str] = frozenset({
+    "file_search_call",
+    "computer_call",
+    "computer_call_output",
+    "web_search_call",
+    "function_call",
+    "function_call_output",
+    "image_generation_call",
+    "code_interpreter_call",
+    "local_shell_call",
+    "local_shell_call_output",
+    "mcp_list_tools",
+    "mcp_approval_request",
+    "mcp_approval_response",
+    "mcp_call",
+    "reasoning",
+})
 
 from ..authenticator import Authenticator
 from ..common_utils import (
@@ -83,6 +103,36 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return dict(response_api_optional_params)
 
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """
+        Transform the request and set X-Initiator header based on input.
+
+        validate_environment cannot access the input parameter, so we set
+        the X-Initiator header here where input is available. Only overrides
+        if the caller hasn't explicitly set X-Initiator via extra_headers.
+        """
+        if "X-Initiator" not in headers:
+            initiator = self._get_initiator(input)
+            headers["X-Initiator"] = initiator
+            verbose_logger.debug(
+                "GitHub Copilot Responses API: Set X-Initiator=%s", initiator
+            )
+
+        return super().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     def validate_environment(
         self,
         headers: dict,
@@ -127,7 +177,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 initiator = self._get_initiator(input_param)
                 merged_headers["X-Initiator"] = initiator
                 verbose_logger.debug(
-                    f"GitHub Copilot Responses API: Set X-Initiator={initiator}"
+                    "GitHub Copilot Responses API: Set X-Initiator=%s", initiator
                 )
 
                 # Add vision header if input contains images
@@ -138,7 +188,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     )
 
             verbose_logger.debug(
-                f"GitHub Copilot Responses API: Successfully configured headers for model {model}"
+                "GitHub Copilot Responses API: Successfully configured headers for model %s",
+                model,
             )
 
             return merged_headers
@@ -189,7 +240,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         This override preserves encrypted_content while still filtering out
         status=None which OpenAI's API rejects.
         """
-        if item.get("type") == "reasoning":
+        item_type = item.get("type")
+        if isinstance(item_type, str) and item_type.lower() == "reasoning":
             # Preserve encrypted_content before parent processing
             encrypted_content = item.get("encrypted_content")
 
@@ -210,7 +262,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     filtered_item[k] = v
 
             verbose_logger.debug(
-                f"GitHub Copilot reasoning item processed, encrypted_content preserved: {encrypted_content is not None}"
+                "GitHub Copilot reasoning item processed, encrypted_content preserved: %s",
+                encrypted_content is not None,
             )
             return filtered_item
         return item
@@ -239,10 +292,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def _get_initiator(self, input_param: Union[str, ResponseInputParam]) -> str:
         """
-        Determine X-Initiator header value based on input analysis.
+        Determine X-Initiator header value based on the last input item.
 
-        Based on copilot-api's hasAgentInitiator logic:
-        - Returns "agent" if input contains assistant role or items without role
+        Only the initial user-prompted message should consume a premium request
+        (X-Initiator: user). Follow-up agentic calls should not (X-Initiator: agent).
+
+        Based on the OpenCode reference implementation:
+        - Checks only the last input item
+        - Returns "agent" if last item has role "assistant" or an agent-related type
         - Returns "user" otherwise
 
         Args:
@@ -255,19 +312,21 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if isinstance(input_param, str):
             return "user"
 
-        # If input is a list, analyze items
-        if isinstance(input_param, list):
-            for item in input_param:
-                if not isinstance(item, dict):
-                    continue
-
-                # Check if item has no role (agent-initiated)
-                if "role" not in item or not item.get("role"):
+        # If input is a list, check the last item
+        if isinstance(input_param, list) and input_param:
+            last_item = input_param[-1]
+            if isinstance(last_item, dict):
+                # Check if role is assistant
+                role = last_item.get("role")
+                if isinstance(role, str) and role.lower() == "assistant":
                     return "agent"
 
-                # Check if role is assistant (agent-initiated)
-                role = item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":
+                # Check if type is an agent-related input type
+                item_type = last_item.get("type")
+                if (
+                    isinstance(item_type, str)
+                    and item_type.lower() in RESPONSES_API_AGENT_INPUT_TYPES
+                ):
                     return "agent"
 
         # Default to user-initiated
@@ -298,7 +357,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if depth > max_depth:
             verbose_logger.warning(
-                f"[GitHub Copilot] Max recursion depth {max_depth} reached while checking for vision content"
+                "[GitHub Copilot] Max recursion depth %s reached while checking for vision content",
+                max_depth,
             )
             return False
 
