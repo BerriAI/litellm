@@ -177,10 +177,10 @@ export function AllModelsDataTable<TData, TValue>({
               ) : tableInstance.getRowModel().rows.length > 0 ? (
                 tableInstance.getRowModel().rows.map((row) => (
                   <TableRow
-                  key={row.id}
-                  className={onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}
-                  onClick={() => onRowClick?.(row.original)}
-                >
+                    key={row.id}
+                    className={onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}
+                    onClick={() => onRowClick?.(row.original)}
+                  >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
