@@ -436,4 +436,10 @@
 - [x] V-006 验证通过：无 device_id 时 fallback 到旧逻辑
 - [x] 代码注释清晰，易于维护
 - [x] 实现范围与 solution.md 一致
+- [x] **补充功能：key_hash 设置**（用于关联客户端设备与旧 key）
+  - [x] create_or_get_user_key 返回值添加 key_hash 字段
+  - [x] 旧 key 时计算 SHA256 hash；新创建的 key 返回 None
+  - [x] cli_get_key 中设置 key_hash 到 store.data
+  - [x] 新增 2 个单元测试验证 key_hash 计算
+  - [x] 所有 13 个测试通过（11 原有 + 2 新增）
 
