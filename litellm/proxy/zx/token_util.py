@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 from typing import Literal, Optional, Dict
 import time
+import hashlib
 from fastapi import Request
 from litellm.proxy.management_endpoints import internal_user_endpoints
 from litellm.proxy.management_endpoints import key_management_endpoints
@@ -91,7 +92,7 @@ async def create_or_get_user_key(
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     key_alias: Optional[str] = None,
     key_metadata: Optional[dict] = {},
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Optional[str]]:
     if dept_id is None or dept_id.strip() == "":
         dept_id = "none_dept_id"
     if user_api_key_dict is None:
@@ -179,7 +180,9 @@ async def create_or_get_user_key(
                         )
                         # 不阻塞返回，继续返回现有 key
 
-                return (False, key_info.token)
+                # 计算旧 key 的哈希值，用于关联客户端设备与旧 key
+                key_hash = hashlib.sha256(key_info.token.encode()).hexdigest()
+                return (False, key_info.token, key_hash)
 
     teams = await team_endpoints.list_team(
         Request(
@@ -268,4 +271,5 @@ async def create_or_get_user_key(
     )
     logger.info(f"user[{user_id}:{org_email}] key[{key_alias}] create start")
 
-    return (True, key_res.key)
+    # 新创建的 key 无 key_hash（仅旧 key 需要计算 hash 用于关联）
+    return (True, key_res.key, None)

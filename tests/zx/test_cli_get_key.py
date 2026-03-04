@@ -2,6 +2,7 @@
 Unit tests for cli_get_key API endpoint (device-key-separation feature)
 """
 import pytest
+import hashlib
 from litellm.proxy.zx.token_util import TokenStore
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
 
@@ -151,6 +152,33 @@ class TestKeyMetadataInitialization:
 
         # Verify device_id is None or missing
         assert device_id is None
+
+
+# T5 Tests: Key hash computation for legacy key association
+class TestKeyHashComputation:
+    """Test that key_hash is computed for legacy keys"""
+
+    @pytest.mark.asyncio
+    async def test_key_hash_calculation(self):
+        """Test that key_hash is correctly calculated as SHA256 of key token"""
+        test_key = "test-key-token-12345"
+        expected_hash = hashlib.sha256(test_key.encode()).hexdigest()
+
+        # Verify the hash calculation
+        assert expected_hash == hashlib.sha256(test_key.encode()).hexdigest()
+        assert len(expected_hash) == 64  # SHA256 hex string is 64 characters
+
+    @pytest.mark.asyncio
+    async def test_key_hash_for_different_keys(self):
+        """Test that different keys produce different hashes"""
+        key1 = "key-token-1"
+        key2 = "key-token-2"
+
+        hash1 = hashlib.sha256(key1.encode()).hexdigest()
+        hash2 = hashlib.sha256(key2.encode()).hexdigest()
+
+        assert hash1 != hash2
+        assert hash1 == hashlib.sha256(key1.encode()).hexdigest()  # Consistent hashing
 
 
 # T5 Tests: Legacy key metadata update

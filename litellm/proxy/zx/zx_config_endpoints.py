@@ -219,7 +219,7 @@ async def cli_get_key(
         key_metadata["device_id"] = device_id
         key_metadata["device_name"] = device_name
 
-    (created, key_or_key_id) = await create_or_get_user_key(
+    (created, key_or_key_id, key_hash) = await create_or_get_user_key(
         "ai_developer",
         user_id,
         user_name,
@@ -241,6 +241,11 @@ async def cli_get_key(
         )
         if key_res is not None:
             key = key_res.key
+
+        # 设置 key_hash 到 store.data，用于关联客户端设备与旧 key
+        if key_hash:
+            store.data["key_hash"] = key_hash
+            logger.info(f"user[{user_id}] key_hash set for legacy key association")
 
         # 注：旧 key 的 metadata 已在 create_or_get_user_key 中合并完成
         # 如果需要额外的元数据处理，可在此扩展
