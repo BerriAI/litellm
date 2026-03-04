@@ -2498,6 +2498,46 @@ class TestCallOpenapiToolHandlerExtraHeaders:
         assert result.isError is False
         assert "_extra_headers" not in captured
 
+    @pytest.mark.asyncio
+    async def test_user_supplied_extra_headers_stripped(self, openapi_spec_path):
+        """User-supplied _extra_headers in arguments must be silently discarded."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="strip-server",
+            name="strip-server",
+            server_name="strip-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            spec_path=openapi_spec_path,
+        )
+
+        captured: dict = {}
+
+        async def mock_handler(**kwargs):
+            captured.update(kwargs)
+            return "ok"
+
+        mock_tool = MagicMock()
+        mock_tool.handler = mock_handler
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.get_tool",
+            return_value=mock_tool,
+        ):
+            result = await manager._call_openapi_tool_handler(
+                server=server,
+                tool_name="op",
+                arguments={
+                    "p": "v",
+                    "_extra_headers": {"Authorization": "Bearer evil"},
+                },
+                raw_headers=None,
+            )
+
+        assert result.isError is False
+        assert "_extra_headers" not in captured
+        assert captured["p"] == "v"
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

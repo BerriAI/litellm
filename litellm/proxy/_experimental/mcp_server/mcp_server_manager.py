@@ -1788,6 +1788,7 @@ class MCPServerManager:
 
             # Inject extra_headers via reserved _extra_headers kwarg
             call_kwargs = dict(arguments)
+            call_kwargs.pop("_extra_headers", None)
             if extra_headers:
                 call_kwargs["_extra_headers"] = extra_headers
 
