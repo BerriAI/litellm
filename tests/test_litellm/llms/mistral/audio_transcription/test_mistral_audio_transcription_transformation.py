@@ -141,7 +141,7 @@ def test_mistral_audio_transcription_request_with_diarize():
     audio_file.close()
 
     assert isinstance(result.data, dict)
-    assert result.data["diarize"] == "True"
+    assert result.data["diarize"] == "true"
 
 
 def test_mistral_audio_transcription_response_transform():
