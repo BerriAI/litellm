@@ -121,7 +121,12 @@ class BlackForestLabsImageEdit:
 
         # Transform request
         # Handle image list vs single image
-        image_input = image[0] if isinstance(image, list) and image else image
+        if isinstance(image, list):
+            if not image:
+                raise BlackForestLabsError(status_code=400, message="No image provided")
+            image_input = image[0]
+        else:
+            image_input = image
         data, _ = self.config.transform_image_edit_request(
             model=model,
             prompt=prompt or "",
@@ -219,7 +224,12 @@ class BlackForestLabsImageEdit:
         )
 
         # Transform request
-        image_input = image[0] if isinstance(image, list) and image else image
+        if isinstance(image, list):
+            if not image:
+                raise BlackForestLabsError(status_code=400, message="No image provided")
+            image_input = image[0]
+        else:
+            image_input = image
         data, _ = self.config.transform_image_edit_request(
             model=model,
             prompt=prompt or "",
