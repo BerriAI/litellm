@@ -118,6 +118,16 @@ class OpenAICountTokensConfig:
                             text_parts.append(block)
                     instructions_parts.append("\n".join(text_parts))
             elif role == "user":
+                if isinstance(content, list):
+                    # Extract text from content blocks for Responses API
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    content = "\n".join(text_parts)
+                input_items.append({"role": "user", "content": content})
                 input_items.append({"role": "user", "content": content})
             elif role == "assistant":
                 # Map tool_calls to Responses API function_call items
