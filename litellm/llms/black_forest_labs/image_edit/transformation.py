@@ -231,9 +231,14 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             "input_image": b64_image,
         }
 
-        # Add optional params
+        # Add optional params (only BFL-recognized parameters)
+        bfl_request_params = [
+            "seed", "output_format", "safety_tolerance", "prompt_upsampling",
+            "aspect_ratio", "steps", "guidance", "grow_mask",
+            "top", "bottom", "left", "right",
+        ]
         for key, value in image_edit_optional_request_params.items():
-            if key not in ["extra_headers", "extra_body", "mask"] and value is not None:
+            if key in bfl_request_params and value is not None:
                 request_body[key] = value
 
         # Handle mask if provided (for inpainting)
