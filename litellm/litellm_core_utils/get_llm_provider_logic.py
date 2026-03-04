@@ -195,6 +195,21 @@ def get_llm_provider(  # noqa: PLR0915
             return model, custom_llm_provider, dynamic_api_key, api_base
         # check if api base is a known openai compatible endpoint
         if api_base:
+            if "api.neosantara.xyz/v1" in api_base:
+                custom_llm_provider = "neosantara"
+                dynamic_api_key = get_secret_str("NEOSANTARA_API_KEY")
+                if api_base is not None and not isinstance(api_base, str):
+                    raise Exception(
+                        "api base needs to be a string. api_base={}".format(api_base)
+                    )
+                if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
+                    raise Exception(
+                        "dynamic_api_key needs to be a string. dynamic_api_key={}".format(
+                            dynamic_api_key
+                        )
+                    )
+                return model, custom_llm_provider, dynamic_api_key, api_base
+
             for endpoint in litellm.openai_compatible_endpoints:
                 if endpoint in api_base:
                     if endpoint == "api.perplexity.ai":
@@ -304,9 +319,6 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
-                    elif endpoint == "api.neosantara.xyz/v1":
-                        custom_llm_provider = "neosantara"
-                        dynamic_api_key = get_secret_str("NEOSANTARA_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
