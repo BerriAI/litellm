@@ -8,41 +8,43 @@ from typing import Optional, Dict, Any
 
 
 class ZixunAuth:
-    def __init__(self, 
-                 auth_host: Optional[str] = None, 
-                 auth_api_host: Optional[str] = None, 
-                 auth_app_key: Optional[str] = None, 
-                 auth_app_secret: Optional[str] = None):
+    def __init__(
+        self,
+        auth_host: Optional[str] = None,
+        auth_api_host: Optional[str] = None,
+        auth_app_key: Optional[str] = None,
+        auth_app_secret: Optional[str] = None,
+    ):
         """
         初始化 ZixunAuth 类
-        
-        :param auth_host: 认证服务器主机 
+
+        :param auth_host: 认证服务器主机
         :param auth_api_host: 认证服务器 API 主机
         :param auth_app_key: 应用 AppKey
         :param auth_app_secret: 应用 AppSecret
         """
         # 优先使用传入的参数，如果没有则从环境变量获取
         self.auth_server_host = self._clean_url(
-            auth_host or os.environ.get('ZX_AUTH_HOST')
+            auth_host or os.environ.get("ZX_AUTH_HOST")
         )
         self.auth_server_api_host = self._clean_url(
-            auth_api_host or os.environ.get('ZX_AUTH_API_HOST')
+            auth_api_host or os.environ.get("ZX_AUTH_API_HOST")
         )
-        self.auth_app_key = auth_app_key or os.environ.get('ZX_AUTH_APP_KEY')
-        self.auth_app_secret = auth_app_secret or os.environ.get('ZX_AUTH_APP_SECRET')
-        
+        self.auth_app_key = auth_app_key or os.environ.get("ZX_AUTH_APP_KEY")
+        self.auth_app_secret = auth_app_secret or os.environ.get("ZX_AUTH_APP_SECRET")
+
         # 验证必要参数
         self._validate_config()
 
     def _validate_config(self):
         """验证配置参数是否齐全"""
         required_params = [
-            ('auth_server_host', self.auth_server_host),
-            ('auth_server_api_host', self.auth_server_api_host),
-            ('auth_app_key', self.auth_app_key),
-            ('auth_app_secret', self.auth_app_secret)
+            ("auth_server_host", self.auth_server_host),
+            ("auth_server_api_host", self.auth_server_api_host),
+            ("auth_app_key", self.auth_app_key),
+            ("auth_app_secret", self.auth_app_secret),
         ]
-        
+
         for param_name, param_value in required_params:
             if not param_value:
                 raise ValueError(f"缺少必要参数：{param_name}")
@@ -50,14 +52,14 @@ class ZixunAuth:
     @staticmethod
     def _clean_url(url: Optional[str]) -> str:
         """清理 URL，移除末尾的斜杠"""
-        if url and url.endswith('/'):
+        if url and url.endswith("/"):
             return url[:-1]
-        return url or ''
+        return url or ""
 
     def generate_oauth_url(self, redirect_url: str) -> str:
         """
         生成 OAuth 认证 URL
-        
+
         :param redirect_url: 回调 URL
         :return: OAuth 认证 URL
         """
@@ -74,69 +76,66 @@ class ZixunAuth:
     def get_access_token(self, auth_code: str) -> str:
         """
         获取访问令牌
-        
+
         :param auth_code: 授权码
         :return: 访问令牌
         """
-        
+
         # 准备请求参数
         url = f"{self.auth_server_api_host}/v1.0/oauth/code/token"
-        headers = {'Content-Type': 'application/json'}
-        data = json.dumps({
-            'clientId': self.auth_app_key,
-            'clientSecret': self.auth_app_secret,
-            'code': auth_code
-        }).encode('utf-8')
-        
+        headers = {"Content-Type": "application/json"}
+        data = json.dumps(
+            {
+                "clientId": self.auth_app_key,
+                "clientSecret": self.auth_app_secret,
+                "code": auth_code,
+            }
+        ).encode("utf-8")
+
         body = None
         try:
             # 发送请求
-            req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
             with urllib.request.urlopen(req) as response:
-                body = json.loads(response.read().decode('utf-8'))
-            
-            # 处理响应
-            if body.get('code') != 0:
-                raise ValueError(f"获取 Access Token 失败: {body}")
-            
-            data = body['data']
-            
-            return data['accessToken']
-        
-        except (Exception) as e:
-            raise RuntimeError(f"获取 Access Token body[{body}] 时发生错误: {e}")
+                body = json.loads(response.read().decode("utf-8"))
 
+            # 处理响应
+            if body.get("code") != 0:
+                raise ValueError(f"获取 Access Token 失败: {body}")
+
+            data = body["data"]
+
+            return data["accessToken"]
+
+        except Exception as e:
+            raise RuntimeError(f"获取 Access Token body[{body}] 时发生错误: {e}")
 
     def get_user_info(self, access_token: str) -> Dict[str, Any]:
         """
         获取用户信息
-        
+
         :param access_token: 访问令牌
         :return: 用户信息字典
         """
         url = f"{self.auth_server_api_host}/v1.0/oauth/getAuthUser"
-        headers = {
-            'Content-Type': 'application/json',
-            'zx-access-token': access_token
-        }
-        data = json.dumps({
-            'clientId': self.auth_app_key,
-            'clientSecret': self.auth_app_secret
-        }).encode('utf-8')
-        
+        headers = {"Content-Type": "application/json", "zx-access-token": access_token}
+        data = json.dumps(
+            {"clientId": self.auth_app_key, "clientSecret": self.auth_app_secret}
+        ).encode("utf-8")
+
         try:
             # 发送请求
-            req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
             with urllib.request.urlopen(req) as response:
-            # with urllib.request.urlopen(req, context=disable_ssl_context) as response:
-                body = json.loads(response.read().decode('utf-8'))
-            
+                # with urllib.request.urlopen(req, context=disable_ssl_context) as response:
+                body = json.loads(response.read().decode("utf-8"))
+
             # 处理响应
-            if body.get('code') != 0:
+            if body.get("code") != 0:
                 raise ValueError(f"获取用户信息失败: {access_token}")
-            
-            return body['data']['auth_user']
-        
+
+            return body["data"]["auth_user"]
+
         except (urllib.error.URLError, ValueError) as e:
             raise RuntimeError(f"获取用户信息时发生错误: {e}")
 
@@ -159,7 +158,7 @@ def main():
         # )
 
         # 生成 OAuth URL
-        redirect_url = 'http://127.0.0.1'
+        redirect_url = "http://127.0.0.1"
         oauth_url = auth.generate_oauth_url(redirect_url)
         print(f"请复制到浏览器执行: {oauth_url}")
 

@@ -6,8 +6,8 @@ from Crypto.PublicKey import RSA
 import rsa
 import base64
 
-__pem_begin = '-----BEGIN RSA PRIVATE KEY-----\n'
-__pem_end = '\n-----END RSA PRIVATE KEY-----'
+__pem_begin = "-----BEGIN RSA PRIVATE KEY-----\n"
+__pem_end = "\n-----END RSA PRIVATE KEY-----"
 
 
 def create_sign(all_params, private_key, sign_type):
@@ -60,9 +60,9 @@ def get_sign_content(params):
     for key in keys:
         value = str(params.get(key))
         if len(value) > 0:
-            result.append(key + '=' + value)
+            result.append(key + "=" + value)
 
-    return '&'.join(result)
+    return "&".join(result)
 
 
 def sign(content, private_key, sign_type):
@@ -80,12 +80,12 @@ def sign(content, private_key, sign_type):
     :return: 返回签名内容
     :rtype: str
     """
-    if sign_type.upper() == 'RSA':
-        return rsa_sign(content, private_key, 'SHA-1')
-    elif sign_type.upper() == 'RSA2':
-        return sign_with_rsa2(private_key, content, 'utf-8')
+    if sign_type.upper() == "RSA":
+        return rsa_sign(content, private_key, "SHA-1")
+    elif sign_type.upper() == "RSA2":
+        return sign_with_rsa2(private_key, content, "utf-8")
     else:
-        raise Exception('sign_type错误')
+        raise Exception("sign_type错误")
 
 
 def rsa_sign(content, private_key, _hash):
@@ -103,7 +103,7 @@ def rsa_sign(content, private_key, _hash):
     :return: 签名内容
     :rtype: str
     """
-    pri_key = rsa.PrivateKey.load_pkcs1(private_key.encode('utf-8'))
+    pri_key = rsa.PrivateKey.load_pkcs1(private_key.encode("utf-8"))
     sign_result = rsa.sign(content, pri_key, _hash)
     return base64.b64encode(sign_result)
 
@@ -117,7 +117,11 @@ def sign_with_rsa2(private_key, sign_content, charset):
 
 
 def fill_private_key_marker(private_key):
-    return add_start_end(private_key, "-----BEGIN RSA PRIVATE KEY-----\n", "\n-----END RSA PRIVATE KEY-----")
+    return add_start_end(
+        private_key,
+        "-----BEGIN RSA PRIVATE KEY-----\n",
+        "\n-----END RSA PRIVATE KEY-----",
+    )
 
 
 def add_start_end(key, startMarker, endMarker):

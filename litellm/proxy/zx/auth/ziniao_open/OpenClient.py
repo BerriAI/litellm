@@ -11,14 +11,15 @@ from common.RequestType import RequestType
 from response.BaseResponse import BaseResponse
 from response.StreamResponse import StreamResponse
 
-_headers = {'Accept-Encoding': 'identity'}
+_headers = {"Accept-Encoding": "identity"}
 
 
 class OpenClient:
     """调用客户端"""
-    __app_id = ''
-    __private_key = ''
-    __url = ''
+
+    __app_id = ""
+    __private_key = ""
+    __url = ""
 
     def __init__(self, app_id, private_key, url):
         """客户端
@@ -55,7 +56,7 @@ class OpenClient:
         """
         request_type = request.get_request_type()
         if not isinstance(request_type, RequestType):
-            raise Exception('get_request_type返回错误类型，正确方式：RequestTypes.XX')
+            raise Exception("get_request_type返回错误类型，正确方式：RequestTypes.XX")
 
         if request.files is not None:
             response = self._post_file(request, user_token, app_token, stream)
@@ -72,7 +73,7 @@ class OpenClient:
         elif request_type == RequestTypes.DELETE:
             response = self._delete(request, user_token, app_token, stream)
         else:
-            raise Exception('get_request_type设置错误')
+            raise Exception("get_request_type设置错误")
         if stream:
             return self._parse_stream_response(response)
         else:
@@ -86,27 +87,42 @@ class OpenClient:
 
     def _post_form(self, request, user_token, app_token, stream=False):
         all_params = self._build_params(request, user_token, app_token)
-        response = requests.post(self.__url, data=all_params, headers=_headers, stream=stream)
+        response = requests.post(
+            self.__url, data=all_params, headers=_headers, stream=stream
+        )
         return response
 
     def _post_json(self, request, user_token, app_token, stream=False):
         all_params = self._build_params(request, user_token, app_token)
-        response = requests.post(self.__url, json=all_params, headers=_headers, stream=stream)
+        response = requests.post(
+            self.__url, json=all_params, headers=_headers, stream=stream
+        )
         return response
 
     def _post_file(self, request, user_token, app_token, stream=False):
         all_params = self._build_params(request, user_token, app_token)
-        response = requests.request('POST', self.__url, data=all_params, files=request.files, headers=_headers, stream=stream)
+        response = requests.request(
+            "POST",
+            self.__url,
+            data=all_params,
+            files=request.files,
+            headers=_headers,
+            stream=stream,
+        )
         return response
 
     def _put(self, request, user_token, app_token, stream=False):
         all_params = self._build_params(request, user_token, app_token)
-        response = requests.put(self.__url, json=all_params, headers=_headers, stream=stream)
+        response = requests.put(
+            self.__url, json=all_params, headers=_headers, stream=stream
+        )
         return response
 
     def _delete(self, request, user_token, app_token, stream=False):
         all_params = self._build_params(request, user_token, app_token)
-        response = requests.delete(self.__url, json=all_params, headers=_headers, stream=stream)
+        response = requests.delete(
+            self.__url, json=all_params, headers=_headers, stream=stream
+        )
         return response
 
     def _build_params(self, request, user_token, app_token):
@@ -125,19 +141,19 @@ class OpenClient:
         :rtype: str
         """
         all_params = {
-            'app_id': self.__app_id,
-            'method': request.get_method(),
-            'charset': 'UTF-8',
-            'sign_type': 'RSA2',
-            'timestamp': int(round(time.time() * 1000)),
-            'version': '1.0',
-            'sdk_version': '1.0'
+            "app_id": self.__app_id,
+            "method": request.get_method(),
+            "charset": "UTF-8",
+            "sign_type": "RSA2",
+            "timestamp": int(round(time.time() * 1000)),
+            "version": "1.0",
+            "sdk_version": "1.0",
         }
 
         if user_token is not None:
-            all_params['user_access_token'] = user_token
+            all_params["user_access_token"] = user_token
         if app_token is not None:
-            all_params['app_auth_token'] = app_token
+            all_params["app_auth_token"] = app_token
 
         biz_model = request.biz_model
         params_model = request.params_model
@@ -158,14 +174,14 @@ class OpenClient:
 
         # 添加业务参数
         if biz_str is not None:
-            all_params['biz_content'] = biz_str
+            all_params["biz_content"] = biz_str
         # url携带参数(GET请求以外有效)
         if params_str is not None:
-            all_params['params_content'] = params_str
+            all_params["params_content"] = params_str
 
         # 构建sign
-        sign = SignUtil.create_sign(all_params, self.__private_key, 'RSA2')
-        all_params['sign'] = sign
+        sign = SignUtil.create_sign(all_params, self.__private_key, "RSA2")
+        all_params["sign"] = sign
         return all_params
 
     @staticmethod
@@ -176,4 +192,3 @@ class OpenClient:
     @staticmethod
     def _parse_stream_response(resp):
         return StreamResponse(resp)
-
