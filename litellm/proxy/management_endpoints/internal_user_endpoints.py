@@ -1867,13 +1867,22 @@ async def ui_view_users(
                         "error": "Only proxy admins and organization admins can search users."
                     },
                 )
-            caller_user = await get_user_object(
-                user_id=user_api_key_dict.user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_id_upsert=False,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            try:
+                caller_user = await get_user_object(
+                    user_id=user_api_key_dict.user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except ValueError:
+                # get_user_object raises ValueError when user not found (user_id_upsert=False)
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Only proxy admins and organization admins can search users."
+                    },
+                )
             if caller_user is None:
                 raise HTTPException(
                     status_code=403,
