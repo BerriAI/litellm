@@ -167,11 +167,6 @@ class OpenrouterConfig(OpenAIGPTConfig):
         )
         response.update(extra_body)
 
-        # ALWAYS add usage parameter to get cost data from OpenRouter
-        # This ensures cost tracking works for all OpenRouter models
-        if "usage" not in response:
-            response["usage"] = {"include": True}
-
         return response
 
     def transform_response(
