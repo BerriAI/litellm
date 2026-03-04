@@ -108,6 +108,11 @@ def map_finish_reason(
     # Map them to "finish_reason_unspecified" so the stream can be assembled
     # without raising an exception.
     if finish_reason not in _VALID_OPENAI_FINISH_REASONS:
+        verbose_logger.warning(
+            "litellm.map_finish_reason: unknown finish_reason %r from provider; "
+            "mapping to 'finish_reason_unspecified' to avoid ValidationError.",
+            finish_reason,
+        )
         return "finish_reason_unspecified"
     return finish_reason
 
