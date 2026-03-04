@@ -235,8 +235,13 @@ class CustomGuardrail(CustomLogger):
                 list(event_hook.tags.values()), supported_event_hooks
             )
             if event_hook.default:
+                default_list = (
+                    event_hook.default
+                    if isinstance(event_hook.default, list)
+                    else [event_hook.default]
+                )
                 _validate_event_hook_list_is_in_supported_event_hooks(
-                    [event_hook.default], supported_event_hooks
+                    default_list, supported_event_hooks
                 )
         elif isinstance(event_hook, GuardrailEventHooks):
             if event_hook not in supported_event_hooks:
@@ -415,7 +420,7 @@ class CustomGuardrail(CustomLogger):
                             "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
                         )
                     result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(
-                        data, self.event_hook
+                        data, self.event_hook, event_type
                     )
                     if result is not None:
                         return result
@@ -442,7 +447,7 @@ class CustomGuardrail(CustomLogger):
                     "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
                 )
             result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(
-                data, self.event_hook
+                data, self.event_hook, event_type
             )
             if result is not None:
                 return result
@@ -461,7 +466,16 @@ class CustomGuardrail(CustomLogger):
         if isinstance(self.event_hook, list):
             return event_type.value in self.event_hook
         if isinstance(self.event_hook, Mode):
-            return event_type.value in self.event_hook.tags.values()
+            if event_type.value in self.event_hook.tags.values():
+                return True
+            if self.event_hook.default:
+                default_list = (
+                    self.event_hook.default
+                    if isinstance(self.event_hook.default, list)
+                    else [self.event_hook.default]
+                )
+                return event_type.value in default_list
+            return False
         return self.event_hook == event_type.value
 
     def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:

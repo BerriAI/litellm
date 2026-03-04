@@ -16,16 +16,17 @@ from pydantic import fields as pyd_fields
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIStreamingResponse
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
+    ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
@@ -555,3 +556,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Fall back to the first candidate
         return candidates[0]
+
+    def supports_native_websocket(self) -> bool:
+        """VolcEngine does not support native WebSocket for Responses API"""
+        return False

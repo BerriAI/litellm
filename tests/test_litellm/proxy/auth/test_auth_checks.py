@@ -1522,52 +1522,51 @@ async def test_get_fuzzy_user_object_case_insensitive_email():
 
 
 @pytest.mark.asyncio
-async def test_common_checks_skip_route_check_for_custom_auth():
+async def test_custom_auth_common_checks_opt_in():
     """
-    Test that custom routes (e.g. /ldap/ngs/ready) pass common_checks when
-    skip_route_check=True, which is the case for custom auth flows.
+    Test that _run_post_custom_auth_checks only runs common_checks when
+    custom_auth_run_common_checks is explicitly set to True in general_settings.
 
-    Regression test for: custom user-added routes being rejected as admin-only
-    after _run_post_custom_auth_checks was introduced.
+    By default (False), common_checks is skipped for backwards compatibility
+    with custom auth flows that existed before PR #22164.
     """
-    from fastapi import Request
+    from litellm.proxy.auth.user_api_key_auth import _run_post_custom_auth_checks
 
-    from litellm.proxy.auth.auth_checks import common_checks
-
-    mock_request = MagicMock(spec=Request)
     valid_token = UserAPIKeyAuth(token="test-token")
+    mock_request = MagicMock()
 
-    # Without skip_route_check, a custom route with unknown user should fail
-    with pytest.raises(Exception):
-        await common_checks(
-            request_body={},
-            team_object=None,
-            user_object=None,
-            end_user_object=None,
-            global_proxy_spend=None,
-            general_settings={},
-            route="/ldap/ngs/ready",
-            llm_router=None,
-            proxy_logging_obj=MagicMock(),
+    # Default (no flag) — common_checks should NOT be called
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks",
+        new_callable=AsyncMock,
+    ) as mock_common, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    ):
+        mock_common.return_value = True
+        result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
             request=mock_request,
-            skip_route_check=False,
+            request_data={},
+            route="/ldap/ngs/ready",
+            parent_otel_span=None,
         )
+        mock_common.assert_not_called()
 
-    # With skip_route_check=True (custom auth path), the same route should pass
-    result = await common_checks(
-        request_body={},
-        team_object=None,
-        user_object=None,
-        end_user_object=None,
-        global_proxy_spend=None,
-        general_settings={},
-        route="/ldap/ngs/ready",
-        llm_router=None,
-        proxy_logging_obj=MagicMock(),
-        valid_token=valid_token,
-        request=mock_request,
-        skip_route_check=True,
-    )
-
-    assert result is True
+    # With flag=True — common_checks SHOULD be called
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks",
+        new_callable=AsyncMock,
+    ) as mock_common, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"custom_auth_run_common_checks": True},
+    ):
+        mock_common.return_value = True
+        result = await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=mock_request,
+            request_data={},
+            route="/chat/completions",
+            parent_otel_span=None,
+        )
+        mock_common.assert_called_once()

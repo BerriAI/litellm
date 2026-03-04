@@ -96,6 +96,19 @@ def test_supports_function_calling_github_anthropic_alias():
     )
 
 
+def test_supports_function_calling_deepinfra_llama():
+    """Test that deepinfra Llama models correctly report function calling support.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22619
+    """
+    assert (
+        litellm.utils.supports_function_calling(
+            model="deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+        )
+        is True
+    )
+
+
 def test_supports_function_calling_unknown_github_alias_returns_false():
     assert (
         litellm.utils.supports_function_calling(
@@ -592,6 +605,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -702,6 +716,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
+                "supports_code_execution": {"type": "boolean"},
+                "supports_file_search": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_parallel_function_calling": {"type": "boolean"},
@@ -1139,20 +1155,25 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
         provider_config=provider_config,
     )
     print(processed_non_default_params)
+    # Vertex AI / Gemini uses Pydantic's model_json_schema() which doesn't
+    # include additionalProperties: False (Gemini rejects it).  Other
+    # providers use OpenAI's to_strict_json_schema() which does.
+    expected_schema = {
+        "properties": {
+            "x": {"title": "X", "type": "string"},
+            "y": {"title": "Y", "type": "string"},
+        },
+        "required": ["x", "y"],
+        "title": "ResponseFormat",
+        "type": "object",
+    }
+    if custom_llm_provider not in ("vertex_ai", "vertex_ai_beta", "gemini"):
+        expected_schema["additionalProperties"] = False
     assert processed_non_default_params == {
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "schema": {
-                    "properties": {
-                        "x": {"title": "X", "type": "string"},
-                        "y": {"title": "Y", "type": "string"},
-                    },
-                    "required": ["x", "y"],
-                    "title": "ResponseFormat",
-                    "type": "object",
-                    "additionalProperties": False,
-                },
+                "schema": expected_schema,
                 "name": "ResponseFormat",
                 "strict": True,
             },

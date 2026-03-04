@@ -374,6 +374,27 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
     router.push(href);
   };
 
+  // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
+  // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
+  const renderNavLink = (label: string, page: string): React.ReactNode => {
+    const href = toHref(page);
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
+            e.stopPropagation();
+            return;
+          }
+          e.preventDefault();
+        }}
+        style={{ color: "inherit", textDecoration: "none" }}
+      >
+        {label}
+      </a>
+    );
+  };
+
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Sider
@@ -412,11 +433,11 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
             items={filteredMenuItems.map((item) => ({
               key: item.key,
               icon: item.icon,
-              label: item.label,
+              label: renderNavLink(item.label, item.page),
               children: item.children?.map((child) => ({
                 key: child.key,
                 icon: child.icon,
-                label: child.label,
+                label: renderNavLink(child.label, child.page),
                 onClick: () => goTo(child.page),
               })),
               onClick: !item.children ? () => goTo(item.page) : undefined,

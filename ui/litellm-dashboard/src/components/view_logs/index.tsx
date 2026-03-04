@@ -20,7 +20,7 @@ import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
+import { AGENT_CALL_TYPES, ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
@@ -309,13 +309,15 @@ export default function SpendLogsTable({
     return matchesSearch;
   });
 
-  const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; mcp: number }>>((acc, log) => {
+  const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>((acc, log) => {
     if (!log.session_id) return acc;
     if (!acc[log.session_id]) {
-      acc[log.session_id] = { llm: 0, mcp: 0 };
+      acc[log.session_id] = { llm: 0, agent: 0, mcp: 0 };
     }
     if (MCP_CALL_TYPES.includes(log.call_type)) {
       acc[log.session_id].mcp += 1;
+    } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
+      acc[log.session_id].agent += 1;
     } else {
       acc[log.session_id].llm += 1;
     }
@@ -343,6 +345,7 @@ export default function SpendLogsTable({
           request_duration_ms: log.request_duration_ms,
           session_llm_count: sessionComposition?.llm ?? undefined,
           session_mcp_count: sessionComposition?.mcp ?? undefined,
+          session_agent_count: sessionComposition?.agent ?? undefined,
           onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
           onSessionClick: (sessionId: string) => {
             if (sessionId) {
@@ -714,7 +717,6 @@ export default function SpendLogsTable({
               accessToken={accessToken}
               isActive={activeTab === "audit logs"}
               premiumUser={premiumUser}
-              allTeams={allTeams}
             />
           </TabPanel>
           <TabPanel><DeletedKeysPage /></TabPanel>

@@ -51,6 +51,8 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import ResponseText  # type: ignore
 else:
     ResponseText = str  # Fallback for ResponseText import
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
@@ -182,8 +184,6 @@ async def aresponses_api_with_mcp(
     mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
     secret_fields = kwargs.get("secret_fields")
     if secret_fields and isinstance(secret_fields, dict):
-        from litellm.responses.utils import ResponsesAPIRequestUtils
-
         mcp_auth_header, mcp_server_auth_headers, _, _ = (
             ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
                 secret_fields=secret_fields, tools=tools
@@ -1662,3 +1662,100 @@ def compact_responses(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+# ---------------------------------------------------------------------------
+# Responses API WebSocket mode
+# ---------------------------------------------------------------------------
+
+
+def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
+    metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
+    guardrails = (
+        (kwargs.get("metadata") or {}).get("guardrails")
+        or kwargs.get("guardrails")
+        or []
+    )
+    if guardrails:
+        metadata["guardrails"] = guardrails
+    return metadata
+
+
+@client
+async def _aresponses_websocket(
+    model: str,
+    websocket: Any,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
+    timeout: Optional[float] = None,
+    **kwargs,
+):
+    """
+    Private function to handle the Responses API WebSocket mode.
+
+    For PROXY use only.
+
+    Resolves the LLM provider from ``model``, looks up the matching
+    ``BaseResponsesAPIConfig``, and hands off to
+    ``BaseLLMHTTPHandler.async_responses_websocket``.
+    """
+    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+    user = kwargs.get("user", None)
+    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict = get_litellm_params(**kwargs)
+
+    model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
+        litellm.get_llm_provider(
+            model=model,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    )
+
+    litellm_logging_obj.update_environment_variables(
+        model=model,
+        user=user,
+        optional_params={},
+        litellm_params=litellm_params_dict,
+        custom_llm_provider=_custom_llm_provider,
+    )
+
+    responses_api_provider_config: Optional[BaseResponsesAPIConfig] = None
+    if _custom_llm_provider is not None:
+        responses_api_provider_config = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=model,
+                provider=litellm.LlmProviders(_custom_llm_provider),
+            )
+        )
+
+    resolved_api_base = (
+        dynamic_api_base
+        or litellm_params.api_base
+        or litellm.api_base
+        or None
+    )
+    resolved_api_key = (
+        dynamic_api_key
+        or litellm_params.api_key
+        or litellm.api_key
+        or litellm.openai_key
+        or get_secret_str("OPENAI_API_KEY")
+    )
+
+    # Extract params that we're passing explicitly to avoid duplicates in **kwargs
+    remaining_kwargs = {k: v for k, v in kwargs.items() if k not in {"user_api_key_dict", "litellm_metadata"}}
+
+    await base_llm_http_handler.async_responses_websocket(
+        model=model,
+        websocket=websocket,
+        logging_obj=litellm_logging_obj,
+        responses_api_provider_config=responses_api_provider_config,
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
+        timeout=timeout,
+        user_api_key_dict=kwargs.get("user_api_key_dict"),
+        litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
+        custom_llm_provider=_custom_llm_provider,
+        **remaining_kwargs,
+    )
