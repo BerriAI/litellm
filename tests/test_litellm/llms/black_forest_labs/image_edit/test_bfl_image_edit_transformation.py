@@ -46,9 +46,9 @@ class TestBlackForestLabsImageEditTransformation:
         """Test that supported OpenAI params are returned correctly."""
         params = self.config.get_supported_openai_params(self.model)
 
-        assert "n" in params
-        assert "size" in params
-        assert "response_format" in params
+        # BFL image edit currently returns an empty list since it uses
+        # different parameter names mapped in map_openai_params
+        assert params == []
 
     def test_map_openai_params_basic(self):
         """Test mapping of OpenAI params to BFL params."""

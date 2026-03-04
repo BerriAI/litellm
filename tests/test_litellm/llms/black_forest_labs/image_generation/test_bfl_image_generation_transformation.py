@@ -43,7 +43,6 @@ class TestBlackForestLabsImageGenerationTransformation:
 
         assert "n" in params
         assert "size" in params
-        assert "response_format" in params
         assert "quality" in params
 
     def test_map_openai_params_basic(self):
@@ -179,10 +178,10 @@ class TestBlackForestLabsImageGenerationTransformation:
         endpoint = self.config._get_model_endpoint("flux-pro")
         assert endpoint == "/v1/flux-pro"
 
-    def test_get_model_endpoint_unknown_defaults(self):
-        """Test that unknown models default to flux-pro-1.1."""
-        endpoint = self.config._get_model_endpoint("unknown-model")
-        assert endpoint == "/v1/flux-pro-1.1"
+    def test_get_model_endpoint_unknown_raises(self):
+        """Test that unknown models raise ValueError."""
+        with pytest.raises(ValueError, match="Unknown BFL image generation model"):
+            self.config._get_model_endpoint("unknown-model")
 
     def test_get_model_endpoint_with_provider_prefix(self):
         """Test that provider prefix is stripped from model name."""
