@@ -97,7 +97,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
-        except (httpx.RequestError, json.JSONDecodeError) as e:
+        except (httpx.RequestError, json.JSONDecodeError, ValueError) as e:
             verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
             raise OpenAIError(
                 status_code=500,
