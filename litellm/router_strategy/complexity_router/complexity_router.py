@@ -367,7 +367,7 @@ class ComplexityRouter(CustomLogger):
                     for part in content
                     if isinstance(part, dict) and part.get("type") == "text"
                 ]
-                content = " ".join(text_parts)
+                content = " ".join(text_parts).strip()
             if isinstance(content, str) and content:
                 if role == "user" and user_message is None:
                     user_message = content
