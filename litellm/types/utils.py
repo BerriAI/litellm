@@ -291,6 +291,7 @@ class CallTypes(str, Enum):
     search = "search"
     asearch = "asearch"
     arealtime = "_arealtime"
+    aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
@@ -3026,6 +3027,7 @@ all_litellm_params = (
         "shared_session",
         "search_tool_name",
         "order",
+        "enable_json_schema_validation",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -3236,6 +3238,7 @@ class SearchProviders(str, Enum):
     SEARXNG = "searxng"
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
+    SEARCHAPI = "searchapi"
 
 
 # Create a set of all search provider values for quick lookup
