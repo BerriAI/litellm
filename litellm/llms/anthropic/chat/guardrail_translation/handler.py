@@ -75,7 +75,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        chat_completion_compatible_request, tool_name_mapping = (
+        chat_completion_compatible_request, _tool_name_mapping = (
             LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
                 # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
                 anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
@@ -140,6 +140,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
         return data
+
+    def extract_request_tool_names(self, data: dict) -> List[str]:
+        """Extract tool names from Anthropic messages request (tools[].name)."""
+        names: List[str] = []
+        for tool in data.get("tools") or []:
+            if isinstance(tool, dict) and tool.get("name"):
+                names.append(str(tool["name"]))
+        return names
 
     def _extract_input_text_and_images(
         self,

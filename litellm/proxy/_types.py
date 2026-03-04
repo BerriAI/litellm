@@ -77,6 +77,7 @@ class SupportedDBObjectType(str, enum.Enum):
     PASS_THROUGH_ENDPOINTS = "pass_through_endpoints"
     PROMPTS = "prompts"
     MODEL_COST_MAP = "model_cost_map"
+    TOOLS = "tools"
 
     def __str__(self):
         return str(self.value)
@@ -2133,7 +2134,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     user_header_mappings: Optional[List[UserHeaderMapping]] = None
     supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
         None,
-        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map'. If not set, all objects are loaded (default behavior).",
+        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools'. If not set, all objects are loaded (default behavior).",
     )
     user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
         None,
@@ -3377,6 +3378,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Team member is already in team
     """
 
+    tool_access_denied = "tool_access_denied"
+    """
+    Tool is not in the allowed tools list for this key/team
+    """
+
     @classmethod
     def get_model_access_error_type_for_object(
         cls, object_type: Literal["key", "user", "team", "org", "project"]
@@ -4161,6 +4167,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     key_hash: Optional[str]  # hash of virtual key that triggered discovery
     team_id: Optional[str]  # team that triggered discovery
     key_alias: Optional[str]  # human-readable key alias
+    user_agent: Optional[str]  # HTTP User-Agent of the caller
 
 
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):

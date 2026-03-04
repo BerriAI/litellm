@@ -1091,6 +1091,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ] = user_api_key_dict.user_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
+    data[_metadata_variable_name]["user_api_key_team_metadata"] = (
+        user_api_key_dict.team_metadata
+    )
+    data[_metadata_variable_name]["user_api_key_object_permission_id"] = (
+        getattr(user_api_key_dict, "object_permission_id", None)
+    )
+    data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = (
+        getattr(user_api_key_dict, "team_object_permission_id", None)
+    )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
 
