@@ -2836,6 +2836,8 @@ class ProxyConfig:
                     )
                 elif key == "max_internal_user_budget":
                     litellm.max_internal_user_budget = float(value)  # type: ignore
+                elif key == "max_cli_session_budget":
+                    litellm.max_cli_session_budget = float(value)  # type: ignore
                 elif key == "default_max_internal_user_budget":
                     litellm.default_max_internal_user_budget = float(value)
                     if litellm.max_internal_user_budget is None:

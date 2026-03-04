@@ -315,6 +315,23 @@ def test_get_cli_jwt_auth_token_custom_expiration(
     assert expires <= get_utc_datetime() + timedelta(hours=48, minutes=1)
 
 
+def test_get_cli_jwt_auth_token_respects_explicit_cli_budget(
+    valid_sso_user_defined_values, monkeypatch
+):
+    """CLI JWT should include max_budget only when max_cli_session_budget is set."""
+    monkeypatch.setattr(litellm, "max_cli_session_budget", 3.5)
+
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["max_budget"] == 3.5
+
+
 
 @pytest.mark.asyncio
 async def test_default_internal_user_params_with_get_user_object(monkeypatch):

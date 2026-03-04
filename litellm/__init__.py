@@ -372,6 +372,7 @@ max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 max_ui_session_budget: Optional[float] = 0.25  # $0.25 USD budgets for UI Chat sessions
+max_cli_session_budget: Optional[float] = None  # Optional budget cap for CLI JWT sessions
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
