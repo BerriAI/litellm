@@ -222,3 +222,30 @@ def test_chat_completion_token_logprob_invalid_top_logprobs_rejected():
             logprob=-0.31725305,
             top_logprobs="invalid_string",
         )
+
+
+def test_delta_maps_reasoning_to_reasoning_content():
+    """
+    Test that Delta maps 'reasoning' field to 'reasoning_content'.
+
+    Providers like Cerebras and Groq return delta.reasoning for gpt-oss models,
+    but LiteLLM expects delta.reasoning_content.
+    """
+    from litellm.types.utils import Delta
+
+    # When provider sends 'reasoning' (e.g., Cerebras gpt-oss streaming)
+    delta = Delta(content=None, role="assistant", reasoning="thinking step by step")
+    assert delta.reasoning_content == "thinking step by step"
+    assert not hasattr(delta, "reasoning"), "reasoning should not leak as an extra attribute"
+
+    # When provider sends 'reasoning_content' directly (e.g., NIM), it still works
+    delta2 = Delta(content="hello", reasoning_content="direct reasoning")
+    assert delta2.reasoning_content == "direct reasoning"
+
+    # When both are present, reasoning_content takes precedence
+    delta3 = Delta(reasoning_content="from_rc", reasoning="from_r")
+    assert delta3.reasoning_content == "from_rc"
+
+    # When neither is present, reasoning_content is not set (OpenAI spec)
+    delta4 = Delta(content="hello")
+    assert not hasattr(delta4, "reasoning_content")
