@@ -7,8 +7,6 @@ import warnings
 import httpx
 import openai
 import pytest
-
-tenacity = pytest.importorskip("tenacity", reason="tenacity required for e2e batch tests")
 from tenacity import RetryError
 
 sys.path.insert(0, os.path.abspath("../.."))
