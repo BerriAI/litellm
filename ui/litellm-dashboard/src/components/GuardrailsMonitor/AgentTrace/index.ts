@@ -5,4 +5,3 @@ export type { TraceViewProps } from "./TraceView";
 export { SpanDetail } from "./SpanDetail";
 export type { SpanDetailProps } from "./SpanDetail";
 export type { Span, AgentTraceSession, SpanType, SpanStatus } from "../agentTraceTypes";
-export { MOCK_AGENT_TRACE_SESSIONS } from "../agentTraceTypes";

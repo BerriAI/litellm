@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { LogViewer } from "./LogViewer";
@@ -80,7 +80,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 }
 
 describe("LogViewer", () => {
-  it("should render agent-trace demo rows first then guardrail log entries", () => {
+  it("should render guardrail log entries", () => {
     render(
       <LogViewer
         guardrailName="Test Guardrail"
@@ -90,38 +90,22 @@ describe("LogViewer", () => {
       { wrapper }
     );
 
-    // First 2 rows are the fixed agent-trace demo rows
-    expect(screen.getByText("Currency Research Agent")).toBeDefined();
-    expect(screen.getByText("Travel Booking Agent")).toBeDefined();
-    // Trace badge appears for demo rows
-    const traceBadges = screen.getAllByText("Trace");
-    expect(traceBadges.length).toBeGreaterThanOrEqual(2);
-
-    // Following rows are guardrail log entries (input snippets are unique to log rows)
+    // Log entries are rendered
     expect(screen.getByText("First guardrail log request")).toBeDefined();
     expect(screen.getByText("Second guardrail log request")).toBeDefined();
     expect(screen.getByText("Third guardrail log request")).toBeDefined();
   });
 
-  it("should open AgentTraceDrawer when first demo trace row is clicked", async () => {
+  it("should show empty state when no logs", () => {
     render(
       <LogViewer
         guardrailName="Test Guardrail"
-        logs={mockLogs}
+        logs={[]}
         logsLoading={false}
       />,
       { wrapper }
     );
 
-    const currencyRow = screen.getByText("Currency Research Agent");
-    expect(screen.queryByTestId("agent-trace-drawer")).toBeNull();
-
-    await act(async () => {
-      currencyRow.closest("button")?.click();
-    });
-
-    expect(screen.getByTestId("agent-trace-drawer")).toBeDefined();
-    expect(screen.getByText(/Agent trace: Currency Research Agent/)).toBeDefined();
-    expect(screen.getByText(/Session: 0c4b4759-83aa/)).toBeDefined();
+    expect(screen.getByText("No logs to display. Adjust filters or date range.")).toBeDefined();
   });
 });

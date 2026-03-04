@@ -243,13 +243,15 @@ async def asend_message(
     if request is None:
         raise ValueError("request is required")
 
+    # Ensure trace_id is always set for context_id propagation
+    trace_id = trace_id or str(uuid.uuid4())
+
     # Create A2A client if not provided but api_base is available
     if a2a_client is None:
         if api_base is None:
             raise ValueError(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
-        trace_id = trace_id or str(uuid.uuid4())
         extra_headers = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
@@ -270,9 +272,8 @@ async def asend_message(
     )
     card_url = getattr(agent_card, "url", None) if agent_card else None
 
-    context_id = trace_id or str(uuid.uuid4())
     if request.params.message.context_id is None:
-        request.params.message.context_id = context_id
+        request.params.message.context_id = trace_id
 
     # Retry loop: if connection fails due to localhost URL in agent card, retry with fixed URL
     a2a_response = None
