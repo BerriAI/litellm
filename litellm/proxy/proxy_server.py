@@ -3039,7 +3039,6 @@ class ProxyConfig:
 
             # Initialize success/failure callbacks from callback_settings when keys were not in litellm_settings
             if success_from_settings and "success_callback" not in litellm_settings:
-            if success_from_settings and "success_callback" not in litellm_settings:
                 for callback in success_from_settings:
                     if "." in callback:
                         litellm.logging_callback_manager.add_litellm_success_callback(
