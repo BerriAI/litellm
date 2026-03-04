@@ -1112,6 +1112,47 @@ async def test_get_guardrail_info_endpoint_db_guardrail(mocker):
     assert result.guardrail_definition_location == "db"
 
 
+class TestBuildFieldDict:
+    """Test _build_field_dict handles both enum and string ui_type values."""
+
+    def test_build_field_dict_with_string_ui_type(self):
+        """Test that _build_field_dict works when ui_type is a plain string (e.g. BlockCodeExecutionGuardrailConfigModel)."""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy.guardrails.guardrail_endpoints import _build_field_dict
+
+        field = MagicMock()
+        field.json_schema_extra = {"ui_type": "multiselect", "options": ["python", "javascript"]}
+
+        result = _build_field_dict(
+            field=field,
+            field_annotation=str,
+            description="Test field",
+            required=False,
+        )
+
+        assert result["type"] == "multiselect"
+        assert result["description"] == "Test field"
+
+    def test_build_field_dict_with_enum_ui_type(self):
+        """Test that _build_field_dict works when ui_type is a GuardrailParamUITypes enum."""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy.guardrails.guardrail_endpoints import _build_field_dict
+        from litellm.types.guardrails import GuardrailParamUITypes
+
+        field = MagicMock()
+        field.json_schema_extra = {"ui_type": GuardrailParamUITypes.BOOL}
+
+        result = _build_field_dict(
+            field=field,
+            field_annotation=bool,
+            description="Test bool field",
+            required=True,
+        )
+
+        assert result["type"] == "bool"
+        assert result["required"] is True
 # --- Team guardrail registration (register / submissions) ---
 
 MOCK_REGISTER_REQUEST = RegisterGuardrailRequest(

@@ -2130,7 +2130,7 @@ def test_reasoning_effort_dict_format_gemini_3():
     assert result["thinkingConfig"]["thinkingLevel"] == "high"
     assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test dict format without effort key - should fall back to Gemini 3 default (low)
+    # Test dict format without effort key - no thinkingConfig should be set
     optional_params = {}
     non_default_params = {"reasoning_effort": {"summary": "auto"}}
     result = v.map_openai_params(
@@ -2139,8 +2139,8 @@ def test_reasoning_effort_dict_format_gemini_3():
         model=model,
         drop_params=False,
     )
-    # Gemini 3 defaults to thinkingLevel="low" when no explicit effort is set
-    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    # No effort key in dict → no thinkingConfig set
+    assert "thinkingConfig" not in result
 
 
 def test_temperature_default_for_gemini_3():
@@ -2453,8 +2453,8 @@ def test_gemini_3_image_models_no_thinking_config():
 
 def test_gemini_3_text_models_get_thinking_config():
     """
-    Test that Gemini 3 text models DO receive automatic thinkingConfig.
-    This ensures we didn't break the existing behavior for non-image models.
+    Test that Gemini 3 text models do NOT receive automatic thinkingConfig
+    when no reasoning_effort or thinking param is provided.
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
@@ -2462,7 +2462,7 @@ def test_gemini_3_text_models_get_thinking_config():
 
     v = VertexGeminiConfig()
 
-    # Test gemini-3-pro-preview (text model, should get thinking)
+    # Test gemini-3-pro-preview (text model, no explicit thinking params)
     model = "gemini-3-pro-preview"
     optional_params = {}
     non_default_params = {}
@@ -2474,9 +2474,8 @@ def test_gemini_3_text_models_get_thinking_config():
         drop_params=False,
     )
 
-    # Should have thinkingConfig automatically added
-    assert "thinkingConfig" in result
-    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    # Should NOT have thinkingConfig automatically added when user provides no reasoning_effort
+    assert "thinkingConfig" not in result
     assert result["temperature"] == 1.0
 
 
