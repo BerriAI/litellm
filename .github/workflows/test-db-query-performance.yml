@@ -80,11 +80,14 @@ jobs:
           echo "Testing: GET /user/daily/activity/aggregated?start_date=2026-02-01&end_date=2026-02-28&timezone=480"
 
           http_code=$(curl --max-time 4 -s \
-            -o /dev/null \
+            -o /tmp/response.json \
             -w "%{http_code}" \
             -H "Authorization: Bearer sk-1234" \
             "http://localhost:4000/user/daily/activity/aggregated?start_date=2026-02-01&end_date=2026-02-28&timezone=480") \
             || { echo "FAILED: request timed out after 4s"; docker logs litellm-test; exit 1; }
+
+          echo "Response (first 500 chars):"
+          head -c 500 /tmp/response.json
 
           if [ "$http_code" -ne 200 ]; then
             echo "FAILED: expected HTTP 200, got $http_code"
