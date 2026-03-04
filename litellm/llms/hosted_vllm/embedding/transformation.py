@@ -110,10 +110,13 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         if model.startswith("hosted_vllm/"):
             model = model.replace("hosted_vllm/", "", 1)
 
+        # Filter out None values to avoid sending invalid params (e.g. encoding_format=None)
+        # which vLLM rejects with: "unknown variant ``, expected float or base64"
+        filtered_params = {k: v for k, v in optional_params.items() if v is not None}
         return {
             "model": model,
             "input": input,
-            **optional_params,
+            **filtered_params,
         }
 
     def transform_embedding_response(
