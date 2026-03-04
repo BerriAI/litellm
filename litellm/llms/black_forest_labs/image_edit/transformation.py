@@ -222,7 +222,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
         # Add optional params
         for key, value in image_edit_optional_request_params.items():
-            if key not in ["extra_headers", "extra_body"] and value is not None:
+            if key not in ["extra_headers", "extra_body", "mask"] and value is not None:
                 request_body[key] = value
 
         # Handle mask if provided (for inpainting)
