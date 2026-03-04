@@ -172,15 +172,14 @@ describe("ModelsAndEndpointsView", () => {
 
     // Find and click dismiss button (X button)
     const dismissButton = container.querySelector('button[aria-label="Dismiss banner"]');
-    if (dismissButton) {
-      fireEvent.click(dismissButton);
+    expect(dismissButton).not.toBeNull();
+    fireEvent.click(dismissButton!);
 
-      // Banner should be hidden
-      expect(queryByText("Missing a provider?")).not.toBeInTheDocument();
+    // Banner should be hidden
+    expect(queryByText("Missing a provider?")).not.toBeInTheDocument();
 
-      // LocalStorage should be updated
-      expect(localStorageMock.getItem("hideMissingProviderBanner")).toBe("true");
-    }
+    // LocalStorage should be updated
+    expect(localStorageMock.getItem("hideMissingProviderBanner")).toBe("true");
   }, 15000);
 
   it("should show compact Request Provider button when banner is dismissed", async () => {
