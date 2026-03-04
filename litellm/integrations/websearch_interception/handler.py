@@ -7,6 +7,7 @@ server-side using litellm router's search tools.
 """
 
 import asyncio
+import math
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
@@ -429,6 +430,56 @@ class WebSearchInterceptionLogger(CustomLogger):
             response_format=response_format,
         )
 
+    @staticmethod
+    def _resolve_max_tokens(
+        optional_params: Dict,
+        kwargs: Dict,
+    ) -> int:
+        """Extract max_tokens and validate against thinking.budget_tokens.
+
+        Anthropic API requires ``max_tokens > thinking.budget_tokens``.
+        If the constraint is violated, auto-adjust to ``budget_tokens + 1024``.
+        """
+        max_tokens: int = optional_params.get(
+            "max_tokens",
+            kwargs.get("max_tokens", 1024),
+        )
+        thinking_param = optional_params.get("thinking")
+        if thinking_param and isinstance(thinking_param, dict):
+            budget_tokens = thinking_param.get("budget_tokens")
+            if (
+                budget_tokens is not None
+                and isinstance(budget_tokens, (int, float))
+                and math.isfinite(budget_tokens)
+                and budget_tokens > 0
+            ):
+                if max_tokens <= budget_tokens:
+                    adjusted = math.ceil(budget_tokens) + 1024
+                    verbose_logger.warning(
+                        "WebSearchInterception: max_tokens=%s <= thinking.budget_tokens=%s, "
+                        "adjusting to %s to satisfy Anthropic API constraint",
+                        max_tokens, budget_tokens, adjusted,
+                    )
+                    max_tokens = adjusted
+        return max_tokens
+
+    @staticmethod
+    def _prepare_followup_kwargs(kwargs: Dict) -> Dict:
+        """Build kwargs for the follow-up call, excluding internal keys.
+
+        ``litellm_logging_obj`` MUST be excluded so the follow-up call creates
+        its own ``Logging`` instance via ``function_setup``.  Reusing the
+        initial call's logging object triggers the dedup flag
+        (``has_logged_async_success``) which silently prevents the initial
+        call's spend from being recorded — the root cause of the
+        SpendLog / AWS billing mismatch.
+        """
+        _internal_keys = {'litellm_logging_obj'}
+        return {
+            k: v for k, v in kwargs.items()
+            if not k.startswith('_websearch_interception') and k not in _internal_keys
+        }
+
     async def _execute_agentic_loop(
         self,
         model: str,
@@ -503,13 +554,18 @@ class WebSearchInterceptionLogger(CustomLogger):
             f"WebSearchInterception: Last message (tool_result): {user_message}"
         )
 
+        # Correlation context for structured logging
+        _call_id = (
+            getattr(logging_obj, "litellm_call_id", None)
+            or kwargs.get("litellm_call_id", "unknown")
+        )
+
+        full_model_name = model  # safe default before try block
+
         # Use anthropic_messages.acreate for follow-up request
         try:
-            # Extract max_tokens from optional params or kwargs
-            # max_tokens is a required parameter for anthropic_messages.acreate()
-            max_tokens = anthropic_messages_optional_request_params.get(
-                "max_tokens",
-                kwargs.get("max_tokens", 1024)  # Default to 1024 if not found
+            max_tokens = self._resolve_max_tokens(
+                anthropic_messages_optional_request_params, kwargs
             )
 
             verbose_logger.debug(
@@ -522,16 +578,10 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if k != 'max_tokens'
             }
 
-            # Remove internal websearch interception flags from kwargs before follow-up request
-            # These flags are used internally and should not be passed to the LLM provider
-            kwargs_for_followup = {
-                k: v for k, v in kwargs.items()
-                if not k.startswith('_websearch_interception')
-            }
+            kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
-            full_model_name = model
             if logging_obj is not None:
                 agentic_params = logging_obj.model_call_details.get("agentic_loop_params", {})
                 full_model_name = agentic_params.get("model", model)
@@ -555,7 +605,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             return final_response
         except Exception as e:
             verbose_logger.exception(
-                f"WebSearchInterception: Follow-up request failed: {str(e)}"
+                "WebSearchInterception: Follow-up request failed "
+                "[call_id=%s model=%s messages=%d searches=%d]: %s",
+                _call_id, full_model_name, len(follow_up_messages),
+                len(final_search_results), str(e),
             )
             raise
 
