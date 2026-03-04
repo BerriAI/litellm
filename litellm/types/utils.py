@@ -3238,6 +3238,7 @@ class SearchProviders(str, Enum):
     SEARXNG = "searxng"
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
+    SEARCHAPI = "searchapi"
 
 
 # Create a set of all search provider values for quick lookup
