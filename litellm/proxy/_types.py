@@ -3691,7 +3691,6 @@ class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
     id: str
     jwt_claim_name: str
     jwt_claim_value: str
-    token: str
     description: Optional[str] = None
     is_active: bool
     created_at: datetime
