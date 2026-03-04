@@ -10,8 +10,11 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 """
 
 import types
-from typing import List
+from typing import Any, List, Union
 
+from litellm.litellm_core_utils.embedding_utils import (
+    flatten_double_wrapped_embedding_input,
+)
 from litellm.types.llms.bedrock import (
     AmazonTitanG1EmbeddingRequest,
     AmazonTitanG1EmbeddingResponse,
@@ -59,8 +62,14 @@ class AmazonTitanG1Config:
         return optional_params
 
     def _transform_request(
-        self, input: str, inference_params: dict
+        self, input: Union[str, List[Any]], inference_params: dict
     ) -> AmazonTitanG1EmbeddingRequest:
+        if isinstance(input, list):
+            if not input:
+                return AmazonTitanG1EmbeddingRequest(inputText="")
+            input = flatten_double_wrapped_embedding_input(input)
+            if isinstance(input, list):
+                input = input[0] if len(input) == 1 and isinstance(input[0], str) else str(input[0])
         return AmazonTitanG1EmbeddingRequest(inputText=input)
 
     def _transform_response(

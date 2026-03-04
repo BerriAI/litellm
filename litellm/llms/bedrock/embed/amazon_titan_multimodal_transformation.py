@@ -6,8 +6,11 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-mm.html
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional, Union
 
+from litellm.litellm_core_utils.embedding_utils import (
+    flatten_double_wrapped_embedding_input,
+)
 from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingConfig,
     AmazonTitanMultimodalEmbeddingRequest,
@@ -39,8 +42,14 @@ class AmazonTitanMultimodalEmbeddingG1Config:
         return optional_params
 
     def _transform_request(
-        self, input: str, inference_params: dict
+        self, input: Union[str, List[Any]], inference_params: dict
     ) -> AmazonTitanMultimodalEmbeddingRequest:
+        if isinstance(input, list):
+            if not input:
+                return AmazonTitanMultimodalEmbeddingRequest(inputText="")
+            input = flatten_double_wrapped_embedding_input(input)
+            if isinstance(input, list):
+                input = input[0] if len(input) == 1 and isinstance(input[0], str) else str(input[0])
         ## check if b64 encoded str or not ##
         is_encoded = is_base64_encoded(input)
         if is_encoded:  # check if string is b64 encoded image or not
