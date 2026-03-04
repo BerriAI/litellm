@@ -7788,7 +7788,7 @@
     },
     "black_forest_labs/flux-kontext-pro": {
         "litellm_provider": "black_forest_labs",
-        "mode": "image_generation",
+        "mode": "image_edit",
         "output_cost_per_image": 0.04,
         "source": "https://bfl.ai/pricing",
         "supported_endpoints": [
@@ -7797,7 +7797,7 @@
     },
     "black_forest_labs/flux-kontext-max": {
         "litellm_provider": "black_forest_labs",
-        "mode": "image_generation",
+        "mode": "image_edit",
         "output_cost_per_image": 0.08,
         "source": "https://bfl.ai/pricing",
         "supported_endpoints": [
@@ -7806,7 +7806,7 @@
     },
     "black_forest_labs/flux-pro-1.0-fill": {
         "litellm_provider": "black_forest_labs",
-        "mode": "image_generation",
+        "mode": "image_edit",
         "output_cost_per_image": 0.05,
         "source": "https://bfl.ai/pricing",
         "supported_endpoints": [
@@ -7815,7 +7815,7 @@
     },
     "black_forest_labs/flux-pro-1.0-expand": {
         "litellm_provider": "black_forest_labs",
-        "mode": "image_generation",
+        "mode": "image_edit",
         "output_cost_per_image": 0.05,
         "source": "https://bfl.ai/pricing",
         "supported_endpoints": [

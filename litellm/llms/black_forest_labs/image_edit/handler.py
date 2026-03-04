@@ -212,7 +212,6 @@ class BlackForestLabsImageEdit:
             headers.update(extra_headers)
 
         # Get complete URL
-        # Get complete URL
         complete_url = self.config.get_complete_url(
             model=model,
             api_base=api_base,
@@ -236,7 +235,7 @@ class BlackForestLabsImageEdit:
             api_key="",
             additional_args={
                 "complete_input_dict": data,
-                "api_base": api_base,
+                "api_base": complete_url,
                 "headers": headers,
             },
         )
@@ -244,7 +243,7 @@ class BlackForestLabsImageEdit:
         # Make initial request
         try:
             response = await async_client.post(
-                url=api_base,
+                url=complete_url,
                 headers=headers,
                 json=data,
                 timeout=timeout,
