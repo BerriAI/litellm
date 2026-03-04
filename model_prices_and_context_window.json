@@ -29958,6 +29958,18 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "together_ai/Qwen/Qwen3.5-397B-A17B": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3.6e-06,
+        "source": "https://www.together.ai/models/Qwen/Qwen3.5-397B-A17B",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "tts-1": {
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "openai",
