@@ -311,6 +311,52 @@ class TestModelsLabImageGenerationConfig:
         assert len(result.data) == 1
         assert result.data[0].url == "https://pub-cdn.modelslab.com/result.png"
 
+    @pytest.mark.asyncio
+    async def test_async_transform_image_generation_response_processing_polls_and_succeeds(self):
+        """When ModelsLab returns status=processing, async transform should poll until success."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "status": "processing",
+            "id": 12345,
+            "fetch_result": "https://modelslab.com/api/v6/images/fetch/12345",
+            "eta": 10,
+            "message": "Image generation in progress",
+        }
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        model_response = ImageResponse(data=[])
+        mock_logging = MagicMock()
+
+        # Mock the async polling method to return a successful result immediately
+        polled_data = {
+            "status": "success",
+            "output": ["https://pub-cdn.modelslab.com/async-result.png"],
+            "generationTime": 5.2,
+            "id": 12345,
+        }
+
+        with patch.object(self.config, "_poll_async", return_value=polled_data) as mock_poll:
+            result = await self.config.async_transform_image_generation_response(
+                model="modelslab/flux",
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=mock_logging,
+                request_data={"key": "test-key"},
+                optional_params={},
+                litellm_params={"api_key": "test-key"},
+                encoding=None,
+            )
+
+        # Verify async polling was triggered with the generation ID
+        mock_poll.assert_called_once()
+        call_kwargs = mock_poll.call_args.kwargs
+        assert call_kwargs["generation_id"] == 12345
+
+        # Verify the final response contains the polled image URL
+        assert len(result.data) == 1
+        assert result.data[0].url == "https://pub-cdn.modelslab.com/async-result.png"
+
     def test_transform_image_generation_response_processing_missing_id_raises(self):
         """processing response without an ID should raise immediately."""
         mock_response = MagicMock(spec=httpx.Response)

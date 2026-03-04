@@ -10,6 +10,7 @@ backends (LangFuse, etc.). Users should treat MODELSLAB_API_KEY with appropriate
 care and rotate it if it is inadvertently logged.
 """
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any, List, Optional
 
@@ -273,6 +274,59 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                     f"ModelsLab unexpected status '{status}' for generation {generation_id}"
                 )
 
+    async def _poll_async(
+        self,
+        generation_id: int,
+        api_key: str,
+        base_url: str,
+        timeout_secs: float = MODELSLAB_POLLING_TIMEOUT,
+    ) -> dict:
+        """
+        Poll ModelsLab fetch endpoint until image generation completes (async).
+
+        ModelsLab fetch endpoint: POST /api/v6/images/fetch/{id}
+        Body: {"key": "<api_key>"}
+        Returns same response schema as text2img.
+        """
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+        client = get_async_httpx_client()
+        start_time = time.time()
+        fetch_url = f"{base_url.rstrip('/')}/{self.FETCH_ENDPOINT}/{generation_id}"
+
+        verbose_logger.debug(f"ModelsLab: async polling fetch URL {fetch_url}")
+
+        while True:
+            if time.time() - start_time > timeout_secs:
+                raise TimeoutError(
+                    f"ModelsLab image generation timed out after {timeout_secs}s. "
+                    f"Generation ID: {generation_id}"
+                )
+
+            response = await client.post(
+                url=fetch_url,
+                json={"key": api_key},
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            status = data.get("status", "")
+
+            verbose_logger.debug(f"ModelsLab: async poll status={status}, id={generation_id}")
+
+            if status == "success":
+                return data
+            elif status == "error":
+                raise ValueError(
+                    f"ModelsLab generation failed: {data.get('message', 'Unknown error')}"
+                )
+            elif status == "processing":
+                await asyncio.sleep(MODELSLAB_POLLING_INTERVAL)
+            else:
+                raise ValueError(
+                    f"ModelsLab unexpected status '{status}' for generation {generation_id}"
+                )
+
     def _build_image_response(
         self,
         response_data: dict,
@@ -342,6 +396,78 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
             )
 
             response_data = self._poll_sync(
+                generation_id=generation_id,
+                api_key=resolved_key,
+                base_url=base_url,
+            )
+
+        if status in ("success",) or response_data.get("status") == "success":
+            return self._build_image_response(response_data, model_response)
+
+        raise self.get_error_class(
+            error_message=f"Unexpected ModelsLab response: {response_data}",
+            status_code=raw_response.status_code,
+            headers=raw_response.headers,
+        )
+
+    async def async_transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ImageResponse:
+        """
+        Async transform the image generation response to the litellm image response.
+
+        ModelsLab returns a task immediately with status PENDING/RUNNING.
+        We need to poll the task until it completes (status SUCCEEDED) using async polling.
+        """
+        try:
+            response_data = raw_response.json()
+        except Exception as e:
+            raise self.get_error_class(
+                error_message=f"Error parsing ModelsLab response: {e}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
+        status = response_data.get("status", "")
+
+        if status == "error":
+            raise self.get_error_class(
+                error_message=f"ModelsLab error: {response_data.get('message', 'Unknown error')}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
+        if status == "processing":
+            generation_id = response_data.get("id")
+            if not generation_id:
+                raise self.get_error_class(
+                    error_message="ModelsLab returned 'processing' without a generation ID",
+                    status_code=raw_response.status_code,
+                    headers=raw_response.headers,
+                )
+
+            verbose_logger.debug(
+                f"ModelsLab: generation {generation_id} is processing, starting async poll..."
+            )
+
+            resolved_key = self._resolve_api_key(request_data, litellm_params)
+            base_url = (
+                litellm_params.get("api_base")
+                or get_secret_str("MODELSLAB_API_BASE")
+                or self.DEFAULT_BASE_URL
+            )
+
+            response_data = await self._poll_async(
                 generation_id=generation_id,
                 api_key=resolved_key,
                 base_url=base_url,
