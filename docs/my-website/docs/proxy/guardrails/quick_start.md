@@ -73,6 +73,7 @@ guardrails:
         plr_scanners: true
 ```
 
+For generic guardrail APIs you can also set **static headers** (`headers`: key/value sent on every request) and **dynamic headers** (`extra_headers`: list of client header names to forward). See [Generic Guardrail API - Static and dynamic headers](/docs/adding_provider/generic_guardrail_api#static-and-dynamic-headers).
 
 ### Supported values for `mode` (Event Hooks)
 
@@ -498,6 +499,11 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Run guardrails based on the user-agent header. This is useful for running pre-call checks on OpenWebUI but only masking in logs for Claude CLI.
 
+`default` can be a single mode string or a list of modes.
+
+<Tabs>
+<TabItem value="single" label="Single Default Mode">
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -517,6 +523,32 @@ guardrails:
       api_base: os.environ/GUARDRAILS_AI_API_BASE # 👈 Guardrails AI API Base. Defaults to "http://0.0.0.0:8000"
       default_on: true # run on every request
 ```
+
+</TabItem>
+<TabItem value="multi" label="Multiple Default Modes">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "guardrails_ai-guard"
+    litellm_params:
+      guardrail: guardrails_ai
+      guard_name: "pii_detect"
+      mode:
+        tags:
+            "User-Agent: claude-cli": "logging_only"
+        default: ["pre_call", "post_call"]  # Run on both pre and post call when no tags match
+      api_base: os.environ/GUARDRAILS_AI_API_BASE
+      default_on: true
+```
+
+</TabItem>
+</Tabs>
 
 
 ### ✨ Model-level Guardrails
@@ -639,12 +671,21 @@ guardrails:
 
 Mode Specification
 
+`default` accepts either a single string or a list of strings.
+
 ```python
 from litellm.types.guardrails import Mode
 
+# Single default mode
 mode = Mode(
     tags={"User-Agent: claude-cli": "logging_only"},
     default="logging_only"
+)
+
+# Multiple default modes
+mode = Mode(
+    tags={"User-Agent: claude-cli": "logging_only"},
+    default=["pre_call", "post_call"]
 )
 ```
 

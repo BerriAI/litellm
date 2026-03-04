@@ -454,8 +454,35 @@ async def create_file(  # noqa: PLR0915
                     model=router_model, llm_router=llm_router
                 )
 
+        # Apply team-level file expiry enforcement
+        team_metadata = user_api_key_dict.team_metadata or {}
+        enforced_file_expiry = team_metadata.get("enforced_file_expires_after")
+        if enforced_file_expiry is not None:
+            if "anchor" not in enforced_file_expiry or "seconds" not in enforced_file_expiry:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "enforced_file_expires_after must contain 'anchor' and 'seconds' keys",
+                    },
+                )
+            if enforced_file_expiry["anchor"] != "created_at":
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"enforced_file_expires_after anchor must be 'created_at', got '{enforced_file_expiry['anchor']}'",
+                    },
+                )
+            expires_after = FileExpiresAfter(
+                anchor="created_at",
+                seconds=enforced_file_expiry["seconds"],
+            )
+
+        verbose_proxy_logger.debug(
+            "create_file expires_after: %s", expires_after
+        )
+
         _create_file_request = CreateFileRequest(
-            file=file_data, 
+            file=file_data,
             purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose),
             expires_after=expires_after,
             **data

@@ -5484,6 +5484,131 @@ export const getGuardrailsList = async (accessToken: string) => {
   }
 };
 
+// Team guardrail submissions (admin)
+export interface GuardrailSubmissionItem {
+  guardrail_id: string;
+  guardrail_name: string;
+  status: string; // "pending_review" | "active" | "rejected"
+  team_id?: string | null;
+  team_guardrail?: boolean; // true when submitted via team (team_id set)
+  litellm_params?: Record<string, unknown> | null;
+  guardrail_info?: Record<string, unknown> | null;
+  submitted_by_user_id?: string | null;
+  submitted_by_email?: string | null;
+  submitted_at?: string | null;
+  reviewed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface GuardrailSubmissionSummary {
+  total: number;
+  pending_review: number;
+  active: number;
+  rejected: number;
+}
+
+export interface ListGuardrailSubmissionsResponse {
+  submissions: GuardrailSubmissionItem[];
+  summary: GuardrailSubmissionSummary;
+}
+
+export const listGuardrailSubmissions = async (
+  accessToken: string,
+  params?: { status?: string; team_id?: string; team_guardrail?: boolean; search?: string }
+): Promise<ListGuardrailSubmissionsResponse> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/submissions` : `/guardrails/submissions`;
+  const searchParams = new URLSearchParams();
+  if (params?.status) searchParams.set("status", params.status);
+  if (params?.team_id) searchParams.set("team_id", params.team_id);
+  if (params?.team_guardrail !== undefined) searchParams.set("team_guardrail", String(params.team_guardrail));
+  if (params?.search) searchParams.set("search", params.search);
+  const fullUrl = searchParams.toString() ? `${url}?${searchParams.toString()}` : url;
+  const response = await fetch(fullUrl, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const getGuardrailSubmission = async (
+  accessToken: string,
+  guardrailId: string
+): Promise<GuardrailSubmissionItem> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}`
+    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const approveGuardrailSubmission = async (
+  accessToken: string,
+  guardrailId: string
+): Promise<{ guardrail_id: string; status: string; message: string }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`
+    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const rejectGuardrailSubmission = async (
+  accessToken: string,
+  guardrailId: string
+): Promise<{ guardrail_id: string; status: string; message: string }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`
+    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
 // Guardrails / Policies usage (dashboard)
 export const getGuardrailsUsageOverview = async (
   accessToken: string,
@@ -8364,6 +8489,7 @@ export const updateGuardrailCall = async (
     guardrail_name?: string;
     default_on?: boolean;
     guardrail_info?: Record<string, any>;
+    litellm_params?: Record<string, any>;
   },
 ) => {
   try {
@@ -8642,29 +8768,45 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
   }
 };
 
-export const uiAuditLogsCall = async (
-  accessToken: string,
-  start_date?: string,
-  end_date?: string,
-  page?: number,
-  page_size?: number,
-) => {
+export interface UiAuditLogsParams {
+  action?: string;
+  table_name?: string;
+  object_id?: string;
+  changed_by?: string;
+  changed_by_api_key?: string;
+  object_team_id?: string;
+  object_key_hash?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+}
+
+export interface UiAuditLogsCallOptions {
+  accessToken: string;
+  page?: number;
+  page_size?: number;
+  params?: UiAuditLogsParams;
+}
+
+export const uiAuditLogsCall = async ({
+  accessToken,
+  page = 1,
+  page_size = 50,
+  params = {},
+}: UiAuditLogsCallOptions) => {
   try {
-    // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/audit` : `/audit`;
 
-    // Add query parameters if they exist
     const queryParams = new URLSearchParams();
-    // if (start_date) queryParams.append('start_date', start_date);
-    // if (end_date) queryParams.append('end_date', end_date);
-    if (page) queryParams.append("page", page.toString());
-    if (page_size) queryParams.append("page_size", page_size.toString());
+    queryParams.append("page", page.toString());
+    queryParams.append("page_size", page_size.toString());
 
-    // Append query parameters to URL if any exist
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
+    for (const [key, value] of Object.entries(params)) {
+      if (value != null && value !== "") {
+        queryParams.append(key, String(value));
+      }
     }
+
+    url += `?${queryParams.toString()}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -8681,8 +8823,7 @@ export const uiAuditLogsCall = async (
       throw new Error(errorMessage);
     }
 
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
     console.error("Failed to fetch audit logs:", error);
     throw error;

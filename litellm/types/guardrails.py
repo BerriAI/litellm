@@ -698,6 +698,15 @@ class BaseLitellmParams(
         ),
     )
 
+    extra_headers: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Header names to forward from the client request to the guardrail (e.g. x-request-id). "
+            "Only these headers' values are sent; others may be omitted or sent as [present]. "
+            "Used by generic_guardrail_api (similar to MCP extra_headers)."
+        ),
+    )
+
     # Custom code guardrail params
     custom_code: Optional[str] = Field(
         default=None,
@@ -709,7 +718,7 @@ class BaseLitellmParams(
 
 class Mode(BaseModel):
     tags: Dict[str, str] = Field(description="Tags for the guardrail mode")
-    default: Optional[str] = Field(
+    default: Optional[Union[str, List[str]]] = Field(
         default=None, description="Default mode when no tags match"
     )
 
