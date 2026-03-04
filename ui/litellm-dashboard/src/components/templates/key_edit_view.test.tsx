@@ -374,7 +374,7 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should disable guardrails selector when user is not premium", async () => {
+  it("should disable guardrails selector when user is not premium and has no write access role", async () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}

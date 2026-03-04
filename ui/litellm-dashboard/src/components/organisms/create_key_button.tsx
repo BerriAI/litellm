@@ -146,6 +146,7 @@ export const fetchUserModels = async (
  */
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -1000,7 +1001,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     name="guardrails"
                     className="mt-4"
                     help={
-                      premiumUser
+                      canEditGuardrails
                         ? "Select existing guardrails or enter new ones"
                         : "Premium feature - Upgrade to set guardrails by key"
                     }
@@ -1008,9 +1009,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <Select
                       mode="tags"
                       style={{ width: "100%" }}
-                      disabled={!premiumUser}
+                      disabled={!canEditGuardrails}
                       placeholder={
-                        !premiumUser
+                        !canEditGuardrails
                           ? "Premium feature - Upgrade to set guardrails by key"
                           : "Select or enter guardrails"
                       }
@@ -1037,12 +1038,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     valuePropName="checked"
                     help={
-                      premiumUser
+                      canEditGuardrails
                         ? "Bypass global guardrails for this key"
                         : "Premium feature - Upgrade to disable global guardrails by key"
                     }
                   >
-                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+                    <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
                   <Form.Item
                     label={
