@@ -56,9 +56,23 @@ class AmazonAnthropicClaudeMessagesConfig(
     # Beta header patterns that are not supported by Bedrock Invoke API
     # These will be filtered out to prevent 400 "invalid beta flag" errors
 
+    # Anthropic-only params that are not supported by Bedrock
+    BEDROCK_UNSUPPORTED_ANTHROPIC_PARAMS = {"inference_geo", "speed"}
+
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
+
+    def get_supported_anthropic_messages_params(self, model: str) -> list:
+        """
+        Override parent to exclude Anthropic-only params not supported by Bedrock.
+        """
+        supported = super().get_supported_anthropic_messages_params(model)
+        return [
+            p
+            for p in supported
+            if p not in self.BEDROCK_UNSUPPORTED_ANTHROPIC_PARAMS
+        ]
 
     def validate_anthropic_messages_environment(
         self,
@@ -401,6 +415,10 @@ class AmazonAnthropicClaudeMessagesConfig(
                 output_format=output_format,
                 anthropic_messages_request=anthropic_messages_request,
             )
+
+        # 5b. Remove Anthropic-only params not supported by Bedrock Invoke
+        anthropic_messages_request.pop("inference_geo", None)
+        anthropic_messages_request.pop("speed", None)
 
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
