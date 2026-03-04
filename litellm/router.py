@@ -7105,6 +7105,17 @@ class Router:
                 model_group_name=model_id
             )
 
+        # If still not found, check for wildcard pattern matches
+        if deployment is None:
+            potential_wildcard_models = self.pattern_router.route(model_id) or []
+            if potential_wildcard_models:
+                # Use the first matching wildcard deployment
+                deployment_dict = potential_wildcard_models[0]
+                if isinstance(deployment_dict, dict):
+                    deployment = Deployment(**deployment_dict)
+                elif isinstance(deployment_dict, Deployment):
+                    deployment = deployment_dict
+
         if deployment is None:
             return None
 
