@@ -9,6 +9,7 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
@@ -19,9 +20,18 @@ from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPICon
 
 
 class TestChatGPTResponsesAPITransformation:
-    def test_chatgpt_provider_config_registration(self):
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.3-chat-latest",
+            "chatgpt/gpt-5.3-instant",
+            "chatgpt/gpt-5.3-codex",
+            "chatgpt/gpt-5.3-codex-spark",
+        ],
+    )
+    def test_chatgpt_provider_config_registration(self, model_name):
         config = ProviderConfigManager.get_provider_responses_api_config(
-            model="chatgpt/gpt-5.2",
+            model=model_name,
             provider=LlmProviders.CHATGPT,
         )
 
@@ -75,7 +85,7 @@ class TestChatGPTResponsesAPITransformation:
     def test_chatgpt_forces_streaming_and_reasoning_include(self):
         config = ChatGPTResponsesAPIConfig()
         request = config.transform_responses_api_request(
-            model="chatgpt/gpt-5.2-codex",
+            model="chatgpt/gpt-5.3-codex",
             input="hi",
             response_api_optional_request_params={},
             litellm_params=GenericLiteLLMParams(),
@@ -91,7 +101,7 @@ class TestChatGPTResponsesAPITransformation:
     def test_chatgpt_drops_unsupported_responses_params(self):
         config = ChatGPTResponsesAPIConfig()
         request = config.transform_responses_api_request(
-            model="chatgpt/gpt-5.2-codex",
+            model="chatgpt/gpt-5.3-codex-spark",
             input="hi",
             response_api_optional_request_params={
                 # unsupported by ChatGPT Codex
@@ -134,7 +144,7 @@ class TestChatGPTResponsesAPITransformation:
             "object": "response",
             "created_at": 1700000000,
             "status": "completed",
-            "model": "gpt-5.2-codex",
+            "model": "gpt-5.3-codex",
             "output": [
                 {
                     "type": "message",
@@ -156,7 +166,7 @@ class TestChatGPTResponsesAPITransformation:
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
-            model="chatgpt/gpt-5.2-codex",
+            model="chatgpt/gpt-5.3-codex",
             raw_response=raw_response,
             logging_obj=logging_obj,
         )
