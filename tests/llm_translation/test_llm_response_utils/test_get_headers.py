@@ -61,6 +61,33 @@ def test_get_response_headers_without_openai_headers():
     assert result == expected_output, "Unexpected output for non-OpenAI headers"
 
 
+def test_get_response_headers_with_retry_after():
+    """
+    retry-after header from upstream providers should be forwarded directly
+    so clients can implement proper backoff on 429 responses.
+    """
+    input_headers = {
+        "retry-after": "30",
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-requests": "0",
+    }
+    result = get_response_headers(input_headers)
+    assert result["retry-after"] == "30", "retry-after header should be forwarded directly"
+    assert result["llm_provider-retry-after"] == "30", "retry-after should also appear with llm_provider prefix"
+    assert result["x-ratelimit-limit-requests"] == "100"
+
+
+def test_get_response_headers_without_retry_after():
+    """
+    When no retry-after header is present, result should not contain it.
+    """
+    input_headers = {
+        "x-ratelimit-limit-requests": "100",
+    }
+    result = get_response_headers(input_headers)
+    assert "retry-after" not in result
+
+
 def test_get_llm_provider_headers():
     """
     If non OpenAI headers are already prefixed with llm_provider- they are not prefixed with llm_provider- again
