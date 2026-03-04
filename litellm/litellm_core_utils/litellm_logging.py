@@ -5259,13 +5259,14 @@ def _enrich_cost_breakdown_with_cache_costs(
             return cost_breakdown
 
         model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        service_tier = logging_obj.model_call_details.get("service_tier")
         (
             _prompt_base,
             _comp_base,
             cache_creation_rate,
             cache_creation_rate_1hr,
             cache_read_rate,
-        ) = _get_token_base_cost(model_info=model_info, usage=usage_obj)
+        ) = _get_token_base_cost(model_info=model_info, usage=usage_obj, service_tier=service_tier)
 
         if cache_hit_tokens > 0:
             cost_breakdown["cache_read_input_cost"] = float(cache_hit_tokens) * cache_read_rate
