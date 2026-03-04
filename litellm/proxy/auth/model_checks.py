@@ -218,6 +218,10 @@ def get_complete_model_list(
 def get_known_models_from_wildcard(
     wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> List[str]:
+    if wildcard_model == "*":
+        # Global wildcard — return all known models across all providers
+        return get_provider_models("*", litellm_params=litellm_params) or []
+
     try:
         wildcard_provider_prefix, wildcard_suffix = wildcard_model.split("/", 1)
     except ValueError:  # safely fail
@@ -276,6 +280,10 @@ def _get_wildcard_models(
     all_wildcard_models = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
+            # Always remove wildcard patterns from the final model list;
+            # users should see concrete model names, not globs.
+            models_to_remove.add(model)
+
             if (
                 return_wildcard_routes
             ):  # will add the wildcard route to the list eg: anthropic/*.
@@ -299,18 +307,13 @@ def _get_wildcard_models(
                     wildcard_models = get_known_models_from_wildcard(
                         wildcard_model=model, litellm_params=None
                     )
-                    if wildcard_models:
-                        models_to_remove.add(model)
-                        all_wildcard_models.extend(wildcard_models)
+                    all_wildcard_models.extend(wildcard_models)
             else:
                 # get all known provider models
                 wildcard_models = get_known_models_from_wildcard(
                     wildcard_model=model, litellm_params=None
                 )
-
-                if wildcard_models:
-                    models_to_remove.add(model)
-                    all_wildcard_models.extend(wildcard_models)
+                all_wildcard_models.extend(wildcard_models)
 
     for model in models_to_remove:
         unique_models.remove(model)
