@@ -5211,7 +5211,6 @@ def _extract_response_obj_and_hidden_params(
 
 
 def _enrich_cost_breakdown_with_cache_costs(
-    cost_breakdown: Optional[CostBreakdown],
     init_response_obj: Any,
     logging_obj: "Logging",
 ) -> Optional[CostBreakdown]:
@@ -5219,6 +5218,7 @@ def _enrich_cost_breakdown_with_cache_costs(
     Enrich cost_breakdown with cache_read_input_cost / cache_write_input_cost
     when the usage object contains cached or cache-creation tokens.
     """
+    cost_breakdown = logging_obj.cost_breakdown
     if cost_breakdown is None:
         return None
     if "cache_read_input_cost" in cost_breakdown:
@@ -5419,6 +5419,9 @@ def get_standard_logging_object_payload(
             kwargs.get("model", "") or "", custom_llm_provider, metadata
         )
 
+        cost_breakdown = _enrich_cost_breakdown_with_cache_costs(
+            init_response_obj, logging_obj
+        )
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
@@ -5446,9 +5449,7 @@ def get_standard_logging_object_payload(
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
-            cost_breakdown=_enrich_cost_breakdown_with_cache_costs(
-                logging_obj.cost_breakdown, init_response_obj, logging_obj
-            ),
+            cost_breakdown=cost_breakdown,
             total_tokens=usage_dict.get("total_tokens", 0),
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
