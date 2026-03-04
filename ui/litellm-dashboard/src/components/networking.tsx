@@ -9966,7 +9966,8 @@ export interface ToolRow {
   tool_id: string;
   tool_name: string;
   origin?: string;
-  call_policy: string;
+  input_policy: string;
+  output_policy: string;
   call_count?: number;
   assignments?: Record<string, any>;
   key_hash?: string;
@@ -9977,6 +9978,37 @@ export interface ToolRow {
   created_by?: string;
   updated_by?: string;
 }
+
+export interface ToolPolicyOption {
+  value: string;
+  label: string;
+  description: string;
+}
+
+export interface ToolPolicyOptionsResponse {
+  input_policies: ToolPolicyOption[];
+  output_policies: ToolPolicyOption[];
+}
+
+export const fetchToolPolicyOptions = async (
+  accessToken: string
+): Promise<ToolPolicyOptionsResponse> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/tool/policy/options`
+    : `/v1/tool/policy/options`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
+};
 
 export const fetchToolsList = async (accessToken: string): Promise<ToolRow[]> => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/list` : `/v1/tool/list`;
@@ -10000,7 +10032,7 @@ export interface ToolPolicyOverrideRow {
   tool_name: string;
   team_id?: string | null;
   key_hash?: string | null;
-  call_policy: string;
+  input_policy: string;
   key_alias?: string | null;
   created_at?: string;
   updated_at?: string;
@@ -10081,14 +10113,15 @@ export const fetchToolDetail = async (
 export const updateToolPolicy = async (
   accessToken: string,
   toolName: string,
-  callPolicy: string,
+  policies: { input_policy?: string; output_policy?: string },
   options?: { team_id?: string | null; key_hash?: string | null; key_alias?: string | null }
-): Promise<ToolRow & { team_id?: string; key_hash?: string }> => {
+): Promise<ToolRow> => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/policy` : `/v1/tool/policy`;
   const body: Record<string, string | undefined | null> = {
     tool_name: toolName,
-    call_policy: callPolicy,
   };
+  if (policies.input_policy != null) body.input_policy = policies.input_policy;
+  if (policies.output_policy != null) body.output_policy = policies.output_policy;
   if (options?.team_id != null) body.team_id = options.team_id || undefined;
   if (options?.key_hash != null) body.key_hash = options.key_hash || undefined;
   if (options?.key_alias != null) body.key_alias = options.key_alias || undefined;
