@@ -3741,6 +3741,11 @@ jobs:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - run:
+          name: Install system dependencies
+          command: |
+            sudo apt-get update -y
+            sudo apt-get install -y libpq-dev
+      - run:
           name: Install Dependencies
           command: |
             export PATH="$HOME/miniconda/bin:$PATH"
