@@ -269,7 +269,7 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
     assert token_data["user_id"] == "test_user"
     assert token_data["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
     assert token_data["models"] == ["gpt-3.5-turbo"]
-    assert token_data["max_budget"] == litellm.max_ui_session_budget
+    assert "max_budget" not in token_data
 
     # Verify expiration time is set to 24 hours (default)
     assert "expires" in token_data
@@ -304,6 +304,9 @@ def test_get_cli_jwt_auth_token_custom_expiration(
     )
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
+
+    # CLI JWT should not inherit UI session budget cap by default
+    assert "max_budget" not in token_data
 
     # Verify expiration time is set to 48 hours
     assert "expires" in token_data

@@ -2003,7 +2003,12 @@ class ExperimentalUIJWTToken:
             token=CLI_JWT_TOKEN_NAME,
             key_name=CLI_JWT_TOKEN_NAME,
             key_alias=CLI_JWT_TOKEN_NAME,
-            max_budget=litellm.max_ui_session_budget,
+            # Do NOT inherit UI session budget caps for CLI JWT tokens.
+            #
+            # UI budget defaults (often 0.25) are intended for short-lived UI
+            # sessions and can unexpectedly trigger BudgetExceededError for CLI
+            # users who did not explicitly configure key budgets.
+            max_budget=None,
             expires=expires,
             user_id=user_info.user_id,
             team_id=_team_id,
