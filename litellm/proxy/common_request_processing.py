@@ -41,6 +41,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.performance_endpoints.latency_tracker import record_request_timing
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -495,6 +496,14 @@ class ProxyBaseLLMRequestProcessing:
             logging_caching_headers = get_logging_caching_headers(request_data)
             if logging_caching_headers:
                 headers.update(logging_caching_headers)
+
+        try:
+            record_request_timing(
+                hidden_params,
+                model=(request_data or {}).get("model") or None,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(f"record_request_timing error (non-fatal): {e}")
 
         try:
             return {
