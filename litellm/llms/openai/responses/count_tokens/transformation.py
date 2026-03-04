@@ -102,7 +102,7 @@ class OpenAICountTokensConfig:
 
         for msg in messages:
             role = msg.get("role", "")
-            content = msg.get("content", "")
+            content = msg.get("content") or ""
 
             if role in ("system", "developer"):
                 # Extract system/developer messages as instructions
