@@ -62,3 +62,74 @@ def test_helicone_vertex_ai_via_custom_llm_provider():
     for model, custom_llm_provider in test_cases:
         is_vertex_ai = custom_llm_provider == "vertex_ai" or model.startswith("vertex_ai/")
         assert is_vertex_ai, f"{model} with custom_llm_provider={custom_llm_provider} should be recognized as vertex_ai"
+
+
+def test_helicone_vertex_gemini_gets_vertex_provider_url():
+    """
+    Test that vertex_ai/gemini-* models route to aiplatform.googleapis.com,
+    not generativelanguage.googleapis.com.
+
+    This verifies the branch ordering fix: is_vertex_ai must be checked
+    before "gemini" in model, otherwise vertex gemini models get the wrong
+    provider_url.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.integrations.helicone import HeliconeLogger
+
+    logger = HeliconeLogger()
+
+    captured = {}
+
+    def mock_post(url, **kwargs):
+        captured["url"] = url
+        captured["data"] = kwargs.get("json", {})
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        return mock_resp
+
+    test_cases = [
+        # (model, custom_llm_provider, expected_provider_url)
+        (
+            "vertex_ai/gemini-1.5-pro",
+            "",
+            "https://aiplatform.googleapis.com/v1",
+        ),
+        (
+            "gemini-2.0-flash",
+            "vertex_ai",
+            "https://aiplatform.googleapis.com/v1",
+        ),
+        (
+            "gemini-1.5-flash",
+            "",
+            "https://generativelanguage.googleapis.com/v1beta",
+        ),
+    ]
+
+    for model, custom_llm_provider, expected_url in test_cases:
+        captured.clear()
+        mock_client = MagicMock()
+        mock_client.post = mock_post
+        with patch("litellm.module_level_client", mock_client):
+            logger.log_success(
+                model=model,
+                messages=[{"role": "user", "content": "test"}],
+                response_obj={"choices": [{"message": {"content": "hi"}}]},
+                start_time=MagicMock(),
+                end_time=MagicMock(),
+                print_verbose=lambda *args, **kwargs: None,
+                kwargs={
+                    "litellm_params": {
+                        "custom_llm_provider": custom_llm_provider,
+                        "metadata": {},
+                    },
+                },
+            )
+
+        assert "data" in captured, f"No request captured for {model}"
+        actual_url = captured["data"]["providerRequest"]["url"]
+        assert actual_url == expected_url, (
+            f"Model {model} (provider={custom_llm_provider!r}): "
+            f"expected provider_url={expected_url}, got {actual_url}"
+        )

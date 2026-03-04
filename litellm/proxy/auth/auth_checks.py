@@ -279,7 +279,6 @@ async def common_checks(  # noqa: PLR0915
     request: Request,
     skip_budget_checks: bool = False,
     project_object: Optional[LiteLLM_ProjectTableCachedObj] = None,
-    skip_route_check: bool = False,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -499,21 +498,18 @@ async def common_checks(  # noqa: PLR0915
         user_object=user_object, route=route, request_body=request_body
     )
 
-    if not skip_route_check:
-        token_team = getattr(valid_token, "team_id", None)
-        token_type: Literal["ui", "api"] = (
-            "ui"
-            if token_team is not None and token_team == "litellm-dashboard"
-            else "api"
-        )
-        _is_route_allowed = _is_allowed_route(
-            route=route,
-            token_type=token_type,
-            user_obj=user_object,
-            request=request,
-            request_data=request_body,
-            valid_token=valid_token,
-        )
+    token_team = getattr(valid_token, "team_id", None)
+    token_type: Literal["ui", "api"] = (
+        "ui" if token_team is not None and token_team == "litellm-dashboard" else "api"
+    )
+    _is_route_allowed = _is_allowed_route(
+        route=route,
+        token_type=token_type,
+        user_obj=user_object,
+        request=request,
+        request_data=request_body,
+        valid_token=valid_token,
+    )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     await vector_store_access_check(
