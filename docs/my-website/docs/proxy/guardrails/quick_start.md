@@ -358,13 +358,13 @@ response = client.chat.completions.create(
         }
     ],
     extra_body={
-      "guardrails": [
+      "guardrails": {
         "aporia-pre-guard": {
           "extra_body": {
             "success_threshold": 0.9
           }
         }
-      ]
+      }
     }
 
 )
@@ -387,13 +387,13 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         "content": "what llm are you"
         }
     ],
-    "guardrails": [
+    "guardrails": {
       "aporia-pre-guard": {
         "extra_body": {
           "success_threshold": 0.9
         }
       }
-    ]
+    }
 }'
 ```
 </TabItem>
@@ -451,7 +451,6 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
     -H 'Content-Type: application/json' \
     -d '{
             "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
-        }
     }'
 ```
 
@@ -465,7 +464,6 @@ curl --location 'http://0.0.0.0:4000/key/update' \
     --data '{
         "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
         "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
-        }
 }'
 ```
 
