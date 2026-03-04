@@ -143,7 +143,8 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
     """
     if request is None:
         return {}
-    cached = getattr(request.state, "_cached_headers", None)
+    state = getattr(request, "state", None)
+    cached = getattr(state, "_cached_headers", None)
     if cached is not None:
         return cached
     try:
@@ -154,7 +155,8 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
         )
         headers = {}
     try:
-        request.state._cached_headers = headers
+        if state is not None:
+            state._cached_headers = headers
     except Exception:
         pass  # request.state may not be available in all contexts
     return headers

@@ -11,8 +11,7 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union,
-                    cast)
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -21,33 +20,48 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.constants import (CLI_JWT_EXPIRATION_HOURS, CLI_JWT_TOKEN_NAME,
-                               DEFAULT_ACCESS_GROUP_CACHE_TTL,
-                               DEFAULT_IN_MEMORY_TTL,
-                               DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-                               DEFAULT_MAX_RECURSE_DEPTH,
-                               EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE)
+from litellm.constants import (
+    CLI_JWT_EXPIRATION_HOURS,
+    CLI_JWT_TOKEN_NAME,
+    DEFAULT_ACCESS_GROUP_CACHE_TTL,
+    DEFAULT_IN_MEMORY_TTL,
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    DEFAULT_MAX_RECURSE_DEPTH,
+    EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.proxy._types import (RBAC_ROLES, CallInfo,
-                                  LiteLLM_AccessGroupTable,
-                                  LiteLLM_BudgetTable, LiteLLM_EndUserTable,
-                                  Litellm_EntityType, LiteLLM_JWTAuth,
-                                  LiteLLM_ObjectPermissionTable,
-                                  LiteLLM_OrganizationMembershipTable,
-                                  LiteLLM_OrganizationTable,
-                                  LiteLLM_ProjectTableCachedObj,
-                                  LiteLLM_TagTable, LiteLLM_TeamMembership,
-                                  LiteLLM_TeamTable,
-                                  LiteLLM_TeamTableCachedObj,
-                                  LiteLLM_UserTable, LiteLLMRoutes,
-                                  LitellmUserRoles, NewTeamRequest,
-                                  ProxyErrorTypes, ProxyException,
-                                  RoleBasedPermissions, SpecialModelNames,
-                                  UserAPIKeyAuth)
+from litellm.proxy._types import (
+    RBAC_ROLES,
+    CallInfo,
+    LiteLLM_AccessGroupTable,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
+    Litellm_EntityType,
+    LiteLLM_JWTAuth,
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_OrganizationMembershipTable,
+    LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TagTable,
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
+    LitellmUserRoles,
+    NewTeamRequest,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
+    SpecialModelNames,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
-    TOOL_CAPABLE_CALL_TYPES, extract_request_tool_names)
+    TOOL_CAPABLE_CALL_TYPES,
+    extract_request_tool_names,
+)
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
@@ -221,8 +235,9 @@ async def check_tools_allowlist(
     effective allowlist is read from valid_token.metadata and valid_token.team_metadata.
     Raises ProxyException with tool_access_denied if a tool is not allowed.
     """
-    from litellm.litellm_core_utils.api_route_to_call_types import \
-        get_call_types_for_route
+    from litellm.litellm_core_utils.api_route_to_call_types import (
+        get_call_types_for_route,
+    )
 
     if valid_token is None:
         return
@@ -264,6 +279,7 @@ async def common_checks(  # noqa: PLR0915
     request: Request,
     skip_budget_checks: bool = False,
     project_object: Optional[LiteLLM_ProjectTableCachedObj] = None,
+    skip_route_check: bool = False,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -465,8 +481,7 @@ async def common_checks(  # noqa: PLR0915
     _request_metadata: dict = request_body.get("metadata", {}) or {}
     if _request_metadata.get("guardrails"):
         # check if team allowed to modify guardrails
-        from litellm.proxy.guardrails.guardrail_helpers import \
-            can_modify_guardrails
+        from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
 
         can_modify: bool = can_modify_guardrails(team_object)
         if can_modify is False:
@@ -484,18 +499,21 @@ async def common_checks(  # noqa: PLR0915
         user_object=user_object, route=route, request_body=request_body
     )
 
-    token_team = getattr(valid_token, "team_id", None)
-    token_type: Literal["ui", "api"] = (
-        "ui" if token_team is not None and token_team == "litellm-dashboard" else "api"
-    )
-    _is_route_allowed = _is_allowed_route(
-        route=route,
-        token_type=token_type,
-        user_obj=user_object,
-        request=request,
-        request_data=request_body,
-        valid_token=valid_token,
-    )
+    if not skip_route_check:
+        token_team = getattr(valid_token, "team_id", None)
+        token_type: Literal["ui", "api"] = (
+            "ui"
+            if token_team is not None and token_team == "litellm-dashboard"
+            else "api"
+        )
+        _is_route_allowed = _is_allowed_route(
+            route=route,
+            token_type=token_type,
+            user_obj=user_object,
+            request=request,
+            request_data=request_body,
+            valid_token=valid_token,
+        )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     await vector_store_access_check(
@@ -1916,13 +1934,14 @@ class ExperimentalUIJWTToken:
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
         from datetime import timedelta
 
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
-            encrypt_value_helper
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
 
         if user_info.user_role is None:
             raise Exception("User role is required for experimental UI login")
 
-        # Calculate expiration time (10 minutes from now)
+        # Experimental UI flow uses fixed 10-min expiry for security (does not use LITELLM_UI_SESSION_DURATION)
         expiration_time = get_utc_datetime() + timedelta(minutes=10)
 
         # Format the expiration time as ISO 8601 string
@@ -1963,8 +1982,9 @@ class ExperimentalUIJWTToken:
         """
         from datetime import timedelta
 
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
-            encrypt_value_helper
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
 
         if user_info.user_role is None:
             raise Exception("User role is required for CLI JWT login")
@@ -2003,8 +2023,9 @@ class ExperimentalUIJWTToken:
         import json
 
         from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
-            decrypt_value_helper
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            decrypt_value_helper,
+        )
 
         decrypted_token = decrypt_value_helper(
             hashed_token, key="ui_hash_key", exception_type="debug"
@@ -2299,10 +2320,8 @@ async def _get_resources_from_access_groups(
     # Lazy import to avoid circular imports
     if prisma_client is None or user_api_key_cache is None:
         from litellm.proxy.proxy_server import prisma_client as _prisma_client
-        from litellm.proxy.proxy_server import \
-            proxy_logging_obj as _proxy_logging_obj
-        from litellm.proxy.proxy_server import \
-            user_api_key_cache as _user_api_key_cache
+        from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
+        from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
 
         prisma_client = prisma_client or _prisma_client
         user_api_key_cache = user_api_key_cache or _user_api_key_cache
@@ -3258,8 +3277,7 @@ async def _tag_max_budget_check(
         BudgetExceededError if any tag is over its max budget.
         Triggers a budget alert if any tag is over its max budget.
     """
-    from litellm.proxy.common_utils.http_parsing_utils import \
-        get_tags_from_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
     if prisma_client is None:
         return

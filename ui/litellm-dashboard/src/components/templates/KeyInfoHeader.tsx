@@ -11,6 +11,7 @@ import {
   ClockCircleOutlined,
   ThunderboltOutlined,
   SafetyCertificateOutlined,
+  TransactionOutlined,
 } from "@ant-design/icons";
 import LabeledField from "../common_components/LabeledField";
 
@@ -33,6 +34,7 @@ interface KeyInfoHeaderProps {
   onCreateNew?: () => void;
   onRegenerate?: () => void;
   onDelete?: () => void;
+  onResetSpend?: () => void;
   canModifyKey?: boolean;
   backButtonText?: string;
   regenerateDisabled?: boolean;
@@ -45,6 +47,7 @@ export function KeyInfoHeader({
   onCreateNew,
   onRegenerate,
   onDelete,
+  onResetSpend,
   canModifyKey = true,
   backButtonText = "Back to Keys",
   regenerateDisabled = false,
@@ -84,6 +87,11 @@ export function KeyInfoHeader({
                 </Button>
               </span>
             </Tooltip>
+            {onResetSpend && (
+              <Button danger icon={<TransactionOutlined />} onClick={onResetSpend}>
+                Reset Spend
+              </Button>
+            )}
             <Button danger icon={<DeleteOutlined />} onClick={onDelete}>
               Delete Key
             </Button>

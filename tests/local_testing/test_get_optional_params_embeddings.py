@@ -69,3 +69,40 @@ def test_bedrock_embed_v2_with_drop_params():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params == {"dimensions": 512, "embeddingTypes": ["binary"]}
+
+
+def test_openai_non_text_embedding_3_with_allowed_openai_params():
+    """
+    Test that `dimensions` is allowed for non-text-embedding-3 OpenAI models
+    when `allowed_openai_params=["dimensions"]` is passed. Without this flag,
+    an UnsupportedParamsError would be raised.
+    """
+    model, custom_llm_provider, _, _ = get_llm_provider(
+        model="openai/nvidia/llama-3.2-nv-embedqa-1b-v2"
+    )
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        dimensions=1024,
+        custom_llm_provider=custom_llm_provider,
+        allowed_openai_params=["dimensions"],
+    )
+    print(f"received optional_params: {optional_params}")
+    assert optional_params.get("dimensions") == 1024
+
+
+def test_openai_non_text_embedding_3_without_allowed_openai_params_raises():
+    """
+    Test that passing `dimensions` to a non-text-embedding-3 OpenAI model
+    without `allowed_openai_params` still raises UnsupportedParamsError.
+    """
+    from litellm.exceptions import UnsupportedParamsError
+
+    model, custom_llm_provider, _, _ = get_llm_provider(
+        model="openai/nvidia/llama-3.2-nv-embedqa-1b-v2"
+    )
+    with pytest.raises(UnsupportedParamsError):
+        get_optional_params_embeddings(
+            model=model,
+            dimensions=1024,
+            custom_llm_provider=custom_llm_provider,
+        )

@@ -309,7 +309,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should navigate to settings tab when clicked", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
     renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -328,7 +328,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should open edit mode when edit button is clicked", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
     renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -353,8 +353,8 @@ describe("TeamInfoView", () => {
     });
   });
 
-  it("should close edit mode when cancel button is clicked", async () => {
-    const user = userEvent.setup();
+  it("should close edit mode when cancel button is clicked", { timeout: 15000 }, async () => {
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
     renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -387,7 +387,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should call onClose when back button is clicked", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = vi.fn();
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
@@ -405,7 +405,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should copy team ID to clipboard when copy button is clicked", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
     renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -425,7 +425,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should disable secret manager settings for non-premium users", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         metadata: {
@@ -458,7 +458,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should allow premium users to edit secret manager settings", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         metadata: {
@@ -492,7 +492,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should add team member when form is submitted", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onUpdate = vi.fn();
     const teamData = createMockTeamData();
     vi.mocked(networking.teamInfoCall).mockResolvedValue(teamData);
@@ -582,7 +582,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should display soft budget in settings view when present", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         soft_budget: 500.75,
@@ -652,7 +652,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should display soft budget alerting emails in settings view when present", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         metadata: {
@@ -682,7 +682,7 @@ describe("TeamInfoView", () => {
   });
 
   it("should pass access_group_ids to teamUpdateCall when saving team settings", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const accessGroupIds = ["ag-1", "ag-2"];
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({

@@ -301,7 +301,7 @@ model LiteLLM_MCPServerTable {
   token_url          String?
   registration_url   String?
   allow_all_keys Boolean @default(false)
-  available_on_public_internet Boolean @default(false)
+  available_on_public_internet Boolean @default(true)
 }
 
 // Generate Tokens for Proxy
@@ -391,7 +391,7 @@ model LiteLLM_DeletedVerificationToken {
     config                  Json     @default("{}")
     user_id                 String?
     team_id                 String?
-    agent_id                String?
+    agent_id   String?
     project_id              String?
     permissions             Json     @default("{}")
     max_parallel_requests   Int?
@@ -506,6 +506,7 @@ model LiteLLM_SpendLogs {
   agent_id            String?
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
+  @@index([startTime, request_id])
   @@index([end_user])
   @@index([session_id])
 }
@@ -871,6 +872,13 @@ model LiteLLM_GuardrailsTable {
   team_id String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+  // Submission lifecycle. Possible values: pending_review (team-registered, awaiting approval), active (approved), rejected
+  status String @default("active")
+  submitted_at DateTime?
+  reviewed_at DateTime?
+  // submitted_by_user_id and submitted_by_email live in guardrail_info JSON
+
+  @@index([status])
 }
 
 // Daily guardrail metrics for usage dashboard (one row per guardrail per day)
@@ -1111,4 +1119,19 @@ model LiteLLM_AccessGroupTable {
   created_by         String?
   updated_at         DateTime @default(now()) @updatedAt
   updated_by         String?
+}
+// Claude Code Plugin Marketplace table
+model LiteLLM_ClaudeCodePluginTable {
+  id            String    @id @default(uuid())
+  name          String    @unique
+  version       String?
+  description   String?
+  manifest_json String?
+  files_json    String?   @default("{}")
+  enabled       Boolean   @default(true)
+  created_at    DateTime? @default(now())
+  updated_at    DateTime? @default(now()) @updatedAt
+  created_by    String?
+
+  @@map("LiteLLM_ClaudeCodePluginTable")
 }

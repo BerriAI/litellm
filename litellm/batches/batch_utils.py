@@ -128,73 +128,58 @@ def calculate_vertex_ai_batch_cost_and_usage(
     model_name: Optional[str] = None,
 ) -> Tuple[float, Usage]:
     """
-    Calculate both cost and usage from Vertex AI batch responses
+    Calculate both cost and usage from Vertex AI batch responses.
+
+    Vertex AI batch output lines have format:
+      {"request": ..., "status": "", "response": {"candidates": [...], "usageMetadata": {...}}}
+
+    usageMetadata contains promptTokenCount, candidatesTokenCount, totalTokenCount.
     """
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
+    from litellm.cost_calculator import batch_cost_calculator
+
     total_cost = 0.0
     total_tokens = 0
     prompt_tokens = 0
     completion_tokens = 0
-    
-    for response in vertex_ai_batch_responses:
-        if response.get("status") == "JOB_STATE_SUCCEEDED":  # Check if response was successful
-            # Transform Vertex AI response to OpenAI format if needed
+    actual_model_name = model_name or "gemini-2.0-flash-001"
 
-            # Create required arguments for the transformation method
-            model_response = ModelResponse()
-            
-            # Ensure model_name is not None
-            actual_model_name = model_name or "gemini-2.5-flash"
-            
-            # Create a real LiteLLM logging object
-            logging_obj = Logging(
+    for response in vertex_ai_batch_responses:
+        response_body = response.get("response")
+        if response_body is None:
+            continue
+
+        usage_metadata = response_body.get("usageMetadata", {})
+        _prompt = usage_metadata.get("promptTokenCount", 0) or 0
+        _completion = usage_metadata.get("candidatesTokenCount", 0) or 0
+        _total = usage_metadata.get("totalTokenCount", 0) or (_prompt + _completion)
+
+        line_usage = Usage(
+            prompt_tokens=_prompt,
+            completion_tokens=_completion,
+            total_tokens=_total,
+        )
+
+        try:
+            p_cost, c_cost = batch_cost_calculator(
+                usage=line_usage,
                 model=actual_model_name,
-                messages=[{"role": "user", "content": "batch_request"}],
-                stream=False,
-                call_type=CallTypes.aretrieve_batch,
-                start_time=time.time(),
-                litellm_call_id="batch_" + str(uuid.uuid4()),
-                function_id="batch_processing",
-                litellm_trace_id=str(uuid.uuid4()),
-                kwargs={"optional_params": {}}
-            )
-            
-            # Add the optional_params attribute that the Vertex AI transformation expects
-            logging_obj.optional_params = {}
-            raw_response = httpx.Response(200)  # Mock response object
-            
-            openai_format_response = VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
-                completion_response=response["response"],
-                model_response=model_response,
-                model=actual_model_name,
-                logging_obj=logging_obj,
-                raw_response=raw_response,
-            )
-            
-            # Calculate cost using existing function
-            cost = litellm.completion_cost(
-                completion_response=openai_format_response,
                 custom_llm_provider="vertex_ai",
-                call_type=CallTypes.aretrieve_batch.value,
             )
-            total_cost += cost
-            
-            # Extract usage from the transformed response
-            usage_obj = getattr(openai_format_response, 'usage', None)
-            if usage_obj:
-                usage = usage_obj
-            else:
-                # Fallback: create usage from response dict
-                response_dict = openai_format_response.dict() if hasattr(openai_format_response, 'dict') else {}
-                usage = _get_batch_job_usage_from_response_body(response_dict)
-            
-            total_tokens += usage.total_tokens
-            prompt_tokens += usage.prompt_tokens
-            completion_tokens += usage.completion_tokens
-    
+            total_cost += p_cost + c_cost
+        except Exception as e:
+            verbose_logger.debug(
+                "vertex_ai batch cost calculation error for line: %s", str(e)
+            )
+
+        prompt_tokens += _prompt
+        completion_tokens += _completion
+        total_tokens += _total
+
+    verbose_logger.info(
+        "vertex_ai batch cost: cost=%s, prompt=%d, completion=%d, total=%d",
+        total_cost, prompt_tokens, completion_tokens, total_tokens,
+    )
+
     return total_cost, Usage(
         total_tokens=total_tokens,
         prompt_tokens=prompt_tokens,

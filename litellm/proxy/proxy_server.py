@@ -14,47 +14,98 @@ import time
 import traceback
 import warnings
 from datetime import datetime, timedelta, timezone
-from typing import (TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal,
-                    Optional, Set, Tuple, Union, cast, get_args, get_origin,
-                    get_type_hints)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import anyio
+import websockets
+import websockets.exceptions
 from pydantic import BaseModel, Json
 
 from litellm._uuid import uuid
 from litellm.constants import (
-    AIOHTTP_CONNECTOR_LIMIT, AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
-    AIOHTTP_KEEPALIVE_TIMEOUT, AIOHTTP_NEEDS_CLEANUP_CLOSED,
-    AIOHTTP_TTL_DNS_CACHE, AUDIO_SPEECH_CHUNK_SIZE, BASE_MCP_ROUTE,
-    DEFAULT_MAX_RECURSE_DEPTH, DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
-    DEFAULT_SHARED_HEALTH_CHECK_TTL, DEFAULT_SLACK_ALERTING_THRESHOLD,
+    AIOHTTP_CONNECTOR_LIMIT,
+    AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
+    AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_NEEDS_CLEANUP_CLOSED,
+    AIOHTTP_TTL_DNS_CACHE,
+    AUDIO_SPEECH_CHUNK_SIZE,
+    BASE_MCP_ROUTE,
+    DEFAULT_MAX_RECURSE_DEPTH,
+    DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+    DEFAULT_SHARED_HEALTH_CHECK_TTL,
+    DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
-    LITELLM_SETTINGS_SAFE_DB_OVERRIDES, LITELLM_UI_ALLOW_HEADERS)
-from litellm.litellm_core_utils.litellm_logging import \
-    _init_custom_logger_compatible_class
+    LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
+    LITELLM_UI_ALLOW_HEADERS,
+    LITELLM_UI_SESSION_DURATION,
+)
+from litellm.litellm_core_utils.litellm_logging import (
+    _init_custom_logger_compatible_class,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import (CallbackDelete, CallInfo, CommonProxyErrors,
-                                  ConfigFieldDelete, ConfigFieldInfo,
-                                  ConfigFieldUpdate, ConfigGeneralSettings,
-                                  ConfigList, ConfigYAML,
-                                  EnterpriseLicenseData, FieldDetail,
-                                  InvitationClaim, InvitationDelete,
-                                  InvitationModel, InvitationNew,
-                                  InvitationUpdate, Litellm_EntityType,
-                                  LiteLLM_JWTAuth, LiteLLM_TeamTable,
-                                  LiteLLM_UserTable, LitellmUserRoles,
-                                  PassThroughGenericEndpoint, ProxyErrorTypes,
-                                  ProxyException, RoleBasedPermissions,
-                                  SpecialModelNames, SupportedDBObjectType,
-                                  TeamDefaultSettings, TokenCountRequest,
-                                  TransformRequestBody, UserAPIKeyAuth)
+from litellm.proxy._types import (
+    CallbackDelete,
+    CallInfo,
+    CommonProxyErrors,
+    ConfigFieldDelete,
+    ConfigFieldInfo,
+    ConfigFieldUpdate,
+    ConfigGeneralSettings,
+    ConfigList,
+    ConfigYAML,
+    EnterpriseLicenseData,
+    FieldDetail,
+    InvitationClaim,
+    InvitationDelete,
+    InvitationModel,
+    InvitationNew,
+    InvitationUpdate,
+    Litellm_EntityType,
+    LiteLLM_JWTAuth,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    PassThroughGenericEndpoint,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
+    SpecialModelNames,
+    SupportedDBObjectType,
+    TeamDefaultSettings,
+    TokenCountRequest,
+    TransformRequestBody,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.common_utils.callback_utils import (
-    normalize_callback_names, process_callback)
+    normalize_callback_names,
+    process_callback,
+)
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
-from litellm.types.utils import (ModelResponse, ModelResponseStream,
-                                 TextCompletionResponse, TokenCountResponse)
-from litellm.utils import (_invalidate_model_cost_lowercase_map,
-                           load_credentials_from_list)
+from litellm.types.utils import (
+    ModelResponse,
+    ModelResponseStream,
+    TextCompletionResponse,
+    TokenCountResponse,
+)
+from litellm.utils import (
+    _invalidate_model_cost_lowercase_map,
+    load_credentials_from_list,
+)
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -151,266 +202,353 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
-from litellm.constants import (_REALTIME_BODY_CACHE_SIZE, APSCHEDULER_COALESCE,
-                               APSCHEDULER_MAX_INSTANCES,
-                               APSCHEDULER_MISFIRE_GRACE_TIME,
-                               APSCHEDULER_REPLACE_EXISTING, DAYS_IN_A_MONTH,
-                               DEFAULT_HEALTH_CHECK_INTERVAL,
-                               DEFAULT_MODEL_CREATED_AT_TIME,
-                               LITELLM_PROXY_ADMIN_NAME,
-                               PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
-                               PROXY_BATCH_POLLING_INTERVAL,
-                               PROXY_BATCH_WRITE_AT,
-                               PROXY_BUDGET_RESCHEDULER_MAX_TIME,
-                               PROXY_BUDGET_RESCHEDULER_MIN_TIME)
+from litellm.constants import (
+    _REALTIME_BODY_CACHE_SIZE,
+    APSCHEDULER_COALESCE,
+    APSCHEDULER_MAX_INSTANCES,
+    APSCHEDULER_MISFIRE_GRACE_TIME,
+    APSCHEDULER_REPLACE_EXISTING,
+    DAYS_IN_A_MONTH,
+    DEFAULT_HEALTH_CHECK_INTERVAL,
+    DEFAULT_MODEL_CREATED_AT_TIME,
+    LITELLM_PROXY_ADMIN_NAME,
+    PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
+    PROXY_BATCH_POLLING_INTERVAL,
+    PROXY_BATCH_WRITE_AT,
+    PROXY_BUDGET_RESCHEDULER_MAX_TIME,
+    PROXY_BUDGET_RESCHEDULER_MIN_TIME,
+)
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs, get_litellm_metadata_from_kwargs)
+    _get_parent_otel_span_from_kwargs,
+    get_litellm_metadata_from_kwargs,
+)
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.litellm_logging import \
-    Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.sensitive_data_masker import \
-    SensitiveDataMasker
-from litellm.llms.custom_httpx.http_handler import (AsyncHTTPHandler,
-                                                    HTTPHandler)
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.proxy._experimental.mcp_server.discoverable_endpoints import \
-    router as mcp_discoverable_endpoints_router
-from litellm.proxy._experimental.mcp_server.rest_endpoints import \
-    router as mcp_rest_endpoints_router
+from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    router as mcp_discoverable_endpoints_router,
+)
+from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+    router as mcp_rest_endpoints_router,
+)
 from litellm.proxy._experimental.mcp_server.server import app as mcp_app
-from litellm.proxy._experimental.mcp_server.tool_registry import \
-    global_mcp_tool_registry
+from litellm.proxy._experimental.mcp_server.tool_registry import (
+    global_mcp_tool_registry,
+)
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.a2a_endpoints import router as a2a_router
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-from litellm.proxy.agent_endpoints.endpoints import \
-    router as agent_endpoints_router
+from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_router
 from litellm.proxy.agent_endpoints.model_list_helpers import (
-    append_agents_to_model_group, append_agents_to_model_info)
-from litellm.proxy.analytics_endpoints.analytics_endpoints import \
-    router as analytics_router
-from litellm.proxy.anthropic_endpoints.claude_code_endpoints import \
-    claude_code_marketplace_router
-from litellm.proxy.anthropic_endpoints.endpoints import \
-    router as anthropic_router
-from litellm.proxy.anthropic_endpoints.skills_endpoints import \
-    router as anthropic_skills_router
-from litellm.proxy.auth.auth_checks import (ExperimentalUIJWTToken,
-                                            get_team_object, log_db_metrics)
+    append_agents_to_model_group,
+    append_agents_to_model_info,
+)
+from litellm.proxy.analytics_endpoints.analytics_endpoints import (
+    router as analytics_router,
+)
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
+    claude_code_marketplace_router,
+)
+from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
+from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+    router as anthropic_skills_router,
+)
+from litellm.proxy.auth.auth_checks import (
+    ExperimentalUIJWTToken,
+    get_team_object,
+    log_db_metrics,
+)
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
-from litellm.proxy.auth.model_checks import (get_all_fallbacks,
-                                             get_complete_model_list,
-                                             get_key_models,
-                                             get_mcp_server_ids,
-                                             get_team_models)
+from litellm.proxy.auth.model_checks import (
+    get_all_fallbacks,
+    get_complete_model_list,
+    get_key_models,
+    get_mcp_server_ids,
+    get_team_models,
+)
 from litellm.proxy.auth.user_api_key_auth import (
-    _fetch_global_spend_with_event_coordination, user_api_key_auth,
-    user_api_key_auth_websocket)
+    _fetch_global_spend_with_event_coordination,
+    user_api_key_auth,
+    user_api_key_auth_websocket,
+)
 from litellm.proxy.batches_endpoints.endpoints import router as batches_router
+
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
-    ProxyBaseLLMRequestProcessing, create_response)
-from litellm.proxy.common_utils.callback_utils import \
-    initialize_callbacks_on_proxy
+    ProxyBaseLLMRequestProcessing,
+    create_response,
+)
+from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
-from litellm.proxy.common_utils.debug_utils import \
-    router as debugging_endpoints_router
+from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper, encrypt_value_helper)
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body, _safe_get_request_headers, check_file_size_under_limit,
-    get_form_data)
+    _read_request_body,
+    _safe_get_request_headers,
+    check_file_size_under_limit,
+    get_form_data,
+)
 from litellm.proxy.common_utils.load_config_utils import (
-    get_config_file_contents_from_gcs, get_file_contents_from_s3)
-from litellm.proxy.common_utils.openai_endpoint_utils import \
-    remove_sensitive_info_from_deployment
+    get_config_file_contents_from_gcs,
+    get_file_contents_from_s3,
+)
+from litellm.proxy.common_utils.openai_endpoint_utils import (
+    remove_sensitive_info_from_deployment,
+)
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
-from litellm.proxy.container_endpoints.endpoints import \
-    router as container_router
-from litellm.proxy.credential_endpoints.endpoints import \
-    router as credential_router
-from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import \
-    SpendLogCleanup
+from litellm.proxy.container_endpoints.endpoints import router as container_router
+from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
-from litellm.proxy.fine_tuning_endpoints.endpoints import \
-    router as fine_tuning_router
-from litellm.proxy.fine_tuning_endpoints.endpoints import \
-    set_fine_tuning_config
+from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
+from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
-from litellm.proxy.guardrails.guardrail_endpoints import \
-    router as guardrails_router
-from litellm.proxy.guardrails.init_guardrails import (init_guardrails_v2,
-                                                      initialize_guardrails)
+from litellm.proxy.guardrails.guardrail_endpoints import router as guardrails_router
+from litellm.proxy.guardrails.init_guardrails import (
+    init_guardrails_v2,
+    initialize_guardrails,
+)
 from litellm.proxy.health_check import perform_health_check
-from litellm.proxy.health_endpoints._health_endpoints import \
-    router as health_router
-from litellm.proxy.hooks.model_max_budget_limiter import \
-    _PROXY_VirtualKeyModelMaxBudgetLimiter
-from litellm.proxy.hooks.prompt_injection_detection import \
-    _OPTIONAL_PromptInjectionDetection
+from litellm.proxy.health_endpoints._health_endpoints import router as health_router
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    _PROXY_VirtualKeyModelMaxBudgetLimiter,
+)
+from litellm.proxy.hooks.prompt_injection_detection import (
+    _OPTIONAL_PromptInjectionDetection,
+)
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-from litellm.proxy.management_endpoints.access_group_endpoints import \
-    router as access_group_router
-from litellm.proxy.management_endpoints.budget_management_endpoints import \
-    router as budget_management_router
-from litellm.proxy.management_endpoints.cache_settings_endpoints import \
-    router as cache_settings_router
-from litellm.proxy.management_endpoints.callback_management_endpoints import \
-    router as callback_management_endpoints_router
+from litellm.proxy.management_endpoints.access_group_endpoints import (
+    router as access_group_router,
+)
+from litellm.proxy.management_endpoints.budget_management_endpoints import (
+    router as budget_management_router,
+)
+from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+    router as cache_settings_router,
+)
+from litellm.proxy.management_endpoints.callback_management_endpoints import (
+    router as callback_management_endpoints_router,
+)
 from litellm.proxy.management_endpoints.common_utils import (
-    _user_has_admin_privileges, admin_can_invite_user)
-from litellm.proxy.management_endpoints.compliance_endpoints import \
-    router as compliance_router
-from litellm.proxy.management_endpoints.cost_tracking_settings import \
-    router as cost_tracking_settings_router
-from litellm.proxy.management_endpoints.customer_endpoints import \
-    router as customer_router
-from litellm.proxy.management_endpoints.fallback_management_endpoints import \
-    router as fallback_management_router
-from litellm.proxy.management_endpoints.internal_user_endpoints import \
-    router as internal_user_router
-from litellm.proxy.management_endpoints.internal_user_endpoints import \
-    user_update
+    _user_has_admin_privileges,
+    admin_can_invite_user,
+)
+from litellm.proxy.management_endpoints.compliance_endpoints import (
+    router as compliance_router,
+)
+from litellm.proxy.management_endpoints.cost_tracking_settings import (
+    router as cost_tracking_settings_router,
+)
+from litellm.proxy.management_endpoints.customer_endpoints import (
+    router as customer_router,
+)
+from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+    router as fallback_management_router,
+)
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    router as internal_user_router,
+)
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    delete_verification_tokens, duration_in_seconds, generate_key_helper_fn)
-from litellm.proxy.management_endpoints.key_management_endpoints import \
-    router as key_management_router
-from litellm.proxy.management_endpoints.mcp_management_endpoints import \
-    router as mcp_management_router
-from litellm.proxy.management_endpoints.model_access_group_management_endpoints import \
-    router as model_access_group_management_router
+    delete_verification_tokens,
+    duration_in_seconds,
+    generate_key_helper_fn,
+)
+from litellm.proxy.management_endpoints.key_management_endpoints import (
+    router as key_management_router,
+)
+from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+    router as mcp_management_router,
+)
+from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+    router as model_access_group_management_router,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (
-    _add_model_to_db, _add_team_model_to_db,
-    _deduplicate_litellm_router_models)
-from litellm.proxy.management_endpoints.model_management_endpoints import \
-    router as model_management_router
-from litellm.proxy.management_endpoints.organization_endpoints import \
-    router as organization_router
-from litellm.proxy.management_endpoints.policy_endpoints import \
-    router as policy_router
-from litellm.proxy.management_endpoints.project_endpoints import \
-    router as project_router
-from litellm.proxy.management_endpoints.router_settings_endpoints import \
-    router as router_settings_router
+    _add_model_to_db,
+    _add_team_model_to_db,
+    _deduplicate_litellm_router_models,
+)
+from litellm.proxy.management_endpoints.model_management_endpoints import (
+    router as model_management_router,
+)
+from litellm.proxy.management_endpoints.organization_endpoints import (
+    router as organization_router,
+)
+from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
+from litellm.proxy.management_endpoints.project_endpoints import (
+    router as project_router,
+)
+from litellm.proxy.management_endpoints.router_settings_endpoints import (
+    router as router_settings_router,
+)
 from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
-from litellm.proxy.management_endpoints.tag_management_endpoints import \
-    router as tag_management_router
-from litellm.proxy.management_endpoints.team_callback_endpoints import \
-    router as team_callback_router
-from litellm.proxy.management_endpoints.team_endpoints import \
-    router as team_router
+from litellm.proxy.management_endpoints.tag_management_endpoints import (
+    router as tag_management_router,
+)
+from litellm.proxy.management_endpoints.team_callback_endpoints import (
+    router as team_callback_router,
+)
+from litellm.proxy.management_endpoints.team_endpoints import router as team_router
 from litellm.proxy.management_endpoints.team_endpoints import (
-    update_team, validate_membership)
-from litellm.proxy.management_endpoints.tool_management_endpoints import \
-    router as tool_management_router
-from litellm.proxy.management_endpoints.ui_sso import \
-    get_disabled_non_admin_personal_key_creation
+    update_team,
+    validate_membership,
+)
+from litellm.proxy.management_endpoints.tool_management_endpoints import (
+    router as tool_management_router,
+)
+from litellm.proxy.management_endpoints.ui_sso import (
+    get_disabled_non_admin_personal_key_creation,
+)
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
-from litellm.proxy.management_endpoints.usage_endpoints import \
-    router as usage_ai_router
-from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import \
-    router as user_agent_analytics_router
-from litellm.proxy.management_helpers.audit_logs import \
-    create_audit_log_for_update
-from litellm.proxy.middleware.prometheus_auth_middleware import \
-    PrometheusAuthMiddleware
+from litellm.proxy.management_endpoints.usage_endpoints import router as usage_ai_router
+from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
+    router as user_agent_analytics_router,
+)
+from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.middleware.in_flight_requests_middleware import (
+    InFlightRequestsMiddleware,
+)
+from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
-from litellm.proxy.openai_evals_endpoints.endpoints import \
-    router as evals_router
-from litellm.proxy.openai_files_endpoints.files_endpoints import \
-    router as openai_files_router
-from litellm.proxy.openai_files_endpoints.files_endpoints import \
-    set_files_config
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import \
-    passthrough_endpoint_router
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import \
-    router as llm_passthrough_router
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import \
-    vertex_ai_live_websocket_passthrough
-from litellm.proxy.pass_through_endpoints.pass_through_endpoints import \
-    initialize_pass_through_endpoints
-from litellm.proxy.pass_through_endpoints.pass_through_endpoints import \
-    router as pass_through_router
-from litellm.proxy.policy_engine.policy_endpoints import \
-    router as policy_crud_router
-from litellm.proxy.policy_engine.policy_resolve_endpoints import \
-    router as policy_resolve_router
+from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_router
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    router as openai_files_router,
+)
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    passthrough_endpoint_router,
+)
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    router as llm_passthrough_router,
+)
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    vertex_ai_live_websocket_passthrough,
+)
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    initialize_pass_through_endpoints,
+)
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    router as pass_through_router,
+)
+from litellm.proxy.policy_engine.policy_endpoints import router as policy_crud_router
+from litellm.proxy.policy_engine.policy_resolve_endpoints import (
+    router as policy_resolve_router,
+)
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
-from litellm.proxy.response_api_endpoints.endpoints import \
-    router as response_router
+from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
-from litellm.proxy.search_endpoints.search_tool_management import \
-    router as search_tool_management_router
-from litellm.proxy.spend_tracking.cloudzero_endpoints import \
-    router as cloudzero_router
-from litellm.proxy.spend_tracking.spend_management_endpoints import \
-    router as spend_management_router
-from litellm.proxy.spend_tracking.spend_tracking_utils import \
-    get_logging_payload
+from litellm.proxy.search_endpoints.search_tool_management import (
+    router as search_tool_management_router,
+)
+from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
+    router as spend_management_router,
+)
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.types_utils.utils import get_instance_fn
-from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import \
-    router as ui_crud_endpoints_router
-from litellm.proxy.utils import (PrismaClient, ProxyLogging, ProxyUpdateSpend,
-                                 _cache_user_row, _get_docs_url,
-                                 _get_projected_spend_over_limit,
-                                 _get_redoc_url,
-                                 _is_projected_spend_over_limit,
-                                 _is_valid_team_configs, get_custom_url,
-                                 get_error_message_str, get_server_root_path,
-                                 handle_exception_on_proxy, hash_token,
-                                 model_dump_with_preserved_fields,
-                                 update_spend)
-from litellm.proxy.vector_store_endpoints.endpoints import \
-    router as vector_store_router
-from litellm.proxy.vector_store_endpoints.management_endpoints import \
-    router as vector_store_management_router
-from litellm.proxy.vector_store_files_endpoints.endpoints import \
-    router as vector_store_files_router
-from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import \
-    router as langfuse_router
+from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+    router as ui_crud_endpoints_router,
+)
+from litellm.proxy.utils import (
+    PrismaClient,
+    ProxyLogging,
+    ProxyUpdateSpend,
+    _cache_user_row,
+    _get_docs_url,
+    _get_projected_spend_over_limit,
+    _get_redoc_url,
+    _is_projected_spend_over_limit,
+    _is_valid_team_configs,
+    get_custom_url,
+    get_error_message_str,
+    get_server_root_path,
+    handle_exception_on_proxy,
+    hash_token,
+    model_dump_with_preserved_fields,
+    update_spend,
+)
+from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    router as vector_store_management_router,
+)
+from litellm.proxy.vector_store_files_endpoints.endpoints import (
+    router as vector_store_files_router,
+)
+from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
+    router as langfuse_router,
+)
 from litellm.proxy.video_endpoints.endpoints import router as video_router
-from litellm.router import (AssistantsTypedDict, Deployment, LiteLLM_Params,
-                            ModelGroupInfo)
+from litellm.router import (
+    AssistantsTypedDict,
+    Deployment,
+    LiteLLM_Params,
+    ModelGroupInfo,
+)
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
-from litellm.secret_managers.main import (get_secret, get_secret_bool,
-                                          get_secret_str, str_to_bool)
+from litellm.secret_managers.main import (
+    get_secret,
+    get_secret_bool,
+    get_secret_str,
+    str_to_bool,
+)
 from litellm.types.integrations.slack_alerting import SlackAlertingArgs
-from litellm.types.llms.anthropic import (AnthropicMessagesRequest,
-                                          AnthropicResponse,
-                                          AnthropicResponseContentBlockText,
-                                          AnthropicResponseUsageBlock)
+from litellm.types.llms.anthropic import (
+    AnthropicMessagesRequest,
+    AnthropicResponse,
+    AnthropicResponseContentBlockText,
+    AnthropicResponseUsageBlock,
+)
 from litellm.types.llms.openai import HttpxBinaryResponseContent
-from litellm.types.proxy.management_endpoints.model_management_endpoints import \
-    ModelGroupInfoProxy
+from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    ModelGroupInfoProxy,
+)
 from litellm.types.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams)
+    DefaultTeamSSOParams,
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
-from litellm.types.router import (RouterGeneralSettings, SearchToolTypedDict,
-                                  updateDeployment)
+from litellm.types.router import (
+    RouterGeneralSettings,
+    SearchToolTypedDict,
+    updateDeployment,
+)
 from litellm.types.scheduler import DefaultPriorities
-from litellm.types.secret_managers.main import (KeyManagementSettings,
-                                                KeyManagementSystem)
+from litellm.types.secret_managers.main import (
+    KeyManagementSettings,
+    KeyManagementSystem,
+)
 from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
@@ -424,15 +562,34 @@ litellm.suppress_debug_info = True
 import json
 from typing import Union
 
-from fastapi import (Depends, FastAPI, File, Form, Header, HTTPException, Path,
-                     Query, Request, Response, UploadFile, WebSocket,
-                     WebSocketDisconnect, applications, status)
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    applications,
+    status,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import (FileResponse, JSONResponse, ORJSONResponse,
-                               RedirectResponse, StreamingResponse)
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    ORJSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
@@ -455,8 +612,7 @@ except Exception:
 ###################
 # Import enterprise routes
 try:
-    from litellm_enterprise.proxy.enterprise_routes import \
-        router as _enterprise_router
+    from litellm_enterprise.proxy.enterprise_routes import router as _enterprise_router
     from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
 
     enterprise_router = _enterprise_router
@@ -798,8 +954,9 @@ def get_openapi_schema():
         return app.openapi_schema
 
     # Use compatibility wrapper for FastAPI 0.120+ schema generation
-    from litellm.proxy.common_utils.openapi_schema_compat import \
-        get_openapi_schema_with_compat
+    from litellm.proxy.common_utils.openapi_schema_compat import (
+        get_openapi_schema_with_compat,
+    )
 
     openapi_schema = get_openapi_schema_with_compat(
         get_openapi_func=get_openapi,
@@ -853,8 +1010,7 @@ def get_openapi_schema():
         }
 
     # Add LLM API request schema bodies for documentation
-    from litellm.proxy.common_utils.custom_openapi_spec import \
-        CustomOpenAPISpec
+    from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
@@ -880,8 +1036,7 @@ def custom_openapi():
     openapi_schema["paths"] = paths_to_include
 
     # Add LLM API request schema bodies for documentation
-    from litellm.proxy.common_utils.custom_openapi_spec import \
-        CustomOpenAPISpec
+    from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
@@ -1253,6 +1408,7 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
+app.add_middleware(InFlightRequestsMiddleware)
 
 
 def mount_swagger_ui():
@@ -1874,8 +2030,9 @@ def _schedule_background_health_check_db_save(
         return
     import time as time_module
 
-    from litellm.proxy.health_endpoints._health_endpoints import \
-        _save_background_health_checks_to_db
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _save_background_health_checks_to_db,
+    )
 
     checked_by = (
         shared_health_manager.pod_id
@@ -1935,8 +2092,9 @@ async def _run_background_health_check():
     # Initialize shared health check manager if Redis is available and feature is enabled
     shared_health_manager = None
     if use_shared_health_check and redis_usage_cache is not None:
-        from litellm.proxy.health_check_utils.shared_health_check_manager import \
-            SharedHealthCheckManager
+        from litellm.proxy.health_check_utils.shared_health_check_manager import (
+            SharedHealthCheckManager,
+        )
 
         shared_health_manager = SharedHealthCheckManager(
             redis_cache=redis_usage_cache,
@@ -2009,22 +2167,24 @@ async def _run_background_health_check():
                     "Error in shared health check, falling back to direct health check: %s",
                     str(e),
                 )
-                healthy_endpoints, unhealthy_endpoints = (
-                    await _run_direct_health_check_with_instrumentation(
-                        _llm_model_list,
-                        health_check_details,
-                        health_check_concurrency,
-                        instrumentation_context,
-                    )
-                )
-        else:
-            healthy_endpoints, unhealthy_endpoints = (
-                await _run_direct_health_check_with_instrumentation(
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
                     health_check_details,
                     health_check_concurrency,
                     instrumentation_context,
                 )
+        else:
+            (
+                healthy_endpoints,
+                unhealthy_endpoints,
+            ) = await _run_direct_health_check_with_instrumentation(
+                _llm_model_list,
+                health_check_details,
+                health_check_concurrency,
+                instrumentation_context,
             )
 
         # Update the global variable with the health check results
@@ -2618,24 +2778,25 @@ class ProxyConfig:
                     litellm.guardrail_name_config_map = guardrail_name_config_map
 
                 elif key == "global_prompt_directory":
-                    from litellm.integrations.dotprompt import \
-                        set_global_prompt_directory
+                    from litellm.integrations.dotprompt import (
+                        set_global_prompt_directory,
+                    )
 
                     set_global_prompt_directory(value)
                     verbose_proxy_logger.info(
                         f"{blue_color_code}Set Global Prompt Directory on LiteLLM Proxy{reset_color_code}"
                     )
                 elif key == "global_bitbucket_config":
-                    from litellm.integrations.bitbucket import \
-                        set_global_bitbucket_config
+                    from litellm.integrations.bitbucket import (
+                        set_global_bitbucket_config,
+                    )
 
                     set_global_bitbucket_config(value)
                     verbose_proxy_logger.info(
                         f"{blue_color_code}Set Global BitBucket Config on LiteLLM Proxy{reset_color_code}"
                     )
                 elif key == "global_gitlab_config":
-                    from litellm.integrations.gitlab import \
-                        set_global_gitlab_config
+                    from litellm.integrations.gitlab import set_global_gitlab_config
 
                     set_global_gitlab_config(value)
                     verbose_proxy_logger.info(
@@ -2706,8 +2867,9 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                from litellm.integrations.prometheus import \
-                                    PrometheusLogger
+                                from litellm.integrations.prometheus import (
+                                    PrometheusLogger,
+                                )
 
                                 if PrometheusLogger is not None:
                                     verbose_proxy_logger.debug(
@@ -3118,8 +3280,9 @@ class ProxyConfig:
 
         mcp_servers_config = config.get("mcp_servers", None)
         if mcp_servers_config:
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import \
-                global_mcp_server_manager
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
 
             # Get mcp_aliases from litellm_settings if available
             litellm_settings = config.get("litellm_settings", {})
@@ -3132,8 +3295,7 @@ class ProxyConfig:
         ## VECTOR STORES
         vector_store_registry_config = config.get("vector_store_registry", None)
         if vector_store_registry_config:
-            from litellm.vector_stores.vector_store_registry import \
-                VectorStoreRegistry
+            from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
             if litellm.vector_store_registry is None:
                 litellm.vector_store_registry = VectorStoreRegistry()
@@ -3160,8 +3322,7 @@ class ProxyConfig:
         """
 
         from litellm.proxy.policy_engine.init_policies import init_policies
-        from litellm.proxy.policy_engine.policy_validator import \
-            PolicyValidator
+        from litellm.proxy.policy_engine.policy_validator import PolicyValidator
 
         if config is None:
             verbose_proxy_logger.debug("Policy engine: config is None, skipping")
@@ -3250,8 +3411,9 @@ class ProxyConfig:
                 key_management_system
                 == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
             ):
-                from litellm.secret_managers.aws_secret_manager_v2 import \
-                    AWSSecretsManagerV2
+                from litellm.secret_managers.aws_secret_manager_v2 import (
+                    AWSSecretsManagerV2,
+                )
 
                 AWSSecretsManagerV2.load_aws_secret_manager(
                     use_aws_secret_manager=True,
@@ -3262,24 +3424,28 @@ class ProxyConfig:
             elif (
                 key_management_system == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
             ):
-                from litellm.secret_managers.google_secret_manager import \
-                    GoogleSecretManager
+                from litellm.secret_managers.google_secret_manager import (
+                    GoogleSecretManager,
+                )
 
                 GoogleSecretManager()
             elif key_management_system == KeyManagementSystem.HASHICORP_VAULT.value:
-                from litellm.secret_managers.hashicorp_secret_manager import \
-                    HashicorpSecretManager
+                from litellm.secret_managers.hashicorp_secret_manager import (
+                    HashicorpSecretManager,
+                )
 
                 HashicorpSecretManager()
             elif key_management_system == KeyManagementSystem.CYBERARK.value:
-                from litellm.secret_managers.cyberark_secret_manager import \
-                    CyberArkSecretManager
+                from litellm.secret_managers.cyberark_secret_manager import (
+                    CyberArkSecretManager,
+                )
 
                 CyberArkSecretManager()
             elif key_management_system == KeyManagementSystem.CUSTOM.value:
                 ### LOAD CUSTOM SECRET MANAGER ###
-                from litellm.secret_managers.custom_secret_manager_loader import \
-                    load_custom_secret_manager
+                from litellm.secret_managers.custom_secret_manager_loader import (
+                    load_custom_secret_manager,
+                )
 
                 load_custom_secret_manager(config_file_path=config_file_path)
             else:
@@ -3343,7 +3509,15 @@ class ProxyConfig:
                 combined_id_list.append(model_info.id)
 
         ## CONFIG MODELS ##
-        config = await self.get_config(config_file_path=user_config_file_path)
+        try:
+            config = await self.get_config(config_file_path=user_config_file_path)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to load config in _delete_deployment: %s. "
+                "Skipping deployment cleanup to avoid removing valid models.",
+                str(e),
+            )
+            return 0
         model_list = config.get("model_list", None)
         if model_list:
             for model in model_list:
@@ -3461,8 +3635,20 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
     ):
         global llm_router, llm_model_list, master_key, general_settings
-        config_data = await proxy_config.get_config()
-        search_tools = self.parse_search_tools(config_data)
+
+        # Load config separately so a timeout here doesn't block model loading
+        config_data: dict = {}
+        search_tools = None
+        try:
+            config_data = await proxy_config.get_config()
+            search_tools = self.parse_search_tools(config_data)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to load config in _update_llm_router: %s. "
+                "Proceeding with model loading using cached/empty config.",
+                str(e),
+            )
+
         try:
             models_list: list = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
@@ -3841,8 +4027,9 @@ class ProxyConfig:
         # Schedule new job if retention period is set (not None)
         retention_period = general_settings.get("maximum_spend_logs_retention_period")
         if retention_period is not None:
-            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import \
-                SpendLogCleanup
+            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+                SpendLogCleanup,
+            )
 
             spend_log_cleanup = SpendLogCleanup()
             cleanup_cron = general_settings.get("maximum_spend_logs_cleanup_cron")
@@ -3869,8 +4056,9 @@ class ProxyConfig:
                     )
             else:
                 # Interval-based scheduling (existing behavior)
-                from litellm.litellm_core_utils.duration_parser import \
-                    duration_in_seconds
+                from litellm.litellm_core_utils.duration_parser import (
+                    duration_in_seconds,
+                )
 
                 retention_interval = general_settings.get(
                     "maximum_spend_logs_retention_interval", "1d"
@@ -4237,8 +4425,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
         if self._should_load_db_object(object_type="cache_settings"):
-            from litellm.proxy.management_endpoints.cache_settings_endpoints import \
-                CacheSettingsManager
+            from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+                CacheSettingsManager,
+            )
 
             await CacheSettingsManager.init_cache_settings_in_db(
                 prisma_client=prisma_client, proxy_config=self
@@ -4255,8 +4444,7 @@ class ProxyConfig:
         import json
 
         import litellm
-        from litellm.proxy.hooks.mcp_semantic_filter import \
-            SemanticToolFilterHook
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
         try:
             # Load litellm_settings from DB
@@ -4421,8 +4609,9 @@ class ProxyConfig:
 
             if should_reload:
                 # Perform the reload
-                from litellm.litellm_core_utils.get_model_cost_map import \
-                    get_model_cost_map
+                from litellm.litellm_core_utils.get_model_cost_map import (
+                    get_model_cost_map,
+                )
 
                 model_cost_map_url = litellm.model_cost_map_url
                 new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
@@ -4449,7 +4638,7 @@ class ProxyConfig:
                                 }
                             ),
                         },
-                        "update": {"param_value": safe_dumps({"force_reload": False})},
+                        "update": {"param_value": safe_dumps({"interval_hours": interval_hours, "force_reload": False})},
                     },
                 )
 
@@ -4528,8 +4717,9 @@ class ProxyConfig:
 
             if should_reload:
                 # Perform the reload
-                from litellm.anthropic_beta_headers_manager import \
-                    reload_beta_headers_config
+                from litellm.anthropic_beta_headers_manager import (
+                    reload_beta_headers_config,
+                )
 
                 new_config = reload_beta_headers_config()
 
@@ -4549,7 +4739,7 @@ class ProxyConfig:
                                 }
                             ),
                         },
-                        "update": {"param_value": safe_dumps({"force_reload": False})},
+                        "update": {"param_value": safe_dumps({"interval_hours": interval_hours, "force_reload": False})},
                     },
                 )
 
@@ -4580,14 +4770,12 @@ class ProxyConfig:
         Returns:
             The PromptSpec object
         """
-        from litellm.proxy.prompts.prompt_endpoints import \
-            create_versioned_prompt_spec
+        from litellm.proxy.prompts.prompt_endpoints import create_versioned_prompt_spec
 
         return create_versioned_prompt_spec(db_prompt=db_prompt)
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
-        from litellm.proxy.prompts.prompt_registry import \
-            IN_MEMORY_PROMPT_REGISTRY
+        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
         from litellm.types.prompts.init_prompts import PromptSpec
 
         try:
@@ -4605,7 +4793,10 @@ class ProxyConfig:
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
-            IN_MEMORY_GUARDRAIL_HANDLER, Guardrail, GuardrailRegistry)
+            IN_MEMORY_GUARDRAIL_HANDLER,
+            Guardrail,
+            GuardrailRegistry,
+        )
 
         try:
             guardrails_in_db: List[
@@ -4631,10 +4822,10 @@ class ProxyConfig:
         """
         Initialize policies and policy attachments from database into the in-memory registries.
         """
-        from litellm.proxy.policy_engine.attachment_registry import \
-            get_attachment_registry
-        from litellm.proxy.policy_engine.policy_registry import \
-            get_policy_registry
+        from litellm.proxy.policy_engine.attachment_registry import (
+            get_attachment_registry,
+        )
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         try:
             # Get the global singleton instances
@@ -4664,8 +4855,7 @@ class ProxyConfig:
         Initialize tool policy from database into the in-memory registry.
         Synced periodically by add_deployment -> _init_non_llm_objects_in_db.
         """
-        from litellm.proxy.db.tool_registry_writer import \
-            get_tool_policy_registry
+        from litellm.proxy.db.tool_registry_writer import get_tool_policy_registry
 
         try:
             registry = get_tool_policy_registry()
@@ -4679,8 +4869,7 @@ class ProxyConfig:
             )
 
     async def _init_vector_stores_in_db(self, prisma_client: PrismaClient):
-        from litellm.vector_stores.vector_store_registry import \
-            VectorStoreRegistry
+        from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
         try:
             # read vector stores from db table
@@ -4707,8 +4896,7 @@ class ProxyConfig:
             )
 
     async def _init_vector_store_indexes_in_db(self, prisma_client: PrismaClient):
-        from litellm.vector_stores.vector_store_registry import \
-            VectorStoreIndexRegistry
+        from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
         try:
             # read vector stores from db table
@@ -4738,8 +4926,7 @@ class ProxyConfig:
             )
 
     async def _init_mcp_servers_in_db(self):
-        from litellm.proxy._experimental.mcp_server.utils import \
-            is_mcp_available
+        from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
 
         if not is_mcp_available():
             verbose_proxy_logger.debug(
@@ -4747,8 +4934,9 @@ class ProxyConfig:
             )
             return
 
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import \
-            global_mcp_server_manager
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
 
         try:
             await global_mcp_server_manager.reload_servers_from_database()
@@ -4760,8 +4948,9 @@ class ProxyConfig:
             )
 
     async def _init_agents_in_db(self, prisma_client: PrismaClient):
-        from litellm.proxy.agent_endpoints.agent_registry import \
-            global_agent_registry as AGENT_REGISTRY
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
 
         try:
             db_agents = await AGENT_REGISTRY.get_all_agents_from_db(
@@ -4784,8 +4973,9 @@ class ProxyConfig:
         """
         global llm_router
 
-        from litellm.proxy.search_endpoints.search_tool_registry import \
-            SearchToolRegistry
+        from litellm.proxy.search_endpoints.search_tool_registry import (
+            SearchToolRegistry,
+        )
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
         try:
@@ -4825,8 +5015,9 @@ class ProxyConfig:
             )
 
     async def _init_pass_through_endpoints_in_db(self):
-        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import \
-            initialize_pass_through_endpoints_in_db
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            initialize_pass_through_endpoints_in_db,
+        )
 
         await initialize_pass_through_endpoints_in_db()
 
@@ -4924,8 +5115,11 @@ async def initialize(  # noqa: PLR0915
     if debug is True:  # this needs to be first, so users can see Router init debugg
         import logging
 
-        from litellm._logging import (verbose_logger, verbose_proxy_logger,
-                                      verbose_router_logger)
+        from litellm._logging import (
+            verbose_logger,
+            verbose_proxy_logger,
+            verbose_router_logger,
+        )
 
         # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
         verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
@@ -4934,8 +5128,11 @@ async def initialize(  # noqa: PLR0915
     if detailed_debug is True:
         import logging
 
-        from litellm._logging import (verbose_logger, verbose_proxy_logger,
-                                      verbose_router_logger)
+        from litellm._logging import (
+            verbose_logger,
+            verbose_proxy_logger,
+            verbose_router_logger,
+        )
 
         verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
         verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
@@ -4947,8 +5144,7 @@ async def initialize(  # noqa: PLR0915
             if litellm_log_setting.upper() == "INFO":
                 import logging
 
-                from litellm._logging import (verbose_proxy_logger,
-                                              verbose_router_logger)
+                from litellm._logging import verbose_proxy_logger, verbose_router_logger
 
                 # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
 
@@ -4961,9 +5157,11 @@ async def initialize(  # noqa: PLR0915
             elif litellm_log_setting.upper() == "DEBUG":
                 import logging
 
-                from litellm._logging import (verbose_logger,
-                                              verbose_proxy_logger,
-                                              verbose_router_logger)
+                from litellm._logging import (
+                    verbose_logger,
+                    verbose_proxy_logger,
+                    verbose_router_logger,
+                )
 
                 verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
                 verbose_router_logger.setLevel(
@@ -5148,13 +5346,15 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        # Use a list to accumulate response segments to avoid O(n^2) string concatenation
-        str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
         requested_model_from_client = _get_client_requested_model_for_streaming(
             request_data=request_data
         )
         model_mismatch_logged = False
+        # Use a running string instead of list + join to avoid O(n^2) overhead.
+        # Previously "".join(str_so_far_parts) was called every chunk, re-joining
+        # the entire accumulated response. String += is O(n) amortized total.
+        _str_so_far: str = ""
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -5165,12 +5365,12 @@ async def async_data_generator(
                 user_api_key_dict=user_api_key_dict,
                 response=chunk,
                 data=request_data,
-                str_so_far="".join(str_so_far_parts),
+                str_so_far=_str_so_far if _str_so_far else None,
             )
 
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
-                str_so_far_parts.append(response_str)
+                _str_so_far += response_str
 
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
@@ -5315,8 +5515,7 @@ class ProxyStartupEvent:
         litellm_settings: Dict[str, Any],
     ):
         """Initialize MCP semantic tool filter if configured"""
-        from litellm.proxy.hooks.mcp_semantic_filter import \
-            SemanticToolFilterHook
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
         mcp_semantic_filter_config = litellm_settings.get(
             "mcp_semantic_tool_filter", None
@@ -5428,8 +5627,9 @@ class ProxyStartupEvent:
 
         _teams = litellm.default_internal_user_params.get("teams") or []
         if _teams and all(isinstance(team, dict) for team in _teams):
-            from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import \
-                update_default_team_member_budget
+            from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+                update_default_team_member_budget,
+            )
 
             teams_pydantic_obj = [NewUserRequestTeam(**team) for team in _teams]
             await update_default_team_member_budget(
@@ -5650,8 +5850,9 @@ class ProxyStartupEvent:
         ### CHECK BATCH COST ###
         if llm_router is not None:
             try:
-                from litellm_enterprise.proxy.common_utils.check_batch_cost import \
-                    CheckBatchCost
+                from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+                    CheckBatchCost,
+                )
 
                 check_batch_cost_job = CheckBatchCost(
                     proxy_logging_obj=proxy_logging_obj,
@@ -5680,8 +5881,9 @@ class ProxyStartupEvent:
         ### CHECK RESPONSES COST ###
         if llm_router is not None:
             try:
-                from litellm_enterprise.proxy.common_utils.check_responses_cost import \
-                    CheckResponsesCost
+                from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+                    CheckResponsesCost,
+                )
 
                 check_responses_cost_job = CheckResponsesCost(
                     proxy_logging_obj=proxy_logging_obj,
@@ -5741,8 +5943,7 @@ class ProxyStartupEvent:
         ########################################################
         from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
         from litellm.integrations.focus.focus_logger import FocusLogger
-        from litellm.proxy.spend_tracking.cloudzero_endpoints import \
-            is_cloudzero_setup
+        from litellm.proxy.spend_tracking.cloudzero_endpoints import is_cloudzero_setup
 
         if await is_cloudzero_setup():
             await CloudZeroLogger.init_cloudzero_background_job(scheduler=scheduler)
@@ -5764,15 +5965,17 @@ class ProxyStartupEvent:
         ########################################################
         from litellm.constants import (
             LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
-            LITELLM_KEY_ROTATION_ENABLED)
+            LITELLM_KEY_ROTATION_ENABLED,
+        )
 
         key_rotation_enabled: Optional[bool] = str_to_bool(LITELLM_KEY_ROTATION_ENABLED)
         verbose_proxy_logger.debug(f"key_rotation_enabled: {key_rotation_enabled}")
 
         if key_rotation_enabled is True:
             try:
-                from litellm.proxy.common_utils.key_rotation_manager import \
-                    KeyRotationManager
+                from litellm.proxy.common_utils.key_rotation_manager import (
+                    KeyRotationManager,
+                )
 
                 # Get prisma_client from global scope
                 global prisma_client
@@ -5933,7 +6136,9 @@ class ProxyStartupEvent:
         Doc: https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/dd_libraries/python/
         """
         from litellm.litellm_core_utils.dd_tracing import (
-            _should_use_dd_profiler, _should_use_dd_tracer)
+            _should_use_dd_profiler,
+            _should_use_dd_tracer,
+        )
 
         if _should_use_dd_tracer():
             import ddtrace
@@ -6045,10 +6250,13 @@ async def model_list(
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
-    from litellm.proxy.management_endpoints.common_utils import \
-        _user_has_admin_privileges
-    from litellm.proxy.utils import (create_model_info_response,
-                                     get_available_models_for_user)
+    from litellm.proxy.management_endpoints.common_utils import (
+        _user_has_admin_privileges,
+    )
+    from litellm.proxy.utils import (
+        create_model_info_response,
+        get_available_models_for_user,
+    )
 
     # Validate scope parameter if provided
     if scope is not None and scope != "expand":
@@ -6175,9 +6383,11 @@ async def model_info(
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
-    from litellm.proxy.utils import (create_model_info_response,
-                                     get_available_models_for_user,
-                                     validate_model_access)
+    from litellm.proxy.utils import (
+        create_model_info_response,
+        get_available_models_for_user,
+        validate_model_access,
+    )
 
     # Get available models for the user
     all_models = await get_available_models_for_user(
@@ -6972,6 +7182,11 @@ async def audio_speech(
         )
 
     except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+        )
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.audio_speech(): Exception occured - {}".format(
                 str(e)
@@ -7200,6 +7415,10 @@ async def realtime_websocket_endpoint(
     intent: str = fastapi.Query(
         None, description="The intent of the websocket connection."
     ),
+    guardrails: Optional[str] = fastapi.Query(
+        None,
+        description="Comma-separated list of guardrail names to apply to this request.",
+    ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
     requested_protocols = [
@@ -7217,11 +7436,15 @@ async def realtime_websocket_endpoint(
         RealtimeQueryParams, dict(_realtime_query_params_template(model, intent))
     )
 
-    data = {
+    data: Dict[str, Any] = {
         "model": model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
     }
+
+    # Pass guardrails into data so pre-call guardrail processing picks them up
+    if guardrails:
+        data["guardrails"] = [g.strip() for g in guardrails.split(",") if g.strip()]
 
     # Use raw ASGI headers (already lowercase bytes) to avoid extra work
     headers_list = list(websocket.scope.get("headers") or [])
@@ -7240,6 +7463,10 @@ async def realtime_websocket_endpoint(
 
     ### ROUTE THE REQUEST ###
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+
+    # Phase 1: pre-call processing (auth, guardrails, rate limits).
+    # Errors here (e.g. guardrail block) are sent back to the client as an
+    # error event before closing, so the caller knows what happened.
     try:
         (
             data,
@@ -7259,6 +7486,27 @@ async def realtime_websocket_endpoint(
             model=model,
             route_type="_arealtime",
         )
+    except Exception as e:
+        verbose_proxy_logger.exception("Realtime pre-call error")
+        try:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "guardrail_error",
+                            "message": str(e),
+                        },
+                    }
+                )
+            )
+        except Exception:
+            pass
+        await websocket.close(code=1011, reason="Pre-call error")
+        return
+
+    # Phase 2: route to upstream LLM.
+    try:
         data["user_api_key_dict"] = user_api_key_dict
         llm_call = await route_request(
             data=data,
@@ -7266,7 +7514,6 @@ async def realtime_websocket_endpoint(
             llm_router=llm_router,
             user_model=user_model,
         )
-
         await llm_call
     except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
         verbose_proxy_logger.exception("Invalid status code")
@@ -8094,8 +8341,7 @@ def _get_provider_token_counter(
     if deployment is None:
         return None
 
-    from litellm.litellm_core_utils.get_llm_provider_logic import \
-        get_llm_provider
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     full_model = deployment.get("litellm_params", {}).get("model", "")
     model: Optional[str] = None
@@ -8164,6 +8410,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     prompt = request.prompt
     messages = request.messages
     contents = request.contents
+    tools = request.tools
+    system = request.system
 
     #########################################################
     # Validate request
@@ -8224,6 +8472,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
                 contents=contents,
                 deployment=deployment,
                 request_model=request.model,
+                tools=tools,
+                system=system,
             )
             #########################################################
             # Transfrom the Response to the well known format
@@ -10447,8 +10697,7 @@ async def fallback_login(request: Request):
 )  # hidden since this is a helper for UI sso login
 async def login(request: Request):  # noqa: PLR0915
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import (authenticate_user,
-                                                create_ui_token_object)
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url
 
     form = await request.form()
@@ -10498,8 +10747,7 @@ async def login(request: Request):  # noqa: PLR0915
 )  # hidden helper for UI logins via API
 async def login_v2(request: Request):  # noqa: PLR0915
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import (authenticate_user,
-                                                create_ui_token_object)
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -10608,18 +10856,12 @@ async def onboarding(invite_link: str, request: Request):
             status_code=401, detail={"error": "Invitation link has expired."}
         )
 
-    #### INVALIDATE LINK
-    current_time = litellm.utils.get_utc_datetime()
-
-    _ = await prisma_client.db.litellm_invitationlink.update(
-        where={"id": invite_link},
-        data={
-            "accepted_at": current_time,
-            "updated_at": current_time,
-            "is_accepted": True,
-            "updated_by": invite_obj.user_id,  # type: ignore
-        },
-    )
+    #### CHECK IF ALREADY USED
+    if invite_obj.is_accepted is True:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "Invitation link has already been used."},
+        )
 
     ### GET USER OBJECT ###
     user_obj = await prisma_client.db.litellm_usertable.find_unique(
@@ -10637,7 +10879,7 @@ async def onboarding(invite_link: str, request: Request):
         request_type="key",
         **{
             "user_role": user_obj.user_role,
-            "duration": "24hr",
+            "duration": LITELLM_UI_SESSION_DURATION,
             "key_max_budget": litellm.max_ui_session_budget,
             "models": [],
             "aliases": {},
@@ -10724,19 +10966,11 @@ async def claim_onboarding_link(data: InvitationClaim):
             status_code=401, detail={"error": "Invitation link has expired."}
         )
 
-    #### CHECK IF CLAIMED
-    ##### if claimed - accept
-    ##### if unclaimed - reject
-
+    #### CHECK IF ALREADY USED
     if invite_obj.is_accepted is True:
-        # this is a valid invite that was accepted
-        pass
-    else:
         raise HTTPException(
             status_code=401,
-            detail={
-                "error": "The invitation link was never validated. Please file an issue, if this is not intended - https://github.com/BerriAI/litellm/issues."
-            },
+            detail={"error": "Invitation link has already been used."},
         )
 
     #### CHECK IF VALID USER ID
@@ -10759,6 +10993,18 @@ async def claim_onboarding_link(data: InvitationClaim):
         raise HTTPException(
             status_code=401, detail={"error": "User does not exist in db."}
         )
+
+    #### MARK LINK AS USED
+    current_time = litellm.utils.get_utc_datetime()
+    await prisma_client.db.litellm_invitationlink.update(
+        where={"id": data.invitation_link},
+        data={
+            "accepted_at": current_time,
+            "updated_at": current_time,
+            "is_accepted": True,
+            "updated_by": invite_obj.user_id,  # type: ignore
+        },
+    )
 
     return user_obj
 
@@ -10830,8 +11076,7 @@ async def get_image():
     if logo_path.startswith(("http://", "https://")):
         try:
             # Download the image and cache it
-            from litellm.llms.custom_httpx.http_handler import \
-                get_async_httpx_client
+            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
             from litellm.types.llms.custom_http import httpxSpecialProvider
 
             async_client = get_async_httpx_client(
@@ -10875,8 +11120,7 @@ async def get_favicon():
 
     if favicon_url.startswith(("http://", "https://")):
         try:
-            from litellm.llms.custom_httpx.http_handler import \
-                get_async_httpx_client
+            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
             from litellm.types.llms.custom_http import httpxSpecialProvider
 
             async_client = get_async_httpx_client(
@@ -10941,8 +11185,9 @@ async def new_invitation(
     ```
     """
     try:
-        from litellm.proxy.management_helpers.user_invitation import \
-            create_invitation_for_user
+        from litellm.proxy.management_helpers.user_invitation import (
+            create_invitation_for_user,
+        )
 
         global prisma_client
 
@@ -12029,8 +12274,7 @@ async def reload_model_cost_map(
             )
 
         # Immediately reload the model cost map in the current pod
-        from litellm.litellm_core_utils.get_model_cost_map import \
-            get_model_cost_map
+        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
         model_cost_map_url = litellm.model_cost_map_url
         new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
@@ -12046,7 +12290,14 @@ async def reload_model_cost_map(
         current_time = datetime.utcnow()
         last_model_cost_map_reload = current_time.isoformat()
 
-        # Set force reload flag in database for other pods
+        # Set force reload flag in database for other pods, preserving existing interval_hours
+        existing_config = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "model_cost_map_reload_config"}
+        )
+        existing_interval = None
+        if existing_config and existing_config.param_value:
+            existing_interval = existing_config.param_value.get("interval_hours")
+
         await prisma_client.db.litellm_config.upsert(
             where={"param_name": "model_cost_map_reload_config"},
             data={
@@ -12056,7 +12307,7 @@ async def reload_model_cost_map(
                         {"interval_hours": None, "force_reload": True}
                     ),
                 },
-                "update": {"param_value": safe_dumps({"force_reload": True})},
+                "update": {"param_value": safe_dumps({"interval_hours": existing_interval, "force_reload": True})},
             },
         )
 
@@ -12322,8 +12573,9 @@ async def get_model_cost_map_source(
         )
 
     try:
-        from litellm.litellm_core_utils.get_model_cost_map import \
-            get_model_cost_map_source_info
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            get_model_cost_map_source_info,
+        )
 
         source_info = get_model_cost_map_source_info()
         model_count = len(litellm.model_cost) if litellm.model_cost else 0
@@ -12375,8 +12627,7 @@ async def reload_anthropic_beta_headers(
             )
 
         # Immediately reload the beta headers config in the current pod
-        from litellm.anthropic_beta_headers_manager import \
-            reload_beta_headers_config
+        from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
 
         new_config = reload_beta_headers_config()
 
@@ -12385,7 +12636,14 @@ async def reload_anthropic_beta_headers(
         current_time = datetime.utcnow()
         last_anthropic_beta_headers_reload = current_time.isoformat()
 
-        # Set force reload flag in database for other pods
+        # Set force reload flag in database for other pods, preserving existing interval_hours
+        existing_beta_config = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "anthropic_beta_headers_reload_config"}
+        )
+        existing_beta_interval = None
+        if existing_beta_config and existing_beta_config.param_value:
+            existing_beta_interval = existing_beta_config.param_value.get("interval_hours")
+
         await prisma_client.db.litellm_config.upsert(
             where={"param_name": "anthropic_beta_headers_reload_config"},
             data={
@@ -12395,7 +12653,7 @@ async def reload_anthropic_beta_headers(
                         {"interval_hours": None, "force_reload": True}
                     ),
                 },
-                "update": {"param_value": safe_dumps({"force_reload": True})},
+                "update": {"param_value": safe_dumps({"interval_hours": existing_beta_interval, "force_reload": True})},
             },
         )
 
@@ -12776,8 +13034,9 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
     """Handle dynamic MCP server routes like /github_mcp/mcp"""
     try:
         # Validate that the MCP server exists
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import \
-            global_mcp_server_manager
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
         from litellm.types.mcp import MCPAuth
 
@@ -12796,8 +13055,9 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         scope["path"] = f"/mcp/{mcp_server_name}"
 
         # Import the MCP handler
-        from litellm.proxy._experimental.mcp_server.server import \
-            handle_streamable_http_mcp
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+        )
 
         # Create a custom send function to capture the response
         response_started = False

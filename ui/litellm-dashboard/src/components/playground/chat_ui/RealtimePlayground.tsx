@@ -24,12 +24,14 @@ interface RealtimePlaygroundProps {
   accessToken: string;
   selectedModel: string;
   customProxyBaseUrl?: string;
+  selectedGuardrails?: string[];
 }
 
 const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   accessToken,
   selectedModel,
   customProxyBaseUrl,
+  selectedGuardrails,
 }) => {
   const [messages, setMessages] = useState<RealtimeMessage[]>([]);
   const [inputText, setInputText] = useState("");
@@ -107,7 +109,10 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
 
       const baseUrl = customProxyBaseUrl || getProxyBaseUrl();
       const wsBase = baseUrl.replace(/^http/, "ws");
-      const url = `${wsBase}/v1/realtime?model=${encodeURIComponent(selectedModel)}`;
+      let url = `${wsBase}/v1/realtime?model=${encodeURIComponent(selectedModel)}`;
+      if (selectedGuardrails && selectedGuardrails.length > 0) {
+        url += `&guardrails=${encodeURIComponent(selectedGuardrails.join(","))}`;
+      }
 
       const ws = new WebSocket(url, ["realtime", `openai-insecure-api-key.${accessToken}`]);
 
@@ -197,7 +202,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       addMessage("status", `Connection failed: ${err.message}`);
       setIsConnecting(false);
     }
-  }, [accessToken, selectedModel, selectedVoice, customProxyBaseUrl, addMessage, appendAssistantText, playAudioChunk]);
+  }, [accessToken, selectedModel, selectedVoice, customProxyBaseUrl, selectedGuardrails, addMessage, appendAssistantText, playAudioChunk]);
 
   const disconnect = useCallback(() => {
     stopRecording();

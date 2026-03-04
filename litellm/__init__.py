@@ -12,6 +12,13 @@ warnings.filterwarnings(
 ### INIT VARIABLES #########################
 import threading
 import os
+
+# Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
+import dotenv as _dotenv
+
+if os.getenv("LITELLM_MODE", "DEV") == "DEV":
+    _dotenv.load_dotenv()
+
 from typing import (
     Callable,
     List,
@@ -74,12 +81,9 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
-import dotenv
 # register_async_client_cleanup is lazy-loaded and called on first access
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
-    dotenv.load_dotenv()
 
 
 ####################################################
@@ -105,6 +109,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "prometheus",
     "otel",
     "datadog",
+    "datadog_metrics",
     "datadog_llm_observability",
     "galileo",
     "braintrust",
@@ -197,6 +202,9 @@ telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+use_chat_completions_url_for_anthropic_messages: bool = bool(
+    os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
+)  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -1421,6 +1429,7 @@ if TYPE_CHECKING:
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
     from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
+    from .llms.perplexity.embedding.transformation import PerplexityEmbeddingConfig as PerplexityEmbeddingConfig
     from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as AzureAIStudioConfig
     from .llms.mistral.chat.transformation import MistralConfig as MistralConfig
     from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig as OpenAIResponsesAPIConfig
@@ -1432,6 +1441,7 @@ if TYPE_CHECKING:
     from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
     from .llms.perplexity.responses.transformation import PerplexityResponsesConfig as PerplexityResponsesConfig
     from .llms.databricks.responses.transformation import DatabricksResponsesAPIConfig as DatabricksResponsesAPIConfig
+    from .llms.openrouter.responses.transformation import OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
@@ -1513,6 +1523,7 @@ if TYPE_CHECKING:
     from .llms.azure.completion.transformation import AzureOpenAITextConfig as AzureOpenAITextConfig
     from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig as HostedVLLMChatConfig
     from .llms.hosted_vllm.embedding.transformation import HostedVLLMEmbeddingConfig as HostedVLLMEmbeddingConfig
+    from .llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig as HostedVLLMResponsesAPIConfig
     from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
     from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
     from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig
