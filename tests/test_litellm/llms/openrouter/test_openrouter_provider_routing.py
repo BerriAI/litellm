@@ -81,10 +81,60 @@ class TestOpenRouterNativeModelRouting:
         [
             ("openrouter/anthropic/claude-3-haiku", "anthropic/claude-3-haiku"),
             ("openrouter/meta-llama/llama-3-70b-instruct", "meta-llama/llama-3-70b-instruct"),
+            ("openrouter/google/gemini-3-flash-preview", "google/gemini-3-flash-preview"),
         ],
     )
     def test_regular_models_still_strip_normally(self, input_model, expected_model):
         """Non-native OpenRouter models should still have their prefix stripped."""
         result_model, provider, _, _ = litellm.get_llm_provider(model=input_model)
+        assert provider == "openrouter"
+        assert result_model == expected_model
+
+    @pytest.mark.parametrize(
+        "input_model,expected_model",
+        [
+            ("openrouter/google/gemini-3-flash-preview", "google/gemini-3-flash-preview"),
+            ("openrouter/anthropic/claude-3-haiku", "anthropic/claude-3-haiku"),
+            ("openrouter/meta-llama/llama-3-70b-instruct", "meta-llama/llama-3-70b-instruct"),
+        ],
+    )
+    def test_regular_model_with_custom_llm_provider_strips_prefix(
+        self, input_model, expected_model
+    ):
+        """Regression test for https://github.com/BerriAI/litellm/issues/22667.
+
+        When the proxy/router calls get_llm_provider with both the full model
+        name and custom_llm_provider="openrouter", the "openrouter/" prefix
+        must still be stripped.  Previously, an over-broad early-return for
+        native OpenRouter models caused the prefix to be kept, sending
+        "openrouter/google/gemini-3-flash-preview" to the API instead of
+        "google/gemini-3-flash-preview".
+        """
+        result_model, provider, _, _ = litellm.get_llm_provider(
+            model=input_model,
+            custom_llm_provider="openrouter",
+        )
+        assert provider == "openrouter"
+        assert result_model == expected_model
+
+    @pytest.mark.parametrize(
+        "input_model,expected_model",
+        [
+            ("google/gemini-3-flash-preview", "google/gemini-3-flash-preview"),
+            ("anthropic/claude-3-haiku", "anthropic/claude-3-haiku"),
+        ],
+    )
+    def test_router_second_call_strips_prefix(self, input_model, expected_model):
+        """Simulate the router's second call with already-stripped model name.
+
+        The router first calls get_llm_provider(model="openrouter/google/...")
+        which returns model="google/..." and custom_llm_provider="openrouter".
+        It then passes both to litellm.completion, which calls get_llm_provider
+        again.  The model must not gain back and keep the "openrouter/" prefix.
+        """
+        result_model, provider, _, _ = litellm.get_llm_provider(
+            model=input_model,
+            custom_llm_provider="openrouter",
+        )
         assert provider == "openrouter"
         assert result_model == expected_model

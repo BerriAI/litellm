@@ -158,13 +158,20 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
-        # Native OpenRouter models have IDs like "openrouter/free" where the
+        # Native OpenRouter models have IDs like "openrouter/auto" where the
         # "openrouter/" prefix is part of the actual model name on the API.
-        # When called from a bridge (e.g. anthropic_messages adapter),
-        # custom_llm_provider is already resolved, so return early to prevent
-        # the provider-list stripping below from removing the prefix.
+        # When called from a bridge (e.g. anthropic_messages adapter), or from
+        # the router's second get_llm_provider call with custom_llm_provider
+        # already set, return early to prevent the provider-list stripping
+        # below from removing the prefix.
+        # We distinguish native models (e.g. "openrouter/auto") from regular
+        # third-party models (e.g. "openrouter/google/gemini-3-flash-preview")
+        # by checking that the part after "openrouter/" does NOT contain a "/"
+        # — native model IDs are single-segment names like "auto", "free".
         if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
-            return model, custom_llm_provider, dynamic_api_key, api_base
+            remaining = model[len("openrouter/"):]
+            if "/" not in remaining:
+                return model, custom_llm_provider, dynamic_api_key, api_base
 
         if api_key and api_key.startswith("os.environ/"):
             dynamic_api_key = get_secret_str(api_key)
@@ -511,6 +518,17 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
 
     custom_llm_provider = model.split("/", 1)[0]
     model = model.split("/", 1)[1]
+
+    # Native OpenRouter models have IDs that start with "openrouter/"
+    # (e.g. openrouter/auto, openrouter/free, openrouter/bodybuilder).
+    # After stripping the outer provider prefix above, if the remaining
+    # model name still starts with "openrouter/", that inner prefix is
+    # part of the actual model ID on the OpenRouter API.  Return
+    # immediately so it is not stripped a second time.
+    # Example: "openrouter/openrouter/auto" -> model="openrouter/auto"
+    if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
+        dynamic_api_key = api_key or get_secret_str("OPENROUTER_API_KEY")
+        return model, custom_llm_provider, dynamic_api_key, api_base
 
     # Check JSON providers FIRST (before hardcoded ones)
     from litellm.llms.openai_like.dynamic_config import create_config_class
