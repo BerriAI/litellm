@@ -121,7 +121,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             openai_params=self.get_supported_openai_params(model),
         )
         for key, value in provider_specific_params.items():
-            form_fields[key] = str(value)
+            form_fields[key] = str(value).lower() if isinstance(value, bool) else str(value)
 
         files = {
             "file": (
