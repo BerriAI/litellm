@@ -151,6 +151,37 @@ def test_chat_completion_token_logprob_null_top_logprobs():
     assert isinstance(logprob.top_logprobs, list)
 
 
+def test_usage_maps_cache_read_from_prompt_details():
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=2,
+        total_tokens=12,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=300),
+    )
+
+    assert usage._cache_read_input_tokens == 300
+
+
+def test_usage_cache_read_param_not_overwritten_by_prompt_details():
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    input_prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=300)
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=2,
+        total_tokens=12,
+        prompt_tokens_details=input_prompt_tokens_details,
+        cache_read_input_tokens=500,
+    )
+
+    assert usage._cache_read_input_tokens == 500
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 500
+    assert input_prompt_tokens_details.cached_tokens == 300
+
+
 def test_chat_completion_token_logprob_valid_top_logprobs():
     """
     Test that ChatCompletionTokenLogprob still accepts valid top_logprobs arrays.

@@ -1530,7 +1530,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
                     **prompt_tokens_details.model_dump()
                 )
             elif isinstance(prompt_tokens_details, PromptTokensDetailsWrapper):
-                _prompt_tokens_details = prompt_tokens_details
+                _prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **prompt_tokens_details.model_dump()
+                )
 
         ## DEEPSEEK MAPPING ##
         if "prompt_cache_hit_tokens" in params and isinstance(
@@ -1590,16 +1592,32 @@ class Usage(SafeAttributeModel, CompletionUsage):
         ):
             self._cache_creation_input_tokens = params["cache_creation_input_tokens"]
 
-        if "cache_read_input_tokens" in params and isinstance(
+        has_cache_read_input_tokens = "cache_read_input_tokens" in params and isinstance(
             params["cache_read_input_tokens"], int
-        ):
+        )
+        has_prompt_cache_hit_tokens = "prompt_cache_hit_tokens" in params and isinstance(
+            params["prompt_cache_hit_tokens"], int
+        )
+
+        if has_cache_read_input_tokens:
             self._cache_read_input_tokens = params["cache_read_input_tokens"]
 
         ## DEEPSEEK MAPPING ##
-        if "prompt_cache_hit_tokens" in params and isinstance(
-            params["prompt_cache_hit_tokens"], int
-        ):
+        if has_prompt_cache_hit_tokens:
             self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
+
+        # Provider-specific cache-read fields above intentionally override
+        # prompt_tokens_details.cached_tokens when both are provided.
+        # _prompt_tokens_details is copied during initialization, so caller input
+        # objects are not mutated; this fallback only applies when provider fields
+        # are absent.
+        if (
+            not has_cache_read_input_tokens
+            and not has_prompt_cache_hit_tokens
+            and self.prompt_tokens_details is not None
+            and self.prompt_tokens_details.cached_tokens is not None
+        ):
+            self._cache_read_input_tokens = self.prompt_tokens_details.cached_tokens
 
         for k, v in params.items():
             setattr(self, k, v)
