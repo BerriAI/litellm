@@ -40,7 +40,7 @@ def get_callbacks_from_callback_settings(
         if not isinstance(config, dict):
             continue
         event_types = config.get("event_types")
-        if isinstance(event_types, list):
+        if isinstance(event_types, list) and len(event_types) > 0:
             has_success = CALLBACK_EVENT_SUCCESS in event_types
             has_failure = CALLBACK_EVENT_FAILURE in event_types
             if has_success and has_failure:
