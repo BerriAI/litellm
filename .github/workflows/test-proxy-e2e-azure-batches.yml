@@ -56,7 +56,7 @@ jobs:
         run: |
           poetry config virtualenvs.in-project true
           poetry install --with dev,proxy-dev --extras "proxy"
-          poetry run pip install psycopg2-binary uvicorn fastapi httpx
+          poetry run pip install psycopg2-binary uvicorn fastapi httpx tenacity
 
       - name: Setup litellm-enterprise
         run: |
