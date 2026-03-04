@@ -1,20 +1,20 @@
 ---
 slug: streaming-connection-pool-leak
 title: "How We Fixed a Streaming Connection Pool Leak"
-date: 2026-02-14T10:00:00
+date: 2026-03-04T10:00:00
 authors:
   - name: Ryan Crabbe
     title: "Performance Engineer, LiteLLM"
     url: https://www.linkedin.com/in/ryan-crabbe-0b9687214
-    image_url: https://media.licdn.com/dms/image/v2/D5603AQHt1t9Z4BJ6Gw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1724453682340?e=1772064000&v=beta&t=VXdmr13rsNB05wyA2F1TENOB5UuDHUZ0FCHTolNyR5M
+    image_url: https://github.com/ryan-crabbe.png
 description: "How we tracked down and fixed a connection pool leak that caused OpenAI streaming requests to hang after 30 minutes"
 tags: [performance, streaming, debugging]
 hide_table_of_contents: false
 ---
 
-import { HappyPathScene, LeakScene, FixScene } from '@site/src/components/ParkingGarageAnimation';
+import { HappyPathScene, LeakScene, FixScene, StreamChainDiagram, ContentVsStreamDiagram } from '@site/src/components/StreamingDiagrams';
 
-> Sometimes after roughly 30 minutes of running the LiteLLM proxy, OpenAI calls would just hang. Direct requests to OpenAI worked fine, and other providers through the proxy were unaffected. Since the requests were hanging rather than failing, and the provider itself was healthy, this pointed to a streaming connection issue.
+> Sometimes after roughly 30 minutes of running the LiteLLM proxy, streaming requests would just hang. Direct requests to the providers worked fine. Since the requests were hanging rather than failing, and the providers themselves were healthy, this pointed to a streaming connection issue.
 
 {/* truncate */}
 
@@ -22,7 +22,7 @@ import { HappyPathScene, LeakScene, FixScene } from '@site/src/components/Parkin
 
 ## Reproducing It
 
-We wrote a self-contained Python script that starts a fake OpenAI server, starts the LiteLLM proxy pointed at it, and makes streaming requests where the client disconnects mid-stream. With the connection pool limit set to 2, the first two requests leak their connections, and the third request hangs forever waiting for a pool slot — confirming the bug.
+We wrote a self-contained Python script that starts a fake OpenAI server, starts the LiteLLM proxy pointed at it, and makes streaming requests where the client disconnects mid-stream. With the connection pool limit set to 2, the first two requests leak their connections, and the third request hangs forever waiting for a pool slot, confirming the bug.
 
 <details>
 <summary>Repro script</summary>
@@ -252,7 +252,7 @@ When a client makes a streaming request through the proxy, there are two separat
 Client ↔ Connection A ↔ Proxy ↔ Connection B ↔ Provider
 ```
 
-The proxy holds Connection B in a pool — by default 50 slots per provider host. On the happy path, a connection is acquired from the pool, used for streaming, and released when the stream completes:
+The proxy holds Connection B in a pool. By default there are 500 slots per provider host. On the happy path, a connection is acquired from the pool, used for streaming, and released when the stream completes:
 
 <HappyPathScene />
 
@@ -260,58 +260,99 @@ The proxy holds Connection B in a pool — by default 50 slots per provider host
 
 ## The Leak
 
-When the client disconnects mid-stream, Starlette cancels the async generator that yields chunks. But the generator isn't the same thing as the `CustomStreamWrapper` that owns the upstream HTTP connection. The generator gets torn down — the connection stays in its pool slot. Under normal traffic, disconnects accumulate faster than GC can reclaim them, and eventually every slot is leaked:
+When a client disconnects mid-stream, the upstream HTTP connection should be released back to the pool. Instead, it stays stuck in its pool slot. Over time, leaked connections accumulate and the pool fills up. New requests hang waiting for a slot that will never free up:
 
 <LeakScene />
 
 ---
 
-## The First Fix — And Why It Wasn't Enough
+## The Initial Fix
 
-Two changes to fix the leak:
+LiteLLM's `CustomStreamWrapper` is the universal streaming adapter that wraps every provider's raw HTTP stream and normalizes the chunks into a single response format. The proxy interacts with this wrapper, not the raw provider connection. But `CustomStreamWrapper` didn't have an `aclose()` method, so there was no way for cleanup code to reach through it and release the underlying HTTP connection.
 
-1. **Added `aclose()` to `CustomStreamWrapper`** — giving the cleanup path a way to release the connection. The proxy interacts with `CustomStreamWrapper`, not the raw provider connection, so it needed a method that delegates down to the underlying stream's close and releases the HTTP connection.
+The obvious first step: give the cleanup path a way to release the connection, and make sure it always runs.
 
-2. **Added a `finally` block in `async_data_generator`** — ensuring the connection is always released, whether the stream completes normally, the client disconnects, or something throws.
+<StreamChainDiagram />
+
+1. **Added `aclose()` to `CustomStreamWrapper`** so that cleanup code can delegate down through the wrapper to the underlying stream's close and release the HTTP connection.
+
+2. **Added a `finally` block in `async_data_generator`** to ensure the connection is always released, whether the stream completes normally, the client disconnects, or something throws. `async_data_generator` is the async generator that pulls chunks from `CustomStreamWrapper` and yields them to the client as they come in.
 
 We ran the repro script. The leak was still there.
 
 ---
 
-## Three More Problems
+## Why It Was Still Leaking
 
-We added logging throughout the cleanup chain and reran the repro. The `finally` block wasn't even being hit. Here's what we found, in order of discovery:
-
-### Starlette stopped detecting disconnects
-
-Starlette 0.45.3 changed how `StreamingResponse` detects client disconnects. The old behavior used a dedicated `listen_for_disconnect` task that actively watched for `http.disconnect` messages. The new behavior relies on `send()` raising `OSError` when the client is gone. But uvicorn's `send()` silently returns instead of raising — so the generator never gets cancelled and the `finally` block never runs.
-
-**Fix:** Monkey-patch `StreamingResponse.__call__` to restore the task-group disconnect listener.
+We added logging throughout the cleanup chain and reran the repro. `aclose()` wasn't actually closing anything, and the `finally` block wasn't even being hit. Here's what we found.
 
 ### The `aclose()` call chain was broken
 
-After fixing disconnect detection, the `finally` block ran and `aclose()` was called — but `AiohttpResponseStream.aclose()` was never reached. In `aiohttp_transport.py`, the response was constructed with `content=` instead of `stream=`. This caused httpx to wrap the stream in an `AsyncIteratorByteStream` whose `aclose()` is a no-op. The call chain hit a dead end one layer too early.
+This was the hardest problem to track down, and the most impactful.
 
-**Fix:** Change `content=` to `stream=` in `aiohttp_transport.py`. One word.
+In our aiohttp transport layer (`aiohttp_transport.py`), the httpx Response was constructed using `content=` instead of `stream=`:
 
-### Cleanup was cancelled before it could finish
+```python
+# Before (broken): content= eagerly reads the body and wraps it in a ByteStream
+# whose aclose() is a no-op
+return httpx.Response(status_code=status_code, content=stream, ...)
 
-After the above two fixes, `aclose()` reached the right function — but it wasn't completing. When the task group cancels the streaming task, anyio throws `CancelledError` into every subsequent `await`. The `finally` block runs, but every async cleanup call inside it is immediately interrupted.
+# After (fixed): stream= preserves the original async stream so aclose()
+# propagates to the real connection
+return httpx.Response(status_code=status_code, stream=stream, ...)
+```
 
-**Fix:** Wrap cleanup awaits in `anyio.CancelScope(shield=True)` — a brief immunity window that lets the cleanup complete before cancellation resumes.
+This single-word difference has significant consequences. Here's the relevant section from httpx's [Response constructor](https://github.com/encode/httpx/blob/master/httpx/_models.py#L548-L567), where a 6-year-old comment leads the way:
+
+![httpx Response constructor — content= vs stream= path](./httpx_response_constructor.png)
+
+When `content=` is used, httpx consumes the data immediately and discards the original stream. By the time `aclose()` is called, there's nothing left to close. The real HTTP connection is never released.
+
+When you pass `stream=`, httpx keeps the original stream intact. Closing the response actually closes the underlying connection and returns it to the pool. 
+
+The httpx source code comment goes: "stream= is only useful when creating response instances having received a stream from the transport API", which is exactly what our aiohttp transport does.
+
+
+<ContentVsStreamDiagram />
+
+Because we were using `content=`, every cancelled streaming request had a silently broken cleanup path. When a client disconnected mid-stream, the `aclose()` call that should have released the connection was a no-op. It wasn't a missing reference that garbage collection could fix; the close mechanism itself was pointing at the wrong thing.
+
+#### Smaller fixes that also needed to happen
+
+<details>
+<summary>Cleanup was cancelled before it could finish</summary>
+
+With the stream fix in place, `aclose()` now reached the right function. But it wasn't completing.
+
+When a client disconnects, Starlette cancels the streaming task. This cancellation is aggressive: it interrupts every `await` inside the task, including the ones in our `finally` block that are trying to clean up the connection. The cleanup code runs, but each async call inside it is immediately killed before it can finish.
+
+So the fix was wrapping the cleanup in `anyio.CancelScope(shield=True)`, which temporarily protects it from cancellation so it can complete before the task is torn down.
+
+</details>
+
+<details>
+<summary>Uvicorn disconnect detection gap</summary>
+
+On Uvicorn versions 0.28 through 0.32.0, the `finally` block in our async generator wasn't being triggered on client disconnect at all. These versions of Uvicorn reported support for ASGI spec 2.4 but didn't actually implement its disconnect signaling. Starlette saw the reported spec version and skipped its own fallback disconnect detection, meaning disconnects went completely unnoticed.
+
+This has been fixed upstream in Uvicorn 0.32.1+, which correctly references ASGI spec 2.3 and causes Starlette to use its own disconnect detection. LiteLLM now pins Uvicorn to `>=0.32.1` to ensure this works correctly.
+
+</details>
 
 ---
 
 ## The Complete Fix
 
-We ran the repro script again. Request 3 completes instead of hanging. The `finally` block now properly releases the connection on disconnect:
+Running the repro script again: request 3 completes instead of hanging. The `finally` block now properly releases the connection on disconnect:
 
 <FixScene />
 
 ---
 
-## What This Means
+## Going Forward
 
-For LiteLLM users, streaming connections through the proxy are now properly released on client disconnect instead of leaking until pool exhaustion. The Starlette/Uvicorn disconnect detection gap also affects any FastAPI application doing streaming — not just LiteLLM.
+Streaming performance and reliability has been a top issue for us. We're putting a [sustained emphasis on performance and reliability](https://www.linkedin.com/feed/update/urn:li:activity:7433372716365332480/) for streaming workloads, and this fix is part of that recent effort.
 
-We prevent regression with unit tests for each fix — verifying that `aclose()` propagates through the `stream=` path, that cleanup completes under anyio cancellation, that the disconnect monkey-patch is applied, and that the router's generator calls `aclose()` on close. We're also adding the integration repro script to CI/CD to catch this class of streaming bug end-to-end.
+For LiteLLM users, streaming connections through the proxy are now properly released on client disconnect instead of leaking until pool exhaustion.
+
+In addition to regression and e2e tests in our CI/CD workflow, we are also adding a test suite to the [LiteLLM Observatory](/blog/litellm-observatory) to verify on major releases that there are no breaking regressions for these streaming changes under a production workload.
