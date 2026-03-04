@@ -122,6 +122,8 @@ class OpenAICountTokensConfig:
             elif role == "assistant":
                 # Map tool_calls to Responses API function_call items
                 tool_calls = msg.get("tool_calls")
+                if content:
+                    input_items.append({"role": "assistant", "content": content})
                 if tool_calls:
                     for tc in tool_calls:
                         func = tc.get("function", {})
@@ -131,7 +133,7 @@ class OpenAICountTokensConfig:
                             "name": func.get("name", ""),
                             "arguments": func.get("arguments", ""),
                         })
-                else:
+                elif not content:
                     input_items.append({"role": "assistant", "content": content})
             elif role == "tool":
                 input_items.append({
