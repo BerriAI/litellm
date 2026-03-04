@@ -1,75 +1,136 @@
 """
-Test for interactions endpoint agent parameter handling.
+Regression tests for Google Interactions endpoint parameter handling.
 
-Tests that the /v1beta/interactions endpoint correctly extracts
-the `agent` parameter as a fallback when `model` is not provided.
+These tests ensure `agent` is NOT remapped into `model` for create interaction calls.
 """
+
+import os
+import sys
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+sys.path.insert(0, os.path.abspath("../../.."))
 
-class TestInteractionsAgentParameter:
-    """Test agent parameter handling in interactions endpoint."""
 
-    def test_agent_parameter_fallback_logic(self):
-        """
-        Test the core logic: model or agent extraction.
+def _build_test_client():
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
 
-        This tests the fix in endpoints.py line ~267:
-        model=data.get("model") or data.get("agent")
-        """
-        # Case 1: Only agent provided (Deep Research use case)
-        data = {
-            "agent": "deep-research-pro-preview-12-2025",
-            "input": "Research quantum computing",
-            "background": True,
-        }
-        model = data.get("model") or data.get("agent")
-        assert model == "deep-research-pro-preview-12-2025"
+        from litellm.proxy.google_endpoints.endpoints import router as google_router
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to missing dependency: {e}")
 
-        # Case 2: Only model provided (normal use case)
-        data = {
-            "model": "gemini-2.5-flash",
-            "input": "Hello world",
-        }
-        model = data.get("model") or data.get("agent")
-        assert model == "gemini-2.5-flash"
+    app = FastAPI()
+    app.include_router(google_router)
+    return TestClient(app)
 
-        # Case 3: Both provided (model takes precedence)
-        data = {
-            "model": "gemini-2.5-flash",
-            "agent": "deep-research-pro-preview-12-2025",
-            "input": "Test",
-        }
-        model = data.get("model") or data.get("agent")
-        assert model == "gemini-2.5-flash"
 
-        # Case 4: Neither provided
-        data = {
-            "input": "Test",
-        }
-        model = data.get("model") or data.get("agent")
-        assert model is None
+def _patch_proxy_server_dependencies():
+    """
+    Patch proxy_server globals imported inside create_interaction endpoint.
 
-    def test_route_type_in_skip_model_routing_list(self):
-        """
-        Test that acreate_interaction is in the list of routes
-        that skip model-based routing.
+    We patch only to make endpoint invocation deterministic for unit tests.
+    """
+    return patch.multiple(
+        "litellm.proxy.proxy_server",
+        general_settings={},
+        llm_router=object(),
+        proxy_config=object(),
+        proxy_logging_obj=object(),
+        select_data_generator=None,
+        user_api_base=None,
+        user_max_tokens=None,
+        user_model=None,
+        user_request_timeout=None,
+        user_temperature=None,
+        version="test-version",
+    )
 
-        This tests the fix in route_llm_request.py.
-        """
-        # The list of routes that skip model routing for interactions
-        skip_model_routing_routes = [
-            "acreate_interaction",
-            "aget_interaction",
-            "adelete_interaction",
-            "acancel_interaction",
-        ]
 
-        # acreate_interaction should be in the list (this is the fix)
-        assert "acreate_interaction" in skip_model_routing_routes
+def test_interactions_agent_only_keeps_model_none():
+    """
+    If request contains only `agent`, endpoint must pass `model=None` to processing.
 
-        # All interaction routes should be covered
-        assert "aget_interaction" in skip_model_routing_routes
-        assert "adelete_interaction" in skip_model_routing_routes
-        assert "acancel_interaction" in skip_model_routing_routes
+    This prevents accidental payload translation to `{"model": "deep-research-..."}`.
+    """
+    client = _build_test_client()
+
+    with _patch_proxy_server_dependencies(), patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+        new_callable=AsyncMock,
+    ) as mock_base_process:
+        mock_base_process.return_value = {"id": "int_123", "status": "created"}
+
+        response = client.post(
+            "/v1beta/interactions",
+            json={
+                "agent": "deep-research-pro-preview-12-2025",
+                "input": "Research quantum computing",
+                "background": True,
+            },
+            headers={"Authorization": "Bearer sk-test-key"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"id": "int_123", "status": "created"}
+
+        call_kwargs = mock_base_process.call_args.kwargs
+
+        assert call_kwargs["route_type"] == "acreate_interaction"
+        assert call_kwargs["model"] is None
+
+
+def test_interactions_model_is_forwarded_when_provided():
+    """If request contains `model`, endpoint must forward it as processing model."""
+    client = _build_test_client()
+
+    with _patch_proxy_server_dependencies(), patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+        new_callable=AsyncMock,
+    ) as mock_base_process:
+        mock_base_process.return_value = {"id": "int_456", "status": "created"}
+
+        response = client.post(
+            "/v1beta/interactions",
+            json={
+                "model": "gemini/gemini-2.5-flash",
+                "input": "Hello world",
+            },
+            headers={"Authorization": "Bearer sk-test-key"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"id": "int_456", "status": "created"}
+
+        call_kwargs = mock_base_process.call_args.kwargs
+        assert call_kwargs["model"] == "gemini/gemini-2.5-flash"
+
+
+def test_interactions_model_takes_precedence_when_both_present():
+    """If both model and agent are provided, model is the routing model argument."""
+    client = _build_test_client()
+
+    with _patch_proxy_server_dependencies(), patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+        new_callable=AsyncMock,
+    ) as mock_base_process:
+        mock_base_process.return_value = {"id": "int_789", "status": "created"}
+
+        response = client.post(
+            "/v1beta/interactions",
+            json={
+                "model": "gemini/gemini-2.5-flash",
+                "agent": "deep-research-pro-preview-12-2025",
+                "input": "Test both",
+            },
+            headers={"Authorization": "Bearer sk-test-key"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"id": "int_789", "status": "created"}
+
+        call_kwargs = mock_base_process.call_args.kwargs
+
+        assert call_kwargs["model"] == "gemini/gemini-2.5-flash"

@@ -293,7 +293,13 @@ async def create_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model") or data.get("agent"),
+            # IMPORTANT: Do not map `agent` into `model`.
+            #
+            # Google Interactions API requires these as distinct mutually-exclusive
+            # fields. If we pass an agent id via `model`, downstream transformation
+            # sends `{"model": "deep-research-..."}` instead of
+            # `{"agent": "deep-research-..."}`, which Google rejects.
+            model=data.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
