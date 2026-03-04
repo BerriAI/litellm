@@ -762,6 +762,12 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     import json
 
     init_verbose_loggers()
+
+    if os.getenv("LITELLM_SUPPRESS_HEALTH_LOGS", "false").lower() == "true":
+        from litellm._logging import apply_health_check_log_filter
+
+        apply_health_check_log_filter()
+
     ## CHECK PREMIUM USER
     verbose_proxy_logger.debug(
         "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
@@ -3119,6 +3125,21 @@ class ProxyConfig:
                 health_check_concurrency,
                 health_check_details,
             )
+
+            ### SUPPRESS HEALTH CHECK LOGS ###
+            suppress_health_check_logs = general_settings.get(
+                "suppress_health_check_logs", None
+            )
+            if suppress_health_check_logs is True:
+                os.environ["LITELLM_SUPPRESS_HEALTH_LOGS"] = "true"
+                from litellm._logging import apply_health_check_log_filter
+
+                apply_health_check_log_filter()
+            elif suppress_health_check_logs is False:
+                os.environ["LITELLM_SUPPRESS_HEALTH_LOGS"] = "false"
+                from litellm._logging import remove_health_check_log_filter
+
+                remove_health_check_log_filter()
 
             ### RBAC ###
             rbac_role_permissions = general_settings.get("role_permissions", None)

@@ -2123,6 +2123,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "health checks run without a concurrency cap"
         ),
     )
+    suppress_health_check_logs: Optional[bool] = Field(
+        None,
+        description=(
+            "suppress Uvicorn access logs for health check endpoints "
+            "(/health, /health/readiness, /health/liveliness, /health/liveness). "
+            "Also settable via LITELLM_SUPPRESS_HEALTH_LOGS env var."
+        ),
+    )
     alerting: Optional[List] = Field(
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",

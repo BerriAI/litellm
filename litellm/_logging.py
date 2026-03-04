@@ -1,6 +1,7 @@
 import ast
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from logging import Formatter
@@ -246,6 +247,72 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         lg.propagate = False  # prevent bubbling to parent/root
 
 
+class HealthCheckAccessFilter(logging.Filter):
+    """Filter that suppresses Uvicorn access log entries for health check endpoints."""
+
+    _HTTP_PATH_PATTERN = re.compile(r'"[A-Z]+ ([^ ]+) HTTP/')
+    _HEALTH_PATHS = {
+        "/health",
+        "/health/readiness",
+        "/health/liveliness",
+        "/health/liveness",
+    }
+
+    @staticmethod
+    def _extract_path_from_record(record: logging.LogRecord) -> Optional[str]:
+        args = getattr(record, "args", None)
+        raw_path: Optional[Any] = None
+
+        if isinstance(args, dict):
+            raw_path = args.get("path")
+        elif isinstance(args, tuple) and len(args) >= 3:
+            raw_path = args[2]
+
+        if raw_path is None:
+            return None
+
+        return str(raw_path).split("?", 1)[0]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        path = self._extract_path_from_record(record)
+        if path is not None:
+            return path not in self._HEALTH_PATHS
+
+        msg = record.getMessage()
+        match = self._HTTP_PATH_PATTERN.search(msg)
+        if match:
+            request_path = match.group(1).split("?", 1)[0]
+            return request_path not in self._HEALTH_PATHS
+        # Could not extract path from structured args or regex — allow the log through
+        # rather than relying on brittle substring matching.
+        return True
+
+
+def apply_health_check_log_filter() -> None:
+    """Attach HealthCheckAccessFilter to the uvicorn.access logger at runtime.
+
+    Works regardless of whether JSON logging is enabled. Safe to call
+    multiple times — the filter is only added once.
+    """
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, HealthCheckAccessFilter) for f in access_logger.filters):
+        access_logger.addFilter(HealthCheckAccessFilter())
+
+
+def remove_health_check_log_filter() -> None:
+    """Remove HealthCheckAccessFilter from uvicorn.access logger and handlers."""
+    access_logger = logging.getLogger("uvicorn.access")
+
+    for _filter in list(access_logger.filters):
+        if isinstance(_filter, HealthCheckAccessFilter):
+            access_logger.removeFilter(_filter)
+
+    for handler in list(access_logger.handlers):
+        for _filter in list(handler.filters):
+            if isinstance(_filter, HealthCheckAccessFilter):
+                handler.removeFilter(_filter)
+
+
 def _get_uvicorn_json_log_config():
     """
     Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
@@ -302,6 +369,21 @@ def _get_uvicorn_json_log_config():
             },
         },
     }
+
+    # Add health check log suppression if configured
+    if os.getenv("LITELLM_SUPPRESS_HEALTH_LOGS", "false").lower() == "true":
+        filters = log_config.setdefault("filters", {})
+        filters.setdefault(
+            "health_check",
+            {
+                "()": "litellm._logging.HealthCheckAccessFilter",
+            },
+        )
+
+        access_handler = log_config["handlers"].setdefault("access", {})
+        access_filters = access_handler.setdefault("filters", [])
+        if "health_check" not in access_filters:
+            access_filters.append("health_check")
 
     return log_config
 
