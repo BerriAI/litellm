@@ -650,6 +650,9 @@ class LiteLLMRoutes(enum.Enum):
         "/invitation/delete",
         # Team guardrail submission - requires team-scoped key; endpoint enforces team_id
         "/guardrails/register",
+        # Skill read routes - endpoint enforces scoping via object_permission.skills
+        "/skill/list",
+        "/skill/{skill_name}",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -842,6 +845,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     vector_stores: Optional[List[str]] = None
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
+    skills: Optional[List[str]] = None
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -1725,6 +1729,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     vector_stores: Optional[List[str]] = []
     agents: Optional[List[str]] = []
     agent_access_groups: Optional[List[str]] = []
+    skills: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
