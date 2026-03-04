@@ -2813,7 +2813,8 @@ class ProxyConfig:
                 elif key == "callbacks":
                     # Merge callback_settings-derived callbacks with litellm_settings
                     litellm_callbacks = value if isinstance(value, list) else []
-                    if litellm_callbacks:
+                    # Only warn on mixed usage (both callback_settings and litellm_settings.callbacks)
+                    if litellm_callbacks and callback_settings:
                         warnings.warn(
                             "litellm_settings.callbacks is deprecated. Use callback_settings instead. "
                             "Define callbacks in callback_settings - they are auto-enabled. "
