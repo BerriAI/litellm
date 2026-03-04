@@ -407,7 +407,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Create the initial response iterator if not already created
             if self.base_iterator is None:
                 await self._create_initial_response_iterator()
-            
+
+            if self.base_iterator is None:
+                # LLM call failed — still emit MCP discovery events before finishing
+                if self.mcp_discovery_events:
+                    self.phase = "mcp_discovery"
+                else:
+                    self.phase = "finished"
+                    raise StopAsyncIteration
+
             if self.base_iterator:
                 # Check if base_iterator is actually iterable
                 if hasattr(self.base_iterator, "__anext__"):
@@ -601,7 +609,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.base_iterator = None
-            self.phase = "finished"
+            # Don't set phase to "finished" here — let __anext__ emit any
+            # pre-generated MCP discovery events before ending the iteration.
 
     async def _generate_tool_execution_events(self) -> None:
         """Generate tool execution events and execute tools"""
