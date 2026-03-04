@@ -3052,7 +3052,7 @@ class ProxyConfig:
                         litellm.logging_callback_manager.add_litellm_success_callback(
                             resolved
                         )
-                    else:
+                    if "prometheus" in callback:
                         resolved = (
                             litellm.logging_callback_manager._add_custom_callback_generic_api_str(
                                 callback
