@@ -17,6 +17,7 @@ import {
   SafetyOutlined,
   SettingOutlined,
   SoundOutlined,
+  SwapOutlined,
   TagsOutlined,
   ToolOutlined,
   UserOutlined,
@@ -71,6 +72,7 @@ import SessionManagement from "./SessionManagement";
 import RealtimePlayground from "./RealtimePlayground";
 import { A2ATaskMetadata, MessageType } from "./types";
 import { useCodeInterpreter } from "./useCodeInterpreter";
+import { findRolloutForModel } from "../../model_rollout/ModelRollout";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -238,6 +240,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
   const [mockTestFallbacks, setMockTestFallbacks] = useState<boolean>(false);
+  const [lastRolloutInfo, setLastRolloutInfo] = useState<{
+    requestedModel: string;
+    actualModel: string;
+    liveModel: string;
+    candidateModel: string;
+    canaryPercent: number;
+  } | null>(null);
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
@@ -966,6 +975,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
     codeInterpreter.clearResult(); // Clear previous code interpreter results
     setIsLoading(true);
 
+    // Model rollout: check if selected model has an A/B test configured
+    let effectiveModel = selectedModel;
+    let rolloutApplied = false;
+    const rolloutConfig = selectedModel ? findRolloutForModel(selectedModel) : null;
+    if (rolloutConfig) {
+      const roll = Math.random() * 100;
+      if (roll < rolloutConfig.canaryPercent) {
+        effectiveModel = rolloutConfig.candidateModel;
+      } else {
+        effectiveModel = rolloutConfig.liveModel;
+      }
+      rolloutApplied = effectiveModel !== selectedModel;
+      setLastRolloutInfo({
+        requestedModel: selectedModel!,
+        actualModel: effectiveModel!,
+        liveModel: rolloutConfig.liveModel,
+        candidateModel: rolloutConfig.candidateModel,
+        canaryPercent: rolloutConfig.canaryPercent,
+      });
+    } else {
+      setLastRolloutInfo(null);
+    }
+
     try {
       if (selectedModel) {
         if (endpointType === EndpointType.CHAT) {
@@ -987,8 +1019,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
               : (customProxyBaseUrl || undefined);
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
-            (chunk, model) => updateTextUI("assistant", chunk, model),
-            selectedModel,
+            (chunk, model) => updateTextUI("assistant", chunk, rolloutApplied ? `${effectiveModel} (rollout from ${selectedModel})` : model),
+            effectiveModel || selectedModel,
             effectiveApiKey,
             selectedTags,
             signal,
@@ -1069,8 +1101,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
           await makeOpenAIResponsesRequest(
             apiChatHistory,
-            (role, delta, model) => updateTextUI(role, delta, model),
-            selectedModel,
+            (role, delta, model) => updateTextUI(role, delta, rolloutApplied ? `${effectiveModel} (rollout from ${selectedModel})` : model),
+            effectiveModel || selectedModel,
             effectiveApiKey,
             selectedTags,
             signal,
@@ -1101,8 +1133,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
           await makeAnthropicMessagesRequest(
             apiChatHistory,
-            (role, delta, model) => updateTextUI(role, delta, model),
-            selectedModel,
+            (role, delta, model) => updateTextUI(role, delta, rolloutApplied ? `${effectiveModel} (rollout from ${selectedModel})` : model),
+            effectiveModel || selectedModel,
             effectiveApiKey,
             selectedTags,
             signal,
@@ -1520,6 +1552,58 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </div>
               )}
 
+              {/* Model Rollout indicator */}
+              {lastRolloutInfo && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    background: "#f8f9fc",
+                    border: "1px solid #e5e7eb",
+                    fontSize: 12,
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: 6, color: "#333", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span><SwapOutlined style={{ marginRight: 4 }} /> A/B Test Active</span>
+                    <span style={{
+                      fontSize: 11,
+                      fontWeight: 500,
+                      padding: "1px 8px",
+                      borderRadius: 10,
+                      background: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "#f6ffed" : "#e6f7ff",
+                      color: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "#52c41a" : "#1677ff",
+                      border: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "1px solid #b7eb8f" : "1px solid #91d5ff",
+                    }}>
+                      Routed → {lastRolloutInfo.actualModel}
+                    </span>
+                  </div>
+                  {/* Split bar */}
+                  <div style={{ display: "flex", borderRadius: 4, overflow: "hidden", height: 6, marginBottom: 6 }}>
+                    <div style={{ width: `${100 - lastRolloutInfo.canaryPercent}%`, background: "#52c41a" }} />
+                    <div style={{ width: `${lastRolloutInfo.canaryPercent}%`, background: "#1677ff" }} />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{
+                      fontWeight: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? 600 : 400,
+                      color: lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "#52c41a" : "#888",
+                    }}>
+                      {lastRolloutInfo.actualModel === lastRolloutInfo.liveModel ? "● " : ""}
+                      {lastRolloutInfo.liveModel}
+                      <span style={{ fontWeight: 500, color: "#52c41a", marginLeft: 4 }}>{100 - lastRolloutInfo.canaryPercent}%</span>
+                    </span>
+                    <span style={{
+                      fontWeight: lastRolloutInfo.actualModel === lastRolloutInfo.candidateModel ? 600 : 400,
+                      color: lastRolloutInfo.actualModel === lastRolloutInfo.candidateModel ? "#1677ff" : "#888",
+                    }}>
+                      {lastRolloutInfo.actualModel === lastRolloutInfo.candidateModel ? "● " : ""}
+                      {lastRolloutInfo.candidateModel}
+                      <span style={{ fontWeight: 500, color: "#1677ff", marginLeft: 4 }}>{lastRolloutInfo.canaryPercent}%</span>
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Agent Selector - shown ONLY for A2A Agents endpoint */}
               {endpointType === EndpointType.A2A_AGENTS && (
                 <div>
@@ -1891,9 +1975,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         </div>
                         <strong className="text-sm capitalize">{message.role}</strong>
                         {message.role === "assistant" && message.model && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
-                            {message.model}
-                          </span>
+                          message.model.includes("(rollout from") ? (
+                            <span className="flex items-center gap-1.5">
+                              <span className="text-xs px-2 py-0.5 rounded font-normal" style={{ background: "#e6f7ff", color: "#1677ff", border: "1px solid #91d5ff" }}>
+                                {message.model.split(" (rollout from")[0]}
+                              </span>
+                              <span className="text-xs text-gray-400">via rollout</span>
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-gray-50 text-gray-400 font-normal line-through" style={{ fontSize: 10 }}>
+                                {message.model.match(/\(rollout from (.+)\)/)?.[1] ?? ""}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
+                              {message.model}
+                            </span>
+                          )
                         )}
                       </div>
                       {message.reasoningContent && <ReasoningContent reasoningContent={message.reasoningContent} />}

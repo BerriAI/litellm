@@ -20,6 +20,7 @@ import {
   ToolOutlined,
   TagsOutlined,
   AuditOutlined,
+  BranchesOutlined,
 } from "@ant-design/icons";
 // import {
 //   all_admin_roles,
@@ -105,6 +106,10 @@ const routeFor = (slug: string): string => {
       return "guardrails";
     case "policies":
       return "policies";
+    case "routing-groups":
+      return "routing-groups";
+    case "model-rollout":
+      return "model-rollout";
 
     // tools
     case "mcp-servers":
@@ -166,6 +171,13 @@ const menuItems: MenuItemCfg[] = [
     page: "models",
     label: "Models + Endpoints",
     icon: <BlockOutlined style={{ fontSize: 18 }} />,
+    roles: rolesWithWriteAccess,
+  },
+  {
+    key: "29",
+    page: "routing-groups",
+    label: "Routing Groups",
+    icon: <BranchesOutlined style={{ fontSize: 18 }} />,
     roles: rolesWithWriteAccess,
   },
   {

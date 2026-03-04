@@ -102,6 +102,9 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            routing_strategy=None,
+            model_group_size=None,
+            model_group_candidates=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "

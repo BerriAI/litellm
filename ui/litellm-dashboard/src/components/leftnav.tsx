@@ -9,7 +9,9 @@ import {
   BgColorsOutlined,
   BlockOutlined,
   BookOutlined,
+  BranchesOutlined,
   CreditCardOutlined,
+  DeploymentUnitOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
   FileTextOutlined,
@@ -86,6 +88,31 @@ const menuGroups: MenuGroup[] = [
         label: "Models + Endpoints",
         icon: <BlockOutlined />,
         roles: rolesWithWriteAccess,
+      },
+      {
+        key: "routing",
+        page: "routing-groups",
+        label: "Routing",
+        icon: <BranchesOutlined />,
+        roles: rolesWithWriteAccess,
+        children: [
+          {
+            key: "routing-groups",
+            page: "routing-groups",
+            label: "Routing Groups",
+            icon: <BranchesOutlined />,
+          },
+          {
+            key: "model-rollout",
+            page: "model-rollout",
+            label: (
+              <span className="flex items-center gap-2">
+                Model Rollout <NewBadge />
+              </span>
+            ),
+            icon: <DeploymentUnitOutlined />,
+          },
+        ],
       },
       {
         key: "agents",
@@ -554,11 +581,22 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
   const selectedMenuKey = findMenuItemKey(defaultSelectedKey);
 
+  const findParentKey = (page: string): string | null => {
+    for (const group of menuGroups) {
+      for (const item of group.items) {
+        if (item.children?.some((c) => c.page === page)) return item.key;
+      }
+    }
+    return null;
+  };
+  const parentKey = findParentKey(defaultSelectedKey);
+  const openKeys = parentKey ? [parentKey] : [];
+
   return (
     <Layout>
       <Sider
         theme="light"
-        width={220}
+        width={240}
         collapsed={collapsed}
         collapsedWidth={80}
         collapsible
@@ -588,7 +626,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           <Menu
             mode="inline"
             selectedKeys={[selectedMenuKey]}
-            defaultOpenKeys={[]}
+            defaultOpenKeys={openKeys}
             inlineCollapsed={collapsed}
             className="custom-sidebar-menu"
             style={{
@@ -600,7 +638,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
             items={buildMenuItems()}
           />
         </ConfigProvider>
-        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
+        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={240} />}
       </Sider>
     </Layout>
   );
