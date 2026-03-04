@@ -318,6 +318,8 @@ async def list_skills(
             )
 
         return results
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing skills: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
