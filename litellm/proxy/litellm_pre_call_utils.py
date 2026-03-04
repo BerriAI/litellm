@@ -828,9 +828,11 @@ class LiteLLMProxyRequestSetup:
                 tags = [tag.strip() for tag in _tags]
             elif isinstance(headers["x-litellm-tags"], list):
                 tags = headers["x-litellm-tags"]
-        # Check request body for tags
+        # Check request body for tags — merge with header tags
         if "tags" in data and isinstance(data["tags"], list):
-            tags = data["tags"]
+            request_tags = data["tags"]
+            existing = tags or []
+            tags = LiteLLMProxyRequestSetup._merge_tags(existing, request_tags)
 
         return tags
 
@@ -1156,7 +1158,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     if tags is not None:
-        data[_metadata_variable_name]["tags"] = tags
+        existing_tags = data[_metadata_variable_name].get("tags") or []
+        merged = LiteLLMProxyRequestSetup._merge_tags(existing_tags, tags)
+        data[_metadata_variable_name]["tags"] = merged
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(
