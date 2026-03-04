@@ -178,6 +178,16 @@ class TestBlackForestLabsImageGenerationTransformation:
         endpoint = self.config._get_model_endpoint("flux-pro")
         assert endpoint == "/v1/flux-pro"
 
+    def test_get_model_endpoint_flux_kontext_pro(self):
+        """Test endpoint for flux-kontext-pro model (supports both generation and editing)."""
+        endpoint = self.config._get_model_endpoint("flux-kontext-pro")
+        assert endpoint == "/v1/flux-kontext-pro"
+
+    def test_get_model_endpoint_flux_kontext_max(self):
+        """Test endpoint for flux-kontext-max model (supports both generation and editing)."""
+        endpoint = self.config._get_model_endpoint("flux-kontext-max")
+        assert endpoint == "/v1/flux-kontext-max"
+
     def test_get_model_endpoint_unknown_raises(self):
         """Test that unknown models raise ValueError."""
         with pytest.raises(ValueError, match="Unknown BFL image generation model"):

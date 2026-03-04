@@ -36,4 +36,7 @@ IMAGE_GENERATION_MODELS: Dict[str, str] = {
     "flux-pro-1.1-ultra": "/v1/flux-pro-1.1-ultra",
     "flux-dev": "/v1/flux-dev",
     "flux-pro": "/v1/flux-pro",
+    # Kontext models support both text-to-image and image editing
+    "flux-kontext-pro": "/v1/flux-kontext-pro",
+    "flux-kontext-max": "/v1/flux-kontext-max",
 }
