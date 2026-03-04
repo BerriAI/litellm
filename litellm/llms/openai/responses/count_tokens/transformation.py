@@ -128,7 +128,6 @@ class OpenAICountTokensConfig:
                             text_parts.append(block)
                     content = "\n".join(text_parts)
                 input_items.append({"role": "user", "content": content})
-                input_items.append({"role": "user", "content": content})
             elif role == "assistant":
                 # Map tool_calls to Responses API function_call items
                 tool_calls = msg.get("tool_calls")
