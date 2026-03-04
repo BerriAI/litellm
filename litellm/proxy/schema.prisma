@@ -277,8 +277,9 @@ model LiteLLM_MCPServerTable {
   alias        String?
   description  String?
   url          String?
+  spec_path    String?
   transport    String         @default("sse")
-  auth_type    String?        
+  auth_type    String?
   credentials  Json?          @default("{}")
   created_at   DateTime?      @default(now()) @map("created_at")
   created_by   String?
