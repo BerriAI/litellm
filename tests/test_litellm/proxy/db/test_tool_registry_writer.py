@@ -215,10 +215,11 @@ async def test_get_tools_by_names_empty_list():
 # --- ToolPolicyRegistry ---
 
 
-def _mock_tool_row(tool_name: str, call_policy: str = "untrusted"):
+def _mock_tool_row(tool_name: str, input_policy: str = "untrusted", output_policy: str = "untrusted"):
     row = MagicMock()
     row.tool_name = tool_name
-    row.call_policy = call_policy
+    row.input_policy = input_policy
+    row.output_policy = output_policy
     return row
 
 
