@@ -5,6 +5,10 @@ permissions:
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "cookbook/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -12,6 +16,7 @@ concurrency:
 
 jobs:
   test-db-query-performance:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -78,7 +83,8 @@ jobs:
             -o /dev/null \
             -w "%{http_code}" \
             -H "Authorization: Bearer sk-1234" \
-            "http://localhost:4000/user/daily/activity/aggregated?start_date=2026-02-01&end_date=2026-02-28&timezone=480")
+            "http://localhost:4000/user/daily/activity/aggregated?start_date=2026-02-01&end_date=2026-02-28&timezone=480") \
+            || { echo "FAILED: request timed out after 4s"; docker logs litellm-test; exit 1; }
 
           if [ "$http_code" -ne 200 ]; then
             echo "FAILED: expected HTTP 200, got $http_code"
