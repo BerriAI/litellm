@@ -198,7 +198,7 @@ async def test_get_tools_by_names_returns_policy_map():
     ]
     prisma = _make_prisma(find_many_rows=rows)
     result = await get_tools_by_names(prisma, ["tool_a", "tool_b"])
-    assert result == {"tool_a": "trusted", "tool_b": "blocked"}
+    assert result == {"tool_a": ("trusted", "untrusted"), "tool_b": ("blocked", "untrusted")}
     prisma.db.litellm_tooltable.find_many.assert_awaited_once_with(
         where={"tool_name": {"in": ["tool_a", "tool_b"]}}
     )
