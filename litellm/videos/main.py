@@ -71,7 +71,7 @@ async def avideo_generation(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model or DEFAULT_VIDEO_ENDPOINT_MODEL, api_base=local_vars.get("api_base", None)
+                model=model or DEFAULT_VIDEO_ENDPOINT_MODEL, api_base=kwargs.get("api_base", None)
             )
 
         func = partial(
@@ -699,7 +699,7 @@ async def avideo_list(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model="", api_base=local_vars.get("api_base", None)
+                model=DEFAULT_VIDEO_ENDPOINT_MODEL, api_base=kwargs.get("api_base", None)
             )
 
         func = partial(
