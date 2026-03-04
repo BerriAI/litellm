@@ -29,8 +29,7 @@ if TYPE_CHECKING:
 
 class ResponsesIDSecurity(CustomLogger):
     def __init__(self):
-        # Cache for encrypted response IDs to ensure consistency across streaming chunks
-        self._encrypted_response_id_cache: dict[str, str] = {}
+        pass
 
     async def async_pre_call_hook(
         self,
@@ -189,6 +188,7 @@ class ResponsesIDSecurity(CustomLogger):
         self,
         response: BaseLiteLLMOpenAIResponseObject,
         user_api_key_dict: "UserAPIKeyAuth",
+        request_cache: Optional[dict[str, str]] = None,
     ) -> BaseLiteLLMOpenAIResponseObject:
         # encrypt the response id using the symmetric key
         # encrypt the response id, and encode the user id and response id in base64
@@ -212,9 +212,9 @@ class ResponsesIDSecurity(CustomLogger):
             and isinstance(response_id, str)
             and response_id.startswith("resp_")
         ):
-            # Check cache first to ensure consistency across streaming chunks
-            if response_id in self._encrypted_response_id_cache:
-                setattr(response, "id", self._encrypted_response_id_cache[response_id])
+            # Check request-scoped cache first (for streaming consistency)
+            if request_cache is not None and response_id in request_cache:
+                setattr(response, "id", request_cache[response_id])
             else:
                 encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
                     response_id,
@@ -226,13 +226,14 @@ class ResponsesIDSecurity(CustomLogger):
                     value=encrypted_response_id
                 )
                 encrypted_id = f"resp_{encoded_user_id_and_response_id}"
-                self._encrypted_response_id_cache[response_id] = encrypted_id
+                if request_cache is not None:
+                    request_cache[response_id] = encrypted_id
                 setattr(response, "id", encrypted_id)
 
         elif response_obj and isinstance(response_obj, ResponsesAPIResponse):
-            # Check cache first to ensure consistency across streaming chunks
-            if response_obj.id in self._encrypted_response_id_cache:
-                setattr(response_obj, "id", self._encrypted_response_id_cache[response_obj.id])
+            # Check request-scoped cache first (for streaming consistency)
+            if request_cache is not None and response_obj.id in request_cache:
+                setattr(response_obj, "id", request_cache[response_obj.id])
             else:
                 encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
                     response_obj.id,
@@ -243,7 +244,8 @@ class ResponsesIDSecurity(CustomLogger):
                     value=encrypted_response_id
                 )
                 encrypted_id = f"resp_{encoded_user_id_and_response_id}"
-                self._encrypted_response_id_cache[response_obj.id] = encrypted_id
+                if request_cache is not None:
+                    request_cache[response_obj.id] = encrypted_id
                 setattr(response_obj, "id", encrypted_id)
             setattr(response, "response", response_obj)
         return response
@@ -267,7 +269,7 @@ class ResponsesIDSecurity(CustomLogger):
         if isinstance(response, ResponsesAPIResponse):
             response = cast(
                 ResponsesAPIResponse,
-                self._encrypt_response_id(response, user_api_key_dict),
+                self._encrypt_response_id(response, user_api_key_dict, request_cache=None),
             )
         return response
 
@@ -276,6 +278,9 @@ class ResponsesIDSecurity(CustomLogger):
     ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
         from litellm.proxy.proxy_server import general_settings
 
+        # Create a request-scoped cache for consistent encryption across streaming chunks.
+        request_encryption_cache: dict[str, str] = {}
+
         async for chunk in response:
             if (
                 isinstance(chunk, BaseLiteLLMOpenAIResponseObject)
@@ -283,5 +288,5 @@ class ResponsesIDSecurity(CustomLogger):
                 == "/v1/responses"  # only encrypt the response id for the responses api
                 and not general_settings.get("disable_responses_id_security", False)
             ):
-                chunk = self._encrypt_response_id(chunk, user_api_key_dict)
+                chunk = self._encrypt_response_id(chunk, user_api_key_dict, request_encryption_cache)
             yield chunk
