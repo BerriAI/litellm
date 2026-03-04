@@ -29,7 +29,8 @@ if TYPE_CHECKING:
 
 class ResponsesIDSecurity(CustomLogger):
     def __init__(self):
-        pass
+        # Cache for encrypted response IDs to ensure consistency across streaming chunks
+        self._encrypted_response_id_cache: dict[str, str] = {}
 
     async def async_pre_call_hook(
         self,
@@ -211,31 +212,39 @@ class ResponsesIDSecurity(CustomLogger):
             and isinstance(response_id, str)
             and response_id.startswith("resp_")
         ):
-            encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
-                response_id,
-                user_api_key_dict.user_id or "",
-                user_api_key_dict.team_id or "",
-            )
+            # Check cache first to ensure consistency across streaming chunks
+            if response_id in self._encrypted_response_id_cache:
+                setattr(response, "id", self._encrypted_response_id_cache[response_id])
+            else:
+                encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+                    response_id,
+                    user_api_key_dict.user_id or "",
+                    user_api_key_dict.team_id or "",
+                )
 
-            encoded_user_id_and_response_id = encrypt_value_helper(
-                value=encrypted_response_id
-            )
-            setattr(
-                response, "id", f"resp_{encoded_user_id_and_response_id}"
-            )  # maintain the 'resp_' prefix for the responses api response id
+                encoded_user_id_and_response_id = encrypt_value_helper(
+                    value=encrypted_response_id
+                )
+                encrypted_id = f"resp_{encoded_user_id_and_response_id}"
+                self._encrypted_response_id_cache[response_id] = encrypted_id
+                setattr(response, "id", encrypted_id)
 
         elif response_obj and isinstance(response_obj, ResponsesAPIResponse):
-            encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
-                response_obj.id,
-                user_api_key_dict.user_id or "",
-                user_api_key_dict.team_id or "",
-            )
-            encoded_user_id_and_response_id = encrypt_value_helper(
-                value=encrypted_response_id
-            )
-            setattr(
-                response_obj, "id", f"resp_{encoded_user_id_and_response_id}"
-            )  # maintain the 'resp_' prefix for the responses api response id
+            # Check cache first to ensure consistency across streaming chunks
+            if response_obj.id in self._encrypted_response_id_cache:
+                setattr(response_obj, "id", self._encrypted_response_id_cache[response_obj.id])
+            else:
+                encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+                    response_obj.id,
+                    user_api_key_dict.user_id or "",
+                    user_api_key_dict.team_id or "",
+                )
+                encoded_user_id_and_response_id = encrypt_value_helper(
+                    value=encrypted_response_id
+                )
+                encrypted_id = f"resp_{encoded_user_id_and_response_id}"
+                self._encrypted_response_id_cache[response_obj.id] = encrypted_id
+                setattr(response_obj, "id", encrypted_id)
             setattr(response, "response", response_obj)
         return response
 
