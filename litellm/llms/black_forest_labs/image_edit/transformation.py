@@ -204,7 +204,10 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
                 image.seek(pos)
             return data
         else:
-            return image
+            raise ValueError(
+                f"Unsupported image type: {type(image)}. "
+                "Expected bytes, str (URL or file path), or file-like object."
+            )
 
     def transform_image_edit_request(
         self,
