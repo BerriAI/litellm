@@ -41,6 +41,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [pendingRestoredValues, setPendingRestoredValues] = useState<Record<string, any> | null>(null);
   const authType = Form.useWatch("auth_type", form) as string | undefined;
   const transportType = Form.useWatch("transport", form) as string | undefined;
+  const urlValue = Form.useWatch("url", form) as string | undefined;
+  const specPathValue = Form.useWatch("spec_path", form) as string | undefined;
   const isStdioTransport = transportType === "stdio";
   const isOpenAPITransport = transportType === TRANSPORT.OPENAPI;
   const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
@@ -190,6 +192,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       setAllowedTools(mcpServer.allowed_tools);
     }
   }, [mcpServer]);
+
+  // Clear allowed tools when URL or spec_path changes to a different server
+  // so that the auto-select logic in MCPToolConfiguration picks up the new tools
+  useEffect(() => {
+    const currentEndpoint = urlValue ?? specPathValue;
+    const originalEndpoint = mcpServer.url ?? mcpServer.spec_path;
+    if (currentEndpoint !== undefined && currentEndpoint !== originalEndpoint) {
+      setAllowedTools([]);
+    }
+  }, [urlValue, specPathValue, mcpServer.url, mcpServer.spec_path]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -880,9 +892,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 formValues={{
                   server_id: mcpServer.server_id,
                   server_name: mcpServer.server_name,
-                  url: mcpServer.url,
-                  transport: mcpServer.transport,
-                  auth_type: mcpServer.auth_type,
+                  url: urlValue ?? mcpServer.url,
+                  spec_path: specPathValue ?? mcpServer.spec_path,
+                  transport: transportType ?? mcpServer.transport,
+                  auth_type: authType ?? mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
                   oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
                 }}
