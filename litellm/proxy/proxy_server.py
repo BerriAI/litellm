@@ -5297,7 +5297,7 @@ def _restamp_streaming_chunk_model(
     return chunk, model_mismatch_logged
 
 
-async def async_data_generator(
+async def async_data_generator(  # noqa: PLR0915
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
     verbose_proxy_logger.debug("inside generator")
@@ -5307,26 +5307,39 @@ async def async_data_generator(
             request_data=request_data
         )
         model_mismatch_logged = False
-        # Use a running string instead of list + join to avoid O(n^2) overhead.
-        # Previously "".join(str_so_far_parts) was called every chunk, re-joining
-        # the entire accumulated response. String += is O(n) amortized total.
+
+        # Pre-compute whether any callback actually has a per-chunk streaming
+        # hook. If none do (common case: otel + logger don't override it),
+        # skip the entire per-chunk hook call + get_response_string + str_so_far
+        # accumulation. This eliminates ~2.3ms of overhead per 500-chunk request.
+        _has_streaming_hooks = False
+        for _cb in litellm.callbacks:
+            _cb_obj = _cb
+            if isinstance(_cb, str):
+                continue  # string callbacks never have streaming hooks
+            if hasattr(_cb_obj, "async_post_call_streaming_hook") and \
+               "async_post_call_streaming_hook" in type(_cb_obj).__dict__:
+                _has_streaming_hooks = True
+                break
+
         _str_so_far: str = ""
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
             request_data=request_data,
         ):
-            ### CALL HOOKS ### - modify outgoing data
-            chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=chunk,
-                data=request_data,
-                str_so_far=_str_so_far if _str_so_far else None,
-            )
+            if _has_streaming_hooks:
+                ### CALL HOOKS ### - modify outgoing data
+                chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=chunk,
+                    data=request_data,
+                    str_so_far=_str_so_far if _str_so_far else None,
+                )
 
-            if isinstance(chunk, (ModelResponse, ModelResponseStream)):
-                response_str = litellm.get_response_string(response_obj=chunk)
-                _str_so_far += response_str
+                if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                    response_str = litellm.get_response_string(response_obj=chunk)
+                    _str_so_far += response_str
 
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
