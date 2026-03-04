@@ -62,6 +62,7 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   status?: string;
+  completionStartTime?: string;
   request_duration_ms?: number;
   session_total_count?: number;
   session_total_spend?: number;
@@ -266,6 +267,25 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       return (
         <Tooltip title={`${ms}ms`}>
           <span className="max-w-[15ch] truncate block">{seconds}</span>
+        </Tooltip>
+      );
+    },
+  },
+  {
+    header: "TTFT (s)",
+    accessorKey: "completionStartTime",
+    cell: (info: any) => {
+      const row = info.row.original;
+      const completionStartTime = info.getValue();
+      if (!completionStartTime) return <span>-</span>;
+      // For non-streaming, completionStartTime == endTime so TTFT is not meaningful
+      if (completionStartTime === row.endTime) return <span>-</span>;
+      const ttftMs = new Date(completionStartTime).getTime() - new Date(row.startTime).getTime();
+      if (ttftMs <= 0) return <span>-</span>;
+      const ttftSeconds = (ttftMs / 1000).toFixed(2);
+      return (
+        <Tooltip title={`${ttftMs}ms`}>
+          <span className="max-w-[15ch] truncate block">{ttftSeconds}</span>
         </Tooltip>
       );
     },
