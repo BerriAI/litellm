@@ -3231,6 +3231,9 @@ class ProxyException(Exception):
                     headers[k] = str(v)
         self.headers = headers or {}
         self.provider_specific_fields = provider_specific_fields
+        # Call parent constructor with message so str(exception) returns the message
+        # Fixes: https://github.com/BerriAI/litellm/issues/22644
+        super().__init__(self.message)
         # rules for proxyExceptions
         # Litellm router.py returns "No healthy deployment available" when there are no deployments available
         # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
