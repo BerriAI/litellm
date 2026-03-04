@@ -86,24 +86,27 @@ class TestResponsesAPIExceptionMappingFix:
         """
         Test that KeyError from missing required keys is correctly 
         mapped to InternalServerError.
+        
+        Tests with Anthropic provider to verify the fix applies to ALL providers,
+        not just OpenAI (the isinstance check is in the common section).
         """
         model = "anthropic/claude-3-5-sonnet"
         custom_llm_provider = "anthropic"
         original_exception = KeyError("required_field_for_transformation")
         
-        # KeyError and ValueError might be caught by error string matching before
-        # our isinstance() check, so we test that it's at least not a generic Exception
-        try:
+        with pytest.raises(InternalServerError) as excinfo:
             exception_type(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 original_exception=original_exception,
             )
-        except (InternalServerError, APIConnectionError) as e:
-            # Either is acceptable - both indicate an internal/connection issue
-            # The key is that it's been properly categorized, not left as generic Exception
-            assert hasattr(e, 'model')
-            assert hasattr(e, 'llm_provider')
+        
+        assert isinstance(excinfo.value, InternalServerError)
+        error_msg = str(excinfo.value)
+        assert "KeyError" in error_msg
+        assert "Internal error in LiteLLM" in error_msg
+        assert excinfo.value.model == model
+        assert excinfo.value.llm_provider == custom_llm_provider
 
     def test_attributeerror_mapped_to_internal_server_error(self):
         """
@@ -239,3 +242,34 @@ class TestResponsesAPIExceptionMappingFix:
             
             error_msg = str(excinfo.value)
             assert expected_type_name in error_msg, f"Expected {expected_type_name} in error message: {error_msg}"
+
+    def test_internal_errors_work_for_all_providers(self):
+        """
+        Test that internal Python exceptions are mapped to InternalServerError
+        for ALL providers, not just OpenAI.
+        
+        This verifies the isinstance check is in the common section of exception_type(),
+        not inside provider-specific branches.
+        """
+        test_providers = [
+            ("openai", "gpt-4"),
+            ("anthropic", "claude-3-5-sonnet"),
+            ("azure", "gpt-4"),
+            ("bedrock", "anthropic.claude-v2"),
+            ("vertex_ai", "gemini-pro"),
+        ]
+        
+        original_exception = TypeError("test internal error")
+        
+        for provider, model in test_providers:
+            with pytest.raises(InternalServerError) as excinfo:
+                exception_type(
+                    model=model,
+                    custom_llm_provider=provider,
+                    original_exception=original_exception,
+                )
+            
+            # Verify it's InternalServerError for all providers
+            assert isinstance(excinfo.value, InternalServerError), f"Failed for provider: {provider}"
+            assert "TypeError" in str(excinfo.value), f"Missing TypeError in message for provider: {provider}"
+            assert excinfo.value.llm_provider == provider, f"Provider context lost for: {provider}"
