@@ -2736,6 +2736,9 @@ class CostBreakdown(TypedDict, total=False):
     margin_fixed_amount: float  # Fixed margin amount in USD (optional)
     margin_total_amount: float  # Total margin added in USD (optional)
 
+    cache_read_input_cost: float  # Cost for cache-read/hit input tokens
+    cache_write_input_cost: float  # Cost for cache-creation/write input tokens
+
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """Status fields for easy filtering and analytics"""

@@ -14,6 +14,8 @@ export interface CostBreakdown {
   margin_percent?: number;
   margin_fixed_amount?: number;
   margin_total_amount?: number;
+  cache_read_input_cost?: number;
+  cache_write_input_cost?: number;
 }
 
 interface CostBreakdownViewerProps {
@@ -110,6 +112,18 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                   )}
                 </span>
               </div>
+              {!isCached && costBreakdown?.cache_read_input_cost !== undefined && costBreakdown.cache_read_input_cost > 0 && (
+                <div className="flex text-xs ml-6 border-l-2 border-gray-200 pl-3">
+                  <span className="text-gray-500 w-1/3">Cache Read Cost:</span>
+                  <span className="text-gray-700">{formatCost(costBreakdown.cache_read_input_cost)}</span>
+                </div>
+              )}
+              {!isCached && costBreakdown?.cache_write_input_cost !== undefined && costBreakdown.cache_write_input_cost > 0 && (
+                <div className="flex text-xs ml-6 border-l-2 border-gray-200 pl-3">
+                  <span className="text-gray-500 w-1/3">Cache Write Cost:</span>
+                  <span className="text-gray-700">{formatCost(costBreakdown.cache_write_input_cost)}</span>
+                </div>
+              )}
               <div className="flex text-sm">
                 <span className="text-gray-600 font-medium w-1/3">Output Cost:</span>
                 <span className="text-gray-900">

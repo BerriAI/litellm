@@ -5210,6 +5210,78 @@ def _extract_response_obj_and_hidden_params(
     return response_obj, hidden_params
 
 
+def _enrich_cost_breakdown_with_cache_costs(
+    cost_breakdown: Optional[CostBreakdown],
+    init_response_obj: Any,
+    logging_obj: "Logging",
+) -> Optional[CostBreakdown]:
+    """
+    Enrich cost_breakdown with cache_read_input_cost / cache_write_input_cost
+    when the usage object contains cached or cache-creation tokens.
+    """
+    if cost_breakdown is None:
+        return None
+    if "cache_read_input_cost" in cost_breakdown:
+        return cost_breakdown
+
+    try:
+        from litellm.litellm_core_utils.llm_cost_calc.utils import (
+            _get_token_base_cost,
+            _parse_prompt_tokens_details,
+            calculate_cache_writing_cost,
+        )
+        from litellm.responses.utils import ResponseAPILoggingUtils
+        from litellm.utils import get_model_info
+
+        usage_obj = getattr(init_response_obj, "usage", None)
+        if usage_obj is None:
+            return cost_breakdown
+
+        # Normalise Response-API usage to chat Usage
+        if hasattr(usage_obj, "input_tokens") and not hasattr(usage_obj, "prompt_tokens"):
+            if ResponseAPILoggingUtils._is_response_api_usage(usage_obj):
+                usage_obj = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage_obj)
+            else:
+                return cost_breakdown
+
+        if not hasattr(usage_obj, "prompt_tokens") or not usage_obj.prompt_tokens_details:
+            return cost_breakdown
+
+        custom_llm_provider = logging_obj.model_call_details.get("custom_llm_provider")
+        model = logging_obj.model
+        if not custom_llm_provider or not model:
+            return cost_breakdown
+
+        details = _parse_prompt_tokens_details(usage_obj)
+        cache_hit_tokens = details["cache_hit_tokens"]
+        cache_creation_tokens = details["cache_creation_tokens"]
+        if cache_hit_tokens == 0 and cache_creation_tokens == 0:
+            return cost_breakdown
+
+        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        (
+            _prompt_base,
+            _comp_base,
+            cache_creation_rate,
+            cache_creation_rate_1hr,
+            cache_read_rate,
+        ) = _get_token_base_cost(model_info=model_info, usage=usage_obj)
+
+        if cache_hit_tokens > 0:
+            cost_breakdown["cache_read_input_cost"] = float(cache_hit_tokens) * cache_read_rate
+        if cache_creation_tokens > 0:
+            cost_breakdown["cache_write_input_cost"] = calculate_cache_writing_cost(
+                cache_creation_tokens=cache_creation_tokens,
+                cache_creation_token_details=details["cache_creation_token_details"],
+                cache_creation_cost_above_1hr=cache_creation_rate_1hr,
+                cache_creation_cost=cache_creation_rate,
+            )
+    except Exception:
+        pass
+
+    return cost_breakdown
+
+
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
@@ -5374,7 +5446,9 @@ def get_standard_logging_object_payload(
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
-            cost_breakdown=logging_obj.cost_breakdown,
+            cost_breakdown=_enrich_cost_breakdown_with_cache_costs(
+                logging_obj.cost_breakdown, init_response_obj, logging_obj
+            ),
             total_tokens=usage_dict.get("total_tokens", 0),
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
