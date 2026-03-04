@@ -260,3 +260,85 @@ class TestAlertingHangingRequestCheck:
 
         # Should not crash and should not send any alerts
         hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hanging_request_removed_from_cache_after_alert(
+        self, hanging_request_checker
+    ):
+        """
+        Test that a hanging request is removed from cache after sending an alert.
+        This prevents duplicate alerts on subsequent loop iterations and is
+        essential for digest mode to work correctly (issue #22753).
+        """
+        # Add a hanging request to the cache
+        hanging_data = HangingRequestData(
+            request_id="hanging_dedup_001",
+            model="gpt-4",
+            api_base="https://api.openai.com/v1",
+            key_alias="test_key",
+            team_alias="test_team",
+        )
+        await hanging_request_checker.hanging_request_cache.async_set_cache(
+            key="hanging_dedup_001", value=hanging_data, ttl=300
+        )
+
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy:
+            mock_internal_cache = AsyncMock()
+            mock_internal_cache.async_get_cache.return_value = None  # request still hanging
+            mock_proxy.internal_usage_cache = mock_internal_cache
+
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
+                AsyncMock(return_value=["hanging_dedup_001"])
+            )
+
+            await hanging_request_checker.send_alerts_for_hanging_requests()
+
+        # Alert should have been sent once
+        hanging_request_checker.slack_alerting_object.send_alert.assert_called_once()
+
+        # Request should be removed from cache after alerting
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="hanging_dedup_001"
+            )
+        )
+        assert cached_data is None, (
+            "Hanging request should be removed from cache after alert is sent "
+            "to prevent duplicate alerts on subsequent loop iterations"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_duplicate_alerts_across_loop_iterations(
+        self, hanging_request_checker
+    ):
+        """
+        Test that running send_alerts_for_hanging_requests twice does not
+        produce duplicate alerts for the same request (issue #22753).
+        """
+        hanging_data = HangingRequestData(
+            request_id="hanging_nodup_002",
+            model="gemini-2.5-flash",
+            api_base="https://generativelanguage.googleapis.com",
+            key_alias="prod_key",
+            team_alias="ml_team",
+        )
+        await hanging_request_checker.hanging_request_cache.async_set_cache(
+            key="hanging_nodup_002", value=hanging_data, ttl=300
+        )
+
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy:
+            mock_internal_cache = AsyncMock()
+            mock_internal_cache.async_get_cache.return_value = None
+            mock_proxy.internal_usage_cache = mock_internal_cache
+
+            # First iteration: should find and alert
+            await hanging_request_checker.send_alerts_for_hanging_requests()
+
+            # Second iteration: cache should be empty, no new alerts
+            await hanging_request_checker.send_alerts_for_hanging_requests()
+
+        # send_alert should have been called exactly once, not twice
+        assert hanging_request_checker.slack_alerting_object.send_alert.call_count == 1, (
+            "send_alert should only be called once per hanging request, "
+            "not on every loop iteration"
+        )

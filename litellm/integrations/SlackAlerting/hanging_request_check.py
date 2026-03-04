@@ -134,6 +134,14 @@ class AlertingHangingRequestCheck:
                 hanging_request_data=hanging_request_data
             )
 
+            # Remove from cache after alerting to prevent duplicate alerts
+            # on subsequent loop iterations. This is essential for digest mode
+            # to work correctly: without removal the same request would be
+            # re-alerted every loop cycle, bypassing the digest interval.
+            self.hanging_request_cache._remove_key(
+                key=request_id,
+            )
+
         return
 
     async def check_for_hanging_requests(
