@@ -72,7 +72,7 @@ async def zx_job(request: Request, start_date: str | None = None, end_date: str 
     tags=["ZX"],
     # include_in_schema=False,
 )
-async def cli_login(token: str, request: Request):
+async def cli_login(token: str, request: Request, device_id: Optional[str] = None, device_name: Optional[str] = None):
     """
     处理CLI 登录请求
     """
@@ -80,7 +80,8 @@ async def cli_login(token: str, request: Request):
     scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
     host = request.headers.get("X-Forwarded-Host", request.url.netloc)
     url = auth.generate_oauth_url(f'{scheme}://{host}/zx/auth_callback?auth_key={auth_key}')
-    set_store(type='cli', token=token, auth_key=auth_key, timeout=5)
+    key_metadata = {"device_id": device_id, "device_name": device_name}
+    set_store(type='cli', token=token, auth_key=auth_key, timeout=5, data={"key_metadata": key_metadata})
     return RedirectResponse(url, status_code=status.HTTP_302_FOUND)
 
 
@@ -158,7 +159,7 @@ async def cli_get_key(type: Optional[str] = None, token: Annotated[str | None, H
         raise HTTPException(status_code=401, detail="Invalid token")
 
     user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-    
+
     user_info = store.data.get('user_info', {})
     user_id = user_info['userId']
     user_name = user_info['name']
@@ -166,10 +167,27 @@ async def cli_get_key(type: Optional[str] = None, token: Annotated[str | None, H
     dept_id = None
     if user_info.get('deptIdList'):
         dept_id = user_info.get('deptIdList')[0]
+
+    # 从 store 中读取 device_id 和 device_name
+    device_id = store.data.get('key_metadata', {}).get('device_id')
+    device_name = store.data.get('key_metadata', {}).get('device_name', 'unknown')
+
+    # 构建 key_alias：优先使用 device_id，如果不存在则使用旧逻辑
     key_alias = None
-    if type is not None and type.strip().startswith("assistant-"):
+    if device_id:
+        # 新的设备级 key_alias 规则
+        key_alias = f"{org_email}--{device_id}"
+    elif type is not None and type.strip().startswith("assistant-"):
+        # 旧的逻辑：基于 type 构建 key_alias
         key_alias = f"{org_email.split('@')[0]}--{type.strip()}"
-    (created, key_or_key_id) = await create_or_get_user_key('ai_developer', user_id, user_name, org_email, dept_id, user_api_key_dict, key_alias)
+
+    # 准备 key_metadata，包含 device_id 和 device_name
+    key_metadata = store.data.get('key_metadata', {}).copy()
+    if device_id:
+        key_metadata['device_id'] = device_id
+        key_metadata['device_name'] = device_name
+
+    (created, key_or_key_id) = await create_or_get_user_key('ai_developer', user_id, user_name, org_email, dept_id, user_api_key_dict, key_alias, key_metadata=key_metadata)
     key = None
     if created:
         key = key_or_key_id
