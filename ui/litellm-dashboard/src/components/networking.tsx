@@ -10138,6 +10138,8 @@ export interface ToolRow {
   updated_at?: string;
   created_by?: string;
   updated_by?: string;
+  user_agent?: string;
+  last_used_at?: string;
 }
 
 export interface ToolPolicyOption {
