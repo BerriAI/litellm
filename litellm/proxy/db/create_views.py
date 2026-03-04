@@ -157,23 +157,31 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
 
         print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
 
-    try:
-        await db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
-        print("DailyTagSpend Exists!")  # noqa
-    except Exception:
-        sql_query = """
-        CREATE OR REPLACE VIEW "DailyTagSpend" AS
+    sql_query = """
+    CREATE OR REPLACE VIEW "DailyTagSpend" AS
+    WITH base AS (
         SELECT
-            jsonb_array_elements_text(request_tags) AS individual_request_tag,
-            DATE(s."startTime") AS spend_date,
-            COUNT(*) AS log_count,
-            SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs" s
-        GROUP BY individual_request_tag, DATE(s."startTime");
-        """
-        await db.execute_raw(query=sql_query)
-
-        print("DailyTagSpend Created!")  # noqa
+            spend,
+            "startTime",
+            request_tags,
+            jsonb_array_length(request_tags) AS tag_count
+        FROM "LiteLLM_SpendLogs"
+        WHERE request_tags IS NOT NULL
+          AND jsonb_typeof(request_tags) = 'array'
+    ),
+    tagged AS (
+        SELECT * FROM base WHERE tag_count > 0
+    )
+    SELECT
+        jsonb_array_elements_text(request_tags) AS individual_request_tag,
+        DATE(t."startTime") AS spend_date,
+        COUNT(*) AS log_count,
+        SUM(spend / tag_count) AS total_spend
+    FROM tagged t
+    GROUP BY individual_request_tag, DATE(t."startTime");
+    """
+    await db.execute_raw(query=sql_query)
+    print("DailyTagSpend Created/Updated!")  # noqa
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1""")

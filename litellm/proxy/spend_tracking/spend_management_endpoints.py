@@ -882,7 +882,7 @@ async def get_global_spend_provider(
 
         # we use the in memory router for this
         ui_response = []
-        provider_spend_mapping: defaultdict = defaultdict(int)
+        provider_spend_mapping: defaultdict = defaultdict(float)
         for row in db_response:
             _model_id = row["model_id"]
             _provider = "Unknown"
@@ -3043,11 +3043,23 @@ async def get_spend_by_tags(
 ):
     response = await prisma_client.db.query_raw(
         """
+        WITH base AS (
+            SELECT
+                spend,
+                request_tags,
+                jsonb_array_length(request_tags) AS tag_count
+            FROM "LiteLLM_SpendLogs"
+            WHERE request_tags IS NOT NULL
+              AND jsonb_typeof(request_tags) = 'array'
+        ),
+        tagged AS (
+            SELECT * FROM base WHERE tag_count > 0
+        )
         SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        COUNT(*) AS log_count,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
+            jsonb_array_elements_text(request_tags) AS individual_request_tag,
+            COUNT(*) AS log_count,
+            SUM(spend / tag_count) AS total_spend
+        FROM tagged
         GROUP BY individual_request_tag;
         """
     )
@@ -3119,7 +3131,7 @@ async def ui_get_spend_by_tags(
     # print(response)
     # Bar Chart 1 - Spend per tag - Top 10 tags by spend
     total_spend_per_tag: collections.defaultdict = collections.defaultdict(float)
-    total_requests_per_tag: collections.defaultdict = collections.defaultdict(int)
+    total_requests_per_tag: collections.defaultdict = collections.defaultdict(float)
     for row in response:
         tag_name = row["individual_request_tag"]
         tag_spend = row["total_spend"]

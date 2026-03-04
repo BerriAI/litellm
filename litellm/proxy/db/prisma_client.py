@@ -5,6 +5,7 @@ This file contains the PrismaWrapper class, which is used to wrap the Prisma cli
 import asyncio
 import os
 import random
+from pathlib import Path
 import subprocess
 import time
 import urllib
@@ -354,9 +355,7 @@ class PrismaManager:
     @staticmethod
     def _get_prisma_dir() -> str:
         """Get the path to the migrations directory"""
-        abspath = os.path.abspath(__file__)
-        dname = os.path.dirname(os.path.dirname(abspath))
-        return dname
+        return str(Path(__file__).resolve().parents[1])
 
     @staticmethod
     def setup_database(use_migrate: bool = False) -> bool:
