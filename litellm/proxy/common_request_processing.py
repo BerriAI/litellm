@@ -63,7 +63,11 @@ from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
-    """Parses an event line and returns an error code if present, else None."""
+    """Parses an event line and returns an error code if present, else None.
+
+    Note: some providers emit error objects without an explicit numeric code. In that case
+    we still want to treat the first chunk as an error and return a JSON error response.
+    """
     event_line = (
         event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
     )
@@ -92,6 +96,10 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
                         )
                         # Not a valid integer string, treat as if no valid code was found for this check
                         pass
+                elif error_code_raw is None:
+                    # Some providers omit an explicit error code in streaming error chunks.
+                    # Treat this as an error, but default to 500.
+                    return status.HTTP_500_INTERNAL_SERVER_ERROR
 
                 # Ensure error_code is a valid HTTP status code
                 if error_code is not None and 100 <= error_code <= 599:
