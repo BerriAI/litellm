@@ -12,6 +12,7 @@ import pytest
 from litellm.llms.modelslab.image_generation import (
     ModelsLabImageGenerationConfig,
     get_modelslab_image_generation_config,
+    _redact_sensitive_fields,
 )
 from litellm.types.utils import ImageResponse
 
@@ -21,6 +22,34 @@ class TestModelsLabImageGenerationConfig:
 
     def setup_method(self):
         self.config = ModelsLabImageGenerationConfig()
+
+    def test_get_sensitive_request_fields(self):
+        """Test that get_sensitive_request_fields returns the key field."""
+        sensitive_fields = self.config.get_sensitive_request_fields()
+        assert "key" in sensitive_fields
+
+    def test_get_redacted_request(self):
+        """Test that get_redacted_request redacts the API key."""
+        request_data = {
+            "key": "secret-api-key-123",
+            "prompt": "A test prompt",
+            "model_id": "flux",
+        }
+        redacted = self.config.get_redacted_request(request_data)
+
+        assert redacted["key"] == "***REDACTED***"
+        assert redacted["prompt"] == "A test prompt"
+        assert redacted["model_id"] == "flux"
+        # Original should be unchanged
+        assert request_data["key"] == "secret-api-key-123"
+
+    def test_redact_sensitive_fields_function(self):
+        """Test the standalone redaction function."""
+        data = {"key": "test-key", "other": "value"}
+        redacted = _redact_sensitive_fields(data)
+
+        assert redacted["key"] == "***REDACTED***"
+        assert redacted["other"] == "value"
 
     def test_get_supported_openai_params(self):
         params = self.config.get_supported_openai_params("modelslab/flux")
@@ -65,6 +94,37 @@ class TestModelsLabImageGenerationConfig:
 
         assert result["samples"] == 3
         assert "n" not in result
+
+    def test_map_openai_params_size_invalid_format_raises(self):
+        """Test that invalid size format with 'x' but malformed raises a clear error."""
+        non_default_params = {"size": "1024xinvalid"}
+        optional_params = {}
+
+        with pytest.raises(ValueError) as exc_info:
+            self.config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model="modelslab/flux",
+                drop_params=False,
+            )
+
+        assert "Invalid size format" in str(exc_info.value)
+        assert "WIDTHxHEIGHT" in str(exc_info.value)
+
+    def test_map_openai_params_size_empty_after_x_raises(self):
+        """Test that empty size after x (e.g., '1024x') raises an error."""
+        non_default_params = {"size": "1024x"}
+        optional_params = {}
+
+        with pytest.raises(ValueError) as exc_info:
+            self.config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model="modelslab/flux",
+                drop_params=False,
+            )
+
+        assert "Invalid size format" in str(exc_info.value)
 
     def test_map_openai_params_size_to_width_height(self):
         non_default_params = {"size": "1024x768"}

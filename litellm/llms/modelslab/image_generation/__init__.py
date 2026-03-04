@@ -1,11 +1,15 @@
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from .transformation import ModelsLabImageGenerationConfig
+from .transformation import (
+    ModelsLabImageGenerationConfig,
+    _redact_sensitive_fields,
+)
 
 __all__ = [
     "ModelsLabImageGenerationConfig",
     "get_modelslab_image_generation_config",
+    "_redact_sensitive_fields",
 ]
 
 

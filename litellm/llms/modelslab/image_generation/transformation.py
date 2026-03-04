@@ -36,6 +36,18 @@ else:
 MODELSLAB_POLLING_INTERVAL = 3  # seconds between polls
 MODELSLAB_POLLING_TIMEOUT = 300  # 5 minutes max
 
+# Fields that contain sensitive data and should be redacted from logs
+MODELSLAB_SENSITIVE_FIELDS: List[str] = ["key"]
+
+
+def _redact_sensitive_fields(data: dict) -> dict:
+    """Return a copy of the data with sensitive fields redacted for logging."""
+    redacted = data.copy()
+    for field in MODELSLAB_SENSITIVE_FIELDS:
+        if field in redacted:
+            redacted[field] = "***REDACTED***"
+    return redacted
+
 
 class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://modelslab.com/api/v6"
@@ -49,6 +61,23 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
             "n",
             "size",
         ]
+
+    def get_sensitive_request_fields(self) -> List[str]:
+        """
+        Return list of field names that contain sensitive data and should be
+        redacted from logs. This enables integration with LiteLLM's logging
+        pipeline when/if it supports per-provider sensitive field redaction.
+
+        For ModelsLab, the 'key' field contains the API key in the request body.
+        """
+        return MODELSLAB_SENSITIVE_FIELDS
+
+    def get_redacted_request(self, request_data: dict) -> dict:
+        """
+        Return a copy of request data with sensitive fields redacted.
+        Useful for safe logging when the full request would otherwise be logged.
+        """
+        return _redact_sensitive_fields(request_data)
 
     def map_openai_params(
         self,
@@ -65,11 +94,17 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                     if k == "n":
                         optional_params["samples"] = non_default_params[k]
                     elif k == "size":
-                        size_str = non_default_params[k]
-                        if "x" in str(size_str):
-                            w, h = size_str.split("x", 1)
-                            optional_params["width"] = int(w)
-                            optional_params["height"] = int(h)
+                        size_str = str(non_default_params[k])
+                        if "x" in size_str:
+                            try:
+                                w, h = size_str.split("x", 1)
+                                optional_params["width"] = int(w)
+                                optional_params["height"] = int(h)
+                            except (ValueError, IndexError) as e:
+                                raise ValueError(
+                                    f"Invalid size format '{size_str}'. "
+                                    f"Expected format is WIDTHxHEIGHT (e.g., '1024x1024')."
+                                )
                     else:
                         optional_params[k] = non_default_params[k]
                 elif drop_params:
