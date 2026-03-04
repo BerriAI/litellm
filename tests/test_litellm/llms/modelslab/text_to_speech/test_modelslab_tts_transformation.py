@@ -58,6 +58,27 @@ class TestModelsLabTTSTransformation:
         )
         assert params["speed"] == 1.5
 
+    def test_map_openai_params_response_format_mp3(self):
+        """response_format mp3 maps to output_format mp3."""
+        _, params = self.config.map_openai_params(
+            model="default", optional_params={"response_format": "mp3"}, voice="alloy"
+        )
+        assert params["output_format"] == "mp3"
+
+    def test_map_openai_params_response_format_wav(self):
+        """response_format wav maps to output_format wav."""
+        _, params = self.config.map_openai_params(
+            model="default", optional_params={"response_format": "wav"}, voice="alloy"
+        )
+        assert params["output_format"] == "wav"
+
+    def test_map_openai_params_response_format_ignored_for_invalid(self):
+        """Invalid response_format values are ignored."""
+        _, params = self.config.map_openai_params(
+            model="default", optional_params={"response_format": "flac"}, voice="alloy"
+        )
+        assert "output_format" not in params
+
     def test_get_supported_openai_params(self):
         params = self.config.get_supported_openai_params("default")
         assert "voice" in params

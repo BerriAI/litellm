@@ -100,6 +100,12 @@ class ModelsLabTextToSpeechConfig(BaseTextToSpeechConfig):
             except (ValueError, TypeError):
                 pass
 
+        # Map response_format (mp3, wav, etc.)
+        if "response_format" in optional_params:
+            fmt = optional_params["response_format"]
+            if fmt in ("mp3", "wav", "ogg"):
+                mapped["output_format"] = fmt
+
         # Language from extra params
         if "language" in kwargs:
             lang = kwargs["language"]
