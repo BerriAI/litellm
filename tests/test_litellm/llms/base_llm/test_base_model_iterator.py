@@ -4,7 +4,7 @@ Tests for BaseModelResponseIterator - specifically testing that empty SSE lines 
 
 import pytest
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+from litellm.types.utils import GenericStreamingChunk
 
 
 class TestBaseModelResponseIterator:
