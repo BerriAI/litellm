@@ -1,13 +1,16 @@
 """
 Tool Policy Guardrail
 
-Reads call_policy from LiteLLM_ToolTable and enforces it on LLM requests/responses.
+Reads input_policy / output_policy from LiteLLM_ToolTable and enforces them.
 
-Policy values:
-  "trusted"   - allow through (no action)
-  "untrusted" - allow through (no action; default for newly discovered tools)
+Input policy values:
+  "untrusted" - allow through (default for newly discovered tools)
+  "trusted"   - only allow if conversation contains no untrusted tool output
   "blocked"   - raise HTTPException, preventing the tool call
-  "dual_llm"  - (Phase 3) send to second LLM for verification; currently treated as allowed
+
+Output policy values:
+  "untrusted" - output may be tainted (default)
+  "trusted"   - output is verified safe
 
 Configuration in proxy config YAML:
   guardrails:
@@ -15,15 +18,9 @@ Configuration in proxy config YAML:
       litellm_params:
         guardrail: tool_policy
         mode: post_call
-
-or both pre and post call:
-    - guardrail_name: "tool_policy"
-      litellm_params:
-        guardrail: tool_policy
-        mode: during_call  # runs before LLM and on response
 """
 
-from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -80,12 +77,33 @@ def _get_request_route_from_data(request_data: dict) -> Optional[str]:
     return meta.get("user_api_key_request_route")
 
 
+def _resolve_tool_names_from_messages(messages: List[dict]) -> Dict[str, str]:
+    """
+    Build a map of tool_call_id -> tool_name from assistant messages' tool_calls.
+    Used to resolve which tool produced each tool result in the conversation.
+    """
+    mapping: Dict[str, str] = {}
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        tool_calls = msg.get("tool_calls") or []
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                tc_id = tc.get("id")
+                fn = (tc.get("function") or {}).get("name")
+            else:
+                tc_id = getattr(tc, "id", None)
+                fn_obj = getattr(tc, "function", None)
+                fn = getattr(fn_obj, "name", None) if fn_obj else None
+            if tc_id and fn:
+                mapping[tc_id] = fn
+    return mapping
+
+
 class ToolPolicyGuardrail(CustomGuardrail):
     """
-    Guardrail that enforces per-tool call policies from the in-memory
-    ToolPolicyRegistry (synced from DB). Key/team allowed_tools (allowlist) is
-    enforced in the auth layer (check_tools_allowlist). No DB or cache in hot
-    path — registry lookups only.
+    Guardrail that enforces per-tool input/output policies from the in-memory
+    ToolPolicyRegistry (synced from DB).
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -106,7 +124,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         """
-        Enforce DB call_policy on request tools / response tool_calls.
+        Enforce input_policy and output_policy trust chain on request tools / response tool_calls.
         """
         if input_type == "request":
             tools = inputs.get("tools") or []
@@ -120,9 +138,8 @@ class ToolPolicyGuardrail(CustomGuardrail):
             if not tool_names:
                 route = _get_request_route_from_data(request_data)
                 if route:
-
                     tool_names = extract_request_tool_names(route, request_data)
-        else:  # response
+        else:
             tool_calls = inputs.get("tool_calls") or []
             tool_names = []
             for tc in tool_calls:
@@ -144,17 +161,18 @@ class ToolPolicyGuardrail(CustomGuardrail):
 
         registry = get_tool_policy_registry()
         if not registry.is_initialized():
-            policy_map = {}
-        else:
-            policy_map = registry.get_effective_policies(
-                tool_names,
-                object_permission_id=object_permission_id,
-                team_object_permission_id=team_object_permission_id,
-            )
+            return inputs
+
+        # Stage 1: Check for blocked tools (input_policy=blocked or per-key/team override)
+        policy_map = registry.get_effective_policies(
+            tool_names,
+            object_permission_id=object_permission_id,
+            team_object_permission_id=team_object_permission_id,
+        )
         blocked = [name for name in tool_names if policy_map.get(name) == "blocked"]
         if blocked:
             verbose_proxy_logger.warning(
-                "ToolPolicyGuardrail: blocking tool(s) %s (policy=blocked)", blocked
+                "ToolPolicyGuardrail: blocking tool(s) %s (input_policy=blocked)", blocked
             )
             raise HTTPException(
                 status_code=400,
@@ -164,5 +182,48 @@ class ToolPolicyGuardrail(CustomGuardrail):
                     "message": f"Tool(s) {blocked} are blocked by policy.",
                 },
             )
+
+        # Stage 2: Trust chain enforcement (response path only)
+        # For each tool with input_policy=trusted, check if conversation
+        # contains output from tools with output_policy=untrusted
+        if input_type == "response":
+            trusted_input_tools = [
+                name for name in tool_names if policy_map.get(name) == "trusted"
+            ]
+            if trusted_input_tools:
+                messages = request_data.get("messages") or []
+                tc_id_to_name = _resolve_tool_names_from_messages(messages)
+
+                untrusted_sources: List[str] = []
+                for msg in messages:
+                    if msg.get("role") != "tool":
+                        continue
+                    tool_call_id = msg.get("tool_call_id")
+                    source_tool = tc_id_to_name.get(tool_call_id, "") if tool_call_id else ""
+                    if not source_tool:
+                        continue
+                    if registry.get_output_policy(source_tool) == "untrusted":
+                        if source_tool not in untrusted_sources:
+                            untrusted_sources.append(source_tool)
+
+                if untrusted_sources:
+                    verbose_proxy_logger.warning(
+                        "ToolPolicyGuardrail: trust chain violation — %s require trusted input "
+                        "but conversation has untrusted output from %s",
+                        trusted_input_tools,
+                        untrusted_sources,
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Violated tool policy",
+                            "blocked_tools": trusted_input_tools,
+                            "untrusted_sources": untrusted_sources,
+                            "message": (
+                                f"{', '.join(trusted_input_tools)} requires trusted input but "
+                                f"conversation contains untrusted output from {', '.join(untrusted_sources)}."
+                            ),
+                        },
+                    )
 
         return inputs

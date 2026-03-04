@@ -2,18 +2,17 @@
 DB helpers for LiteLLM_ToolTable — the global tool registry.
 
 Tools are auto-discovered from LLM responses and upserted here.
-Admins use the management endpoints to read and update call_policy.
+Admins use the management endpoints to read and update input_policy / output_policy.
 """
 
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
-    ToolCallPolicy,
     ToolPolicyOverrideRow,
 )
 
@@ -33,12 +32,15 @@ def _row_to_model(row: Union[dict, Any]) -> LiteLLM_ToolTableRow:
                 "tool_id",
                 "tool_name",
                 "origin",
-                "call_policy",
+                "input_policy",
+                "output_policy",
                 "call_count",
                 "assignments",
                 "key_hash",
                 "team_id",
                 "key_alias",
+                "user_agent",
+                "last_used_at",
                 "created_at",
                 "updated_at",
                 "created_by",
@@ -49,12 +51,15 @@ def _row_to_model(row: Union[dict, Any]) -> LiteLLM_ToolTableRow:
         tool_id=row.get("tool_id", ""),
         tool_name=row.get("tool_name", ""),
         origin=row.get("origin"),
-        call_policy=row.get("call_policy", "untrusted"),
+        input_policy=row.get("input_policy") or "untrusted",
+        output_policy=row.get("output_policy") or "untrusted",
         call_count=int(row.get("call_count") or 0),
         assignments=row.get("assignments"),
         key_hash=row.get("key_hash"),
         team_id=row.get("team_id"),
         key_alias=row.get("key_alias"),
+        user_agent=row.get("user_agent"),
+        last_used_at=row.get("last_used_at"),
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
         created_by=row.get("created_by"),
@@ -69,8 +74,8 @@ async def batch_upsert_tools(
     """
     Batch-upsert tool registry rows via Prisma.
 
-    On first insert: sets call_policy = "untrusted" (schema default), call_count = 1.
-    On conflict: increments call_count; preserves existing call_policy.
+    On first insert: sets input_policy/output_policy = "untrusted" (default), call_count = 1.
+    On conflict: increments call_count; preserves existing policies.
     """
     if not items:
         return
@@ -87,6 +92,7 @@ async def batch_upsert_tools(
             key_hash = item.get("key_hash")
             team_id = item.get("team_id")
             key_alias = item.get("key_alias")
+            user_agent = item.get("user_agent")
             await table.upsert(
                 where={"tool_name": tool_name},
                 data={
@@ -94,17 +100,21 @@ async def batch_upsert_tools(
                         "tool_id": str(uuid.uuid4()),
                         "tool_name": tool_name,
                         "origin": origin,
-                        "call_policy": "untrusted",
+                        "input_policy": "untrusted",
+                        "output_policy": "untrusted",
                         "call_count": 1,
                         "created_by": created_by,
                         "updated_by": created_by,
                         "key_hash": key_hash,
                         "team_id": team_id,
                         "key_alias": key_alias,
+                        "user_agent": user_agent,
+                        "last_used_at": now,
                     },
                     "update": {
                         "call_count": {"increment": 1},
                         "updated_at": now,
+                        "last_used_at": now,
                     },
                 },
             )
@@ -119,11 +129,11 @@ async def batch_upsert_tools(
 
 async def list_tools(
     prisma_client: "PrismaClient",
-    call_policy: Optional[ToolCallPolicy] = None,
+    input_policy: Optional[str] = None,
 ) -> List[LiteLLM_ToolTableRow]:
-    """Return all tools, optionally filtered by call_policy."""
+    """Return all tools, optionally filtered by input_policy."""
     try:
-        where = {"call_policy": call_policy} if call_policy is not None else {}
+        where = {"input_policy": input_policy} if input_policy is not None else {}
         rows = await prisma_client.db.litellm_tooltable.find_many(
             where=where,
             order={"created_at": "desc"},
@@ -154,30 +164,39 @@ async def get_tool(
 async def update_tool_policy(
     prisma_client: "PrismaClient",
     tool_name: str,
-    call_policy: ToolCallPolicy,
     updated_by: Optional[str],
+    input_policy: Optional[str] = None,
+    output_policy: Optional[str] = None,
 ) -> Optional[LiteLLM_ToolTableRow]:
-    """Update the call_policy for a tool. Upserts the row if it does not exist yet."""
+    """Update input_policy and/or output_policy for a tool. Upserts the row if it does not exist yet."""
     try:
         _updated_by = updated_by or "system"
         now = datetime.now(timezone.utc)
+
+        create_data: dict = {
+            "tool_id": str(uuid.uuid4()),
+            "tool_name": tool_name,
+            "input_policy": input_policy or "untrusted",
+            "output_policy": output_policy or "untrusted",
+            "created_by": _updated_by,
+            "updated_by": _updated_by,
+            "created_at": now,
+            "updated_at": now,
+        }
+        update_data: dict = {
+            "updated_by": _updated_by,
+            "updated_at": now,
+        }
+        if input_policy is not None:
+            update_data["input_policy"] = input_policy
+        if output_policy is not None:
+            update_data["output_policy"] = output_policy
+
         await prisma_client.db.litellm_tooltable.upsert(
             where={"tool_name": tool_name},
             data={
-                "create": {
-                    "tool_id": str(uuid.uuid4()),
-                    "tool_name": tool_name,
-                    "call_policy": call_policy,
-                    "created_by": _updated_by,
-                    "updated_by": _updated_by,
-                    "created_at": now,
-                    "updated_at": now,
-                },
-                "update": {
-                    "call_policy": call_policy,
-                    "updated_by": _updated_by,
-                    "updated_at": now,
-                },
+                "create": create_data,
+                "update": update_data,
             },
         )
         return await get_tool(prisma_client, tool_name)
@@ -191,10 +210,9 @@ async def update_tool_policy(
 async def get_tools_by_names(
     prisma_client: "PrismaClient",
     tool_names: List[str],
-) -> Dict[str, str]:
+) -> Dict[str, Tuple[str, str]]:
     """
-    Return a {tool_name: call_policy} map for the given tool names.
-    Used by the policy enforcement guardrail — single batch query, never N+1.
+    Return a {tool_name: (input_policy, output_policy)} map for the given tool names.
     """
     if not tool_names:
         return {}
@@ -202,7 +220,13 @@ async def get_tools_by_names(
         rows = await prisma_client.db.litellm_tooltable.find_many(
             where={"tool_name": {"in": tool_names}},
         )
-        return {row.tool_name: row.call_policy for row in rows}
+        return {
+            row.tool_name: (
+                getattr(row, "input_policy", "untrusted") or "untrusted",
+                getattr(row, "output_policy", "untrusted") or "untrusted",
+            )
+            for row in rows
+        }
     except Exception as e:
         verbose_proxy_logger.error(
             "tool_registry_writer get_tools_by_names error: %s", e
@@ -238,7 +262,7 @@ async def list_overrides_for_tool(
                         tool_name=tool_name,
                         team_id=None,
                         key_hash=getattr(t, "token", None),
-                        call_policy="blocked",
+                        input_policy="blocked",
                         key_alias=getattr(t, "key_alias", None),
                         created_at=None,
                         updated_at=None,
@@ -251,7 +275,7 @@ async def list_overrides_for_tool(
                         tool_name=tool_name,
                         team_id=getattr(team, "team_id", None),
                         key_hash=None,
-                        call_policy="blocked",
+                        input_policy="blocked",
                         key_alias=getattr(team, "team_alias", None),
                         created_at=None,
                         updated_at=None,
@@ -268,12 +292,12 @@ async def list_overrides_for_tool(
 class ToolPolicyRegistry:
     """
     In-memory registry of tool policies synced from DB.
-    Synced in _init_tool_policy_in_db (from add_deployment / _init_non_llm_objects_in_db).
     Hot path uses get_effective_policies only — no DB, no cache.
     """
 
     def __init__(self) -> None:
-        self._global_tool_policies: Dict[str, str] = {}
+        self._tool_input_policies: Dict[str, str] = {}
+        self._tool_output_policies: Dict[str, str] = {}
         self._blocked_tools_by_op_id: Dict[str, List[str]] = {}
         self._initialized: bool = False
 
@@ -281,10 +305,17 @@ class ToolPolicyRegistry:
         return self._initialized
 
     async def sync_tool_policy_from_db(self, prisma_client: "PrismaClient") -> None:
-        """Load all tool policies and object-permission blocked_tools from DB; replace in-memory state."""
+        """Load all tool policies and object-permission blocked_tools from DB."""
         try:
             tools = await prisma_client.db.litellm_tooltable.find_many()
-            self._global_tool_policies = {row.tool_name: row.call_policy for row in tools}
+            self._tool_input_policies = {
+                row.tool_name: getattr(row, "input_policy", "untrusted") or "untrusted"
+                for row in tools
+            }
+            self._tool_output_policies = {
+                row.tool_name: getattr(row, "output_policy", "untrusted") or "untrusted"
+                for row in tools
+            }
 
             perms = await prisma_client.db.litellm_objectpermissiontable.find_many()
             self._blocked_tools_by_op_id = {}
@@ -296,8 +327,8 @@ class ToolPolicyRegistry:
 
             self._initialized = True
             verbose_proxy_logger.info(
-                "ToolPolicyRegistry: synced %d global tool policies and %d object permissions from DB",
-                len(self._global_tool_policies),
+                "ToolPolicyRegistry: synced %d tool policies and %d object permissions from DB",
+                len(self._tool_input_policies),
                 len(self._blocked_tools_by_op_id),
             )
         except Exception as e:
@@ -306,6 +337,12 @@ class ToolPolicyRegistry:
             )
             raise
 
+    def get_input_policy(self, tool_name: str) -> str:
+        return self._tool_input_policies.get(tool_name, "untrusted")
+
+    def get_output_policy(self, tool_name: str) -> str:
+        return self._tool_output_policies.get(tool_name, "untrusted")
+
     def get_effective_policies(
         self,
         tool_names: List[str],
@@ -313,8 +350,8 @@ class ToolPolicyRegistry:
         team_object_permission_id: Optional[str] = None,
     ) -> Dict[str, str]:
         """
-        Return effective call_policy per tool from in-memory state.
-        If tool is in key or team blocked_tools -> "blocked", else global policy or "untrusted".
+        Return effective input_policy per tool from in-memory state.
+        If tool is in key or team blocked_tools -> "blocked", else global input_policy or "untrusted".
         """
         if not tool_names:
             return {}
@@ -329,7 +366,7 @@ class ToolPolicyRegistry:
             if name in blocked:
                 result[name] = "blocked"
             else:
-                result[name] = self._global_tool_policies.get(name, "untrusted")
+                result[name] = self._tool_input_policies.get(name, "untrusted")
         return result
 
 

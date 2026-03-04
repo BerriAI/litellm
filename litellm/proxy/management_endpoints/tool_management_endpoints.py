@@ -4,8 +4,9 @@ TOOL POLICY MANAGEMENT
 All /tool management endpoints
 
 GET  /v1/tool/list              - List all discovered tools and their policies
+GET  /v1/tool/policy/options    - List available input/output policy options with descriptions
 GET  /v1/tool/{tool_name}       - Get a single tool's details
-POST /v1/tool/policy            - Update the call_policy for a tool
+POST /v1/tool/policy            - Update the input_policy / output_policy for a tool
 """
 
 import uuid
@@ -22,9 +23,12 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
-    ToolCallPolicy,
     ToolDetailResponse,
+    ToolInputPolicy,
     ToolListResponse,
+    ToolOutputPolicy,
+    ToolPolicyOption,
+    ToolPolicyOptionsResponse,
     ToolPolicyUpdateRequest,
     ToolPolicyUpdateResponse,
     ToolUsageLogEntry,
@@ -32,6 +36,54 @@ from litellm.types.tool_management import (
 )
 
 router = APIRouter()
+
+TOOL_POLICY_OPTIONS = ToolPolicyOptionsResponse(
+    input_policies=[
+        ToolPolicyOption(
+            value="untrusted",
+            label="Untrusted",
+            description="Tool accepts any input, including data from untrusted tool outputs. Default for newly discovered tools.",
+        ),
+        ToolPolicyOption(
+            value="trusted",
+            label="Trusted",
+            description="Tool requires trusted input. Blocked if the conversation contains output from any tool with output_policy=untrusted.",
+        ),
+        ToolPolicyOption(
+            value="blocked",
+            label="Blocked",
+            description="Tool is completely prohibited. Any attempt to call it is rejected.",
+        ),
+    ],
+    output_policies=[
+        ToolPolicyOption(
+            value="untrusted",
+            label="Untrusted",
+            description="Tool output may contain unsafe content (prompt injection, risky code). Downstream tools with input_policy=trusted will be blocked.",
+        ),
+        ToolPolicyOption(
+            value="trusted",
+            label="Trusted",
+            description="Tool output is verified safe. Will not trigger trust-chain blocks on downstream tools.",
+        ),
+    ],
+)
+
+
+@router.get(
+    "/v1/tool/policy/options",
+    tags=["tool management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ToolPolicyOptionsResponse,
+)
+async def get_tool_policy_options(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Return the available input and output policy options with descriptions.
+    Static data — no DB call.
+    """
+    return TOOL_POLICY_OPTIONS
 
 
 @router.get(
@@ -41,14 +93,14 @@ router = APIRouter()
     response_model=ToolListResponse,
 )
 async def list_tools(
-    call_policy: Optional[ToolCallPolicy] = None,
+    input_policy: Optional[ToolInputPolicy] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    List all auto-discovered tools and their call policies.
+    List all auto-discovered tools and their policies.
 
     Parameters:
-    - call_policy: Optional filter — one of "trusted", "untrusted", "dual_llm", "blocked"
+    - input_policy: Optional filter — one of "trusted", "untrusted", "blocked"
     """
     from litellm.proxy.db.tool_registry_writer import list_tools as db_list_tools
     from litellm.proxy.proxy_server import prisma_client
@@ -60,7 +112,7 @@ async def list_tools(
 
     try:
         tools = await db_list_tools(
-            prisma_client=prisma_client, call_policy=call_policy
+            prisma_client=prisma_client, input_policy=input_policy
         )
         return ToolListResponse(tools=tools, total=len(tools))
     except Exception as e:
@@ -80,9 +132,6 @@ async def get_tool_detail(
 ):
     """
     Get a single tool with its policy overrides (for UI detail view).
-
-    Parameters:
-    - tool_name: The tool name (supports namespaced names with slashes)
     """
     from litellm.proxy.db.tool_registry_writer import get_tool as db_get_tool
     from litellm.proxy.db.tool_registry_writer import list_overrides_for_tool
@@ -269,9 +318,6 @@ async def get_tool(
 ):
     """
     Get details for a single tool.
-
-    Parameters:
-    - tool_name: The tool name (supports namespaced names with slashes)
     """
     from litellm.proxy.db.tool_registry_writer import get_tool as db_get_tool
     from litellm.proxy.proxy_server import prisma_client
@@ -311,9 +357,6 @@ async def _resolve_key_hash_to_object_permission_id(
     op_id = getattr(row, "object_permission_id", None)
     if op_id:
         return op_id
-    # Create new object permission and atomically assign to key.
-    # Uses update_many with object_permission_id=None to prevent race conditions:
-    # only one concurrent request wins; the loser cleans up its orphaned row.
     new_id = str(uuid.uuid4())
     await prisma_client.db.litellm_objectpermissiontable.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
@@ -323,7 +366,6 @@ async def _resolve_key_hash_to_object_permission_id(
         data={"object_permission_id": new_id},
     )
     if updated_count == 0:
-        # Another request already assigned a permission; clean up orphan
         await prisma_client.db.litellm_objectpermissiontable.delete(
             where={"object_permission_id": new_id}
         )
@@ -351,7 +393,6 @@ async def _resolve_team_id_to_object_permission_id(
     op_id = getattr(row, "object_permission_id", None)
     if op_id:
         return op_id
-    # Same atomic pattern as _resolve_key_hash_to_object_permission_id
     new_id = str(uuid.uuid4())
     await prisma_client.db.litellm_objectpermissiontable.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
@@ -383,18 +424,14 @@ async def update_tool_policy(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Set the call policy for a tool (global) or for a specific team/key (override).
+    Set the input_policy and/or output_policy for a tool (global), or block for a specific team/key (override).
 
     Parameters:
     - tool_name: str - The tool to update
-    - call_policy: "trusted" | "untrusted" | "dual_llm" | "blocked"
+    - input_policy: optional - "trusted" | "untrusted" | "blocked"
+    - output_policy: optional - "trusted" | "untrusted"
     - team_id: optional - if set, create/update override for this team only
     - key_hash: optional - if set, create/update override for this key only
-    - key_alias: optional - human-readable key alias for UI
-
-    If both team_id and key_hash are omitted, updates the global tool policy.
-    Setting a tool to "blocked" will cause the ToolPolicyGuardrail to reject
-    that tool_call for the relevant scope.
     """
     from litellm.proxy.db.tool_registry_writer import (
         add_tool_to_object_permission_blocked,
@@ -431,7 +468,8 @@ async def update_tool_policy(
                     status_code=404,
                     detail="Key or team not found for the given identifier",
                 )
-            if data.call_policy == "blocked":
+            is_blocking = data.input_policy == "blocked"
+            if is_blocking:
                 ok = await add_tool_to_object_permission_blocked(
                     prisma_client=prisma_client,
                     object_permission_id=op_id,
@@ -453,16 +491,25 @@ async def update_tool_policy(
                 await registry.sync_tool_policy_from_db(prisma_client)
             return ToolPolicyUpdateResponse(
                 tool_name=data.tool_name,
-                call_policy=data.call_policy,
+                input_policy=data.input_policy,
+                output_policy=data.output_policy,
                 updated=True,
                 team_id=data.team_id,
                 key_hash=data.key_hash,
             )
+
+        if data.input_policy is None and data.output_policy is None:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one of input_policy or output_policy must be provided",
+            )
+
         updated = await db_update_tool_policy(
             prisma_client=prisma_client,
             tool_name=data.tool_name,
-            call_policy=data.call_policy,
             updated_by=user_api_key_dict.user_id,
+            input_policy=data.input_policy,
+            output_policy=data.output_policy,
         )
         if updated is None:
             raise HTTPException(
@@ -474,7 +521,8 @@ async def update_tool_policy(
             await registry.sync_tool_policy_from_db(prisma_client)
         return ToolPolicyUpdateResponse(
             tool_name=updated.tool_name,
-            call_policy=updated.call_policy,
+            input_policy=updated.input_policy,
+            output_policy=updated.output_policy,
             updated=True,
         )
     except HTTPException:

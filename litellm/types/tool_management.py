@@ -9,17 +9,23 @@ from pydantic import BaseModel, Field
 
 ToolCallPolicy = Literal["trusted", "untrusted", "dual_llm", "blocked"]
 
+ToolInputPolicy = Literal["trusted", "untrusted", "blocked"]
+ToolOutputPolicy = Literal["trusted", "untrusted"]
+
 
 class LiteLLM_ToolTableRow(BaseModel):
     tool_id: str
     tool_name: str
     origin: Optional[str] = None
-    call_policy: ToolCallPolicy = "untrusted"
+    input_policy: ToolInputPolicy = "untrusted"
+    output_policy: ToolOutputPolicy = "untrusted"
     call_count: int = 0
     assignments: Optional[Dict] = None
     key_hash: Optional[str] = None
     team_id: Optional[str] = None
     key_alias: Optional[str] = None
+    user_agent: Optional[str] = None
+    last_used_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None
@@ -33,15 +39,17 @@ class ToolListResponse(BaseModel):
 
 class ToolPolicyUpdateRequest(BaseModel):
     tool_name: str
-    call_policy: ToolCallPolicy
-    team_id: Optional[str] = None  # if set, create/update override for this team
-    key_hash: Optional[str] = None  # if set, create/update override for this key
-    key_alias: Optional[str] = None  # human-readable key alias for UI
+    input_policy: Optional[ToolInputPolicy] = None
+    output_policy: Optional[ToolOutputPolicy] = None
+    team_id: Optional[str] = None
+    key_hash: Optional[str] = None
+    key_alias: Optional[str] = None
 
 
 class ToolPolicyUpdateResponse(BaseModel):
     tool_name: str
-    call_policy: ToolCallPolicy
+    input_policy: Optional[ToolInputPolicy] = None
+    output_policy: Optional[ToolOutputPolicy] = None
     updated: bool
     team_id: Optional[str] = None
     key_hash: Optional[str] = None
@@ -52,10 +60,21 @@ class ToolPolicyOverrideRow(BaseModel):
     tool_name: str
     team_id: Optional[str] = None
     key_hash: Optional[str] = None
-    call_policy: ToolCallPolicy
+    input_policy: ToolInputPolicy = "blocked"
     key_alias: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class ToolPolicyOption(BaseModel):
+    value: str
+    label: str
+    description: str
+
+
+class ToolPolicyOptionsResponse(BaseModel):
+    input_policies: List[ToolPolicyOption]
+    output_policies: List[ToolPolicyOption]
 
 
 class ToolDetailResponse(BaseModel):
