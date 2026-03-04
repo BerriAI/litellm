@@ -99,8 +99,13 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
 
+        _model_call_details = getattr(self.logging_obj, "model_call_details", None)
+        if not isinstance(_model_call_details, dict):
+            _model_call_details = {}
+            self.logging_obj.model_call_details = _model_call_details
+
         litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
-            **self.logging_obj.model_call_details.get("litellm_params", {})
+            **_model_call_details.get("litellm_params", {})
         )
         self.merge_reasoning_content_in_choices: bool = (
             litellm_params.merge_reasoning_content_in_choices or False
@@ -2172,7 +2177,7 @@ class CustomStreamWrapper:
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
         """
-        from litellm.exceptions import MidStreamFallbackError
+        from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 
         # Map to OpenAI exception format
         if isinstance(e, OpenAIError):
@@ -2188,6 +2193,12 @@ class CustomStreamWrapper:
                 )
             except Exception as mapping_error:
                 mapped_exception = mapping_error
+
+        # Preserve ContextWindowExceededError status code (400) — re-raise
+        # directly so the caller sees the original non-retriable error instead
+        # of a 503 MidStreamFallbackError.  Fixes #18689.
+        if isinstance(mapped_exception, ContextWindowExceededError):
+            raise mapped_exception
 
         def _normalize_status_code(exc: Exception) -> Optional[int]:
             """Best-effort status_code extraction."""
