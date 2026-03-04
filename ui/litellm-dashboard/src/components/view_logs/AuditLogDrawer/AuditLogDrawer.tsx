@@ -1,5 +1,6 @@
 import { Drawer, Tag, Typography } from "antd";
-import { CloseOutlined } from "@ant-design/icons";
+import { CloseOutlined, CopyOutlined, CheckOutlined } from "@ant-design/icons";
+import { useState, useCallback } from "react";
 import moment from "moment";
 import { AuditLogEntry } from "../columns";
 import DefaultProxyAdminTag from "../../common_components/DefaultProxyAdminTag";
@@ -27,11 +28,48 @@ const ACTION_COLOR: Record<string, string> = {
   rotated: "orange",
 };
 
-function JsonBlock({ value }: { value: Record<string, any> }) {
+function CopyableJsonBlock({ label, value }: { label: string; value: Record<string, any> }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      const text = JSON.stringify(value, null, 2);
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const el = document.createElement("textarea");
+        el.value = text;
+        el.style.position = "fixed";
+        el.style.opacity = "0";
+        document.body.appendChild(el);
+        el.focus();
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.error("Copy failed:", e);
+    }
+  }, [value]);
+
   return (
-    <pre className="p-3 bg-gray-50 border rounded text-xs font-mono overflow-auto max-h-96 whitespace-pre-wrap break-all">
-      {JSON.stringify(value, null, 2)}
-    </pre>
+    <div className="bg-white rounded border overflow-hidden">
+      <div className="flex justify-between items-center px-3 py-2 border-b bg-gray-50">
+        <span className="text-xs font-semibold text-gray-600">{label}</span>
+        <button
+          onClick={handleCopy}
+          className="p-1 hover:bg-gray-200 rounded text-gray-500 hover:text-gray-700 transition-colors"
+          title="Copy JSON"
+        >
+          {copied ? <CheckOutlined className="text-green-600" /> : <CopyOutlined />}
+        </button>
+      </div>
+      <pre className="p-3 bg-white text-xs font-mono overflow-auto max-h-96 whitespace-pre-wrap break-all m-0">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    </div>
   );
 }
 
@@ -95,45 +133,51 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
         : { note: "No differing fields detected" };
   }
 
-  const renderValue = (value: Record<string, any> | null | undefined) => {
+  const renderValue = (label: string, value: Record<string, any> | null | undefined) => {
     if (!value || Object.keys(value).length === 0) {
-      return <p className="text-xs text-gray-400 italic">N/A</p>;
+      return (
+        <div className="bg-white rounded border overflow-hidden">
+          <div className="flex items-center px-3 py-2 border-b bg-gray-50">
+            <span className="text-xs font-semibold text-gray-600">{label}</span>
+          </div>
+          <p className="px-3 py-3 text-xs text-gray-400 italic m-0">N/A</p>
+        </div>
+      );
     }
 
-    // For key table updates, filter to only show meaningful fields
+    // For key table updates, show only meaningful fields as plain text
     if (isKeyTable && isUpdateAction) {
       const knownKeyFields = ["token", "spend", "max_budget"];
       const hasOnlyKnown = Object.keys(value).every((k) => knownKeyFields.includes(k));
       if (hasOnlyKnown && !("note" in value)) {
         return (
-          <div className="space-y-1 text-xs">
-            {value.token !== undefined && (
-              <p><span className="text-gray-500">Token:</span> {value.token ?? "N/A"}</p>
-            )}
-            {value.spend !== undefined && (
-              <p><span className="text-gray-500">Spend:</span> ${Number(value.spend).toFixed(6)}</p>
-            )}
-            {value.max_budget !== undefined && (
-              <p><span className="text-gray-500">Max Budget:</span> ${Number(value.max_budget).toFixed(6)}</p>
-            )}
+          <div className="bg-white rounded border overflow-hidden">
+            <div className="flex items-center px-3 py-2 border-b bg-gray-50">
+              <span className="text-xs font-semibold text-gray-600">{label}</span>
+            </div>
+            <div className="px-3 py-3 space-y-1 text-xs">
+              {value.token !== undefined && (
+                <p><span className="text-gray-500">Token:</span> {value.token ?? "N/A"}</p>
+              )}
+              {value.spend !== undefined && (
+                <p><span className="text-gray-500">Spend:</span> ${Number(value.spend).toFixed(6)}</p>
+              )}
+              {value.max_budget !== undefined && (
+                <p><span className="text-gray-500">Max Budget:</span> ${Number(value.max_budget).toFixed(6)}</p>
+              )}
+            </div>
           </div>
         );
       }
     }
 
-    return <JsonBlock value={value} />;
+    return <CopyableJsonBlock label={label} value={value} />;
   };
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-      <div>
-        <p className="text-xs font-semibold text-gray-600 mb-2">Before</p>
-        {renderValue(displayBefore)}
-      </div>
-      <div>
-        <p className="text-xs font-semibold text-gray-600 mb-2">After</p>
-        {renderValue(displayAfter)}
-      </div>
+      {renderValue("Before", displayBefore)}
+      {renderValue("After", displayAfter)}
     </div>
   );
 }
@@ -209,12 +253,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
         </div>
 
         {/* Diff */}
-        <div>
-          <p className="text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-            Changes
-          </p>
-          <DiffSection log={log} />
-        </div>
+        <DiffSection log={log} />
       </div>
     </Drawer>
   );

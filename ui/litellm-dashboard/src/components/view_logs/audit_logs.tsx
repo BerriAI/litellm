@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { Table, Tag, Input, Select, Button, Pagination } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import { Table, Tag, Input, Select, Button, Pagination, Spin } from "antd";
+import { ReloadOutlined, LoadingOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import moment from "moment";
 import { uiAuditLogsCall } from "../networking";
@@ -285,7 +285,10 @@ export default function AuditLogs({
           columns={columns}
           dataSource={auditLogs}
           rowKey="id"
-          loading={query.isLoading}
+          loading={{
+            spinning: query.isLoading,
+            indicator: <Spin indicator={<LoadingOutlined spin />} size="small" />,
+          }}
           size="small"
           pagination={false}
           onRow={(record) => ({
