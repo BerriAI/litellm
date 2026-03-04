@@ -28,7 +28,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _parse_prompt_tokens_details,
     calculate_cost_component,
     generic_cost_per_token,
-    generic_cost_per_token_with_breakdown,
     get_billable_input_tokens,
     select_cost_metric_for_model,
 )
@@ -942,22 +941,6 @@ def _store_cost_breakdown_in_logging_obj(
     margin_percent: Optional[float] = None,
     margin_fixed_amount: Optional[float] = None,
     margin_total_amount: Optional[float] = None,
-    input_cost_text: Optional[float] = None,
-    input_cost_cache_read: Optional[float] = None,
-    input_cost_cache_creation: Optional[float] = None,
-    input_cost_audio: Optional[float] = None,
-    output_cost_text: Optional[float] = None,
-    output_cost_reasoning: Optional[float] = None,
-    output_cost_audio: Optional[float] = None,
-    input_tokens_text: Optional[int] = None,
-    input_tokens_cache_read: Optional[int] = None,
-    input_tokens_cache_creation: Optional[int] = None,
-    input_tokens_audio: Optional[int] = None,
-    output_tokens_text: Optional[int] = None,
-    output_tokens_reasoning: Optional[int] = None,
-    output_tokens_audio: Optional[int] = None,
-    above_128k_tokens: Optional[bool] = None,
-    above_200k_tokens: Optional[bool] = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -975,22 +958,12 @@ def _store_cost_breakdown_in_logging_obj(
         margin_percent: Margin percentage applied (0.10 = 10%)
         margin_fixed_amount: Fixed margin amount in USD
         margin_total_amount: Total margin added in USD
-        input_cost_text: Cost for non-cached text input tokens
-        input_cost_cache_read: Cost for cache read/hit tokens
-        input_cost_cache_creation: Cost for cache creation/write tokens
-        input_cost_audio: Cost for audio input tokens
-        output_cost_text: Cost for text output tokens
-        output_cost_reasoning: Cost for reasoning output tokens
-        output_cost_audio: Cost for audio output tokens
-        input_tokens_*: Token counts for each input category
-        output_tokens_*: Token counts for each output category
-        above_128k_tokens: Whether above-128K token pricing was used
-        above_200k_tokens: Whether above-200K token pricing was used
     """
     if litellm_logging_obj is None:
         return
 
     try:
+        # Store the cost breakdown
         litellm_logging_obj.set_cost_breakdown(
             input_cost=prompt_tokens_cost_usd_dollar,
             output_cost=completion_tokens_cost_usd_dollar,
@@ -1003,26 +976,11 @@ def _store_cost_breakdown_in_logging_obj(
             margin_percent=margin_percent,
             margin_fixed_amount=margin_fixed_amount,
             margin_total_amount=margin_total_amount,
-            input_cost_text=input_cost_text,
-            input_cost_cache_read=input_cost_cache_read,
-            input_cost_cache_creation=input_cost_cache_creation,
-            input_cost_audio=input_cost_audio,
-            output_cost_text=output_cost_text,
-            output_cost_reasoning=output_cost_reasoning,
-            output_cost_audio=output_cost_audio,
-            input_tokens_text=input_tokens_text,
-            input_tokens_cache_read=input_tokens_cache_read,
-            input_tokens_cache_creation=input_tokens_cache_creation,
-            input_tokens_audio=input_tokens_audio,
-            output_tokens_text=output_tokens_text,
-            output_tokens_reasoning=output_tokens_reasoning,
-            output_tokens_audio=output_tokens_audio,
-            above_128k_tokens=above_128k_tokens,
-            above_200k_tokens=above_200k_tokens,
         )
 
     except Exception as breakdown_error:
         verbose_logger.debug(f"Error storing cost breakdown: {str(breakdown_error)}")
+        # Don't fail the main cost calculation if breakdown storage fails
         pass
 
 
@@ -1577,49 +1535,6 @@ def completion_cost(  # noqa: PLR0915
                     margin_fixed_amount = 0.0
                     margin_total_amount = 0.0
 
-                # Compute granular breakdown if we have the usage object
-                _granular_kwargs: dict = {}
-                verbose_logger.debug(
-                    "Granular breakdown check: usage_obj=%s, provider=%s, model=%s",
-                    type(cost_per_token_usage_object).__name__ if cost_per_token_usage_object else None,
-                    custom_llm_provider,
-                    model,
-                )
-                if (
-                    cost_per_token_usage_object is not None
-                    and custom_llm_provider is not None
-                ):
-                    try:
-                        _breakdown = generic_cost_per_token_with_breakdown(
-                            model=model,
-                            usage=cost_per_token_usage_object,
-                            custom_llm_provider=custom_llm_provider,
-                            service_tier=service_tier,
-                        )
-                        _granular_kwargs = dict(
-                            input_cost_text=_breakdown["input_breakdown"]["text_cost"],
-                            input_cost_cache_read=_breakdown["input_breakdown"]["cache_read_cost"],
-                            input_cost_cache_creation=_breakdown["input_breakdown"]["cache_creation_cost"],
-                            input_cost_audio=_breakdown["input_breakdown"]["audio_cost"],
-                            output_cost_text=_breakdown["output_breakdown"]["text_cost"],
-                            output_cost_reasoning=_breakdown["output_breakdown"]["reasoning_cost"],
-                            output_cost_audio=_breakdown["output_breakdown"]["audio_cost"],
-                            input_tokens_text=_breakdown["prompt_tokens_details"]["text_tokens"],
-                            input_tokens_cache_read=_breakdown["prompt_tokens_details"]["cache_hit_tokens"],
-                            input_tokens_cache_creation=_breakdown["prompt_tokens_details"]["cache_creation_tokens"],
-                            input_tokens_audio=_breakdown["prompt_tokens_details"]["audio_tokens"],
-                            output_tokens_text=_breakdown["completion_tokens_details_parsed"]["text_tokens"],
-                            output_tokens_reasoning=_breakdown["completion_tokens_details_parsed"]["reasoning_tokens"],
-                            output_tokens_audio=_breakdown["completion_tokens_details_parsed"]["audio_tokens"],
-                            above_128k_tokens=_breakdown["above_128k_tokens"],
-                            above_200k_tokens=_breakdown["above_200k_tokens"],
-                        )
-                    except Exception as _granular_err:
-                        verbose_logger.debug(
-                            "Error computing granular cost breakdown: %s",
-                            str(_granular_err),
-                        )
-
                 # Store cost breakdown in logging object if available
                 if litellm_logging_obj is not None:
                     _store_cost_breakdown_in_logging_obj(
@@ -1635,7 +1550,6 @@ def completion_cost(  # noqa: PLR0915
                         margin_percent=margin_percent,
                         margin_fixed_amount=margin_fixed_amount,
                         margin_total_amount=margin_total_amount,
-                        **_granular_kwargs,
                     )
 
                 return _final_cost

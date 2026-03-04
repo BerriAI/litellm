@@ -14,30 +14,6 @@ export interface CostBreakdown {
   margin_percent?: number;
   margin_fixed_amount?: number;
   margin_total_amount?: number;
-
-  // Granular input cost breakdown
-  input_cost_text?: number;
-  input_cost_cache_read?: number;
-  input_cost_cache_creation?: number;
-  input_cost_audio?: number;
-
-  // Granular output cost breakdown
-  output_cost_text?: number;
-  output_cost_reasoning?: number;
-  output_cost_audio?: number;
-
-  // Token counts for granular breakdown
-  input_tokens_text?: number;
-  input_tokens_cache_read?: number;
-  input_tokens_cache_creation?: number;
-  input_tokens_audio?: number;
-  output_tokens_text?: number;
-  output_tokens_reasoning?: number;
-  output_tokens_audio?: number;
-
-  // Pricing tier indicators
-  above_128k_tokens?: boolean;
-  above_200k_tokens?: boolean;
 }
 
 interface CostBreakdownViewerProps {
@@ -100,24 +76,6 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   const originalCost = isCached ? 0 : costBreakdown?.original_cost;
   const totalCost = isCached ? 0 : (costBreakdown?.total_cost ?? totalSpend);
 
-  const hasGranularInput =
-    !isCached &&
-    costBreakdown &&
-    (costBreakdown.input_cost_cache_read !== undefined ||
-      costBreakdown.input_cost_cache_creation !== undefined ||
-      costBreakdown.input_cost_audio !== undefined);
-
-  const hasGranularOutput =
-    !isCached &&
-    costBreakdown &&
-    (costBreakdown.output_cost_reasoning !== undefined ||
-      costBreakdown.output_cost_audio !== undefined);
-
-  const hasPricingTier =
-    !isCached &&
-    costBreakdown &&
-    (costBreakdown.above_128k_tokens || costBreakdown.above_200k_tokens);
-
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
       <Collapse
@@ -139,18 +97,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
             ),
             children: (
               <div className="p-6 space-y-4">
-            {/* Pricing tier badge */}
-            {hasPricingTier && (
-              <div className="mb-2">
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                  {costBreakdown?.above_200k_tokens
-                    ? "Above 200K Token Pricing"
-                    : "Above 128K Token Pricing"}
-                </span>
-              </div>
-            )}
-
-            {/* Input Cost Section */}
+            {/* Step 1: Base Token Costs */}
             <div className="space-y-2 max-w-2xl">
               <div className="flex text-sm">
                 <span className="text-gray-600 font-medium w-1/3">Input Cost:</span>
@@ -163,76 +110,6 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                   )}
                 </span>
               </div>
-              {/* Granular input breakdown */}
-              {hasGranularInput && (
-                <div className="ml-6 space-y-1 border-l-2 border-gray-200 pl-3">
-                  {costBreakdown.input_cost_text !== undefined && costBreakdown.input_cost_text > 0 && (
-                    <div className="flex text-xs">
-                      <span className="text-gray-500 w-1/3">Text Tokens:</span>
-                      <span className="text-gray-700">
-                        {formatCost(costBreakdown.input_cost_text)}
-                        {costBreakdown.input_tokens_text !== undefined && (
-                          <span className="text-gray-400 ml-1">
-                            ({costBreakdown.input_tokens_text.toLocaleString()} tokens)
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                  {costBreakdown.input_cost_cache_read !== undefined && costBreakdown.input_cost_cache_read > 0 && (
-                    <div className="flex text-xs">
-                      <span className="text-gray-500 w-1/3">Cache Read:</span>
-                      <span className="text-gray-700">
-                        {formatCost(costBreakdown.input_cost_cache_read)}
-                        {costBreakdown.input_tokens_cache_read !== undefined && (
-                          <span className="text-gray-400 ml-1">
-                            ({costBreakdown.input_tokens_cache_read.toLocaleString()} tokens)
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                  {costBreakdown.input_tokens_cache_read !== undefined && costBreakdown.input_tokens_cache_read > 0 && (costBreakdown.input_cost_cache_read === undefined || costBreakdown.input_cost_cache_read === 0) && (
-                    <div className="flex text-xs">
-                      <span className="text-gray-500 w-1/3">Cache Read:</span>
-                      <span className="text-gray-700">
-                        {formatCost(0)}
-                        <span className="text-gray-400 ml-1">
-                          ({costBreakdown.input_tokens_cache_read.toLocaleString()} tokens — free)
-                        </span>
-                      </span>
-                    </div>
-                  )}
-                  {costBreakdown.input_cost_cache_creation !== undefined && costBreakdown.input_cost_cache_creation > 0 && (
-                    <div className="flex text-xs">
-                      <span className="text-gray-500 w-1/3">Cache Write:</span>
-                      <span className="text-gray-700">
-                        {formatCost(costBreakdown.input_cost_cache_creation)}
-                        {costBreakdown.input_tokens_cache_creation !== undefined && (
-                          <span className="text-gray-400 ml-1">
-                            ({costBreakdown.input_tokens_cache_creation.toLocaleString()} tokens)
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                  {costBreakdown.input_cost_audio !== undefined && costBreakdown.input_cost_audio > 0 && (
-                    <div className="flex text-xs">
-                      <span className="text-gray-500 w-1/3">Audio:</span>
-                      <span className="text-gray-700">
-                        {formatCost(costBreakdown.input_cost_audio)}
-                        {costBreakdown.input_tokens_audio !== undefined && (
-                          <span className="text-gray-400 ml-1">
-                            ({costBreakdown.input_tokens_audio.toLocaleString()} tokens)
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Output Cost */}
               <div className="flex text-sm">
                 <span className="text-gray-600 font-medium w-1/3">Output Cost:</span>
                 <span className="text-gray-900">
@@ -244,55 +121,9 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                   )}
                 </span>
               </div>
-              {/* Granular output breakdown */}
-              {hasGranularOutput && (
-                <div className="ml-6 space-y-1 border-l-2 border-gray-200 pl-3">
-                  {costBreakdown.output_cost_text !== undefined && costBreakdown.output_cost_text > 0 && (
-                    <div className="flex text-xs">
-                      <span className="text-gray-500 w-1/3">Text Tokens:</span>
-                      <span className="text-gray-700">
-                        {formatCost(costBreakdown.output_cost_text)}
-                        {costBreakdown.output_tokens_text !== undefined && (
-                          <span className="text-gray-400 ml-1">
-                            ({costBreakdown.output_tokens_text.toLocaleString()} tokens)
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                  {costBreakdown.output_cost_reasoning !== undefined && costBreakdown.output_cost_reasoning > 0 && (
-                    <div className="flex text-xs">
-                      <span className="text-gray-500 w-1/3">Reasoning:</span>
-                      <span className="text-gray-700">
-                        {formatCost(costBreakdown.output_cost_reasoning)}
-                        {costBreakdown.output_tokens_reasoning !== undefined && (
-                          <span className="text-gray-400 ml-1">
-                            ({costBreakdown.output_tokens_reasoning.toLocaleString()} tokens)
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                  {costBreakdown.output_cost_audio !== undefined && costBreakdown.output_cost_audio > 0 && (
-                    <div className="flex text-xs">
-                      <span className="text-gray-500 w-1/3">Audio:</span>
-                      <span className="text-gray-700">
-                        {formatCost(costBreakdown.output_cost_audio)}
-                        {costBreakdown.output_tokens_audio !== undefined && (
-                          <span className="text-gray-400 ml-1">
-                            ({costBreakdown.output_tokens_audio.toLocaleString()} tokens)
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Web Search / Tool Usage Cost */}
               {costBreakdown?.tool_usage_cost !== undefined && costBreakdown.tool_usage_cost > 0 && (
                 <div className="flex text-sm">
-                  <span className="text-gray-600 font-medium w-1/3">Web Search / Tool Cost:</span>
+                  <span className="text-gray-600 font-medium w-1/3">Tool Usage Cost:</span>
                   <span className="text-gray-900">{formatCost(costBreakdown.tool_usage_cost)}</span>
                 </div>
               )}

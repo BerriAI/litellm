@@ -1322,22 +1322,6 @@ class Logging(LiteLLMLoggingBaseClass):
         margin_percent: Optional[float] = None,
         margin_fixed_amount: Optional[float] = None,
         margin_total_amount: Optional[float] = None,
-        input_cost_text: Optional[float] = None,
-        input_cost_cache_read: Optional[float] = None,
-        input_cost_cache_creation: Optional[float] = None,
-        input_cost_audio: Optional[float] = None,
-        output_cost_text: Optional[float] = None,
-        output_cost_reasoning: Optional[float] = None,
-        output_cost_audio: Optional[float] = None,
-        input_tokens_text: Optional[int] = None,
-        input_tokens_cache_read: Optional[int] = None,
-        input_tokens_cache_creation: Optional[int] = None,
-        input_tokens_audio: Optional[int] = None,
-        output_tokens_text: Optional[int] = None,
-        output_tokens_reasoning: Optional[int] = None,
-        output_tokens_audio: Optional[int] = None,
-        above_128k_tokens: Optional[bool] = None,
-        above_200k_tokens: Optional[bool] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1347,24 +1331,13 @@ class Logging(LiteLLMLoggingBaseClass):
             output_cost: Cost of output/completion tokens
             cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
             total_cost: Total cost of request
-            additional_costs: Free-form additional costs dict
+            additional_costs: Free-form additional costs dict (e.g., {"azure_model_router_flat_cost": 0.00014})
             original_cost: Cost before discount
             discount_percent: Discount percentage (0.05 = 5%)
             discount_amount: Discount amount in USD
             margin_percent: Margin percentage applied (0.10 = 10%)
             margin_fixed_amount: Fixed margin amount in USD
             margin_total_amount: Total margin added in USD
-            input_cost_text: Cost for non-cached text input tokens
-            input_cost_cache_read: Cost for cache read/hit tokens
-            input_cost_cache_creation: Cost for cache creation/write tokens
-            input_cost_audio: Cost for audio input tokens
-            output_cost_text: Cost for text output tokens
-            output_cost_reasoning: Cost for reasoning output tokens
-            output_cost_audio: Cost for audio output tokens
-            input_tokens_*: Token counts for each input category
-            output_tokens_*: Token counts for each output category
-            above_128k_tokens: Whether above-128K token pricing was used
-            above_200k_tokens: Whether above-200K token pricing was used
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1397,129 +1370,6 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["margin_fixed_amount"] = margin_fixed_amount
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
-
-        # Store granular input cost breakdown
-        if input_cost_text is not None:
-            self.cost_breakdown["input_cost_text"] = input_cost_text
-        if input_cost_cache_read is not None:
-            self.cost_breakdown["input_cost_cache_read"] = input_cost_cache_read
-        if input_cost_cache_creation is not None:
-            self.cost_breakdown["input_cost_cache_creation"] = input_cost_cache_creation
-        if input_cost_audio is not None:
-            self.cost_breakdown["input_cost_audio"] = input_cost_audio
-
-        # Store granular output cost breakdown
-        if output_cost_text is not None:
-            self.cost_breakdown["output_cost_text"] = output_cost_text
-        if output_cost_reasoning is not None:
-            self.cost_breakdown["output_cost_reasoning"] = output_cost_reasoning
-        if output_cost_audio is not None:
-            self.cost_breakdown["output_cost_audio"] = output_cost_audio
-
-        # Store token counts
-        if input_tokens_text is not None:
-            self.cost_breakdown["input_tokens_text"] = input_tokens_text
-        if input_tokens_cache_read is not None:
-            self.cost_breakdown["input_tokens_cache_read"] = input_tokens_cache_read
-        if input_tokens_cache_creation is not None:
-            self.cost_breakdown["input_tokens_cache_creation"] = input_tokens_cache_creation
-        if input_tokens_audio is not None:
-            self.cost_breakdown["input_tokens_audio"] = input_tokens_audio
-        if output_tokens_text is not None:
-            self.cost_breakdown["output_tokens_text"] = output_tokens_text
-        if output_tokens_reasoning is not None:
-            self.cost_breakdown["output_tokens_reasoning"] = output_tokens_reasoning
-        if output_tokens_audio is not None:
-            self.cost_breakdown["output_tokens_audio"] = output_tokens_audio
-
-        # Store pricing tier indicators
-        if above_128k_tokens is not None:
-            self.cost_breakdown["above_128k_tokens"] = above_128k_tokens
-        if above_200k_tokens is not None:
-            self.cost_breakdown["above_200k_tokens"] = above_200k_tokens
-
-    def _populate_granular_cost_breakdown(self, result: Any) -> None:
-        """
-        Compute and store granular cost breakdown (cache read/write, reasoning,
-        web search, etc.) when it wasn't set by completion_cost (e.g., when
-        response_cost was pre-computed in _hidden_params).
-        """
-        try:
-            from litellm.litellm_core_utils.llm_cost_calc.utils import (
-                generic_cost_per_token_with_breakdown,
-            )
-            from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
-                StandardBuiltInToolCostTracking,
-            )
-            from litellm.responses.utils import ResponseAPILoggingUtils
-
-            usage_obj = getattr(result, "usage", None)
-            if usage_obj is None:
-                return
-
-            # Ensure usage is in the chat usage format (with prompt_tokens)
-            if isinstance(usage_obj, dict):
-                if ResponseAPILoggingUtils._is_response_api_usage(usage_obj):
-                    usage_obj = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage_obj)
-                elif "prompt_tokens" not in usage_obj:
-                    return
-            elif hasattr(usage_obj, "input_tokens") and not hasattr(usage_obj, "prompt_tokens"):
-                if ResponseAPILoggingUtils._is_response_api_usage(usage_obj):
-                    usage_obj = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage_obj)
-                else:
-                    return
-
-            if not hasattr(usage_obj, "prompt_tokens"):
-                return
-
-            custom_llm_provider = self.model_call_details.get("custom_llm_provider")
-            model = self.model
-            if custom_llm_provider is None or model is None:
-                return
-
-            breakdown = generic_cost_per_token_with_breakdown(
-                model=model,
-                usage=usage_obj,
-                custom_llm_provider=custom_llm_provider,
-            )
-
-            # Compute tool costs
-            tool_cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-                model=model,
-                response_object=result,
-                usage=usage_obj,
-                standard_built_in_tools_params=self.standard_built_in_tools_params,
-                custom_llm_provider=custom_llm_provider,
-            )
-
-            total_cost = breakdown["prompt_cost"] + breakdown["completion_cost"] + tool_cost
-
-            self.set_cost_breakdown(
-                input_cost=breakdown["prompt_cost"],
-                output_cost=breakdown["completion_cost"],
-                total_cost=total_cost,
-                cost_for_built_in_tools_cost_usd_dollar=tool_cost,
-                input_cost_text=breakdown["input_breakdown"]["text_cost"],
-                input_cost_cache_read=breakdown["input_breakdown"]["cache_read_cost"],
-                input_cost_cache_creation=breakdown["input_breakdown"]["cache_creation_cost"],
-                input_cost_audio=breakdown["input_breakdown"]["audio_cost"],
-                output_cost_text=breakdown["output_breakdown"]["text_cost"],
-                output_cost_reasoning=breakdown["output_breakdown"]["reasoning_cost"],
-                output_cost_audio=breakdown["output_breakdown"]["audio_cost"],
-                input_tokens_text=breakdown["prompt_tokens_details"]["text_tokens"],
-                input_tokens_cache_read=breakdown["prompt_tokens_details"]["cache_hit_tokens"],
-                input_tokens_cache_creation=breakdown["prompt_tokens_details"]["cache_creation_tokens"],
-                input_tokens_audio=breakdown["prompt_tokens_details"]["audio_tokens"],
-                output_tokens_text=breakdown["completion_tokens_details_parsed"]["text_tokens"],
-                output_tokens_reasoning=breakdown["completion_tokens_details_parsed"]["reasoning_tokens"],
-                output_tokens_audio=breakdown["completion_tokens_details_parsed"]["audio_tokens"],
-                above_128k_tokens=breakdown["above_128k_tokens"],
-                above_200k_tokens=breakdown["above_200k_tokens"],
-            )
-        except Exception as e:
-            verbose_logger.debug(
-                "Failed to populate granular cost breakdown: %s", str(e)
-            )
 
     def _response_cost_calculator(
         self,
@@ -1801,10 +1651,6 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = self._response_cost_calculator(
                 result=logging_result
             )
-
-        # Populate granular cost breakdown if not already set by completion_cost
-        if self.cost_breakdown is None:
-            self._populate_granular_cost_breakdown(logging_result)
 
         self.model_call_details["standard_logging_object"] = (
             self._build_standard_logging_payload(logging_result, start_time, end_time)
@@ -5364,21 +5210,6 @@ def _extract_response_obj_and_hidden_params(
     return response_obj, hidden_params
 
 
-def _compute_cost_breakdown_fallback(
-    logging_obj: "Logging", response_obj: Any
-) -> Optional[CostBreakdown]:
-    """
-    Compute granular cost breakdown when it wasn't set by the completion_cost
-    path (e.g., when response_cost was pre-computed in _hidden_params).
-    """
-    try:
-        logging_obj._populate_granular_cost_breakdown(response_obj)
-        return logging_obj.cost_breakdown
-    except Exception as e:
-        verbose_logger.debug("_compute_cost_breakdown_fallback failed: %s", str(e))
-        return None
-
-
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
@@ -5543,7 +5374,7 @@ def get_standard_logging_object_payload(
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
-            cost_breakdown=logging_obj.cost_breakdown if logging_obj.cost_breakdown is not None else _compute_cost_breakdown_fallback(logging_obj, init_response_obj),
+            cost_breakdown=logging_obj.cost_breakdown,
             total_tokens=usage_dict.get("total_tokens", 0),
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
