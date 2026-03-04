@@ -673,6 +673,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking
             )
             if reasoning_effort:
+                summary = thinking.get("summary") if isinstance(thinking, dict) else None
+                if summary:
+                    return {"reasoning_effort": {"effort": reasoning_effort, "summary": summary}}
                 return {"reasoning_effort": reasoning_effort}
             return {}
 

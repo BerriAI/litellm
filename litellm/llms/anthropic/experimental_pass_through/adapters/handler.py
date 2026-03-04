@@ -44,8 +44,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         For OpenAI models, Chat Completions typically does not return reasoning text
         (only token accounting). To return a thinking-like content block in the
-        Anthropic response format, we route the request through OpenAI's Responses API
-        and request a reasoning summary.
+        Anthropic response format, we route the request through OpenAI's Responses API.
+        If the user provides a `summary` field in the thinking dict, it is passed
+        through to the OpenAI reasoning params (opt-in per OpenAI spec).
         """
         custom_llm_provider = completion_kwargs.get("custom_llm_provider")
         if custom_llm_provider is None:
@@ -77,19 +78,20 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             completion_kwargs["model"] = f"responses/{model}"
             
         reasoning_effort = completion_kwargs.get("reasoning_effort")
+        summary = thinking.get("summary") if isinstance(thinking, dict) else None
         if isinstance(reasoning_effort, str) and reasoning_effort:
-            summary = thinking.get("summary", "detailed") if isinstance(thinking, dict) else "detailed"
-            completion_kwargs["reasoning_effort"] = {
-                "effort": reasoning_effort,
-                "summary": summary,
-            }
+            reasoning_dict: Dict[str, Any] = {"effort": reasoning_effort}
+            if summary:
+                reasoning_dict["summary"] = summary
+            completion_kwargs["reasoning_effort"] = reasoning_dict
         elif isinstance(reasoning_effort, dict):
             if (
-                "summary" not in reasoning_effort
+                summary
+                and "summary" not in reasoning_effort
                 and "generate_summary" not in reasoning_effort
             ):
                 updated_reasoning_effort = dict(reasoning_effort)
-                updated_reasoning_effort["summary"] = "detailed"
+                updated_reasoning_effort["summary"] = summary
                 completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
