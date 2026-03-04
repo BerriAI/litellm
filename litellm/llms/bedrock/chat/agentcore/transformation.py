@@ -499,6 +499,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                         # Process metadata/usage
                         metadata = event_payload.get("metadata")
                         if metadata and "usage" in metadata:
+                            # NOTE:
+                            # Metadata events can appear mid-stream (e.g. around
+                            # toolUse/toolResult phases). Marking them as
+                            # finish_reason="stop" can prematurely terminate
+                            # streaming before final content arrives.
                             chunk = ModelResponseStream(
                                 id=f"chatcmpl-{uuid.uuid4()}",
                                 created=0,
@@ -507,7 +512,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                             )
                             chunk.choices = [
                                 StreamingChoices(
-                                    finish_reason="stop",
+                                    finish_reason=None,
                                     index=0,
                                     delta=Delta(),
                                 )
@@ -654,6 +659,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                         # Process metadata/usage
                         metadata = event_payload.get("metadata")
                         if metadata and "usage" in metadata:
+                            # NOTE:
+                            # Metadata events can appear mid-stream (e.g. around
+                            # toolUse/toolResult phases). Marking them as
+                            # finish_reason="stop" can prematurely terminate
+                            # streaming before final content arrives.
                             chunk = ModelResponseStream(
                                 id=f"chatcmpl-{uuid.uuid4()}",
                                 created=0,
@@ -662,7 +672,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                             )
                             chunk.choices = [
                                 StreamingChoices(
-                                    finish_reason="stop",
+                                    finish_reason=None,
                                     index=0,
                                     delta=Delta(),
                                 )

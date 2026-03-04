@@ -20,6 +20,24 @@ import litellm
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
 
 
+class _FakeAsyncTextResponse:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    async def aiter_text(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeSyncTextResponse:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def iter_text(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
 class TestAgentCoreAcceptHeader:
     """Tests for Accept header in AgentCore requests."""
 
@@ -81,3 +99,82 @@ class TestAgentCoreAcceptHeader:
             headers = mock_post.call_args.kwargs["headers"]
             assert "Accept" in headers
             assert headers["Accept"] == "application/json, text/event-stream"
+
+
+class TestAgentCoreStreamingToolFlow:
+    """Regression tests for tool-flow streaming ordering in AgentCore."""
+
+    @pytest.fixture
+    def config(self):
+        return AmazonAgentCoreConfig()
+
+    def _build_tool_flow_sse(self) -> str:
+        return (
+            'data: {"event":{"contentBlockDelta":{"delta":{"text":"Let me check weather. "}}}}\n'
+            'data: {"event":{"metadata":{"usage":{"inputTokens":10,"outputTokens":3,"totalTokens":13}}}}\n'
+            'data: {"event":{"toolUse":{"toolUseId":"tool-1","name":"get_weather","input":{"city":"Paris"}}}}\n'
+            'data: {"event":{"contentBlockDelta":{"delta":{"text":"Here are results."}}}}\n'
+            'data: {"message":{"role":"assistant","content":[{"text":"Let me check weather. Here are results."}]}}\n'
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_stream_does_not_stop_on_intermediate_metadata(self, config):
+        """
+        Metadata can appear before final tool-result content.
+
+        Ensure intermediate metadata does not emit finish_reason='stop', which
+        would prematurely terminate streaming before final content arrives.
+        """
+        response = _FakeAsyncTextResponse([self._build_tool_flow_sse()])
+
+        chunks = []
+        async for chunk in config._stream_agentcore_response(
+            response=response,
+            model="bedrock/agentcore/test-runtime",
+        ):
+            chunks.append(chunk)
+
+        assert len(chunks) >= 3
+
+        stop_indices = [
+            i
+            for i, chunk in enumerate(chunks)
+            if chunk.choices[0].finish_reason == "stop"
+        ]
+        assert stop_indices == [len(chunks) - 1]
+
+        content_parts = [
+            chunk.choices[0].delta.content
+            for chunk in chunks
+            if chunk.choices[0].delta.content
+        ]
+        assert "".join(content_parts) == "Let me check weather. Here are results."
+
+        assert any(getattr(chunk, "usage", None) is not None for chunk in chunks)
+
+    def test_sync_stream_does_not_stop_on_intermediate_metadata(self, config):
+        """Same regression coverage for sync streaming path."""
+        response = _FakeSyncTextResponse([self._build_tool_flow_sse()])
+
+        chunks = list(
+            config._stream_agentcore_response_sync(
+                response=response,
+                model="bedrock/agentcore/test-runtime",
+            )
+        )
+
+        assert len(chunks) >= 3
+
+        stop_indices = [
+            i
+            for i, chunk in enumerate(chunks)
+            if chunk.choices[0].finish_reason == "stop"
+        ]
+        assert stop_indices == [len(chunks) - 1]
+
+        content_parts = [
+            chunk.choices[0].delta.content
+            for chunk in chunks
+            if chunk.choices[0].delta.content
+        ]
+        assert "".join(content_parts) == "Let me check weather. Here are results."
