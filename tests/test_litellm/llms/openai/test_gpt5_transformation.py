@@ -269,6 +269,7 @@ def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-2025-12-11")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
+    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.3-chat-latest")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-pro")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
@@ -402,7 +403,7 @@ def test_gpt5_2_chat_temperature_restricted(config: OpenAIConfig):
     Regression test for https://github.com/BerriAI/litellm/issues/21911
     """
     # gpt-5.2-chat should reject non-1 temperature when drop_params=False
-    for model in ["gpt-5.2-chat", "gpt-5.2-chat-latest"]:
+    for model in ["gpt-5.2-chat", "gpt-5.2-chat-latest", "gpt-5.3-chat-latest"]:
         with pytest.raises(litellm.utils.UnsupportedParamsError):
             config.map_openai_params(
                 non_default_params={"temperature": 0.7},

@@ -167,12 +167,12 @@ class HeliconeLogger:
             if "claude" in model and not is_vertex_ai:
                 url = f"{self.api_base}/anthropic/v1/log"
                 provider_url = "https://api.anthropic.com/v1/messages"
-            elif "gemini" in model:
-                url = f"{self.api_base}/custom/v1/log"
-                provider_url = "https://generativelanguage.googleapis.com/v1beta"
             elif is_vertex_ai:
                 url = f"{self.api_base}/custom/v1/log"
                 provider_url = "https://aiplatform.googleapis.com/v1"
+            elif "gemini" in model:
+                url = f"{self.api_base}/custom/v1/log"
+                provider_url = "https://generativelanguage.googleapis.com/v1beta"
             headers = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",

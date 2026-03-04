@@ -408,10 +408,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         file_id = "deleted"
         if hasattr(raw_response, "request") and raw_response.request:
             url = str(raw_response.request.url)
-            if "/o/" in url:
+            if "/b/" in url and "/o/" in url:
                 import urllib.parse
+                bucket_part = url.split("/b/")[-1].split("/o/")[0]
                 encoded_name = url.split("/o/")[-1].split("?")[0]
-                file_id = f"gs://{urllib.parse.unquote(encoded_name)}"
+                file_id = f"gs://{bucket_part}/{urllib.parse.unquote(encoded_name)}"
         return FileDeleted(id=file_id, deleted=True, object="file")
 
     def transform_list_files_request(
