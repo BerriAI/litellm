@@ -160,3 +160,103 @@ class TestBatchEndpointTeamOverride:
             },
         )
         assert kwargs["output_expires_after"] == CALLER_EXPIRY
+
+    def test_team_injects_when_caller_sends_nothing(self, monkeypatch, llm_router):
+        """Team enforcement applies even when caller sends no expiry."""
+        kwargs = self._post_batch(
+            monkeypatch,
+            llm_router,
+            team_metadata={
+                "enforced_batch_output_expires_after": TEAM_EXPIRY,
+            },
+            request_body={
+                "input_file_id": "file-abc123",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+            },
+        )
+        assert kwargs["output_expires_after"] == TEAM_EXPIRY
+
+
+class TestBatchEndpointTeamValidation:
+    """Verify validation errors for malformed team metadata on batch endpoint."""
+
+    def _post_batch_raw(
+        self,
+        monkeypatch,
+        llm_router: Router,
+        team_metadata: dict,
+        request_body: dict,
+    ):
+        """POST /v1/batches and return the raw response (no status assertion)."""
+        _setup_proxy(monkeypatch, llm_router)
+
+        user_key = UserAPIKeyAuth(
+            api_key="test-key",
+            team_metadata=team_metadata,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: user_key
+
+        async def mock_acreate_batch(**kwargs):
+            return _make_batch_response()
+
+        monkeypatch.setattr(litellm, "acreate_batch", mock_acreate_batch)
+
+        try:
+            response = client.post(
+                "/v1/batches",
+                json=request_body,
+                headers={"Authorization": "Bearer test-key"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        return response
+
+    _BATCH_BODY = {
+        "input_file_id": "file-abc123",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+    }
+
+    def test_missing_anchor_key_returns_500(self, monkeypatch, llm_router):
+        """Missing 'anchor' key in team metadata returns 500."""
+        response = self._post_batch_raw(
+            monkeypatch,
+            llm_router,
+            team_metadata={
+                "enforced_batch_output_expires_after": {"seconds": 3600},
+            },
+            request_body=self._BATCH_BODY,
+        )
+        assert response.status_code == 500
+        assert "malformed" in response.json()["error"]["message"]
+
+    def test_missing_seconds_key_returns_500(self, monkeypatch, llm_router):
+        """Missing 'seconds' key in team metadata returns 500."""
+        response = self._post_batch_raw(
+            monkeypatch,
+            llm_router,
+            team_metadata={
+                "enforced_batch_output_expires_after": {"anchor": "created_at"},
+            },
+            request_body=self._BATCH_BODY,
+        )
+        assert response.status_code == 500
+        assert "malformed" in response.json()["error"]["message"]
+
+    def test_invalid_anchor_returns_500(self, monkeypatch, llm_router):
+        """Invalid anchor value in team metadata returns 500."""
+        response = self._post_batch_raw(
+            monkeypatch,
+            llm_router,
+            team_metadata={
+                "enforced_batch_output_expires_after": {
+                    "anchor": "last_active_at",
+                    "seconds": 3600,
+                },
+            },
+            request_body=self._BATCH_BODY,
+        )
+        assert response.status_code == 500
+        assert "created_at" in response.json()["error"]["message"]
