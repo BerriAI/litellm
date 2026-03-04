@@ -520,6 +520,12 @@ async def count_response_input_tokens(
 
     except HTTPException:
         raise
+    except ProxyException as e:
+        status_code = int(e.code) if e.code and e.code.isdigit() else 500
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": e.message},
+        )
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.response_api_endpoints.count_response_input_tokens(): Exception occurred - {}".format(
@@ -527,7 +533,7 @@ async def count_response_input_tokens(
             )
         )
         raise HTTPException(
-            status_code=500, detail={"error": "Internal server error"}
+            status_code=500, detail={"error": f"Internal server error: {str(e)}"}
         )
 
 
