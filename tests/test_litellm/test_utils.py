@@ -96,6 +96,19 @@ def test_supports_function_calling_github_anthropic_alias():
     )
 
 
+def test_supports_function_calling_deepinfra_llama():
+    """Test that deepinfra Llama models correctly report function calling support.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22619
+    """
+    assert (
+        litellm.utils.supports_function_calling(
+            model="deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+        )
+        is True
+    )
+
+
 def test_supports_function_calling_unknown_github_alias_returns_false():
     assert (
         litellm.utils.supports_function_calling(
