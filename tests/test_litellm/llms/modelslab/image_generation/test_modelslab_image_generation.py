@@ -96,8 +96,8 @@ class TestModelsLabImageGenerationConfig:
         assert "n" not in result
 
     def test_map_openai_params_size_invalid_format_raises(self):
-        """Test that invalid size format with 'x' but malformed raises a clear error."""
-        non_default_params = {"size": "1024xinvalid"}
+        """Test that invalid size format without 'x' raises a clear error."""
+        non_default_params = {"size": "1024"}
         optional_params = {}
 
         with pytest.raises(ValueError) as exc_info:

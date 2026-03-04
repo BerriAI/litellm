@@ -95,16 +95,20 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                         optional_params["samples"] = non_default_params[k]
                     elif k == "size":
                         size_str = str(non_default_params[k])
-                        if "x" in size_str:
-                            try:
-                                w, h = size_str.split("x", 1)
-                                optional_params["width"] = int(w)
-                                optional_params["height"] = int(h)
-                            except (ValueError, IndexError) as e:
-                                raise ValueError(
-                                    f"Invalid size format '{size_str}'. "
-                                    f"Expected format is WIDTHxHEIGHT (e.g., '1024x1024')."
-                                )
+                        if "x" not in size_str:
+                            raise ValueError(
+                                f"Invalid size format '{size_str}'. "
+                                f"Expected format is WIDTHxHEIGHT (e.g., '1024x1024')."
+                            )
+                        try:
+                            w, h = size_str.split("x", 1)
+                            optional_params["width"] = int(w)
+                            optional_params["height"] = int(h)
+                        except (ValueError, IndexError) as e:
+                            raise ValueError(
+                                f"Invalid size format '{size_str}'. "
+                                f"Expected format is WIDTHxHEIGHT (e.g., '1024x1024')."
+                            )
                     else:
                         optional_params[k] = non_default_params[k]
                 elif drop_params:
@@ -302,8 +306,13 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
             )
 
             resolved_key = self._resolve_api_key(request_data, litellm_params)
+            # Try to get custom api_base from litellm_params, otherwise fall back to env/default
+            # Note: transform_image_generation_response doesn't receive api_base directly,
+            # so we check if it was passed in litellm_params
             base_url = (
-                get_secret_str("MODELSLAB_API_BASE") or self.DEFAULT_BASE_URL
+                litellm_params.get("api_base")
+                or get_secret_str("MODELSLAB_API_BASE")
+                or self.DEFAULT_BASE_URL
             )
 
             response_data = self._poll_sync(
