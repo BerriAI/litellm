@@ -8,7 +8,7 @@ import {
   ColumnDef,
   flexRender,
   getCoreRowModel,
-  getSortedRowModel,
+  getCoreRowModel,
   PaginationState,
   SortingState,
   useReactTable,
