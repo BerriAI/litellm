@@ -71,6 +71,15 @@ headers = get_default_headers()
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 
 
+def _format_timeout(timeout: Optional[Union[float, httpx.Timeout]]) -> str:
+    """Return a human-readable string for a timeout value."""
+    if timeout is None:
+        return "default (client-level) timeout"
+    if isinstance(timeout, (int, float)):
+        return f"{timeout}s"
+    return str(timeout)
+
+
 def _prepare_request_data_and_content(
     data: Optional[Union[dict, str, bytes]] = None,
     content: Any = None,
@@ -493,7 +502,7 @@ class AsyncHTTPHandler:
                     headers["response_headers-{}".format(key)] = value
 
             raise litellm.Timeout(
-                message=f"Connection timed out. Timeout passed={timeout}, time taken={time_delta} seconds",
+                message=f"Connection timed out. Timeout passed={_format_timeout(timeout)}, time taken={time_delta}s",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
                 headers=headers,
@@ -563,7 +572,7 @@ class AsyncHTTPHandler:
                     headers["response_headers-{}".format(key)] = value
 
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_format_timeout(timeout)}.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
                 headers=headers,
@@ -629,7 +638,7 @@ class AsyncHTTPHandler:
                     headers["response_headers-{}".format(key)] = value
 
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_format_timeout(timeout)}.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
                 headers=headers,
@@ -1028,7 +1037,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_format_timeout(timeout)}.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1076,7 +1085,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_format_timeout(timeout)}.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1124,7 +1133,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_format_timeout(timeout)}.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1161,7 +1170,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_format_timeout(timeout)}.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
