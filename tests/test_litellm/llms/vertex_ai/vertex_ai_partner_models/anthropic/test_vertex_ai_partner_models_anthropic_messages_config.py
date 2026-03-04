@@ -248,3 +248,91 @@ def test_validate_environment_with_authorization_header_calculates_api_base():
         # Verify Authorization header is still present
         assert "Authorization" in updated_headers, \
             "Authorization header should be preserved"
+
+
+def test_vertex_ai_experimental_output_config_format_removed():
+    """
+    Regression test for #21407: output_config.format (structured output schema)
+    must be stripped in the experimental pass-through path.
+    When only format is present, the entire output_config key is removed.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 50,
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"greeting": {"type": "string"}},
+                    "required": ["greeting"],
+                },
+            }
+        },
+    }
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "output_config" not in result, (
+        "output_config should be removed when it only contains format"
+    )
+
+
+def test_vertex_ai_experimental_output_config_effort_preserved():
+    """
+    Regression test: output_config.effort (reasoning effort for Claude 4.6)
+    must be preserved in the experimental path.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 50,
+        "output_config": {"effort": "high"},
+    }
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "think carefully"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "output_config" in result, (
+        "output_config with effort must be preserved for Claude 4.6"
+    )
+    assert result["output_config"]["effort"] == "high"
+
+
+def test_vertex_ai_experimental_output_config_mixed():
+    """
+    When output_config has both format and effort, only format is stripped.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 50,
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "schema": {"type": "object", "properties": {}},
+            },
+            "effort": "medium",
+        },
+    }
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "extract carefully"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "output_config" in result
+    assert "format" not in result["output_config"]
+    assert result["output_config"]["effort"] == "medium"

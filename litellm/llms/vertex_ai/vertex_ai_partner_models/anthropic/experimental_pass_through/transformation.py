@@ -152,8 +152,14 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             "output_format", None
         )  # do not pass output_format in request body to vertex ai - vertex ai does not support output_format as yet
 
-        anthropic_messages_request.pop(
-            "output_config", None
-        )  # do not pass output_config in request body to vertex ai - vertex ai does not support output_config
+        # Selectively strip output_config.format (structured output schema) but
+        # preserve output_config.effort (reasoning effort for Claude 4.6)
+        output_config = anthropic_messages_request.get("output_config")
+        if isinstance(output_config, dict):
+            output_config.pop("format", None)
+            if not output_config:
+                anthropic_messages_request.pop("output_config", None)
+        elif output_config is not None:
+            anthropic_messages_request.pop("output_config", None)
 
         return anthropic_messages_request

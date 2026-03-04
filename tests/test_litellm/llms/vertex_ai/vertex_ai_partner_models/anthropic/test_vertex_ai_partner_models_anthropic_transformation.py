@@ -491,110 +491,117 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
     ), "Header should be removed if no supported values remain"
 
 
-def test_vertex_ai_anthropic_output_config_dropped():
+def test_vertex_ai_anthropic_output_config_format_removed():
     """
-    Test that output_config parameter is dropped from Vertex AI Anthropic requests.
-    
-    Vertex AI does not support the output_config parameter (used for effort settings
-    in Anthropic API). This test ensures it's properly removed to prevent
-    "Extra inputs are not permitted" errors.
+    Regression test for #21407: output_config.format (structured output schema)
+    must be stripped from Vertex AI Anthropic requests to avoid
+    'Extra inputs are not permitted'. When only format is present, the entire
+    output_config key should be removed.
     """
     config = VertexAIAnthropicConfig()
-    
-    messages = [{"role": "user", "content": "What is 2+2?"}]
-    headers = {}
-    
-    # Simulate optional_params with output_config that would be passed in
+
+    messages = [{"role": "user", "content": "Extract info from this email."}]
     optional_params = {
-        "max_tokens": 1024,
         "output_config": {
-            "effort": "high"  # This is Anthropic-specific and not supported by Vertex AI
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            }
         },
     }
-    
-    # Call transform_request which should drop output_config
-    result = config.transform_request(
-        model="claude-3-5-sonnet-20241022",
+
+    transformed_data = config.transform_request(
+        model="claude-sonnet-4",
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers=headers,
+        headers={},
     )
-    
-    # Verify output_config was removed
-    assert "output_config" not in result, \
-        "output_config should be dropped from Vertex AI Anthropic requests"
-    
-    # Verify other parameters are preserved
-    assert result["max_tokens"] == 1024, "max_tokens should be preserved"
-    assert "messages" in result, "messages should be present"
+
+    assert "output_config" not in transformed_data, (
+        "output_config should be removed when it only contains format"
+    )
 
 
-def test_vertex_ai_anthropic_output_format_and_output_config_both_dropped():
+def test_vertex_ai_anthropic_output_config_effort_preserved():
     """
-    Test that both output_format and output_config are dropped from Vertex AI requests.
-    
-    This ensures that even if both parameters somehow make it to the transform_request,
-    they are properly cleaned up before sending to Vertex AI.
+    Regression test: output_config.effort (reasoning effort for Claude 4.6)
+    must be preserved — only the unsupported 'format' key is stripped.
     """
     config = VertexAIAnthropicConfig()
-    
-    messages = [{"role": "user", "content": "Extract structured data"}]
-    headers = {}
-    
-    optional_params = {
-        "max_tokens": 2048,
-        "output_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "data",
-                "schema": {"type": "object", "properties": {"result": {"type": "string"}}}
-            }
-        },
-        "output_config": {
-            "effort": "high"
-        },
-    }
-    
-    # Simulate parent class creating test_data with both parameters
-    # (as if the parent transform_request added them)
-    test_data = {
-        "model": "claude-3-5-sonnet-20241022",
-        "messages": messages,
-        "max_tokens": 2048,
-        "output_format": optional_params["output_format"],
-        "output_config": optional_params["output_config"],
-    }
-    
-    # Mock the parent transform_request to return data with both parameters
-    original_transform = config.__class__.__bases__[0].transform_request
-    
-    def mock_transform_request(self, model, messages, optional_params, litellm_params, headers):
-        return test_data.copy()
-    
-    config.__class__.__bases__[0].transform_request = mock_transform_request
-    
-    try:
-        result = config.transform_request(
-            model="claude-3-5-sonnet-20241022",
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params={},
-            headers=headers,
-        )
-        
-        # Verify both were removed
-        assert "output_format" not in result, \
-            "output_format should be dropped from Vertex AI requests"
-        assert "output_config" not in result, \
-            "output_config should be dropped from Vertex AI requests"
-        
-        # Verify essential params are preserved
-        assert result["max_tokens"] == 2048, "max_tokens should be preserved"
-        assert "messages" in result, "messages should be present"
-        assert "model" not in result, "model should also be dropped for Vertex AI"
-        
-    finally:
-        # Restore original method
-        config.__class__.__bases__[0].transform_request = original_transform
 
+    messages = [{"role": "user", "content": "Think carefully about this."}]
+    optional_params = {
+        "output_config": {"effort": "high"},
+    }
+
+    transformed_data = config.transform_request(
+        model="claude-sonnet-4-6",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "output_config" in transformed_data, (
+        "output_config with effort must be preserved for Claude 4.6"
+    )
+    assert transformed_data["output_config"]["effort"] == "high"
+
+
+def test_vertex_ai_anthropic_output_config_mixed_format_and_effort():
+    """
+    When output_config contains both format and effort, only format is stripped
+    and effort is preserved.
+    """
+    config = VertexAIAnthropicConfig()
+
+    messages = [{"role": "user", "content": "Extract info carefully."}]
+    optional_params = {
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "schema": {"type": "object", "properties": {}},
+            },
+            "effort": "medium",
+        },
+    }
+
+    transformed_data = config.transform_request(
+        model="claude-sonnet-4-6",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "output_config" in transformed_data, (
+        "output_config should remain when effort key is present"
+    )
+    assert "format" not in transformed_data["output_config"], (
+        "format key should be stripped from output_config"
+    )
+    assert transformed_data["output_config"]["effort"] == "medium"
+
+
+def test_vertex_ai_anthropic_output_format_removed():
+    """Verify output_format is also stripped (pre-existing behavior)."""
+    config = VertexAIAnthropicConfig()
+
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {"output_format": {"type": "json_schema"}}
+
+    transformed_data = config.transform_request(
+        model="claude-sonnet-4",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "output_format" not in transformed_data

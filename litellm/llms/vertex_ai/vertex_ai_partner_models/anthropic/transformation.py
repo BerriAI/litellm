@@ -105,11 +105,22 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
 
-        # VertexAI doesn't support output_format parameter, remove it if present
+        # VertexAI doesn't support output_format parameter, remove if present
         data.pop("output_format", None)
         
         # VertexAI doesn't support output_config parameter, remove it if present
         data.pop("output_config", None)
+
+        # VertexAI doesn't support output_config.format (structured output schema),
+        # but does support output_config.effort (reasoning effort for Claude 4.6).
+        # Selectively strip only the unsupported "format" key.
+        output_config = data.get("output_config")
+        if isinstance(output_config, dict):
+            output_config.pop("format", None)
+            if not output_config:
+                data.pop("output_config", None)
+        elif output_config is not None:
+            data.pop("output_config", None)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
