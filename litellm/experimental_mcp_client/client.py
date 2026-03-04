@@ -4,7 +4,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Awaitable, Callable, Dict, Generator, List, Optional, Tuple, TypeVar, Union
 
 import httpx
 from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
@@ -50,6 +50,87 @@ def to_basic_auth(auth_value: str) -> str:
 TSessionResult = TypeVar("TSessionResult")
 
 
+class MCPSigV4Auth(httpx.Auth):
+    """
+    httpx Auth class that signs each request with AWS SigV4.
+
+    This is used for MCP servers that require AWS SigV4 authentication,
+    such as AWS Bedrock AgentCore MCP servers. httpx calls auth_flow()
+    for every outgoing request, enabling per-request signature computation.
+    """
+
+    def __init__(
+        self,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
+        aws_region_name: Optional[str] = None,
+        aws_service_name: Optional[str] = None,
+    ):
+        try:
+            from botocore.credentials import Credentials
+        except ImportError:
+            raise ImportError(
+                "Missing botocore to use AWS SigV4 authentication. "
+                "Run 'pip install boto3'."
+            )
+
+        self.service_name = aws_service_name or "bedrock-agentcore"
+        self.region_name = aws_region_name or "us-east-1"
+
+        # Note: os.environ/ prefixed values are already resolved by
+        # ProxyConfig._check_for_os_environ_vars() at config load time.
+        # Values arrive here as plain strings.
+        if aws_access_key_id and aws_secret_access_key:
+            self.credentials = Credentials(
+                access_key=aws_access_key_id,
+                secret_key=aws_secret_access_key,
+                token=aws_session_token,
+            )
+        else:
+            # Fall back to default boto3 credential chain
+            import botocore.session
+
+            session = botocore.session.get_session()
+            self.credentials = session.get_credentials()
+            if self.credentials is None:
+                raise ValueError(
+                    "No AWS credentials found. Provide aws_access_key_id and "
+                    "aws_secret_access_key, or configure default credentials "
+                    "(env vars, ~/.aws/credentials, instance profile)."
+                )
+
+    def auth_flow(
+        self, request: httpx.Request
+    ) -> Generator[httpx.Request, httpx.Response, None]:
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+
+        # Build AWSRequest from the httpx Request
+        aws_request = AWSRequest(
+            method=request.method,
+            url=str(request.url),
+            data=request.content,
+            headers={
+                "Content-Type": request.headers.get(
+                    "Content-Type", "application/json"
+                ),
+            },
+        )
+
+        # Sign the request — SigV4Auth.add_auth() adds Authorization,
+        # X-Amz-Date, and X-Amz-Security-Token (if session token present).
+        # Host header is derived automatically from the URL.
+        sigv4 = SigV4Auth(self.credentials, self.service_name, self.region_name)
+        sigv4.add_auth(aws_request)
+
+        # Copy SigV4 headers back to the httpx request
+        for header_name, header_value in aws_request.headers.items():
+            request.headers[header_name] = header_value
+
+        yield request
+
+
 class MCPClient:
     """
     MCP Client supporting:
@@ -68,6 +149,7 @@ class MCPClient:
         stdio_config: Optional[MCPStdioConfig] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[VerifyTypes] = None,
+        aws_auth: Optional[httpx.Auth] = None,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -77,6 +159,7 @@ class MCPClient:
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
+        self._aws_auth: Optional[httpx.Auth] = aws_auth
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -214,6 +297,9 @@ class MCPClient:
                     headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
+        # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request
+        # signing (including the body hash), so it uses httpx.Auth flow instead
+        # of static headers. See MCPSigV4Auth and _create_httpx_client_factory().
 
         # update the headers with the extra headers
         if self.extra_headers:
@@ -246,10 +332,16 @@ class MCPClient:
                 f"MCP client using SSL configuration: {type(ssl_config).__name__}"
             )
 
+            # Use SigV4 auth if configured and no explicit auth provided.
+            # The MCP SDK's sse_client and streamable_http_client call this
+            # factory without passing auth=, so self._aws_auth is used.
+            # For non-SigV4 clients, self._aws_auth is None — no behavior change.
+            effective_auth = auth if auth is not None else self._aws_auth
+
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout,
-                auth=auth,
+                auth=effective_auth,
                 verify=ssl_config,
                 follow_redirects=True,
             )

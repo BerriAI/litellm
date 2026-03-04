@@ -46,6 +46,12 @@ class MCPServer(BaseModel):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    # AWS SigV4 fields
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_session_token: Optional[str] = None
+    aws_region_name: Optional[str] = None
+    aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
