@@ -359,7 +359,7 @@ class ComplexityRouter(CustomLogger):
         
         for msg in reversed(messages):
             role = msg.get("role", "")
-            content = msg.get("content", "")
+            content = msg.get("content") or ""
             # content may be a list of content parts (e.g. [{"type": "text", "text": "..."}])
             if isinstance(content, list):
                 text_parts = [
