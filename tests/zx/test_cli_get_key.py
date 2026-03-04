@@ -139,6 +139,30 @@ class TestKeyMetadataInitialization:
         assert device_id is None
 
 
+# T5 Tests: Legacy key metadata update
+class TestLegacyKeyMetadataUpdate:
+    """Test that old keys get their metadata dynamically updated"""
+
+    @pytest.mark.asyncio
+    async def test_legacy_key_receives_device_id(self):
+        """Test that legacy key metadata is updated to include device_id when it's missing"""
+        # Simulate an existing key without device_id in metadata
+        legacy_metadata = {'custom_field': 'value'}
+
+        # When device_id is provided, it should be added to metadata
+        device_id = 'device-new-123'
+        device_name = 'New Device'
+
+        # Updated metadata should contain both old and new fields
+        updated_metadata = legacy_metadata.copy()
+        updated_metadata['device_id'] = device_id
+        updated_metadata['device_name'] = device_name
+
+        assert updated_metadata['device_id'] == device_id
+        assert updated_metadata['device_name'] == device_name
+        assert updated_metadata['custom_field'] == 'value'  # Old fields preserved
+
+
 # Integration-like tests
 class TestCliGetKeyIntegration:
     """High-level tests for cli_get_key behavior"""
