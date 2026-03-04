@@ -804,12 +804,12 @@ class TestCommonRequestProcessingHelpers:
             ("id: 123", None),  # Non-SSE event line
             (
                 'data: {"error": {"message": "some error"}}',
-                None,
-            ),  # Error event without 'code' field
+                500,
+            ),  # Error event without 'code' field -> default to 500
             (
                 'data: {"error": {"code": null, "message": "code is null"}}',
-                None,
-            ),  # Error with null code
+                500,
+            ),  # Error with null code -> default to 500
         ],
     )
     async def test_parse_event_data_for_error(self, event_line, expected_code):

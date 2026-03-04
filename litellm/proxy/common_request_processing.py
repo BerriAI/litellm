@@ -96,14 +96,18 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
                         )
                         # Not a valid integer string, treat as if no valid code was found for this check
                         pass
-                elif error_code_raw is None:
-                    # Some providers omit an explicit error code in streaming error chunks.
-                    # Treat this as an error, but default to 500.
-                    return status.HTTP_500_INTERNAL_SERVER_ERROR
+                # NOTE: if `code` is missing or null, treat it as "no parsable HTTP status".
+                # The caller may still choose to return a generic error response by inspecting
+                # the payload separately.
 
                 # Ensure error_code is a valid HTTP status code
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
+
+                # At this point, the chunk contains an error object but we couldn't parse a valid HTTP status code.
+                # Returning 500 ensures callers can still treat the first chunk as an error and return JSON.
+                if error_code_raw is None:
+                    return status.HTTP_500_INTERNAL_SERVER_ERROR
                 elif (
                     error_code_raw is not None
                 ):  # Log if original code was present but not valid
