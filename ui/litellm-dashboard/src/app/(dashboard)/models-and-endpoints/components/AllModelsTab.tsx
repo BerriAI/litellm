@@ -213,7 +213,7 @@ const AllModelsTab = ({
       refetchModels();
     } catch (error) {
       console.error("Error deleting model:", error);
-      NotificationsManager.fromBackend("Failed to delete model");
+      NotificationsManager.fromBackend(error);
     } finally {
       setDeleteLoading(false);
       setDeleteModalModelId(null);
