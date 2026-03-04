@@ -326,7 +326,7 @@ class ComplexityRouter(CustomLogger):
         self,
         model: str,
         request_kwargs: Dict,
-        messages: Optional[List[Dict[str, str]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
     ) -> Optional["PreRoutingHookResponse"]:
