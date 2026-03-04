@@ -924,7 +924,7 @@ model LiteLLM_SpendLogGuardrailIndex {
 // Index for fast "last N logs for tool" from SpendLogs – see how a tool is called in production
 model LiteLLM_SpendLogToolIndex {
   request_id String
-  tool_name  String   // matches LiteLLM_ToolTable.tool_name; join for input_policy etc.
+  tool_name  String   // matches LiteLLM_ToolTable.tool_name; join for input_policy/output_policy etc.
   start_time DateTime
 
   @@id([request_id, tool_name])
