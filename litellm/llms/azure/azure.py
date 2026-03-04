@@ -866,7 +866,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             async_handler = client  # type: ignore
 
         if (
-            "images/generations" in api_base
+            api_base
+            and "images/generations" in api_base
             and api_version
             in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
                 "2023-06-01-preview",
@@ -977,7 +978,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             sync_handler = client  # type: ignore
 
         if (
-            "images/generations" in api_base
+            api_base
+            and "images/generations" in api_base
             and api_version
             in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
                 "2023-06-01-preview",
@@ -1084,10 +1086,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_version=api_version,
             )
 
-        if "/openai/deployments/" in api_base:
+        if api_base and "/openai/deployments/" in api_base:
             base_url_with_deployment = api_base
         else:
-            base_url_with_deployment = api_base + "/openai/deployments/" + model
+            base_url_with_deployment = (api_base or "") + "/openai/deployments/" + model
 
         base_url_with_deployment += "/images/generations"
         base_url_with_deployment += "?api-version=" + api_version

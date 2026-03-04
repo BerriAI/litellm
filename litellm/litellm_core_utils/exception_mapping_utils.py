@@ -624,6 +624,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             litellm_debug_info=extra_information,
                         )
                 else:
+                    # Handle Python built-in exceptions that indicate internal bugs, not API errors
+                    if isinstance(original_exception, (TypeError, ValueError, KeyError, AttributeError)):
+                        exception_mapping_worked = True
+                        raise InternalServerError(
+                            message=f"Internal error in LiteLLM: {type(original_exception).__name__}: {message}\n{traceback.format_exc()}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                        )
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     # exception_mapping_worked = True
                     raise APIConnectionError(

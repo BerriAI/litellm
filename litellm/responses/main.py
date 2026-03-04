@@ -515,13 +515,17 @@ async def aresponses(
 
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -781,13 +785,17 @@ def responses(
 
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -846,13 +854,17 @@ async def adelete_responses(
             response = init_response
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -941,13 +953,17 @@ def delete_responses(
 
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -1020,13 +1036,17 @@ async def aget_responses(
             )
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -1129,13 +1149,17 @@ def get_responses(
 
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -1191,13 +1215,17 @@ async def alist_input_items(
             response = init_response
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -1276,13 +1304,17 @@ def list_input_items(
 
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -1341,13 +1373,17 @@ async def acancel_responses(
             response = init_response
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -1436,13 +1472,17 @@ def cancel_responses(
 
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -1514,13 +1554,17 @@ async def acompact_responses(
 
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
 
 
 @client
@@ -1655,10 +1699,14 @@ def compact_responses(
 
         return response
     except Exception as e:
-        raise litellm.exception_type(
+        # Don't double-map exceptions that are already litellm exceptions
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
+        mapped_exception = litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+        raise mapped_exception from e
