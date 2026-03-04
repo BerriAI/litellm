@@ -2882,7 +2882,7 @@ class ProxyConfig:
                 elif key == "success_callback":
                     litellm.success_callback = []
                     litellm_success = value if isinstance(value, list) else []
-                    if litellm_success:
+                    if litellm_success and callback_settings:
                         warnings.warn(
                             "litellm_settings.success_callback is deprecated. Use callback_settings with event_types: [llm_api_success]. "
                             "Support will be removed in 2 releases.",
