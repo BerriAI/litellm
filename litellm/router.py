@@ -115,9 +115,6 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
-from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-    EncryptedContentAffinityCheck,
-)
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
