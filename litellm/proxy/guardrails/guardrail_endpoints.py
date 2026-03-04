@@ -1173,7 +1173,8 @@ def _build_field_dict(
     # Check for custom UI type override
     field_json_schema_extra = getattr(field, "json_schema_extra", {})
     if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-        field_type = field_json_schema_extra["ui_type"].value
+        ui_type = field_json_schema_extra["ui_type"]
+        field_type = ui_type.value if hasattr(ui_type, "value") else ui_type
     elif field_json_schema_extra and "type" in field_json_schema_extra:
         field_type = field_json_schema_extra["type"]
 
