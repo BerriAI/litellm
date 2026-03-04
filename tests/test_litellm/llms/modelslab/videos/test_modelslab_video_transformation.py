@@ -112,6 +112,43 @@ class TestModelsLabVideoTransformation:
         assert data["init_image"] == "https://example.com/frame.jpg"
         assert "img2video" in url
 
+    def test_transform_video_create_request_img2video_auto_route(self):
+        """When init_image is present, endpoint is auto-routed to img2video."""
+        # Start with text2video base URL (what get_complete_url returns by default)
+        base_url = "https://modelslab.com/api/v6/video/text2video"
+        
+        data, files, url = self.config.transform_video_create_request(
+            model="stable-video-diffusion",
+            prompt="Camera panning right",
+            api_base=base_url,
+            video_create_optional_request_params={"init_image": "https://example.com/frame.jpg"},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        
+        assert data["key"] == "test-api-key"
+        assert data["init_image"] == "https://example.com/frame.jpg"
+        # Should auto-route to img2video
+        assert "img2video" in url
+        assert "text2video" not in url
+
+    def test_transform_video_create_request_text2video_no_routing(self):
+        """When no init_image, stays on text2video endpoint."""
+        base_url = "https://modelslab.com/api/v6/video/text2video"
+        
+        data, files, url = self.config.transform_video_create_request(
+            model="i2vgen-xl",
+            prompt="A flowing river",
+            api_base=base_url,
+            video_create_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        
+        assert data["key"] == "test-api-key"
+        # Should stay on text2video
+        assert "text2video" in url
+
     # -------------------------------------------------------------------------
     # transform_video_create_response
     # -------------------------------------------------------------------------

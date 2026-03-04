@@ -131,9 +131,8 @@ class ModelsLabVideoConfig(BaseVideoConfig):
     ) -> str:
         if api_base:
             return api_base.rstrip("/")
-        # Use img2video if init_image is present in litellm_params
-        if litellm_params.get("init_image") or litellm_params.get("input_reference"):
-            return f"{MODELSLAB_VIDEO_BASE_URL}/img2video"
+        # Default to text2video; endpoint selection is handled in 
+        # transform_video_create_request based on mapped params
         return f"{MODELSLAB_VIDEO_BASE_URL}/text2video"
 
     def transform_video_create_request(
@@ -151,6 +150,10 @@ class ModelsLabVideoConfig(BaseVideoConfig):
             "prompt": prompt,
         }
         request_data.update(video_create_optional_request_params)
+
+        # Route to img2video endpoint if init_image is present
+        if "init_image" in video_create_optional_request_params:
+            api_base = f"{MODELSLAB_VIDEO_BASE_URL}/img2video"
 
         files_list: List[Tuple[str, Any]] = []
         return request_data, files_list, api_base
