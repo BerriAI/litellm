@@ -312,6 +312,13 @@ class GenericGuardrailAPI(CustomGuardrail):
         return_inputs.update(inputs)
         return return_inputs
 
+    def _build_request_headers(self) -> dict:
+        """Build HTTP headers for the guardrail API request."""
+        headers = {"Content-Type": "application/json"}
+        if self.headers:
+            headers.update(self.headers)
+        return headers
+
     def _build_guardrail_return_inputs(
         self,
         *,
@@ -416,10 +423,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             model=model,
         )
 
-        # Prepare headers
-        headers = {"Content-Type": "application/json"}
-        if self.headers:
-            headers.update(self.headers)
+        headers = self._build_request_headers()
 
         try:
             # Make the API request
