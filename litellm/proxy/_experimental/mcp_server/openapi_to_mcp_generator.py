@@ -211,6 +211,14 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
+        # Pop extra_headers before processing API parameters.
+        extra_headers: Optional[Dict[str, str]] = kwargs.pop("_extra_headers", None)
+
+        # Build merged headers: copy baked-in headers, overlay extra ones.
+        merged_headers: Dict[str, str] = dict(headers)
+        if extra_headers:
+            merged_headers.update(extra_headers)
+
         # Build URL from base_url and path
         url = base_url + path
 
@@ -263,20 +271,20 @@ def create_tool_function(
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
         if original_method == "get":
-            response = await client.get(url, params=params, headers=headers)
+            response = await client.get(url, params=params, headers=merged_headers)
         elif original_method == "post":
             response = await client.post(
-                url, params=params, json=json_body, headers=headers
+                url, params=params, json=json_body, headers=merged_headers
             )
         elif original_method == "put":
             response = await client.put(
-                url, params=params, json=json_body, headers=headers
+                url, params=params, json=json_body, headers=merged_headers
             )
         elif original_method == "delete":
-            response = await client.delete(url, params=params, headers=headers)
+            response = await client.delete(url, params=params, headers=merged_headers)
         elif original_method == "patch":
             response = await client.patch(
-                url, params=params, json=json_body, headers=headers
+                url, params=params, json=json_body, headers=merged_headers
             )
         else:
             return f"Unsupported HTTP method: {original_method}"

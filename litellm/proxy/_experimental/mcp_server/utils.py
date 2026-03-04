@@ -1,10 +1,10 @@
 """
 MCP Server Utilities
 """
-from typing import Any, Dict, Mapping, Optional, Tuple
 
-import os
 import importlib
+import os
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 # Constants
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
@@ -137,6 +137,33 @@ def validate_mcp_server_name(
             )
         else:
             raise Exception(error_message)
+
+
+def resolve_extra_headers(
+    extra_header_names: Optional[List],
+    raw_headers: Optional[Mapping[str, str]],
+) -> Optional[Dict[str, str]]:
+    """Extract headers listed in *extra_header_names* from *raw_headers*.
+
+    Matching is case-insensitive; the returned dict preserves the casing
+    from *extra_header_names*.  Returns ``None`` when nothing matches.
+    """
+    if not extra_header_names or not raw_headers:
+        return None
+
+    normalized_raw = {
+        str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
+    }
+
+    resolved: Dict[str, str] = {}
+    for header_name in extra_header_names:
+        if not isinstance(header_name, str):
+            continue
+        header_value = normalized_raw.get(header_name.lower())
+        if header_value is not None:
+            resolved[header_name] = header_value
+
+    return resolved or None
 
 
 def merge_mcp_headers(

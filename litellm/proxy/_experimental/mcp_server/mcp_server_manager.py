@@ -50,6 +50,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
     is_tool_name_prefixed,
     merge_mcp_headers,
+    resolve_extra_headers,
     normalize_server_name,
     split_server_prefix_from_name,
     validate_mcp_server_name,
@@ -1744,6 +1745,7 @@ class MCPServerManager:
         server: MCPServer,
         tool_name: str,
         arguments: Dict[str, Any],
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call an OpenAPI tool handler directly.
@@ -1753,8 +1755,10 @@ class MCPServerManager:
         HTTP requests to the API.
 
         Args:
+            server: The MCPServer configuration
             tool_name: The full tool name (with prefix) to call
             arguments: Tool arguments to pass to the handler
+            raw_headers: Optional raw headers from the client request
 
         Returns:
             CallToolResult with the response from the API
@@ -1777,9 +1781,17 @@ class MCPServerManager:
             )
 
         try:
-            # Call the tool handler with the arguments
-            # The handler is an async function that makes the HTTP request
-            handler_result = await tool.handler(**arguments)
+            # Resolve extra_headers from raw request headers
+            extra_headers = resolve_extra_headers(
+                server.extra_headers, raw_headers
+            )
+
+            # Inject extra_headers via reserved _extra_headers kwarg
+            call_kwargs = dict(arguments)
+            if extra_headers:
+                call_kwargs["_extra_headers"] = extra_headers
+
+            handler_result = await tool.handler(**call_kwargs)
 
             # Convert the handler result (string response) to CallToolResult format
             result = CallToolResult(
@@ -1993,20 +2005,13 @@ class MCPServerManager:
         if mcp_server.auth_type == MCPAuth.oauth2:
             extra_headers = oauth2_headers
 
-        if mcp_server.extra_headers and raw_headers:
+        resolved_extra_headers = resolve_extra_headers(
+            mcp_server.extra_headers, raw_headers
+        )
+        if resolved_extra_headers:
             if extra_headers is None:
                 extra_headers = {}
-
-            normalized_raw_headers = {
-                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
-            }
-            for header in mcp_server.extra_headers:
-                if not isinstance(header, str):
-                    continue
-                header_value = normalized_raw_headers.get(header.lower())
-                if header_value is None:
-                    continue
-                extra_headers[header] = header_value
+            extra_headers.update(resolved_extra_headers)
 
         if mcp_server.static_headers:
             if extra_headers is None:
@@ -2128,7 +2133,12 @@ class MCPServerManager:
             )
             tasks.append(
                 asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                    self._call_openapi_tool_handler(
+                        server=mcp_server,
+                        tool_name=name,
+                        arguments=arguments,
+                        raw_headers=raw_headers,
+                    )
                 )
             )
         else:

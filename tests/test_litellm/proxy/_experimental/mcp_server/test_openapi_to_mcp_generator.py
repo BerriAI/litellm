@@ -432,6 +432,82 @@ class TestExtractParameters:
         assert "body" in body_params  # From requestBody
 
 
+class TestExtraHeaders:
+    """Test runtime _extra_headers injection in tool functions."""
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_merged_at_call_time(self):
+        """Runtime _extra_headers are merged with baked-in headers."""
+        baked = {"Authorization": "Bearer static", "X-Static": "yes"}
+        func = create_tool_function(
+            path="/health",
+            method="get",
+            operation={},
+            base_url="https://api.example.com",
+            headers=baked,
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            await func(
+                _extra_headers={
+                    "Authorization": "Bearer runtime",
+                    "X-Request-Id": "abc",
+                }
+            )
+
+            used = async_client.get.call_args[1]["headers"]
+            assert used["Authorization"] == "Bearer runtime"
+            assert used["X-Static"] == "yes"
+            assert used["X-Request-Id"] == "abc"
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_not_leaked_to_params(self):
+        """_extra_headers must not appear as a query parameter."""
+        operation = {
+            "parameters": [{"name": "q", "in": "query", "schema": {"type": "string"}}]
+        }
+        func = create_tool_function(
+            path="/search",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            await func(q="test", _extra_headers={"X-Custom": "val"})
+
+            params = async_client.get.call_args[1]["params"]
+            assert "_extra_headers" not in params
+            assert params.get("q") == "test"
+
+    @pytest.mark.asyncio
+    async def test_baked_headers_not_mutated(self):
+        """Passing _extra_headers must not mutate the baked-in dict."""
+        baked = {"Authorization": "Bearer original"}
+        func = create_tool_function(
+            path="/health",
+            method="get",
+            operation={},
+            base_url="https://api.example.com",
+            headers=baked,
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            await func(_extra_headers={"Authorization": "Bearer new", "X-New": "v"})
+
+        assert baked == {"Authorization": "Bearer original"}
+        assert "X-New" not in baked
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

@@ -2393,5 +2393,111 @@ class TestMCPServerTimestamps:
         assert rebuilt_table.updated_at == updated
 
 
+class TestCallOpenapiToolHandlerExtraHeaders:
+    """Test that _call_openapi_tool_handler forwards extra_headers from raw_headers."""
+
+    @pytest.fixture()
+    def openapi_spec_path(self, tmp_path):
+        """Create a minimal OpenAPI spec file and return its path as str."""
+        spec_file = tmp_path / "openapi.json"
+        spec_file.write_text(
+            json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "info": {"title": "Demo", "version": "1.0.0"},
+                    "paths": {
+                        "/health": {
+                            "get": {
+                                "operationId": "health_check",
+                                "summary": "health",
+                            }
+                        }
+                    },
+                }
+            )
+        )
+        return str(spec_file)
+
+    @pytest.mark.asyncio
+    async def test_forwards_extra_headers(self, openapi_spec_path):
+        """extra_headers names are resolved from raw_headers and passed to handler."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="extra-hdr-server",
+            name="extra-hdr-server",
+            server_name="extra-hdr-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            spec_path=openapi_spec_path,
+            extra_headers=["X-Custom-Auth", "X-Tenant-Id"],
+        )
+
+        captured: dict = {}
+
+        async def mock_handler(**kwargs):
+            captured.update(kwargs)
+            return "ok"
+
+        mock_tool = MagicMock()
+        mock_tool.handler = mock_handler
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.get_tool",
+            return_value=mock_tool,
+        ):
+            result = await manager._call_openapi_tool_handler(
+                server=server,
+                tool_name="op",
+                arguments={"p": "v"},
+                raw_headers={
+                    "x-custom-auth": "secret",
+                    "x-tenant-id": "t1",
+                    "x-unrelated": "ignored",
+                },
+            )
+
+        assert result.isError is False
+        assert captured["_extra_headers"]["X-Custom-Auth"] == "secret"
+        assert captured["_extra_headers"]["X-Tenant-Id"] == "t1"
+        assert "x-unrelated" not in captured.get("_extra_headers", {})
+        assert captured["p"] == "v"
+
+    @pytest.mark.asyncio
+    async def test_no_extra_headers_when_not_configured(self, openapi_spec_path):
+        """_extra_headers not injected when server has no extra_headers config."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="no-extra-hdr-server",
+            name="no-extra-hdr-server",
+            server_name="no-extra-hdr-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            spec_path=openapi_spec_path,
+        )
+
+        captured: dict = {}
+
+        async def mock_handler(**kwargs):
+            captured.update(kwargs)
+            return "ok"
+
+        mock_tool = MagicMock()
+        mock_tool.handler = mock_handler
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.get_tool",
+            return_value=mock_tool,
+        ):
+            result = await manager._call_openapi_tool_handler(
+                server=server,
+                tool_name="op",
+                arguments={"p": "v"},
+                raw_headers={"x-something": "val"},
+            )
+
+        assert result.isError is False
+        assert "_extra_headers" not in captured
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
