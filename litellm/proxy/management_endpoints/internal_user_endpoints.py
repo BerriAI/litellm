@@ -1858,7 +1858,7 @@ async def ui_view_users(
 
     try:
         # Restrict by caller role: proxy admin sees all; org admin sees only their org(s); others 403
-        is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        is_proxy_admin = _user_has_admin_view(user_api_key_dict)
         if not is_proxy_admin:
             if user_api_key_dict.user_id is None:
                 raise HTTPException(
