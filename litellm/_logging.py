@@ -16,11 +16,8 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 json_logs = bool(os.getenv("JSON_LOGS", False))
-# Create a handler for the logger (you may need to adapt this based on your needs)
 log_level = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: str = getattr(logging, log_level.upper())
-handler = logging.StreamHandler()
-handler.setLevel(numeric_level)
 
 
 def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
@@ -130,7 +127,7 @@ def _setup_json_exception_handlers(formatter):
     # Setup excepthook for uncaught exceptions
     def json_excepthook(exc_type, exc_value, exc_traceback):
         record = logging.LogRecord(
-            name="LiteLLM",
+            name="litellm",
             level=logging.ERROR,
             pathname="",
             lineno=0,
@@ -150,7 +147,7 @@ def _setup_json_exception_handlers(formatter):
             exception = context.get("exception")
             if exception:
                 record = logging.LogRecord(
-                    name="LiteLLM",
+                    name="litellm",
                     level=logging.ERROR,
                     pathname="",
                     lineno=0,
@@ -167,30 +164,20 @@ def _setup_json_exception_handlers(formatter):
         pass
 
 
-# Create a formatter and set it for the handler
-if json_logs:
-    handler.setFormatter(JsonFormatter())
-    _setup_json_exception_handlers(JsonFormatter())
-else:
-    formatter = logging.Formatter(
-        "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
-        datefmt="%H:%M:%S",
-    )
+verbose_logger = logging.getLogger("litellm")
+verbose_proxy_logger = logging.getLogger("litellm.proxy")
+verbose_router_logger = logging.getLogger("litellm.router")
 
-    handler.setFormatter(formatter)
-
-verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
-verbose_router_logger = logging.getLogger("LiteLLM Router")
-verbose_logger = logging.getLogger("LiteLLM")
-
-# Add the handler to the logger
-verbose_router_logger.addHandler(handler)
-verbose_proxy_logger.addHandler(handler)
-verbose_logger.addHandler(handler)
+# Library best practice: only a NullHandler by default (Python logging HOWTO)
+verbose_logger.addHandler(logging.NullHandler())
 
 
 def _suppress_loggers():
-    """Suppress noisy loggers at INFO level"""
+    """Suppress noisy loggers at INFO level.
+
+    Not called at import time — call explicitly from application startup
+    (e.g. proxy server via _turn_on_json) if desired.
+    """
     # Suppress httpx request logging at INFO level
     httpx_logger = logging.getLogger("httpx")
     httpx_logger.setLevel(logging.WARNING)
@@ -201,12 +188,7 @@ def _suppress_loggers():
     apscheduler_scheduler_logger = logging.getLogger("apscheduler.scheduler")
     apscheduler_scheduler_logger.setLevel(logging.WARNING)
 
-
-# Call the suppression function
-_suppress_loggers()
-
 ALL_LOGGERS = [
-    logging.getLogger(),
     verbose_logger,
     verbose_router_logger,
     verbose_proxy_logger,
@@ -215,7 +197,7 @@ ALL_LOGGERS = [
 
 def _get_loggers_to_initialize():
     """
-    Get all loggers that should be initialized with the JSON handler.
+    Get all litellm loggers that should be initialized with the JSON handler.
 
     Includes third-party integration loggers (like langfuse) if they are
     configured as callbacks.
@@ -317,9 +299,34 @@ def _turn_on_json():
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
+    # Suppress noisy third-party loggers when running as proxy
+    _suppress_loggers()
+
+
+def _create_stream_handler():
+    """Create a StreamHandler with the appropriate formatter for litellm loggers."""
+    h = logging.StreamHandler()
+    h.setLevel(numeric_level)
+    if json_logs:
+        h.setFormatter(JsonFormatter())
+    else:
+        h.setFormatter(logging.Formatter(
+            "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+    return h
+
+
+def _ensure_stream_handler():
+    """Add a StreamHandler to the litellm parent logger if one is not already present."""
+    for h in verbose_logger.handlers:
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.NullHandler):
+            return
+    verbose_logger.addHandler(_create_stream_handler())
 
 
 def _turn_on_debug():
+    _ensure_stream_handler()
     verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
     verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
     verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
