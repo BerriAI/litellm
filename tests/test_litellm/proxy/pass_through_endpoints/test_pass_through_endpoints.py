@@ -14,8 +14,10 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    create_pass_through_route,
     pass_through_request,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -2369,3 +2371,41 @@ def test_get_registered_pass_through_route_with_custom_root():
 
     # Clean up
     _registered_pass_through_routes.clear()
+
+
+def test_create_pass_through_route_accumulates_multiple_adapters(monkeypatch):
+    """
+    Regression for #22645:
+    registering multiple object-target pass-through endpoints must append adapters
+    instead of overwriting previously registered entries.
+    """
+    import litellm
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    monkeypatch.setattr(litellm, "adapters", [])
+
+    create_pass_through_route(
+        endpoint="/v1/first-endpoint",
+        target=DummyLogger(),
+        custom_headers=None,
+        _forward_headers=False,
+        _merge_query_params=False,
+        dependencies=None,
+    )
+
+    create_pass_through_route(
+        endpoint="/v1/second-endpoint",
+        target=DummyLogger(),
+        custom_headers=None,
+        _forward_headers=False,
+        _merge_query_params=False,
+        dependencies=None,
+    )
+
+    assert isinstance(litellm.adapters, list)
+    assert len(litellm.adapters) == 2
+
+    adapter_ids = [entry["id"] for entry in litellm.adapters]
+    assert len(set(adapter_ids)) == 2
