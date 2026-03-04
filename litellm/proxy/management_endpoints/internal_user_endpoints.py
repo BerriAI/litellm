@@ -1922,7 +1922,7 @@ async def ui_view_users(
             }
 
         # Org admins: only users in their org(s)
-        if not is_proxy_admin and org_admin_org_ids:
+        if not is_proxy_admin:
             where_conditions["organization_memberships"] = {
                 "some": {"organization_id": {"in": org_admin_org_ids}}
             }
