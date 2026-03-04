@@ -1,7 +1,11 @@
 """
-Unit tests for LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs,
-specifically the max_tokens capping logic added to prevent HTTP 400 errors from providers
-with strict output token limits (e.g. Amazon Nova Pro: 10,000 tokens).
+Unit tests for LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs.
+
+Covers:
+- max_tokens capping: prevents HTTP 400 from providers with strict output token limits
+  (e.g. Amazon Nova Pro: 10,000 tokens).
+- output_config stripping: prevents HTTP 400 "extraneous key" errors from non-Anthropic
+  backends that don't understand Anthropic-specific parameters.
 """
 import os
 import sys
@@ -95,3 +99,64 @@ class TestMaxTokensCapping:
             mock_info.return_value = {"max_output_tokens": MODEL_MAX_OUTPUT}
             _call(max_tokens=16_000, extra_kwargs={"custom_llm_provider": PROVIDER})
         mock_provider.assert_not_called()
+
+
+def _call_with_output_config(extra_kwargs=None):
+    """Helper: call _prepare_completion_kwargs with output_config in extra_kwargs
+    and return the full completion kwargs dict."""
+    kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=MODEL,
+        extra_kwargs={
+            "output_config": {"type": "text"},
+            **(extra_kwargs or {"custom_llm_provider": PROVIDER}),
+        },
+    )
+    return kwargs
+
+
+class TestOutputConfigStripping:
+    def test_stripped_for_bedrock_non_claude(self):
+        """output_config is stripped when targeting a non-Anthropic Bedrock model."""
+        with patch("litellm.get_model_info", return_value={}):
+            kwargs = _call_with_output_config(
+                extra_kwargs={"custom_llm_provider": "bedrock"}
+            )
+        assert "output_config" not in kwargs
+
+    def test_stripped_for_non_anthropic_provider(self):
+        """output_config is stripped for any non-Anthropic provider."""
+        with patch("litellm.get_model_info", return_value={}):
+            kwargs = _call_with_output_config(
+                extra_kwargs={"custom_llm_provider": "openai"}
+            )
+        assert "output_config" not in kwargs
+
+    def test_passed_through_for_anthropic_provider(self):
+        """output_config is preserved when targeting the Anthropic provider directly."""
+        with patch("litellm.get_model_info", return_value={}):
+            kwargs = _call_with_output_config(
+                extra_kwargs={"custom_llm_provider": "anthropic"}
+            )
+        assert "output_config" in kwargs
+
+    def test_passed_through_for_bedrock_claude(self):
+        """output_config is preserved when targeting an Anthropic Claude model on Bedrock."""
+        with patch("litellm.get_model_info", return_value={}):
+            kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+                max_tokens=1024,
+                messages=MESSAGES,
+                model="converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
+                extra_kwargs={
+                    "output_config": {"type": "text"},
+                    "custom_llm_provider": "bedrock",
+                },
+            )
+        assert "output_config" in kwargs
+
+    def test_stripped_when_no_provider_specified(self):
+        """output_config is stripped when no provider is given (defaults to non-Anthropic)."""
+        with patch("litellm.get_model_info", return_value={}):
+            kwargs = _call_with_output_config(extra_kwargs={})
+        assert "output_config" not in kwargs
