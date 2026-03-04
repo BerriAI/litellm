@@ -12173,7 +12173,7 @@ async def delete_callback(
         return {
             "message": f"Successfully deleted callback: {callback_name}",
             "removed_callback": callback_name,
-            "remaining_callbacks": success_callbacks,
+            "remaining_callbacks": success_callbacks + failure_callbacks + new_callbacks,
             "deleted_at": datetime.now().isoformat(),
         }
 
