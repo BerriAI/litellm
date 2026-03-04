@@ -1319,7 +1319,18 @@ def post_call_processing(
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
                             ### JSON SCHEMA VALIDATION ###
-                            if litellm.enable_json_schema_validation is True:
+                            # Per-request flag takes priority over global flag
+                            _per_request_validation = (
+                                optional_params.get("enable_json_schema_validation")
+                                if optional_params is not None
+                                else None
+                            )
+                            _enable_json_schema_validation = (
+                                _per_request_validation
+                                if _per_request_validation is not None
+                                else litellm.enable_json_schema_validation
+                            )
+                            if _enable_json_schema_validation is True:
                                 try:
                                     if (
                                         optional_params is not None
@@ -1454,10 +1465,12 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
-            
+
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
-            assert logging_obj is not None, "logging_obj should not be None after function_setup"
-            
+            assert (
+                logging_obj is not None
+            ), "logging_obj should not be None after function_setup"
+
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
@@ -1753,7 +1766,9 @@ def client(original_function):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
-        _update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
+        _update_response_metadata = getattr(
+            sys.modules[__name__], "update_response_metadata"
+        )
         logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
             "litellm_logging_obj", None
         )
@@ -1776,9 +1791,11 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
-            
+
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
-            assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            assert (
+                logging_obj is not None
+            ), "logging_obj should not be None after function_setup"
 
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
@@ -1861,6 +1878,7 @@ def client(original_function):  # noqa: PLR0915
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
+
             if _is_streaming_request(
                 kwargs=kwargs,
                 call_type=call_type,
@@ -2082,12 +2100,14 @@ def _is_async_request(
     return False
 
 
-_STREAMING_CALL_TYPES = frozenset({
-    CallTypes.generate_content_stream,
-    CallTypes.agenerate_content_stream,
-    CallTypes.generate_content_stream.value,
-    CallTypes.agenerate_content_stream.value,
-})
+_STREAMING_CALL_TYPES = frozenset(
+    {
+        CallTypes.generate_content_stream,
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream.value,
+        CallTypes.agenerate_content_stream.value,
+    }
+)
 
 
 def _is_streaming_request(
@@ -2181,7 +2201,7 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
     # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
     # extract .ids so the return type is always List[int].
     if hasattr(enc, "ids"):
-        return enc.ids
+        return enc.ids  # type: ignore
     return enc
 
 
@@ -5836,7 +5856,7 @@ def get_model_info(
                 _model_info[key] = value  # type: ignore
 
     # if verbose_logger.isEnabledFor(logging.DEBUG):
-        # verbose_logger.debug(f"model_info: {_model_info}")
+    # verbose_logger.debug(f"model_info: {_model_info}")
 
     returned_model_info = ModelInfo(
         **_model_info, supported_openai_params=supported_openai_params
@@ -6179,8 +6199,10 @@ def validate_environment(  # noqa: PLR0915
                 "AWS_ROLE_ARN" in os.environ
                 or "AWS_PROFILE" in os.environ
                 or "AWS_WEB_IDENTITY_TOKEN_FILE" in os.environ
-                or "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" in os.environ  # ECS task role
-                or "AWS_CONTAINER_CREDENTIALS_FULL_URI" in os.environ  # ECS/Fargate full URI credential delivery
+                or "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"
+                in os.environ  # ECS task role
+                or "AWS_CONTAINER_CREDENTIALS_FULL_URI"
+                in os.environ  # ECS/Fargate full URI credential delivery
             ):
                 keys_in_environment = True
             else:
@@ -7386,7 +7408,9 @@ class ModelResponseIterator:
         if convert_to_delta is True:
             _stream_response = ModelResponseStream()
             _stream_response.choices[0].delta.content = model_response.choices[0].message.content  # type: ignore
-            self.model_response: Union[ModelResponse, ModelResponseStream] = _stream_response
+            self.model_response: Union[ModelResponse, ModelResponseStream] = (
+                _stream_response
+            )
         else:
             self.model_response = model_response
         self.is_done = False
@@ -7457,13 +7481,13 @@ def is_cached_message(message: AllMessageValues) -> bool:
     Used for anthropic/gemini context caching.
 
     Follows the anthropic format {"cache_control": {"type": "ephemeral"}}
-    
+
     Can be disabled globally by setting litellm.disable_anthropic_gemini_context_caching_transform = True
     """
     # Check if context caching is disabled globally
     if litellm.disable_anthropic_gemini_context_caching_transform is True:
         return False
-    
+
     if "content" not in message:
         return False
 
@@ -7980,6 +8004,7 @@ class ProviderConfigManager:
     def _get_azure_ai_config(model: str) -> BaseConfig:
         """Get Azure AI config based on model type."""
         from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
         return AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
 
     @staticmethod
@@ -8780,6 +8805,12 @@ class ProviderConfigManager:
             )
 
             return BedrockStabilityImageEditConfig()
+        elif LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.image_edit import (
+                get_openrouter_image_edit_config,
+            )
+
+            return get_openrouter_image_edit_config(model)
         return None
 
     @staticmethod
@@ -8830,6 +8861,7 @@ class ProviderConfigManager:
             ParallelAISearchConfig,
         )
         from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
+        from litellm.llms.searchapi.search.transformation import SearchAPIConfig
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
 
@@ -8845,6 +8877,7 @@ class ProviderConfigManager:
             SearchProviders.SEARXNG: SearXNGSearchConfig,
             SearchProviders.LINKUP: LinkupSearchConfig,
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
+            SearchProviders.SEARCHAPI: SearchAPIConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

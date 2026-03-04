@@ -393,6 +393,7 @@ def test_multiple_function_call():
                     ],
                 },
                 {
+                    "role": "user",
                     "parts": [
                         {
                             "function_response": {
@@ -498,6 +499,7 @@ def test_multiple_function_call_changed_text_pos():
                 ],
             },
             {
+                "role": "user",
                 "parts": [
                     {
                         "function_response": {

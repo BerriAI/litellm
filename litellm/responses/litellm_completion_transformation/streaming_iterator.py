@@ -344,8 +344,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._pending_tool_events.append(item_done_event)
 
     def _default_response_created_event_data(self) -> dict:
+        # Use cached response ID if available, otherwise generate a new one
+        if self._cached_response_id is None:
+            self._cached_response_id = f"resp_{str(uuid.uuid4())}"
+        
         response_created_event_data = {
-            "id": f"resp_{str(uuid.uuid4())}",
+            "id": self._cached_response_id,
             "object": "response",
             "created_at": int(time.time()),
             "status": "in_progress",
@@ -1073,6 +1077,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 chat_completion_response=litellm_model_response,
                 responses_api_request=self.responses_api_request,
             )
+
+            # Use the cached response ID to ensure consistency across all events
+            if self._cached_response_id:
+                responses_api_response.id = self._cached_response_id
 
             # Encode the response ID to match non-streaming behavior
             encoded_response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(

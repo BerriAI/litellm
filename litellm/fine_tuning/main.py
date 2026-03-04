@@ -34,6 +34,44 @@ vertex_fine_tuning_apis_instance = VertexFineTuningAPI()
 #################################################
 
 
+def _prepare_azure_extra_body(
+    extra_body: Optional[Dict[str, Any]],
+    kwargs: Dict[str, Any],
+    azure_specific_hyperparams: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Prepare extra_body for Azure fine-tuning API by combining Azure-specific parameters.
+    
+    Azure fine-tuning API accepts additional parameters beyond the standard OpenAI spec:
+    - trainingType: Type of training (e.g., 1 for supervised fine-tuning)
+    - prompt_loss_weight: Weight for prompt loss in training
+    
+    These parameters must be passed in the extra_body field when calling the Azure OpenAI SDK.
+    
+    Args:
+        extra_body: Optional existing extra_body dict
+        kwargs: Request kwargs that may contain Azure-specific parameters
+        azure_specific_hyperparams: Dict of Azure-specific hyperparameters already extracted
+        
+    Returns:
+        Dict containing all Azure-specific parameters to be passed in extra_body
+    """
+    if extra_body is None:
+        extra_body = {}
+    
+    # Azure-specific root-level parameters
+    azure_specific_params = ["trainingType"]
+    for param in azure_specific_params:
+        if param in kwargs:
+            extra_body[param] = kwargs[param]
+    
+    # Add Azure-specific hyperparameters
+    if azure_specific_hyperparams:
+        extra_body.update(azure_specific_hyperparams)
+    
+    return extra_body
+
+
 @client
 async def acreate_fine_tuning_job(
     model: str,
@@ -114,6 +152,15 @@ def create_fine_tuning_job(
 
         # handle hyperparameters
         hyperparameters = hyperparameters or {}  # original hyperparameters
+        
+        # For Azure, extract Azure-specific hyperparameters before creating OpenAI-spec hyperparameters
+        azure_specific_hyperparams = {}
+        if custom_llm_provider == "azure":
+            azure_hyperparameter_keys = ["prompt_loss_weight"]
+            for key in azure_hyperparameter_keys:
+                if key in hyperparameters:
+                    azure_specific_hyperparams[key] = hyperparameters.pop(key)
+        
         _oai_hyperparameters: Hyperparameters = Hyperparameters(
             **hyperparameters
         )  # Typed Hyperparameters for OpenAI Spec
@@ -207,6 +254,10 @@ def create_fine_tuning_job(
                 extra_body.pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+            
+            # Prepare Azure-specific parameters for extra_body
+            extra_body = _prepare_azure_extra_body(extra_body, kwargs, azure_specific_hyperparams)
+            
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
@@ -220,6 +271,10 @@ def create_fine_tuning_job(
             create_fine_tuning_job_data_dict = create_fine_tuning_job_data.model_dump(
                 exclude_none=True
             )
+            
+            # Add extra_body if it has Azure-specific parameters
+            if extra_body:
+                create_fine_tuning_job_data_dict["extra_body"] = extra_body
 
             response = azure_fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,

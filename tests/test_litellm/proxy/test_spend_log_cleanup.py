@@ -233,6 +233,65 @@ async def test_cleanup_old_spend_logs_no_retention_period():
     mock_prisma_client.db.execute_raw.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_lock_not_released_when_not_acquired():
+    """
+    Lock release should be skipped when _should_delete_spend_logs returns False
+    before the lock is ever acquired.
+    """
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.execute_raw = AsyncMock()
+
+    mock_redis_cache = MagicMock()
+    mock_pod_lock_manager = MagicMock()
+    mock_pod_lock_manager.redis_cache = mock_redis_cache
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+
+    # No retention setting → _should_delete_spend_logs() returns False before lock is acquired
+    cleaner = SpendLogCleanup(general_settings={})
+    cleaner.pod_lock_manager = mock_pod_lock_manager
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    mock_pod_lock_manager.acquire_lock.assert_not_called()
+    mock_pod_lock_manager.release_lock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_integer_retention_treated_as_days():
+    """
+    An integer value for maximum_spend_logs_retention_period should be treated
+    as days (e.g., 3 → '3d' → 259200 seconds).
+    """
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": 3}
+    )
+    result = cleaner._should_delete_spend_logs()
+    assert result is True
+    assert cleaner.retention_seconds == 3 * 86400  # 3 days in seconds
+
+
+def test_string_retention_still_works():
+    """
+    String values like '3d', '24h', '3600s' should continue to parse correctly.
+    """
+    cases = [
+        ("3d", 3 * 86400),
+        ("24h", 24 * 3600),
+        ("3600s", 3600),
+        ("2w", 2 * 604800),
+    ]
+    for setting, expected_seconds in cases:
+        cleaner = SpendLogCleanup(
+            general_settings={"maximum_spend_logs_retention_period": setting}
+        )
+        assert cleaner._should_delete_spend_logs() is True, f"Failed for {setting}"
+        assert cleaner.retention_seconds == expected_seconds, (
+            f"Expected {expected_seconds} for {setting}, got {cleaner.retention_seconds}"
+        )
+
+
 def test_cleanup_batch_size_env_var(monkeypatch):
     """Ensure batch size is configurable via environment variable"""
     import importlib

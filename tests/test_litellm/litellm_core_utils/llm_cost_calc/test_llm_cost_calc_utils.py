@@ -33,8 +33,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _calculate_input_cost,
     PromptTokensDetailsResult,
+    _calculate_input_cost,
     calculate_cache_writing_cost,
     generic_cost_per_token,
 )
@@ -101,6 +101,52 @@ def test_reasoning_tokens_gemini():
         ),
         prompt_tokens_details=PromptTokensDetailsWrapper(
             audio_tokens=None, cached_tokens=None, text_tokens=17, image_tokens=None
+        ),
+    )
+    model_cost_map = litellm.model_cost[model]
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
+        10,
+    )
+    assert round(completion_cost, 10) == round(
+        (
+            model_cost_map["output_cost_per_token"]
+            * usage.completion_tokens_details.text_tokens
+        )
+        + (
+            model_cost_map["output_cost_per_reasoning_token"]
+            * usage.completion_tokens_details.reasoning_tokens
+        ),
+        10,
+    )
+
+
+def test_reasoning_tokens_gemini_3_1_flash_lite():
+    """Test cost calculation for gemini-3.1-flash-lite-preview with reasoning tokens"""
+    model = "gemini-3.1-flash-lite-preview"
+    custom_llm_provider = "gemini"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        completion_tokens=1000,
+        prompt_tokens=500,
+        total_tokens=1500,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=400,
+            rejected_prediction_tokens=None,
+            text_tokens=600,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None, cached_tokens=None, text_tokens=500, image_tokens=None
         ),
     )
     model_cost_map = litellm.model_cost[model]

@@ -642,6 +642,7 @@ class MCPServerManager:
             available_on_public_internet=bool(
                 getattr(mcp_server, "available_on_public_internet", True)
             ),
+            created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
         )
         return new_server
@@ -2540,8 +2541,8 @@ class MCPServerManager:
             url=server.url,
             transport=server.transport,
             auth_type=server.auth_type,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=server.created_at,
+            updated_at=server.updated_at,
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],
@@ -2620,8 +2621,6 @@ class MCPServerManager:
         return list_mcp_servers
 
     def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
-        from datetime import datetime
-
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
             server_name=server.server_name,
@@ -2633,8 +2632,8 @@ class MCPServerManager:
             spec_path=server.spec_path,
             transport=server.transport,
             auth_type=server.auth_type,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=server.created_at,
+            updated_at=server.updated_at,
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],

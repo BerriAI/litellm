@@ -49,14 +49,18 @@ class SpendLogCleanup:
 
         try:
             if isinstance(retention_setting, int):
-                retention_setting = str(retention_setting)
+                verbose_proxy_logger.warning(
+                    f"maximum_spend_logs_retention_period is an integer ({retention_setting}); treating as days. "
+                    "Use a string like '3d' to be explicit."
+                )
+                retention_setting = f"{retention_setting}d"
             self.retention_seconds = duration_in_seconds(retention_setting)
             verbose_proxy_logger.info(
                 f"Retention period set to {self.retention_seconds} seconds"
             )
             return True
         except ValueError as e:
-            verbose_proxy_logger.error(
+            verbose_proxy_logger.warning(
                 f"Invalid maximum_spend_logs_retention_period value: {retention_setting}, error: {str(e)}"
             )
             return False
@@ -112,13 +116,11 @@ class SpendLogCleanup:
         If pod_lock_manager is available, ensures only one pod runs cleanup.
         If no pod_lock_manager, runs cleanup without distributed locking.
         """
+        lock_acquired = False
         try:
             verbose_proxy_logger.info(f"Cleanup job triggered at {datetime.now()}")
 
             if not self._should_delete_spend_logs():
-                verbose_proxy_logger.info(
-                    "Skipping cleanup — invalid or missing retention setting."
-                )
                 return
 
             if self.retention_seconds is None:
@@ -155,8 +157,8 @@ class SpendLogCleanup:
             verbose_proxy_logger.error(f"Error during cleanup: {str(e)}")
             return  # Return after error handling
         finally:
-            # Always release the lock if we have a pod lock manager
-            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+            # Only release the lock if it was actually acquired
+            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME
                 )

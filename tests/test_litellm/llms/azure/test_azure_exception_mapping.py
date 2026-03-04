@@ -385,3 +385,58 @@ class TestAzureExceptionMapping:
                 original_exception=mock_exception,
                 custom_llm_provider="azure",
             )
+
+    def test_invalid_encrypted_content_error_with_helpful_message(self):
+        """Test that invalid_encrypted_content errors include helpful guidance
+        about enabling encrypted_content_affinity."""
+        from litellm.exceptions import BadRequestError
+
+        mock_exception = Exception(
+            "The encrypted content gAAAAABpnW_yEYmSNEyOG... could not be verified. "
+            "Reason: Encrypted content organization_id did not match the target organization."
+        )
+        mock_exception.body = {
+            "error": {
+                "message": "The encrypted content could not be verified.",
+                "type": "invalid_request_error",
+                "code": "invalid_encrypted_content",
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_exception.response = mock_response
+
+        with pytest.raises(BadRequestError) as exc_info:
+            exception_type(
+                model="azure/gpt-5.1-codex",
+                original_exception=mock_exception,
+                custom_llm_provider="azure",
+            )
+
+        error = exc_info.value
+        assert "encrypted_content_affinity" in error.message
+        assert "enable_pre_call_checks" in error.message
+        assert "optional_pre_call_checks" in error.message
+        assert "docs.litellm.ai" in error.message
+
+    def test_openai_invalid_encrypted_content_error(self):
+        """Test that OpenAI invalid_encrypted_content errors also get helpful guidance."""
+        from litellm.exceptions import BadRequestError
+
+        mock_exception = Exception(
+            "The encrypted content could not be verified."
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_exception.response = mock_response
+
+        with pytest.raises(BadRequestError) as exc_info:
+            exception_type(
+                model="gpt-5.1-codex",
+                original_exception=mock_exception,
+                custom_llm_provider="openai",
+            )
+
+        error = exc_info.value
+        assert "encrypted_content_affinity" in error.message
+        assert "enable_pre_call_checks" in error.message

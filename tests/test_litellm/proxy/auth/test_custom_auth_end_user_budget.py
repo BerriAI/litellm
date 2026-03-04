@@ -10,9 +10,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 @pytest.mark.asyncio
 async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
-    # Test backwards compatibility
+    # Test backwards compatibility — common_checks only runs when opt-in flag is set
     valid_token = UserAPIKeyAuth(token="test_token")
 
+    # Default: common_checks should NOT be called
     with patch(
         "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
     ) as mock_common:
@@ -26,6 +27,24 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
         )
         assert result.token == "test_token"
         assert getattr(result, "end_user_id", None) is None
+        mock_common.assert_not_awaited()
+
+    # With opt-in flag: common_checks SHOULD be called
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+    ) as mock_common, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"custom_auth_run_common_checks": True},
+    ):
+        mock_common.return_value = True
+        result = await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=None,
+            request_data={},
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+        assert result.token == "test_token"
         mock_common.assert_awaited_once()
 
 

@@ -2307,5 +2307,91 @@ class TestMCPServerManager:
         assert resolved_server.server_name == "test_server"  # server_name matches
 
 
+class TestMCPServerTimestamps:
+    """Regression tests: created_at/updated_at must be preserved, not overwritten with datetime.now()."""
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_preserves_timestamps(self):
+        """build_mcp_server_from_table must carry created_at and updated_at into MCPServer."""
+        manager = MCPServerManager()
+
+        created = datetime(2024, 1, 15, 10, 0, 0)
+        updated = datetime(2024, 6, 20, 12, 30, 0)
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="ts-server-1",
+            server_name="ts_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            created_at=created,
+            updated_at=updated,
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.created_at == created
+        assert mcp_server.updated_at == updated
+
+    def test_build_mcp_server_table_preserves_timestamps(self):
+        """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""
+        manager = MCPServerManager()
+
+        created = datetime(2024, 1, 15, 10, 0, 0)
+        updated = datetime(2024, 6, 20, 12, 30, 0)
+
+        server = MCPServer(
+            server_id="ts-server-2",
+            name="ts_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            created_at=created,
+            updated_at=updated,
+        )
+
+        table = manager._build_mcp_server_table(server)
+
+        assert table.created_at == created
+        assert table.updated_at == updated
+
+    def test_build_mcp_server_table_none_timestamps_when_not_set(self):
+        """_build_mcp_server_table must return None timestamps when not set on MCPServer."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="ts-server-3",
+            name="ts_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+        )
+
+        table = manager._build_mcp_server_table(server)
+
+        assert table.created_at is None
+        assert table.updated_at is None
+
+    @pytest.mark.asyncio
+    async def test_round_trip_timestamps_preserved(self):
+        """Timestamps survive the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable."""
+        manager = MCPServerManager()
+
+        created = datetime(2023, 3, 10, 8, 0, 0)
+        updated = datetime(2023, 9, 5, 16, 45, 0)
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="ts-server-4",
+            server_name="ts_server_rt",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            created_at=created,
+            updated_at=updated,
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+
+        assert rebuilt_table.created_at == created
+        assert rebuilt_table.updated_at == updated
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
