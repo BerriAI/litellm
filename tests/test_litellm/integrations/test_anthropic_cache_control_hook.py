@@ -903,3 +903,103 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
                 if isinstance(item, dict) and "cachePoint" in item
             )
             assert cache_control_count == 1, f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."
+
+
+def test_gemini_cache_control_injection_points_detected():
+    """
+    Test that cache_control_injection_points work for Gemini models.
+
+    Verifies the full flow:
+    1. The hook injects cache_control markers on string-content messages
+    2. is_cached_message() detects the injected markers (message-level cache_control)
+    3. separate_cached_messages() correctly separates the messages
+
+    Fixes GitHub issue #18519.
+    """
+    from litellm.llms.vertex_ai.context_caching.transformation import (
+        separate_cached_messages,
+    )
+    from litellm.utils import is_cached_message
+
+    hook = AnthropicCacheControlHook()
+
+    # Simulate messages as they would appear for a Gemini call with string content
+    messages: List[AllMessageValues] = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant that analyzes legal documents.",
+        },
+        {
+            "role": "user",
+            "content": "What are the key terms?",
+        },
+    ]
+
+    # Simulate what the hook does: inject cache_control on the system message
+    injection_points = [{"location": "message", "role": "system"}]
+
+    # Manually apply the hook's logic for the system message (string content case)
+    # The hook sets message["cache_control"] = {"type": "ephemeral"} for string content
+    hook._safe_insert_cache_control_in_message(
+        message=messages[0],
+        control={"type": "ephemeral"},
+    )
+
+    # Verify the hook injected message-level cache_control (string content path)
+    assert messages[0].get("cache_control") == {"type": "ephemeral"}
+
+    # Verify is_cached_message detects message-level cache_control
+    assert is_cached_message(messages[0]) is True
+    assert is_cached_message(messages[1]) is False
+
+    # Verify separate_cached_messages correctly separates them
+    cached, non_cached = separate_cached_messages(messages)
+    assert len(cached) == 1
+    assert cached[0]["role"] == "system"
+    assert len(non_cached) == 1
+    assert non_cached[0]["role"] == "user"
+
+
+def test_gemini_cache_control_injection_list_content_detected():
+    """
+    Test that cache_control_injection_points work for Gemini models
+    when the message content is a list (not string).
+    """
+    from litellm.llms.vertex_ai.context_caching.transformation import (
+        separate_cached_messages,
+    )
+    from litellm.utils import is_cached_message
+
+    hook = AnthropicCacheControlHook()
+
+    messages: List[AllMessageValues] = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are a helpful assistant."},
+                {"type": "text", "text": "Analyze legal documents carefully."},
+            ],
+        },
+        {
+            "role": "user",
+            "content": "What are the key terms?",
+        },
+    ]
+
+    # Apply the hook's logic for list content - sets cache_control on last item
+    hook._safe_insert_cache_control_in_message(
+        message=messages[0],
+        control={"type": "ephemeral"},
+    )
+
+    # Verify cache_control was set on the last content item
+    assert messages[0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+
+    # Verify is_cached_message detects content-item-level cache_control
+    assert is_cached_message(messages[0]) is True
+    assert is_cached_message(messages[1]) is False
+
+    # Verify separate_cached_messages correctly separates them
+    cached, non_cached = separate_cached_messages(messages)
+    assert len(cached) == 1
+    assert len(non_cached) == 1
