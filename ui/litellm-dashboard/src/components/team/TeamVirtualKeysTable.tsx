@@ -569,7 +569,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     onSortingChange: handleSortingChange,
     onPaginationChange: setTablePagination,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
+    // getSortedRowModel not needed — manualSorting: true delegates sorting to the server
     enableSorting: true,
     manualSorting: true, // Server sorts via useKeys. Avoid redundant client-side sort
     manualPagination: true,
