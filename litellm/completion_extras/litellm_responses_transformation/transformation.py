@@ -250,6 +250,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
 
+        # When reasoning_auto_summary is enabled but no reasoning_effort was
+        # provided, inject reasoning={summary: "detailed"} so that OpenAI
+        # returns reasoning summaries even without explicit effort config.
+        if "reasoning" not in responses_api_request:
+            auto_summary_enabled = (
+                litellm.reasoning_auto_summary
+                or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
+            )
+            if auto_summary_enabled:
+                responses_api_request["reasoning"] = Reasoning(summary="detailed")  # type: ignore
+
     def _build_sanitized_litellm_params(
         self, litellm_params: dict
     ) -> Dict[str, Any]:
