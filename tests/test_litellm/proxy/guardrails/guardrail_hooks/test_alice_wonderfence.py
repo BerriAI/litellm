@@ -55,6 +55,15 @@ def wonderfence_guardrail(monkeypatch, mock_wonderfence_client):
 
 def test_initialization_without_api_key(monkeypatch):
     """Test that initialization fails without API key."""
+    # Mock the SDK so we get past the import check
+    mock_sdk = Mock()
+    mock_sdk.WonderFenceClient = Mock()
+    mock_sdk.models = Mock()
+    mock_sdk.models.AnalysisContext = Mock()
+    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk", mock_sdk)
+    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.client", mock_sdk)
+    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.models", mock_sdk.models)
+
     monkeypatch.delenv("ALICE_API_KEY", raising=False)
 
     with pytest.raises(WonderFenceMissingSecrets) as exc:
@@ -63,7 +72,7 @@ def test_initialization_without_api_key(monkeypatch):
             event_hook=GuardrailEventHooks.pre_call,
         )
 
-    assert "Alice API key not found" in str(exc.value)
+    assert "Alice WonderFence API key not found" in str(exc.value)
 
 
 def test_initialization_with_env_var(monkeypatch):
@@ -122,7 +131,7 @@ async def test_pre_call_hook_block_action(
         )
 
     assert exc.value.status_code == 400
-    assert "Blocked by WonderFence guardrail" in exc.value.detail["error"]
+    assert "Blocked by Alice WonderFence guardrail" in exc.value.detail["error"]
     assert exc.value.detail["action"] == "BLOCK"
     assert len(exc.value.detail["detections"]) == 1
 
@@ -233,7 +242,7 @@ async def test_post_call_hook_block_action(
         )
 
     assert exc.value.status_code == 400
-    assert "Blocked by WonderFence guardrail" in exc.value.detail["error"]
+    assert "Blocked by Alice WonderFence guardrail" in exc.value.detail["error"]
 
 
 @pytest.mark.asyncio
@@ -287,7 +296,7 @@ async def test_error_propagation(
         )
 
     assert exc.value.status_code == 500
-    assert "Error in WonderFence Guardrail" in exc.value.detail["error"]
+    assert "Error in Alice WonderFence Guardrail" in exc.value.detail["error"]
 
 
 @pytest.mark.asyncio
