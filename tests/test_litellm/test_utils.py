@@ -13,12 +13,12 @@ sys.path.insert(
 import litellm
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
+    CallTypes,
     Delta,
     LlmProviders,
     ModelResponseStream,
     StreamingChoices,
 )
-from litellm.types.utils import CallTypes
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
@@ -91,6 +91,19 @@ def test_supports_function_calling_github_anthropic_alias():
     assert (
         litellm.utils.supports_function_calling(
             model="github/claude-3-5-sonnet-latest"
+        )
+        is True
+    )
+
+
+def test_supports_function_calling_deepinfra_llama():
+    """Test that deepinfra Llama models correctly report function calling support.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22619
+    """
+    assert (
+        litellm.utils.supports_function_calling(
+            model="deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo"
         )
         is True
     )
@@ -606,10 +619,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
+                "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
+                "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+                "input_cost_per_audio_token_priority": {"type": "number"},
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
+                "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -644,6 +661,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "max_video_length": {"type": "number"},
                 "max_videos_per_prompt": {"type": "number"},
                 "metadata": {"type": "object"},
+                "provider_specific_entry": {"type": "object"},
                 "mode": {
                     "type": "string",
                     "enum": [
@@ -714,6 +732,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_preset": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
+                "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
                     "type": "array",
                     "items": {
@@ -802,8 +821,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         },
     }
 
-    prod_json = "./model_prices_and_context_window.json"
-    # prod_json = "../../model_prices_and_context_window.json"
+    prod_json = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
     with open(prod_json, "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
@@ -1134,20 +1152,25 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
         provider_config=provider_config,
     )
     print(processed_non_default_params)
+    # Vertex AI / Gemini uses Pydantic's model_json_schema() which doesn't
+    # include additionalProperties: False (Gemini rejects it).  Other
+    # providers use OpenAI's to_strict_json_schema() which does.
+    expected_schema = {
+        "properties": {
+            "x": {"title": "X", "type": "string"},
+            "y": {"title": "Y", "type": "string"},
+        },
+        "required": ["x", "y"],
+        "title": "ResponseFormat",
+        "type": "object",
+    }
+    if custom_llm_provider not in ("vertex_ai", "vertex_ai_beta", "gemini"):
+        expected_schema["additionalProperties"] = False
     assert processed_non_default_params == {
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "schema": {
-                    "properties": {
-                        "x": {"title": "X", "type": "string"},
-                        "y": {"title": "Y", "type": "string"},
-                    },
-                    "required": ["x", "y"],
-                    "title": "ResponseFormat",
-                    "type": "object",
-                    "additionalProperties": False,
-                },
+                "schema": expected_schema,
                 "name": "ResponseFormat",
                 "strict": True,
             },
@@ -2337,7 +2360,7 @@ def test_register_model_with_scientific_notation():
     Test that the register_model function can handle scientific notation in the model name.
     """
     import uuid
-    
+
     # Use a truly unique model name with uuid to avoid conflicts when tests run in parallel
     test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
     
@@ -2370,6 +2393,64 @@ def test_register_model_with_scientific_notation():
     if test_model_name in litellm.model_cost:
         del litellm.model_cost[test_model_name]
     _invalidate_model_cost_lowercase_map()
+
+
+def test_register_model_openrouter_without_slash():
+    """
+    Test that register_model handles openrouter models without '/' in the name.
+
+    Fixes https://github.com/BerriAI/litellm/issues/18936
+
+    Previously, the code did `split_string[1]` which would fail with IndexError
+    when the model name didn't contain '/'. Now it uses `split_string[-1]` which
+    always works.
+    """
+    # Clear any existing entries
+    litellm.openrouter_models.discard("my-custom-alias")
+    litellm.openrouter_models.discard("gpt-4")
+    litellm.openrouter_models.discard("openai/gpt-4")
+
+    # Test 1: Model name without '/' (this was the bug - would raise IndexError)
+    litellm.register_model(
+        {
+            "my-custom-alias": {
+                "max_tokens": 8192,
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        }
+    )
+    assert "my-custom-alias" in litellm.openrouter_models
+
+    # Test 2: Model name with single '/' (openrouter/model format)
+    litellm.register_model(
+        {
+            "openrouter/gpt-4": {
+                "max_tokens": 8192,
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        }
+    )
+    assert "gpt-4" in litellm.openrouter_models
+
+    # Test 3: Model name with double '/' (openrouter/provider/model format)
+    litellm.register_model(
+        {
+            "openrouter/openai/gpt-4-turbo": {
+                "max_tokens": 8192,
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        }
+    )
+    assert "openai/gpt-4-turbo" in litellm.openrouter_models
 
 
 def test_reasoning_content_preserved_in_text_completion_wrapper():
@@ -3013,8 +3094,8 @@ class TestProxyLoggingBudgetAlerts:
         via metadata.soft_budget_alerting_emails to work even when global alerting is disabled.
         """
         from litellm.caching.caching import DualCache
-        from litellm.proxy.utils import ProxyLogging
         from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None  # Global alerting is disabled
@@ -3050,8 +3131,8 @@ class TestProxyLoggingBudgetAlerts:
         and do not send emails when alerting is None.
         """
         from litellm.caching.caching import DualCache
-        from litellm.proxy.utils import ProxyLogging
         from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None
@@ -3082,8 +3163,8 @@ class TestProxyLoggingBudgetAlerts:
         Test that soft_budget alerts with empty alert_emails list still respect alerting=None.
         """
         from litellm.caching.caching import DualCache
-        from litellm.proxy.utils import ProxyLogging
         from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None
@@ -3586,3 +3667,43 @@ class TestMetadataNoneHandling:
         litellm_params = {"metadata": None}
         metadata = litellm_params.get("metadata") or {}
         assert metadata == {}
+
+
+class TestValidateAndFixThinkingParam:
+    """Tests for validate_and_fix_thinking_param."""
+
+    def test_none_returns_none(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=None) is None
+
+    def test_already_snake_case(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budget_tokens": 32000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 32000}
+
+    def test_camel_case_normalized(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budgetTokens": 32000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 32000}
+        assert "budgetTokens" not in result
+
+    def test_both_keys_snake_case_wins(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budget_tokens": 10000, "budgetTokens": 50000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 10000}
+        assert "budgetTokens" not in result
+
+    def test_original_dict_not_mutated(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budgetTokens": 32000}
+        validate_and_fix_thinking_param(thinking=thinking)
+        assert "budgetTokens" in thinking
+        assert "budget_tokens" not in thinking

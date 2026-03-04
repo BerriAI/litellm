@@ -194,7 +194,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               {filteredTools.length === 0 ? (
                 <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
                   <SearchOutlined className="text-2xl mb-2" />
-                  <Text>No tools found matching "{toolSearchTerm}"</Text>
+                  <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
                 </div>
               ) : (
                 filteredTools.map((tool, index) => (

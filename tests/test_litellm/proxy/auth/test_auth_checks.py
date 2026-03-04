@@ -108,11 +108,55 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert token_data["models"] == ["gpt-3.5-turbo"]
     assert token_data["max_budget"] == litellm.max_ui_session_budget
 
-    # Verify expiration time is set and valid
+    # Verify expiration time is set and valid (Experimental UI uses fixed 10-min expiry)
     assert "expires" in token_data
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
-    assert expires > get_utc_datetime()
-    assert expires <= get_utc_datetime() + timedelta(minutes=10)
+    now = get_utc_datetime()
+    # Allow 2 second buffer for test execution timing
+    assert expires > now
+    assert expires <= now + timedelta(minutes=10, seconds=2)
+
+
+def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
+    valid_sso_user_defined_values,
+):
+    """Test that Experimental UI token uses fixed 10-minute expiry (does not use LITELLM_UI_SESSION_DURATION)."""
+    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    now = get_utc_datetime()
+    # Should expire in ~10 minutes (allow 2 second buffer)
+    assert expires > now + timedelta(minutes=9)
+    assert expires <= now + timedelta(minutes=10, seconds=2)
+
+
+def test_experimental_ui_token_ignores_litellm_ui_session_duration(
+    valid_sso_user_defined_values,
+):
+    """Regression test: LITELLM_UI_SESSION_DURATION must NOT affect Experimental UI token expiry.
+    Experimental UI intentionally uses fixed 10-min expiry. If this test fails, the constant
+    was incorrectly wired to the experimental flow."""
+    # Default LITELLM_UI_SESSION_DURATION is "24h" - token must still expire in ~10 min
+    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    now = get_utc_datetime()
+    # Must be ~10 min, NOT 24h. If LITELLM_UI_SESSION_DURATION were incorrectly used, this would fail.
+    assert expires <= now + timedelta(minutes=11), (
+        "Experimental UI must use 10-min expiry, not LITELLM_UI_SESSION_DURATION"
+    )
 
 
 def test_get_experimental_ui_login_jwt_auth_token_invalid(
@@ -1475,3 +1519,55 @@ async def test_get_fuzzy_user_object_case_insensitive_email():
     assert call_args.kwargs["where"]["user_email"]["equals"] == "test@example.com"
     assert call_args.kwargs["where"]["user_email"]["mode"] == "insensitive"
     assert call_args.kwargs["include"] == {"organization_memberships": True}
+
+
+@pytest.mark.asyncio
+async def test_common_checks_skip_route_check_for_custom_auth():
+    """
+    Test that custom routes (e.g. /ldap/ngs/ready) pass common_checks when
+    skip_route_check=True, which is the case for custom auth flows.
+
+    Regression test for: custom user-added routes being rejected as admin-only
+    after _run_post_custom_auth_checks was introduced.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    mock_request = MagicMock(spec=Request)
+    valid_token = UserAPIKeyAuth(token="test-token")
+
+    # Without skip_route_check, a custom route with unknown user should fail
+    with pytest.raises(Exception):
+        await common_checks(
+            request_body={},
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/ldap/ngs/ready",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=mock_request,
+            skip_route_check=False,
+        )
+
+    # With skip_route_check=True (custom auth path), the same route should pass
+    result = await common_checks(
+        request_body={},
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/ldap/ngs/ready",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+        request=mock_request,
+        skip_route_check=True,
+    )
+
+    assert result is True

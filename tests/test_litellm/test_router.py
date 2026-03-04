@@ -925,6 +925,73 @@ def test_router_get_model_access_groups_team_only_models():
     assert list(access_groups.keys()) == ["default-models"]
 
 
+def test_cached_get_model_group_info():
+    """
+    Test that _cached_get_model_group_info caches results and
+    invalidates on deployment changes.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"tpm": 1000, "rpm": 100},
+            },
+        ]
+    )
+
+    # First call should compute and cache
+    result1 = router._cached_get_model_group_info("gpt-4")
+    assert result1 is not None
+    assert result1.tpm == 1000
+
+    # Second call should hit cache (same object)
+    result2 = router._cached_get_model_group_info("gpt-4")
+    assert result1 is result2
+
+    # Add a deployment — cache should be invalidated
+    router.add_deployment(
+        Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="gpt-4", api_key="fake2"),
+            model_info={"tpm": 2000, "rpm": 200},
+        )
+    )
+    result3 = router._cached_get_model_group_info("gpt-4")
+    assert result3 is not result2
+    assert result3 is not None
+    assert result3.tpm == 3000  # 1000 + 2000
+
+    # Delete a deployment — cache should be invalidated
+    deployment_id = router.model_list[-1]["model_info"]["id"]
+    router.delete_deployment(id=deployment_id)
+    result4 = router._cached_get_model_group_info("gpt-4")
+    assert result4 is not result3
+    assert result4 is not None
+    assert result4.tpm == 1000
+
+    # set_model_list — cache should be invalidated
+    router.set_model_list(
+        [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"tpm": 5000},
+            },
+        ]
+    )
+    result5 = router._cached_get_model_group_info("gpt-4")
+    assert result5 is not result4
+    assert result5 is not None
+    assert result5.tpm == 5000
+
+    # Verify cache still works after invalidation
+    result6 = router._cached_get_model_group_info("gpt-4")
+    assert result5 is result6
+
+
 def test_get_model_access_groups_caching():
     """
     Test that get_model_access_groups caches the no-args result
@@ -1290,11 +1357,240 @@ async def test_acompletion_streaming_iterator_edge_cases():
         fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
         modified_messages = fallback_kwargs["messages"]
 
-        # Should have assistant message with empty content
-        assert modified_messages[2]["content"] == ""
+        # Empty content → pre-first-chunk path uses original messages
+        # (no continuation prompt added)
+        assert modified_messages == messages
         print("✓ Handles empty generated content correctly")
 
     print("✓ Edge case tests passed!")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_preserves_hidden_params():
+    """
+    Regression test: FallbackStreamWrapper must copy _hidden_params from the
+    original CustomStreamWrapper so that x-litellm-overhead-duration-ms (and
+    other hidden params) are present in the proxy response headers for streaming.
+    """
+    from unittest.mock import MagicMock
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    # Simulate a CustomStreamWrapper that already has timing metadata set by
+    # update_response_metadata (litellm_overhead_time_ms, _response_ms, etc.)
+    mock_response = MagicMock()
+    mock_response.model = "gpt-4"
+    mock_response.custom_llm_provider = "openai"
+    mock_response.logging_obj = MagicMock()
+    mock_response._hidden_params = {
+        "litellm_overhead_time_ms": 12.34,
+        "_response_ms": 500.0,
+        "litellm_call_id": "test-call-id",
+        "api_base": "https://api.openai.com",
+        "additional_headers": {},
+    }
+
+    # Make the mock iterable (yields nothing — we only care about hidden_params)
+    async def _empty():
+        return
+        yield  # make it an async generator
+
+    mock_response.__aiter__ = lambda self: _empty().__aiter__()
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_response,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    # The returned FallbackStreamWrapper must carry the original _hidden_params
+    assert hasattr(result, "_hidden_params"), "result must have _hidden_params"
+    assert result._hidden_params.get("litellm_overhead_time_ms") == 12.34, (
+        "litellm_overhead_time_ms must be preserved — "
+        "this is what drives x-litellm-overhead-duration-ms in streaming responses"
+    )
+    assert result._hidden_params.get("litellm_call_id") == "test-call-id"
+    assert result._hidden_params.get("_response_ms") == 500.0
+
+
+def test_completion_streaming_iterator_fallback_on_429():
+    """Sync streaming: MidStreamFallbackError (429 pre-first-chunk) triggers fallback.
+
+    This is the sync counterpart of test_acompletion_streaming_iterator.
+    Before this fix, __next__ raised RateLimitError directly and the Router
+    never got a chance to fall back.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    rate_limit_error = MidStreamFallbackError(
+        message="Resource exhausted",
+        model="gpt-4",
+        llm_provider="vertex_ai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class SyncIteratorImmediateError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise rate_limit_error
+
+    mock_response = SyncIteratorImmediateError()
+
+    # Fallback returns a simple non-streaming response (fallback may not stream)
+    mock_fallback_response = MagicMock()
+    mock_fallback_response.__iter__ = MagicMock(return_value=iter([]))
+
+    with patch.object(
+        router,
+        "function_with_fallbacks",
+        return_value=mock_fallback_response,
+    ) as mock_fallback:
+        result = router._completion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        collected_chunks = list(result)
+
+        assert mock_fallback.called
+        call_kwargs = mock_fallback.call_args
+        # Pre-first-chunk: should use original messages, no continuation prompt
+        assert call_kwargs.kwargs.get("messages") == messages
+        # Verify original_function is _completion (sync)
+        assert call_kwargs.kwargs.get("original_function") == router._completion
+
+
+def test_completion_streaming_iterator_preserves_hidden_params():
+    """SyncFallbackStreamWrapper must copy _hidden_params from original response."""
+    from unittest.mock import MagicMock
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    mock_response = MagicMock()
+    mock_response.model = "gpt-4"
+    mock_response.custom_llm_provider = "openai"
+    mock_response.logging_obj = MagicMock()
+    mock_response._hidden_params = {
+        "litellm_overhead_time_ms": 42.0,
+        "litellm_call_id": "test-sync-call",
+    }
+    mock_response.__iter__ = MagicMock(return_value=iter([]))
+
+    result = router._completion_streaming_iterator(
+        model_response=mock_response,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    assert hasattr(result, "_hidden_params")
+    assert result._hidden_params.get("litellm_overhead_time_ms") == 42.0
+    assert result._hidden_params.get("litellm_call_id") == "test-sync-call"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation():
+    """When MidStreamFallbackError has is_pre_first_chunk=True, use original messages."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    pre_first_chunk_error = MidStreamFallbackError(
+        message="429 Resource exhausted",
+        model="gpt-4",
+        llm_provider="vertex_ai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class AsyncIteratorPreFirstChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise pre_first_chunk_error
+
+    mock_response = AsyncIteratorPreFirstChunkError()
+
+    class EmptyAsyncIterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=EmptyAsyncIterator(),
+    ) as mock_fallback_utils:
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+        async for _ in iterator:
+            pass
+
+        assert mock_fallback_utils.called
+        fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
+        # Pre-first-chunk: should use original messages, no continuation prompt
+        assert fallback_kwargs["messages"] == messages
 
 
 @pytest.mark.asyncio
@@ -1858,7 +2154,7 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
     litellm_credential_name to actual credential values (for UI-created models).
     """
     from litellm.types.utils import CredentialItem
-    
+
     # Setup credential list with a test credential
     litellm.credential_list = [
         CredentialItem(

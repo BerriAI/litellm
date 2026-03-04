@@ -18,6 +18,7 @@ Run a specific eval:
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -105,7 +106,25 @@ def _print_confusion_report(label: str, metrics: dict, wrong: list) -> None:
 def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) -> dict:
     """Save confusion matrix results to a JSON file and return the result dict."""
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    safe_label = label.lower().replace(" ", "_").replace("—", "-")
+    # Build a short, filesystem-safe filename from the label.
+    # Full label is preserved inside the JSON; filename just needs to be
+    # unique and recognisable.  Format: {topic}_{method_abbrev}.json
+    parts = label.split("\u2014")
+    topic = parts[0].strip().lower().replace("block ", "").replace(" ", "_")
+    method_full = parts[1].strip() if len(parts) > 1 else ""
+    method_name = re.sub(r"\s*\(.*?\)", "", method_full).strip().lower()
+    qualifier_match = re.search(r"\(([^)]+)\)", method_full)
+    qualifier = qualifier_match.group(1) if qualifier_match else ""
+    qualifier = re.sub(r"\.[a-z]+$", "", qualifier)  # drop .yaml etc.
+    if method_name == "contentfilter":
+        safe_label = f"{topic}_cf"
+    elif qualifier:
+        safe_label = f"{topic}_{method_name}_{qualifier}"
+    else:
+        safe_label = f"{topic}_{method_name}"
+    safe_label = safe_label.replace(" ", "_")
+    safe_label = re.sub(r"[^a-z0-9_.\-]", "", safe_label)
+    safe_label = re.sub(r"_+", "_", safe_label).strip("_")
     result = {
         "label": label,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -274,6 +293,199 @@ class TestInvestmentContentFilter:
             blocker,
             cases,
             "Block Investment — ContentFilter (denied_financial_advice.yaml)",
+        )
+
+
+class TestMilitaryStatusContentFilter:
+    """Military status discrimination eval with production ContentFilterGuardrail + military_status.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("military_status")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_military_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Military Discrimination — ContentFilter (military_status.yaml)",
+        )
+
+
+class TestDisabilityContentFilter:
+    """Disability discrimination eval with production ContentFilterGuardrail + disability.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("disability")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_disability_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Disability Discrimination — ContentFilter (disability.yaml)",
+        )
+
+
+class TestAgeDiscriminationContentFilter:
+    """Age discrimination eval with production ContentFilterGuardrail + age_discrimination.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("age_discrimination")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_age_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Age Discrimination — ContentFilter (age_discrimination.yaml)",
+        )
+
+
+class TestReligionContentFilter:
+    """Religion discrimination eval with production ContentFilterGuardrail + religion.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("religion")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_religion_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Religion Discrimination — ContentFilter (religion.yaml)",
+        )
+
+
+class TestGenderContentFilter:
+    """Gender/sexual orientation discrimination eval with production ContentFilterGuardrail + gender_sexual_orientation.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("gender_sexual_orientation")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_gender_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Gender Discrimination — ContentFilter (gender_sexual_orientation.yaml)",
+        )
+
+
+# ── Claims Agent Guardrails ────────────────────────────────────────
+
+
+class TestClaimsFraudCoachingContentFilter:
+    """Claims fraud coaching eval with production ContentFilterGuardrail + claims_fraud_coaching.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_fraud_coaching")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_fraud_coaching.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims Fraud Coaching — ContentFilter (claims_fraud_coaching.yaml)",
+        )
+
+
+class TestClaimsPhiDisclosureContentFilter:
+    """Claims PHI disclosure eval with production ContentFilterGuardrail + claims_phi_disclosure.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_phi_disclosure")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_phi_disclosure.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims PHI Disclosure — ContentFilter (claims_phi_disclosure.yaml)",
+        )
+
+
+class TestClaimsPriorAuthGamingContentFilter:
+    """Claims prior auth gaming eval with production ContentFilterGuardrail + claims_prior_auth_gaming.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_prior_auth_gaming")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_prior_auth_gaming.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims Prior Auth Gaming — ContentFilter (claims_prior_auth_gaming.yaml)",
+        )
+
+
+class TestClaimsSystemOverrideContentFilter:
+    """Claims system override eval with production ContentFilterGuardrail + claims_system_override.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_system_override")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_system_override.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims System Override — ContentFilter (claims_system_override.yaml)",
+        )
+
+
+class TestClaimsMedicalAdviceContentFilter:
+    """Claims medical advice eval with production ContentFilterGuardrail + claims_medical_advice.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_medical_advice")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_medical_advice.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims Medical Advice — ContentFilter (claims_medical_advice.yaml)",
         )
 
 

@@ -274,6 +274,7 @@ ignored_keys = [
     "endTime",
     "completionStartTime",
     "endTime",
+    "request_duration_ms",
     "organization_id",
     "metadata.model_map_information",
     "metadata.usage_object",
@@ -607,6 +608,82 @@ async def test_ui_view_spend_logs_sort_validation_errors(
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatch):
+    """Test that request_duration_ms is accepted as a valid sort_by field."""
+    base_logs = [
+        {
+            "request_id": "req_fast",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "request_duration_ms": 100,
+            "startTime": "2025-01-01T00:00:00+00:00",
+            "endTime": "2025-01-01T00:00:00.100000+00:00",
+            "model": "gpt-4",
+        },
+        {
+            "request_id": "req_slow",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.05,
+            "total_tokens": 50,
+            "request_duration_ms": 5000,
+            "startTime": "2025-01-01T00:00:01+00:00",
+            "endTime": "2025-01-01T00:00:06+00:00",
+            "model": "gpt-4",
+        },
+    ]
+
+    async def mock_count(*args, **kwargs):
+        return len(base_logs)
+
+    async def mock_query_raw(sql_query, *params):
+        reverse = "DESC" in sql_query
+        sorted_logs = sorted(
+            base_logs, key=lambda x: x.get("request_duration_ms", 0), reverse=reverse
+        )
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return sorted_logs[skip : skip + page_size]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "sort_by": "request_duration_ms",
+                "sort_order": "asc",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        actual_ids = [log["request_id"] for log in data["data"]]
+        assert actual_ids == ["req_fast", "req_slow"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
     mock_spend_logs = [
         {
@@ -783,45 +860,52 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
         make_ui_spend_logs_mock_prisma(mock_spend_logs, lambda where: mock_spend_logs),
     )
 
-    start_date, end_date = _default_date_range()
-
-    # Test first page
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "page": 1,
-            "page_size": 10,
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 25
-    assert len(data["data"]) == 10
-    assert data["page"] == 1
-    assert data["page_size"] == 10
-    assert data["total_pages"] == 3
+    try:
+        start_date, end_date = _default_date_range()
 
-    # Test second page
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "page": 2,
-            "page_size": 10,
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
-    )
+        # Test first page
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "page": 1,
+                "page_size": 10,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 25
-    assert len(data["data"]) == 10
-    assert data["page"] == 2
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 25
+        assert len(data["data"]) == 10
+        assert data["page"] == 1
+        assert data["page_size"] == 10
+        assert data["total_pages"] == 3
+
+        # Test second page
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "page": 2,
+                "page_size": 10,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 25
+        assert len(data["data"]) == 10
+        assert data["page"] == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -1193,27 +1277,34 @@ async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
         make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_api_key),
     )
 
-    start_date, end_date = _default_date_range()
-
-    # Make the request with key_hash filter
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "api_key": "sk-test-key-1",
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
 
-    # Assert response
-    assert response.status_code == 200
-    data = response.json()
+    try:
+        start_date, end_date = _default_date_range()
 
-    # Verify the filtered data
-    assert data["total"] == 1
-    assert len(data["data"]) == 1
-    assert data["data"][0]["api_key"] == "sk-test-key-1"
+        # Make the request with key_hash filter
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "api_key": "sk-test-key-1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        # Assert response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify the filtered data
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["api_key"] == "sk-test-key-1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 async def _wait_for_mock_call(mock, timeout=10, interval=0.1):
@@ -1573,58 +1664,64 @@ async def test_global_spend_keys_endpoint_limit_validation(client, monkeypatch):
     # Create a simple mock for prisma client with empty response
     mock_prisma_client = MagicMock()
     mock_db = MagicMock()
-    mock_query_raw = MagicMock()
-    mock_query_raw.return_value = asyncio.Future()
-    mock_query_raw.return_value.set_result([])
+    mock_query_raw = AsyncMock(return_value=[])
     mock_db.query_raw = mock_query_raw
     mock_prisma_client.db = mock_db
     # Apply the mock to the prisma_client module
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    # Call the endpoint without specifying a limit
-    no_limit_response = client.get("/global/spend/keys")
-    assert no_limit_response.status_code == 200
-    mock_query_raw.assert_called_once_with('SELECT * FROM "Last30dKeysBySpend";')
-    # Reset the mock for the next test
-    mock_query_raw.reset_mock()
-    # Test with valid input
-    normal_limit = "10"
-    good_input_response = client.get(f"/global/spend/keys?limit={normal_limit}")
-    assert good_input_response.status_code == 200
-    # Verify the mock was called with the correct parameters
-    mock_query_raw.assert_called_once_with(
-        'SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;', 10
+    # Override auth to bypass API key validation
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
-    # Reset the mock for the next test
-    mock_query_raw.reset_mock()
-    # Test with SQL injection payload
-    sql_injection_limit = "10; DROP TABLE spend_logs; --"
-    response = client.get(f"/global/spend/keys?limit={sql_injection_limit}")
-    # Verify the response is a validation error (422)
-    assert response.status_code == 422
-    # Verify the mock was not called with the SQL injection payload
-    # This confirms that the validation happens before the database query
-    mock_query_raw.assert_not_called()
-    # Reset the mock for the next test
-    mock_query_raw.reset_mock()
-    # Test with non-numeric input
-    non_numeric_limit = "abc"
-    response = client.get(f"/global/spend/keys?limit={non_numeric_limit}")
-    assert response.status_code == 422
-    mock_query_raw.assert_not_called()
-    mock_query_raw.reset_mock()
-    # Test with negative number
-    negative_limit = "-5"
-    response = client.get(f"/global/spend/keys?limit={negative_limit}")
-    assert response.status_code == 422
-    mock_query_raw.assert_not_called()
-    mock_query_raw.reset_mock()
-    # Test with zero
-    zero_limit = "0"
-    response = client.get(f"/global/spend/keys?limit={zero_limit}")
-    assert response.status_code == 422
-    mock_query_raw.assert_not_called()
-    mock_query_raw.reset_mock()
+
+    try:
+        # Call the endpoint without specifying a limit
+        no_limit_response = client.get("/global/spend/keys")
+        assert no_limit_response.status_code == 200
+        mock_query_raw.assert_called_once_with('SELECT * FROM "Last30dKeysBySpend";')
+        # Reset the mock for the next test
+        mock_query_raw.reset_mock()
+        # Test with valid input
+        normal_limit = "10"
+        good_input_response = client.get(f"/global/spend/keys?limit={normal_limit}")
+        assert good_input_response.status_code == 200
+        # Verify the mock was called with the correct parameters
+        mock_query_raw.assert_called_once_with(
+            'SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;', 10
+        )
+        # Reset the mock for the next test
+        mock_query_raw.reset_mock()
+        # Test with SQL injection payload
+        sql_injection_limit = "10; DROP TABLE spend_logs; --"
+        response = client.get(f"/global/spend/keys?limit={sql_injection_limit}")
+        # Verify the response is a validation error (422)
+        assert response.status_code == 422
+        # Verify the mock was not called with the SQL injection payload
+        # This confirms that the validation happens before the database query
+        mock_query_raw.assert_not_called()
+        # Reset the mock for the next test
+        mock_query_raw.reset_mock()
+        # Test with non-numeric input
+        non_numeric_limit = "abc"
+        response = client.get(f"/global/spend/keys?limit={non_numeric_limit}")
+        assert response.status_code == 422
+        mock_query_raw.assert_not_called()
+        mock_query_raw.reset_mock()
+        # Test with negative number
+        negative_limit = "-5"
+        response = client.get(f"/global/spend/keys?limit={negative_limit}")
+        assert response.status_code == 422
+        mock_query_raw.assert_not_called()
+        mock_query_raw.reset_mock()
+        # Test with zero
+        zero_limit = "0"
+        response = client.get(f"/global/spend/keys?limit={zero_limit}")
+        assert response.status_code == 422
+        mock_query_raw.assert_not_called()
+        mock_query_raw.reset_mock()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -1805,37 +1902,44 @@ async def test_view_spend_tags(client, monkeypatch):
         mock_get_spend_by_tags,
     )
 
-    # Test without date filters
-    response = client.get(
-        "/spend/tags",
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data, list)
-    assert len(data) == 2
-    assert data[0]["individual_request_tag"] == "tag1"
-    assert data[0]["log_count"] == 10
-    assert data[0]["total_spend"] == 0.15
+    try:
+        # Test without date filters
+        response = client.get(
+            "/spend/tags",
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    # Test with date filters
-    start_date = "2024-01-01"
-    end_date = "2024-01-31"
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+        assert data[0]["individual_request_tag"] == "tag1"
+        assert data[0]["log_count"] == 10
+        assert data[0]["total_spend"] == 0.15
 
-    response = client.get(
-        "/spend/tags",
-        params={
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
-    )
+        # Test with date filters
+        start_date = "2024-01-01"
+        end_date = "2024-01-31"
 
-    assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data, list)
-    assert len(data) == 2
+        response = client.get(
+            "/spend/tags",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -1845,16 +1949,23 @@ async def test_view_spend_tags_no_database(client, monkeypatch):
     # Mock prisma_client as None
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
-    response = client.get(
-        "/spend/tags",
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
 
-    assert response.status_code == 500
-    data = response.json()
-    # Check the actual error message structure
-    assert "error" in data
-    assert "Database not connected" in data["error"]["message"]
+    try:
+        response = client.get(
+            "/spend/tags",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 500
+        data = response.json()
+        # Check the actual error message structure
+        assert "error" in data
+        assert "Database not connected" in data["error"]["message"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -2046,29 +2157,36 @@ async def test_ui_view_spend_logs_with_error_code(client):
                     return [mock_spend_logs[1]]
         return mock_spend_logs
 
-    with patch.object(
-        ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code)
-    ):
-        start_date, end_date = _default_date_range()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
 
-        response = client.get(
-            "/spend/logs/ui",
-            params={
-                "error_code": "404",
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-            headers={"Authorization": "Bearer sk-test"},
-        )
+    try:
+        with patch.object(
+            ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code)
+        ):
+            start_date, end_date = _default_date_range()
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1
-        assert len(data["data"]) == 1
-        assert data["data"][0]["id"] == "log1"
-        metadata = json.loads(data["data"][0]["metadata"])
-        assert "error_information" in metadata
-        assert metadata["error_information"]["error_code"] == "404"
+            response = client.get(
+                "/spend/logs/ui",
+                params={
+                    "error_code": "404",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 1
+            assert len(data["data"]) == 1
+            assert data["data"][0]["id"] == "log1"
+            metadata = json.loads(data["data"][0]["metadata"])
+            assert "error_information" in metadata
+            assert metadata["error_information"]["error_code"] == "404"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -2110,29 +2228,36 @@ async def test_ui_view_spend_logs_with_error_message(client):
                     return [mock_spend_logs[1]]
         return mock_spend_logs
 
-    with patch.object(
-        ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_message)
-    ):
-        start_date, end_date = _default_date_range()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
 
-        response = client.get(
-            "/spend/logs/ui",
-            params={
-                "error_message": "Rate limit",
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-            headers={"Authorization": "Bearer sk-test"},
-        )
+    try:
+        with patch.object(
+            ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_message)
+        ):
+            start_date, end_date = _default_date_range()
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1
-        assert len(data["data"]) == 1
-        assert data["data"][0]["id"] == "log1"
-        metadata = json.loads(data["data"][0]["metadata"])
-        assert "error_information" in metadata
-        assert "Rate limit exceeded" in metadata["error_information"]["error_message"]
+            response = client.get(
+                "/spend/logs/ui",
+                params={
+                    "error_message": "Rate limit",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 1
+            assert len(data["data"]) == 1
+            assert data["data"][0]["id"] == "log1"
+            metadata = json.loads(data["data"][0]["metadata"])
+            assert "error_information" in metadata
+            assert "Rate limit exceeded" in metadata["error_information"]["error_message"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -2188,34 +2313,41 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
                 return [mock_spend_logs[2]]
         return mock_spend_logs
 
-    with patch.object(
-        ps,
-        "prisma_client",
-        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code_and_key_alias),
-    ):
-        start_date, end_date = _default_date_range()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
 
-        response = client.get(
-            "/spend/logs/ui",
-            params={
-                "error_code": "500",
-                "key_alias": "test-key-1",
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-            headers={"Authorization": "Bearer sk-test"},
-        )
+    try:
+        with patch.object(
+            ps,
+            "prisma_client",
+            make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code_and_key_alias),
+        ):
+            start_date, end_date = _default_date_range()
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1
-        assert len(data["data"]) == 1
-        assert data["data"][0]["id"] == "log3"
-        metadata = json.loads(data["data"][0]["metadata"])
-        assert "user_api_key_alias" in metadata
-        assert metadata["user_api_key_alias"] == "test-key-1"
-        assert "error_information" in metadata
-        assert metadata["error_information"]["error_code"] == "500"
+            response = client.get(
+                "/spend/logs/ui",
+                params={
+                    "error_code": "500",
+                    "key_alias": "test-key-1",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 1
+            assert len(data["data"]) == 1
+            assert data["data"][0]["id"] == "log3"
+            metadata = json.loads(data["data"][0]["metadata"])
+            assert "user_api_key_alias" in metadata
+            assert metadata["user_api_key_alias"] == "test-key-1"
+            assert "error_information" in metadata
+            assert metadata["error_information"]["error_code"] == "500"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio

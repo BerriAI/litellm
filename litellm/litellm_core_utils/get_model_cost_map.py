@@ -11,6 +11,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import json
 import os
 from importlib.resources import files
+from typing import Optional
 
 import httpx
 
@@ -151,6 +152,37 @@ class GetModelCostMap:
         return response.json()
 
 
+class ModelCostMapSourceInfo:
+    """Tracks the source of the currently loaded model cost map."""
+
+    source: str = "local"  # "local" or "remote"
+    url: Optional[str] = None
+    is_env_forced: bool = False
+    fallback_reason: Optional[str] = None
+
+
+# Module-level singleton tracking the source of the current cost map
+_cost_map_source_info = ModelCostMapSourceInfo()
+
+
+def get_model_cost_map_source_info() -> dict:
+    """
+    Return metadata about where the current model cost map was loaded from.
+
+    Returns a dict with:
+    - source: "local" or "remote"
+    - url: the remote URL attempted (or None for local-only)
+    - is_env_forced: True if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
+    - fallback_reason: human-readable reason if remote failed and local was used
+    """
+    return {
+        "source": _cost_map_source_info.source,
+        "url": _cost_map_source_info.url,
+        "is_env_forced": _cost_map_source_info.is_env_forced,
+        "fallback_reason": _cost_map_source_info.fallback_reason,
+    }
+
+
 def get_model_cost_map(url: str) -> dict:
     """
     Public entry point — returns the model cost map dict.
@@ -166,7 +198,14 @@ def get_model_cost_map(url: str) -> dict:
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.url = None
+        _cost_map_source_info.is_env_forced = True
+        _cost_map_source_info.fallback_reason = None
         return GetModelCostMap.load_local_model_cost_map()
+
+    _cost_map_source_info.url = url
+    _cost_map_source_info.is_env_forced = False
 
     try:
         content = GetModelCostMap.fetch_remote_model_cost_map(url)
@@ -177,6 +216,8 @@ def get_model_cost_map(url: str) -> dict:
             url,
             str(e),
         )
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {str(e)}"
         return GetModelCostMap.load_local_model_cost_map()
 
     # Validate using cached count (cheap int comparison, no file I/O)
@@ -189,6 +230,10 @@ def get_model_cost_map(url: str) -> dict:
             "Using local backup instead. url=%s",
             url,
         )
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
         return GetModelCostMap.load_local_model_cost_map()
 
+    _cost_map_source_info.source = "remote"
+    _cost_map_source_info.fallback_reason = None
     return content
