@@ -54,11 +54,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
         Note: BFL uses different parameter names, these are mapped in map_openai_params.
         """
-        return [
-            "n",  # Number of images (BFL returns 1 per request)
-            "size",  # Maps to aspect_ratio
-            "response_format",  # b64_json or url
-        ]
+        return []
 
     def map_openai_params(
         self,
@@ -155,8 +151,10 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         if model_name in IMAGE_EDIT_MODELS:
             return IMAGE_EDIT_MODELS[model_name]
 
-        # Default to kontext-pro
-        return IMAGE_EDIT_MODELS["flux-kontext-pro"]
+        raise ValueError(
+            f"Unknown BFL image edit model: {model_name}. "
+            f"Supported models: {list(IMAGE_EDIT_MODELS.keys())}"
+        )
 
     def get_complete_url(
         self,

@@ -61,7 +61,6 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         return [
             "n",  # Number of images (BFL returns 1 per request, but ultra supports up to 4)
             "size",  # Maps to width/height or aspect_ratio
-            "response_format",  # b64_json or url
             "quality",  # Maps to raw mode for ultra
         ]
 
@@ -176,8 +175,10 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         if model_name in IMAGE_GENERATION_MODELS:
             return IMAGE_GENERATION_MODELS[model_name]
 
-        # Default to flux-pro-1.1
-        return IMAGE_GENERATION_MODELS["flux-pro-1.1"]
+        raise ValueError(
+            f"Unknown BFL image generation model: {model_name}. "
+            f"Supported models: {list(IMAGE_GENERATION_MODELS.keys())}"
+        )
 
     def get_complete_url(
         self,
