@@ -341,7 +341,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setIsAddingCallback(true);
     }
 
-    const callbackType = (isEdit ? formValues.callback_type : undefined) ?? selectedEditCallback?.type as "success" | "failure" | "success_and_failure" | undefined;
+    const callbackType = (isEdit ? formValues.callback_type : formValues.callback_type) as "success" | "failure" | "success_and_failure" | undefined ?? selectedEditCallback?.type as "success" | "failure" | "success_and_failure" | undefined;
     const payload = buildCallbackPayload(formValues, callbackName, callbacks, isEdit, callbackType, callbackSettings);
 
     try {
