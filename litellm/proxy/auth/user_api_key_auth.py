@@ -1752,20 +1752,21 @@ async def _run_post_custom_auth_checks(
         if _project_obj is not None:
             valid_token.project_metadata = _project_obj.metadata
 
-    _ = await common_checks(
-        request=request,
-        request_body=request_data,
-        team_object=_team_obj,
-        user_object=user_object,
-        end_user_object=end_user_object,
-        general_settings=general_settings,
-        global_proxy_spend=None,
-        route=route,
-        llm_router=llm_router,
-        proxy_logging_obj=proxy_logging_obj,
-        valid_token=valid_token,
-        skip_budget_checks=False,
-        project_object=_project_obj,
-    )
+    if general_settings.get("custom_auth_run_common_checks", False):
+        _ = await common_checks(
+            request=request,
+            request_body=request_data,
+            team_object=_team_obj,
+            user_object=user_object,
+            end_user_object=end_user_object,
+            general_settings=general_settings,
+            global_proxy_spend=None,
+            route=route,
+            llm_router=llm_router,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=valid_token,
+            skip_budget_checks=False,
+            project_object=_project_obj,
+        )
 
     return valid_token

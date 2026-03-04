@@ -1136,23 +1136,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
-            # Only add thinkingLevel if model supports it (exclude image models)
-            if "image" not in model.lower():
-                thinking_config = optional_params.get("thinkingConfig", {})
-                if (
-                    "thinkingLevel" not in thinking_config
-                    and "thinkingBudget" not in thinking_config
-                ):
-                    # For gemini-3-flash-preview, default to "minimal" to match Gemini 2.5 Flash behavior
-                    # For other Gemini 3 models, default to "low"
-                    is_gemini3flash = (
-                        "gemini-3-flash-preview" in model.lower()
-                        or "gemini-3-flash" in model.lower()
-                    )
-                    thinking_config["thinkingLevel"] = (
-                        "minimal" if is_gemini3flash else "low"
-                    )
-                    optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
 

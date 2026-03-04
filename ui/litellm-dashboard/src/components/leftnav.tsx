@@ -374,6 +374,46 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
     setPage(page);
   };
 
+  // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
+  // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
+  const renderNavLink = (
+    label: React.ReactNode,
+    page: string,
+    externalUrl?: string,
+  ): React.ReactNode => {
+    if (externalUrl) {
+      return (
+        <a
+          href={externalUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          style={{ color: "inherit", textDecoration: "none" }}
+        >
+          {label}
+        </a>
+      );
+    }
+    const params = new URLSearchParams(window.location.search);
+    params.set("page", page);
+    const href = `?${params.toString()}`;
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
+            e.stopPropagation();
+            return;
+          }
+          e.preventDefault();
+        }}
+        style={{ color: "inherit", textDecoration: "none" }}
+      >
+        {label}
+      </a>
+    );
+  };
+
   // Filter items based on user role and enabled pages for internal users
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
     const isAdmin = isAdminRole(userRole);
@@ -469,11 +509,11 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         children: filteredItems.map((item) => ({
           key: item.key,
           icon: item.icon,
-          label: item.label,
+          label: renderNavLink(item.label, item.page, item.external_url),
           children: item.children?.map((child) => ({
             key: child.key,
             icon: child.icon,
-            label: child.label,
+            label: renderNavLink(child.label, child.page, child.external_url),
             onClick: () => {
               if (child.external_url) {
                 window.open(child.external_url, "_blank");

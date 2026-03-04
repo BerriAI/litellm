@@ -8,7 +8,10 @@ from typing import Any, Dict, Optional
 import httpx
 
 import litellm
-from litellm.constants import LITELLM_MAX_STREAMING_DURATION_SECONDS, STREAM_SSE_DONE_STRING
+from litellm.constants import (
+    LITELLM_MAX_STREAMING_DURATION_SECONDS,
+    STREAM_SSE_DONE_STRING,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -136,6 +139,31 @@ class BaseResponsesAPIStreamingIterator:
                         )
                     )
                     setattr(openai_responses_api_chunk, "response", response)
+
+                # Wrap encrypted_content in streaming events (output_item.added, output_item.done)
+                if (
+                    self.litellm_metadata
+                    and self.litellm_metadata.get("encrypted_content_affinity_enabled")
+                ):
+                    event_type = getattr(openai_responses_api_chunk, "type", None)
+                    if event_type in (
+                        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    ):
+                        item = getattr(openai_responses_api_chunk, "item", None)
+                        if item:
+                            encrypted_content = getattr(item, "encrypted_content", None)
+                            if encrypted_content and isinstance(encrypted_content, str):
+                                model_id = (
+                                    self.litellm_metadata.get("model_info", {}).get("id")
+                                    if self.litellm_metadata
+                                    else None
+                                )
+                                if model_id:
+                                    wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                                        encrypted_content, model_id
+                                    )
+                                    setattr(item, "encrypted_content", wrapped_content)
 
                 # Store the completed response
                 if (
