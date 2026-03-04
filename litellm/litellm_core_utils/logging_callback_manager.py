@@ -206,7 +206,7 @@ class LoggingCallbackManager:
         callback_settings:
             custom_callback_name:
                 callback_type: generic_api
-                endpoint: https://webhook-test.com/30343bc33591bc5e6dc44217ceae3e0a
+                endpoint: https://example.com/litellm-webhook
                 headers:
                 Authorization: Bearer sk-1234
         """
