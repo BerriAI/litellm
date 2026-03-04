@@ -210,6 +210,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
         # LangChain agents pass strict=true at top level, which fails for GPT models
+        # Anthropic models accept strict, so preserve it for them
         if model.startswith("gpt"):
             excluded_params.add("strict")
 
@@ -298,11 +299,14 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         )
         response = ModelResponse.model_validate(raw_response.json()["final_result"])
 
-        # Strip markdown code blocks if JSON response_format was used
-        # SAP/Anthropic sometimes wraps JSON in ```json ... ``` based on prompt phrasing
+        # Strip markdown code blocks if JSON response_format was used with Anthropic models
+        # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
+        # based on prompt phrasing. GPT/Gemini models don't exhibit this behavior,
+        # so we gate the stripping to avoid accidentally modifying valid responses.
         response_format = optional_params.get("response_format", {})
         if response_format.get("type") in ("json_object", "json_schema"):
-            response = self._strip_markdown_json(response)
+            if model.startswith("anthropic"):
+                response = self._strip_markdown_json(response)
 
         return response
 

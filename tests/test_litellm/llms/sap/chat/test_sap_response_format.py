@@ -803,3 +803,246 @@ class TestModelVariantSupport:
         config = GenAIHubOrchestrationConfig()
         params = config.get_supported_openai_params("mistral-large")
         assert "response_format" in params
+
+
+class TestMarkdownStrippingModelGating:
+    """Test that markdown stripping is only applied to Anthropic models.
+
+    The markdown stripping behavior is specific to Anthropic models on SAP GenAI Hub.
+    GPT/Gemini models don't exhibit this behavior, so stripping should be gated
+    to avoid accidentally modifying valid responses.
+    """
+
+    def test_gpt_model_no_markdown_strip_json_schema(self):
+        """GPT models should NOT have markdown stripped for json_schema response_format."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        # GPT response with markdown-wrapped JSON
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"result": "success"}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "gpt-4o"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        logging_obj = MagicMock()
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "test", "schema": {"type": "object"}}
+        }
+
+        result = config.transform_response(
+            model="gpt-4o",  # GPT model - should NOT strip
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={"response_format": response_format},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Markdown should NOT be stripped for GPT models
+        assert result.choices[0].message.content == '```json\n{"result": "success"}\n```'
+
+    def test_gpt_model_no_markdown_strip_json_object(self):
+        """GPT models should NOT have markdown stripped for json_object response_format."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"answer": 42}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "gpt-4o"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="gpt-4o",  # GPT model - should NOT strip
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={"response_format": {"type": "json_object"}},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Markdown should NOT be stripped for GPT models
+        assert result.choices[0].message.content == '```json\n{"answer": 42}\n```'
+
+    def test_gemini_model_no_markdown_strip(self):
+        """Gemini models should NOT have markdown stripped."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"data": "gemini"}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "gemini-1.5-pro"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="gemini-1.5-pro",  # Gemini model - should NOT strip
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={"response_format": {"type": "json_object"}},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Markdown should NOT be stripped for Gemini models
+        assert result.choices[0].message.content == '```json\n{"data": "gemini"}\n```'
+
+    def test_mistral_model_no_markdown_strip(self):
+        """Mistral models should NOT have markdown stripped."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"model": "mistral"}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "mistral-large"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="mistral-large",  # Mistral model - should NOT strip
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={"response_format": {"type": "json_schema", "json_schema": {"name": "test", "schema": {}}}},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Markdown should NOT be stripped for Mistral models
+        assert result.choices[0].message.content == '```json\n{"model": "mistral"}\n```'
+
+    def test_anthropic_model_still_strips_markdown(self):
+        """Anthropic models should still have markdown stripped (existing behavior)."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"result": "anthropic"}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "anthropic--claude-3-5-sonnet"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="anthropic--claude-3-5-sonnet",  # Anthropic - SHOULD strip
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={"response_format": {"type": "json_schema", "json_schema": {"name": "test", "schema": {}}}},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Markdown SHOULD be stripped for Anthropic models
+        assert result.choices[0].message.content == '{"result": "anthropic"}'
+
+    def test_anthropic_claude_4_strips_markdown(self):
+        """Claude 4 models should have markdown stripped."""
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        config = GenAIHubOrchestrationConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '```json\n{"model": "claude-4"}\n```'},
+                    "finish_reason": "stop"
+                }],
+                "model": "anthropic--claude-4.5-sonnet"
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="anthropic--claude-4.5-sonnet",  # Claude 4 Anthropic - SHOULD strip
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={"response_format": {"type": "json_object"}},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Markdown SHOULD be stripped for Anthropic models
+        assert result.choices[0].message.content == '{"model": "claude-4"}'
