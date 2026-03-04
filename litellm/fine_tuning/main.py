@@ -126,6 +126,21 @@ async def acreate_fine_tuning_job(
         raise e
 
 
+def _resolve_fine_tuning_timeout(
+    timeout: Any,
+    custom_llm_provider: str,
+) -> float:
+    """Normalise a raw timeout value to a float (seconds) for fine-tuning calls."""
+    timeout = timeout or 600
+    if isinstance(timeout, httpx.Timeout):
+        if not supports_httpx_timeout(custom_llm_provider):
+            return float(timeout.read or 600)
+        return timeout  # type: ignore[return-value]
+    if timeout is None:
+        return 600.0
+    return float(timeout)
+
+
 @client
 def create_fine_tuning_job(
     model: str,
@@ -164,21 +179,10 @@ def create_fine_tuning_job(
         _oai_hyperparameters: Hyperparameters = Hyperparameters(
             **hyperparameters
         )  # Typed Hyperparameters for OpenAI Spec
-        ### TIMEOUT LOGIC ###
-        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-        # set timeout for 10 minutes by default
-
-        if (
-            timeout is not None
-            and isinstance(timeout, httpx.Timeout)
-            and supports_httpx_timeout(custom_llm_provider) is False
-        ):
-            read_timeout = timeout.read or 600
-            timeout = read_timeout  # default 10 min timeout
-        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
-        elif timeout is None:
-            timeout = 600.0
+        timeout = _resolve_fine_tuning_timeout(
+            optional_params.timeout or kwargs.get("request_timeout", 600),
+            custom_llm_provider,
+        )
 
         # OpenAI
         if custom_llm_provider == "openai":
