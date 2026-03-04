@@ -65,8 +65,8 @@ class SkillPermissionHandler:
 
             return list(set(allowed_skills))
         except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to get allowed skills: {str(e)}")
-            return []
+            verbose_proxy_logger.exception(f"Failed to get allowed skills: {str(e)}")
+            raise
 
     @staticmethod
     async def is_skill_allowed(

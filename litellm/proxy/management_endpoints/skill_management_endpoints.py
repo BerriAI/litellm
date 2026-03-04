@@ -17,7 +17,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.skill_permission_handler import (
     SkillPermissionHandler,
@@ -31,6 +31,23 @@ from litellm.types.skill_management import (
 )
 
 router = APIRouter()
+
+
+def _check_skill_management_permission(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """
+    Raises HTTP 403 if the caller does not have permission to create, update,
+    or delete skills.  Only PROXY_ADMIN users are allowed to perform these
+    write operations.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Only proxy admins can create, update, or delete skills. Your role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
 
 
 def _parse_frontmatter(content: str) -> dict:
@@ -55,7 +72,6 @@ def _parse_frontmatter(content: str) -> dict:
         return {}
 
 
-
 @router.post(
     "/skill/new",
     tags=["skill management"],
@@ -75,6 +91,8 @@ async def new_skill(
     """
     from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_skill_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(
@@ -141,6 +159,8 @@ async def update_skill(
     - content: Optional[str] - Replacement SKILL.md content
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_skill_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -219,6 +239,8 @@ async def delete_skill(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    _check_skill_management_permission(user_api_key_dict)
+
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
@@ -241,7 +263,6 @@ async def delete_skill(
     except Exception as e:
         verbose_proxy_logger.exception(f"Error deleting skill: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 @router.get(

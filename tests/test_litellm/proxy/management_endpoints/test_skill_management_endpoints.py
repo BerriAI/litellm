@@ -487,6 +487,92 @@ async def test_delete_skill():
         app.dependency_overrides.clear()
 
 
+@pytest.mark.asyncio
+async def test_create_skill_non_admin_forbidden():
+    """
+    Test that non-admin users cannot create skills (HTTP 403).
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            skill_data = {
+                "name": "frontend-design",
+                "content": SAMPLE_SKILL_MD,
+            }
+            headers = {"Authorization": "Bearer sk-1234"}
+
+            response = client.post("/skill/new", json=skill_data, headers=headers)
+            assert response.status_code == 403
+            assert "Only proxy admins" in response.json()["detail"]["error"]
+
+            # Verify prisma was NOT queried (rejected before DB call)
+            mock_db.litellm_skilltable.find_unique.assert_not_called()
+            mock_db.litellm_skilltable.create.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_skill_non_admin_forbidden():
+    """
+    Test that non-admin users cannot update skills (HTTP 403).
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        update_data = {
+            "name": "frontend-design",
+            "content": SAMPLE_SKILL_MD_UPDATED,
+        }
+        headers = {"Authorization": "Bearer sk-1234"}
+
+        response = client.post("/skill/update", json=update_data, headers=headers)
+        assert response.status_code == 403
+        assert "Only proxy admins" in response.json()["detail"]["error"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_delete_skill_non_admin_forbidden():
+    """
+    Test that non-admin users cannot delete skills (HTTP 403).
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        delete_data = {"name": "frontend-design"}
+        headers = {"Authorization": "Bearer sk-1234"}
+
+        response = client.post("/skill/delete", json=delete_data, headers=headers)
+        assert response.status_code == 403
+        assert "Only proxy admins" in response.json()["detail"]["error"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_parse_frontmatter():
     """
     Unit test for the _parse_frontmatter helper function.
