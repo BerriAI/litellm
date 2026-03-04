@@ -184,6 +184,16 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         elif isinstance(image, list):
             # If it's a list, take the first image
             return self._read_image_bytes(image[0])
+        elif isinstance(image, str):
+            if image.startswith(("http://", "https://")):
+                # Download image from URL
+                import httpx as _httpx
+                response = _httpx.get(image)
+                return response.content
+            else:
+                # Assume it's a file path
+                with open(image, "rb") as f:
+                    return f.read()
         elif hasattr(image, "read"):
             # File-like object
             pos = getattr(image, "tell", lambda: 0)()
