@@ -195,7 +195,26 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 "include_usage": True,
             }
 
+        # These params are only understood by Anthropic Claude models.
+        # When routing to a non-Anthropic backend (e.g. Bedrock Nova Pro,
+        # Llama, Mistral), they are rejected as unknown fields.  We strip
+        # them here so that the underlying model receives a clean request.
+        # Note: "thinking" is intentionally excluded from this list because
+        # some non-Anthropic models (e.g. Qwen) support reasoning/thinking
+        # and the existing adapter logic already handles translation for those.
+        _anthropic_only_params = {"output_config"}
+        _target_provider = (extra_kwargs or {}).get("custom_llm_provider", "")
+        _is_anthropic_claude = _target_provider in (
+            "anthropic",
+        ) or (
+            _target_provider == "bedrock"
+            and "anthropic.claude" in completion_kwargs.get("model", "")
+        )
+
         excluded_keys = {"anthropic_messages"}
+        if not _is_anthropic_claude:
+            excluded_keys = excluded_keys | _anthropic_only_params
+
         extra_kwargs = extra_kwargs or {}
         for key, value in extra_kwargs.items():
             if (
