@@ -37,7 +37,7 @@ const processKeysIntoOptions = (
 /**
  * Fetches filter options (key aliases, org IDs, user IDs) from team keys.
  * Fetches page 1 first to get totalPages, then batches remaining pages with
- * Promise.all. Capped at 10 pages (1000 keys)
+ * Promise.allSettled (preserves successful pages if some fail). Capped at 10 pages (1000 keys)
  */
 export const fetchTeamFilterOptions = async (
   accessToken: string | null,
@@ -91,9 +91,11 @@ export const fetchTeamFilterOptions = async (
           null,
         ),
       );
-      const responses = await Promise.all(pagePromises);
-      for (const response of responses) {
-        processKeysIntoOptions(response?.keys || [], keyAliases, organizationIds, userMap);
+      const results = await Promise.allSettled(pagePromises);
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          processKeysIntoOptions(result.value?.keys || [], keyAliases, organizationIds, userMap);
+        }
       }
     }
 
