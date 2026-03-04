@@ -7792,7 +7792,8 @@
         "output_cost_per_image": 0.04,
         "source": "https://bfl.ai/pricing",
         "supported_endpoints": [
-            "/v1/images/edits"
+            "/v1/images/edits",
+            "/v1/images/generations"
         ]
     },
     "black_forest_labs/flux-kontext-max": {
@@ -7801,7 +7802,8 @@
         "output_cost_per_image": 0.08,
         "source": "https://bfl.ai/pricing",
         "supported_endpoints": [
-            "/v1/images/edits"
+            "/v1/images/edits",
+            "/v1/images/generations"
         ]
     },
     "black_forest_labs/flux-pro-1.0-fill": {
