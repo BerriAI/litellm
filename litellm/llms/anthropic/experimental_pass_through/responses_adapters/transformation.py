@@ -241,7 +241,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             effort = "low"
         else:
             effort = "minimal"
-        return {"effort": effort}
+        return {"effort": effort, "summary": "detailed"}
 
     def translate_request(
         self,
