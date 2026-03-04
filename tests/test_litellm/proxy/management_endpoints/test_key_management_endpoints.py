@@ -6455,3 +6455,169 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+
+
+# ============================================================
+# Tests for validate_key_mcp_servers_against_team
+# ============================================================
+
+
+def _make_team_obj_with_mcp_servers(mcp_servers=None, mcp_access_groups=None):
+    """Build a LiteLLM_TeamTableCachedObj with an object_permission."""
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTableCachedObj
+
+    if mcp_servers is None and mcp_access_groups is None:
+        obj_perm = None
+    else:
+        obj_perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-team-1",
+            mcp_servers=mcp_servers or [],
+            mcp_access_groups=mcp_access_groups or [],
+        )
+
+    return LiteLLM_TeamTableCachedObj(
+        team_id="team-mcp-1",
+        object_permission=obj_perm,
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_validation_key_creation_rejects_disallowed_server():
+    """Key creation with an MCP server not in the team's allowed list raises 403."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        validate_key_mcp_servers_against_team,
+    )
+
+    team_obj = _make_team_obj_with_mcp_servers(mcp_servers=["server-allowed"])
+    object_permission = {"mcp_servers": ["server-not-allowed"]}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(object_permission, team_obj)
+
+    assert exc_info.value.status_code == 403
+    assert "server-not-allowed" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_mcp_validation_key_creation_allows_permitted_server():
+    """Key creation with an MCP server in the team's allowed list succeeds."""
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        validate_key_mcp_servers_against_team,
+    )
+
+    team_obj = _make_team_obj_with_mcp_servers(mcp_servers=["server-allowed"])
+    object_permission = {"mcp_servers": ["server-allowed"]}
+
+    # Should not raise
+    await validate_key_mcp_servers_against_team(object_permission, team_obj)
+
+
+@pytest.mark.asyncio
+async def test_mcp_validation_no_restriction_when_team_has_no_mcp_config():
+    """When the team has no object_permission, any MCP server is allowed."""
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        validate_key_mcp_servers_against_team,
+    )
+
+    team_obj = _make_team_obj_with_mcp_servers()  # no object_permission
+    object_permission = {"mcp_servers": ["any-server"]}
+
+    # Should not raise
+    await validate_key_mcp_servers_against_team(object_permission, team_obj)
+
+
+@pytest.mark.asyncio
+async def test_mcp_validation_allow_all_keys_server_always_passes():
+    """A server with allow_all_keys=True passes even when team restricts servers."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        validate_key_mcp_servers_against_team,
+    )
+
+    team_obj = _make_team_obj_with_mcp_servers(mcp_servers=["server-allowed"])
+    object_permission = {"mcp_servers": ["server-allow-all"]}
+
+    mock_manager = MagicMock()
+    mock_manager.get_allow_all_keys_server_ids.return_value = ["server-allow-all"]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        mock_manager,
+    ):
+        # Should not raise because "server-allow-all" is in allow_all_keys
+        await validate_key_mcp_servers_against_team(object_permission, team_obj)
+
+
+@pytest.mark.asyncio
+async def test_mcp_validation_key_update_rejects_disallowed_server(monkeypatch):
+    """Updating a key's object_permission with a disallowed MCP server raises 403."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionBase,
+        LiteLLM_ObjectPermissionTable,
+        LiteLLM_TeamTableCachedObj,
+        LiteLLM_VerificationToken,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    # Set up prisma mock
+    mock_prisma_client = AsyncMock()
+
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed-key",
+        team_id="team-mcp-1",
+        user_id="user-1",
+    )
+    mock_prisma_client.get_data = AsyncMock(return_value=existing_key)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    # Team allows only "server-allowed"
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id="team-mcp-1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-team-1",
+            mcp_servers=["server-allowed"],
+        ),
+    )
+
+    async def mock_get_team_object(**kwargs):
+        return team_obj
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"{}")
+
+    update_data = UpdateKeyRequest(
+        key="sk-test",
+        object_permission=LiteLLM_ObjectPermissionBase(
+            mcp_servers=["server-not-allowed"],
+        ),
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await update_key_fn(
+            request=request,
+            data=update_data,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="user-1",
+            ),
+        )
+
+    exc = exc_info.value
+    # The 403 HTTPException is re-raised as a ProxyException
+    assert "403" in str(exc) or (hasattr(exc, "code") and str(exc.code) == "403")
