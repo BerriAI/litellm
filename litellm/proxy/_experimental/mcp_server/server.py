@@ -2130,6 +2130,16 @@ if MCP_AVAILABLE:
                         mcp_servers_from_path = [server_name]
                     else:
                         mcp_servers_from_path = [servers_and_path]
+
+        # Match server-scoped mount form: /<server_name>/mcp[/...]
+        # Supports server names containing one slash (e.g. custom_solutions/user_123)
+        if mcp_servers_from_path is None:
+            scoped_mount_match = re.match(
+                r"^/([^/]+(?:/[^/]+)?)/mcp(?:/.*)?(?:\?.*)?(?:#.*)?$", path
+            )
+            if scoped_mount_match:
+                mcp_servers_from_path = [scoped_mount_match.group(1)]
+
         return mcp_servers_from_path
 
     async def extract_mcp_auth_context(scope, path):
@@ -2138,6 +2148,14 @@ if MCP_AVAILABLE:
         Returns: (user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers)
         """
         mcp_servers_from_path = _get_mcp_servers_in_path(path)
+        if mcp_servers_from_path is None:
+            # When mounted at /mcp, ASGI path is often stripped (e.g. "/github_onprem")
+            # while root_path contains the mount prefix (e.g. "/mcp"). Reconstruct full
+            # path to preserve consistent server extraction across endpoint forms.
+            root_path = scope.get("root_path")
+            if isinstance(root_path, str) and root_path:
+                combined_path = f"{root_path.rstrip('/')}/{path.lstrip('/')}"
+                mcp_servers_from_path = _get_mcp_servers_in_path(combined_path)
         if mcp_servers_from_path is not None:
             (
                 user_api_key_auth,

@@ -888,6 +888,62 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
     ), "Should have contacted the specific server alias, not the group."
 
 
+@pytest.mark.no_parallel
+def test_get_mcp_servers_in_path_supports_server_scoped_mount_form():
+    """Regression: support /<server>/mcp path form for server extraction."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _get_mcp_servers_in_path
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    assert _get_mcp_servers_in_path("/github_onprem/mcp") == ["github_onprem"]
+    assert _get_mcp_servers_in_path("/custom_solutions/user_123/mcp") == [
+        "custom_solutions/user_123"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_parallel
+async def test_extract_mcp_auth_context_reconstructs_mounted_mcp_path():
+    """
+    Regression: when mounted under /mcp, ASGI path can be stripped (e.g. /github_onprem).
+    Ensure auth context reconstructs full path via root_path to extract mcp_servers.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import extract_mcp_auth_context
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "path": "/github_onprem",
+        "root_path": "/mcp",
+        "headers": [],
+    }
+
+    mock_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-1")
+    process_mock = AsyncMock(return_value=(mock_auth, None, None, None, None, None))
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.process_mcp_request",
+        process_mock,
+    ):
+        (
+            user_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            user_api_key_dict,
+            mcp_info,
+        ) = await extract_mcp_auth_context(scope=scope, path="/github_onprem")
+
+    assert user_auth == mock_auth
+    assert mcp_auth_header is None
+    assert mcp_servers == ["github_onprem"]
+    assert mcp_server_auth_headers is None
+    assert user_api_key_dict is None
+    assert mcp_info is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
 async def test_oauth2_headers_passed_to_mcp_client():
