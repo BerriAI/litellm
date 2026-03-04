@@ -4,16 +4,22 @@ Use ChatGPT Pro/Max subscription models through LiteLLM with OAuth device flow a
 
 | Property | Details |
 |-------|-------|
-| Description | ChatGPT subscription access (Codex + GPT-5.2 family) via ChatGPT backend API |
+| Description | ChatGPT subscription access (Codex + GPT-5.3 family) via ChatGPT backend API |
 | Provider Route on LiteLLM | `chatgpt/` |
 | Supported Endpoints | `/responses`, `/chat/completions` (bridged to Responses for supported models) |
 | API Reference | https://chatgpt.com |
 
-ChatGPT subscription access is native to the Responses API. Chat Completions requests are bridged to Responses for supported models (for example `chatgpt/gpt-5.2`).
+ChatGPT subscription access is native to the Responses API. Chat Completions requests are bridged to Responses for supported models (for example `chatgpt/gpt-5.3-chat-latest`).
 
 Notes:
 - The ChatGPT subscription backend rejects token limit fields (`max_tokens`, `max_output_tokens`, `max_completion_tokens`) and `metadata`. LiteLLM strips these fields for this provider.
 - `/v1/chat/completions` honors `stream`. When `stream` is false (default), LiteLLM aggregates the Responses stream into a single JSON response.
+
+Common GPT-5.3 model IDs:
+- `chatgpt/gpt-5.3-codex`
+- `chatgpt/gpt-5.3-codex-spark`
+- `chatgpt/gpt-5.3-chat-latest`
+- `chatgpt/gpt-5.3-instant`
 
 ## Authentication
 
@@ -31,7 +37,7 @@ ChatGPT subscription access uses an OAuth device code flow:
 import litellm
 
 response = litellm.responses(
-    model="chatgpt/gpt-5.2-codex",
+    model="chatgpt/gpt-5.3-codex",
     input="Write a Python hello world"
 )
 
@@ -44,7 +50,7 @@ print(response)
 import litellm
 
 response = litellm.completion(
-    model="chatgpt/gpt-5.2",
+    model="chatgpt/gpt-5.3-chat-latest",
     messages=[{"role": "user", "content": "Write a Python hello world"}]
 )
 
@@ -55,16 +61,21 @@ print(response)
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
-  - model_name: chatgpt/gpt-5.2
+  - model_name: chatgpt/gpt-5.3-chat-latest
     model_info:
       mode: responses
     litellm_params:
-      model: chatgpt/gpt-5.2
-  - model_name: chatgpt/gpt-5.2-codex
+      model: chatgpt/gpt-5.3-chat-latest
+  - model_name: chatgpt/gpt-5.3-codex
     model_info:
       mode: responses
     litellm_params:
-      model: chatgpt/gpt-5.2-codex
+      model: chatgpt/gpt-5.3-codex
+  - model_name: chatgpt/gpt-5.3-codex-spark
+    model_info:
+      mode: responses
+    litellm_params:
+      model: chatgpt/gpt-5.3-codex-spark
 ```
 
 ```bash showLineNumbers title="Start LiteLLM Proxy"
