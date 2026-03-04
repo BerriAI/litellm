@@ -7609,10 +7609,12 @@ async def acount_tokens(
                     tools=tools,
                     system=system,
                 )
-                if result is not None:
+                if result is not None and not result.error:
                     return result
-    except Exception:
-        pass
+    except Exception as e:
+        verbose_logger.debug(
+            f"Provider token counting failed for model={model}, falling back to local: {e}"
+        )
 
     # Fallback to local tiktoken-based token counting
     local_count = litellm.token_counter(

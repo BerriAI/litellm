@@ -133,9 +133,10 @@ def test_acount_tokens_api_error_falls_back():
             )
         )
 
-        # Should return error response, not raise
-        assert result.error is True
-        assert result.status_code == 401
+        # Should fall back to local tokenizer when provider API errors
+        assert result.error is False
+        assert result.tokenizer_type == "local_tokenizer"
+        assert result.total_tokens > 0
 
 
 def test_acount_tokens_no_api_key_falls_back():
