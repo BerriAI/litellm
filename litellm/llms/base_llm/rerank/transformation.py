@@ -104,31 +104,46 @@ class BaseRerankConfig(ABC):
         model_info: Optional[ModelInfo] = None,
     ) -> Tuple[float, float]:
         """
-        Calculates the cost per query for a given rerank model.
+        Calculates the cost for a given rerank model.
+
+        Supports two pricing strategies:
+        1. Per-query pricing (input_cost_per_query × search_units)
+        2. Per-token pricing (input_cost_per_token × total_tokens) as fallback
+
+        When per-query pricing is available but search_units is missing from
+        the response, defaults to 1 search unit (one query = one request).
 
         Input:
             - model: str, the model name without provider prefix
-            - custom_llm_provider: str, the provider used for the model. If provided, used to check if the litellm model info is for that provider.
-            - num_queries: int, the number of queries to calculate the cost for
+            - custom_llm_provider: str, the provider used for the model.
+            - billed_units: RerankBilledUnits, usage info from the provider response
             - model_info: ModelInfo, the model info for the given model
 
         Returns:
             Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
         """
+        if model_info is None:
+            return 0.0, 0.0
 
+        # Strategy 1: per-query pricing
+        input_cost_per_query = model_info.get("input_cost_per_query")
+        if input_cost_per_query is not None and input_cost_per_query > 0:
+            search_units = (
+                billed_units.get("search_units") if billed_units else None
+            )
+            if search_units is None:
+                search_units = 1  # default: one query per request
+            return input_cost_per_query * search_units, 0.0
+
+        # Strategy 2: per-token pricing (fallback)
+        input_cost_per_token = model_info.get("input_cost_per_token")
         if (
-            model_info is None
-            or "input_cost_per_query" not in model_info
-            or model_info["input_cost_per_query"] is None
-            or billed_units is None
+            input_cost_per_token is not None
+            and input_cost_per_token > 0
+            and billed_units is not None
         ):
-            return 0.0, 0.0
+            total_tokens = billed_units.get("total_tokens")
+            if total_tokens is not None and total_tokens > 0:
+                return input_cost_per_token * total_tokens, 0.0
 
-        search_units = billed_units.get("search_units")
-
-        if search_units is None:
-            return 0.0, 0.0
-
-        prompt_cost = model_info["input_cost_per_query"] * search_units
-
-        return prompt_cost, 0.0
+        return 0.0, 0.0

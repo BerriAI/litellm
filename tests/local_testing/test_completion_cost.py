@@ -1484,6 +1484,74 @@ def test_completion_cost_azure_ai_rerank(model):
     assert cost > 0
 
 
+def test_rerank_cost_no_search_units_defaults_to_one(monkeypatch):
+    """
+    Verifies that rerank cost is non-zero even when the response has no
+    billed_units / search_units (defaults to 1 search unit per request).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/13797
+    """
+    from litellm import RerankResponse
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    response = RerankResponse(
+        id="no-billed-units",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta=None,
+    )
+    response._hidden_params = {"custom_llm_provider": "cohere"}
+
+    cost = completion_cost(
+        model="cohere/rerank-v3.5", completion_response=response, call_type="rerank"
+    )
+    assert cost > 0, f"Expected non-zero cost for rerank with default search_units, got {cost}"
+    assert cost == pytest.approx(0.002)
+
+
+def test_rerank_cost_token_based_pricing(monkeypatch):
+    """
+    Verifies that rerank cost calculation falls back to per-token pricing
+    when input_cost_per_query is not available (e.g. vLLM self-hosted models).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/13797
+    """
+    from litellm import RerankResponse
+    from litellm.types.rerank import RerankBilledUnits, RerankResponseMeta
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    litellm.register_model(
+        {
+            "hosted_vllm/my-rerank-model": {
+                "input_cost_per_token": 0.000004,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "hosted_vllm",
+                "mode": "rerank",
+            }
+        }
+    )
+
+    response = RerankResponse(
+        id="token-pricing",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta=RerankResponseMeta(
+            billed_units=RerankBilledUnits(total_tokens=500)
+        ),
+    )
+    response._hidden_params = {"custom_llm_provider": "hosted_vllm"}
+
+    cost = completion_cost(
+        model="hosted_vllm/my-rerank-model",
+        completion_response=response,
+        call_type="rerank",
+    )
+    assert cost > 0, f"Expected non-zero cost for token-based rerank pricing, got {cost}"
+    assert cost == pytest.approx(0.002)  # 0.000004 * 500
+
+
 def test_together_ai_embedding_completion_cost():
     from litellm.utils import Choices, EmbeddingResponse, Message, ModelResponse, Usage
 
