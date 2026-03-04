@@ -1,0 +1,95 @@
+name: Test Proxy DB Query Performance
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-db-query-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.non_root
+          tags: litellm-test:${{ github.sha }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start LiteLLM container
+        run: |
+          docker run -d \
+            --name litellm-test \
+            -p 4000:4000 \
+            -e DATABASE_URL="${{ secrets.LARGE_DATABASE_TEST_URL }}" \
+            -e LITELLM_MASTER_KEY="sk-1234" \
+            litellm-test:${{ github.sha }} \
+            --detailed_debug
+
+      - name: Wait for container to be healthy
+        run: |
+          echo "Waiting for LiteLLM to start..."
+          max_attempts=30
+          attempt=0
+
+          while [ $attempt -lt $max_attempts ]; do
+            if docker logs litellm-test 2>&1 | grep -q "Uvicorn running"; then
+              echo "LiteLLM started successfully"
+              break
+            fi
+            attempt=$((attempt + 1))
+            echo "Attempt $attempt/$max_attempts - waiting for server to start..."
+            sleep 2
+          done
+
+          if [ $attempt -eq $max_attempts ]; then
+            echo "Server failed to start within timeout"
+            docker logs litellm-test
+            exit 1
+          fi
+
+          sleep 5
+
+      - name: Show container logs
+        if: always()
+        run: docker logs litellm-test
+
+      - name: Test aggregated activity endpoint responds within 4s
+        run: |
+          echo "Testing: GET /user/daily/activity/aggregated?start_date=2026-02-01&end_date=2026-02-28&timezone=480"
+
+          http_code=$(curl --max-time 4 -s \
+            -o /dev/null \
+            -w "%{http_code}" \
+            -H "Authorization: Bearer sk-1234" \
+            "http://localhost:4000/user/daily/activity/aggregated?start_date=2026-02-01&end_date=2026-02-28&timezone=480")
+
+          if [ "$http_code" -ne 200 ]; then
+            echo "FAILED: expected HTTP 200, got $http_code"
+            docker logs litellm-test
+            exit 1
+          fi
+
+          echo "PASSED: endpoint returned HTTP 200 within 4s"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker stop litellm-test || true
+          docker rm litellm-test || true
