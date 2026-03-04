@@ -23,6 +23,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     decode_model_from_file_id,
+    encode_batch_response_ids,
     encode_file_id_with_model,
     get_batch_from_database,
     get_credentials_for_model,
@@ -258,7 +259,9 @@ async def create_batch(  # noqa: PLR0915
                     custom_llm_provider=credentials["custom_llm_provider"],
                     **_create_batch_data  # type: ignore
                 )
-                
+
+                encode_batch_response_ids(response, model=model_param)
+
                 verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
@@ -456,8 +459,9 @@ async def retrieve_batch( # noqa: PLR0915
                 custom_llm_provider=credentials["custom_llm_provider"],
                 **data  # type: ignore
             )
-            
-            
+
+            encode_batch_response_ids(response, model=model_from_id)
+
             verbose_proxy_logger.debug(
                 f"Retrieved batch using model: {model_from_id}, original_id: {original_batch_id}"
             )
@@ -649,7 +653,13 @@ async def list_batches(
                 limit=limit,
                 **data  # type: ignore
             )
-            
+
+            # Encode batch IDs in the list response so clients can use
+            # them for retrieve/cancel/file downloads through the proxy.
+            if response and hasattr(response, "data") and response.data:
+                for batch in response.data:
+                    encode_batch_response_ids(batch, model=model_param)
+
             verbose_proxy_logger.debug(f"Listed batches using model: {model_param}")
         
         # SCENARIO 2 (alternative): target_model_names based routing
@@ -825,7 +835,9 @@ async def cancel_batch(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 **data  # type: ignore
             )
-            
+
+            encode_batch_response_ids(response, model=model_from_id)
+
             verbose_proxy_logger.debug(
                 f"Cancelled batch using model: {model_from_id}, original_id: {original_batch_id}"
             )
