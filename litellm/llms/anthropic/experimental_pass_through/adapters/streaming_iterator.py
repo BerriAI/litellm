@@ -41,8 +41,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         type="text",
         text="",
     )
-    chunk_queue: deque = deque()  # Queue for buffering multiple chunks
-
     def __init__(
         self,
         completion_stream: Any,
@@ -51,8 +49,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     ):
         super().__init__(completion_stream)
         self.model = model
+        self.chunk_queue: deque = deque()
+        self._adapter_instance: Optional[Any] = None
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
+
+    @property
+    def _adapter(self):
+        if self._adapter_instance is None:
+            from .transformation import LiteLLMAnthropicMessagesAdapter
+            self._adapter_instance = LiteLLMAnthropicMessagesAdapter()
+        return self._adapter_instance
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
@@ -76,7 +83,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         )
 
     def __next__(self):
-        from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
             # Always return queued chunks first
@@ -103,26 +109,41 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
+
+                # Deferred first content_block_start: determine actual type from
+                # the first stream chunk instead of hardcoding "text".  This is
+                # required because extended-thinking responses start with a
+                # "thinking" block, not a "text" block.
+                if self.sent_content_block_start is False:
+                    self.sent_content_block_start = True
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = self._adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=chunk.choices,
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+
+                    processed_chunk = self._adapter.translate_streaming_openai_response_to_anthropic(
+                        response=chunk,
+                        current_content_block_index=self.current_content_block_index,
+                    )
+                    self.chunk_queue.append(processed_chunk)
+                    return {
+                        "type": "content_block_start",
+                        "index": self.current_content_block_index,
+                        "content_block": content_block_start,
+                    }
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
                     self._increment_content_block_index()
 
-                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                processed_chunk = self._adapter.translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
                 )
@@ -197,7 +218,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             raise StopAsyncIteration
 
     async def __anext__(self):  # noqa: PLR0915
-        from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
             # Always return queued chunks first
@@ -224,27 +244,39 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
+
+                # Deferred first content_block_start (async path)
+                if self.sent_content_block_start is False:
+                    self.sent_content_block_start = True
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = self._adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=chunk.choices,
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+
+                    processed_chunk = self._adapter.translate_streaming_openai_response_to_anthropic(
+                        response=chunk,
+                        current_content_block_index=self.current_content_block_index,
+                    )
+                    self.chunk_queue.append(processed_chunk)
+                    return {
+                        "type": "content_block_start",
+                        "index": self.current_content_block_index,
+                        "content_block": content_block_start,
+                    }
 
                 # Check if we need to start a new content block
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
                     self._increment_content_block_index()
 
-                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                processed_chunk = self._adapter.translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
                 )
@@ -419,7 +451,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         - Different content types in the response
         - Specific markers in the content
         """
-        from .transformation import LiteLLMAnthropicMessagesAdapter
 
         # Example logic - customize based on your needs:
         # If chunk indicates a tool call
@@ -429,7 +460,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         (
             block_type,
             content_block_start,
-        ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        ) = self._adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
             choices=chunk.choices  # type: ignore
         )
 
