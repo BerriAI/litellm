@@ -1726,7 +1726,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     # Validate sort_by and sort_order
-    valid_sort_fields = {"spend", "total_tokens", "startTime", "endTime"}
+    valid_sort_fields = {"spend", "total_tokens", "startTime", "endTime", "request_duration_ms"}
     if sort_by not in valid_sort_fields:
         raise ProxyException(
             message=f"Invalid sort_by: {sort_by}. Must be one of: {', '.join(sorted(valid_sort_fields))}",
@@ -1939,7 +1939,8 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 custom_llm_provider, api_base, "user", metadata,
                 cache_hit, cache_key, request_tags, team_id,
                 organization_id, end_user, requester_ip_address,
-                session_id, status, mcp_namespaced_tool_name, agent_id
+                session_id, status, mcp_namespaced_tool_name, agent_id,
+                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
             ORDER BY {_sql_col} {_sql_dir}
@@ -3278,7 +3279,11 @@ async def _build_ui_spend_logs_response(
     count_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids = list(
-            {row.session_id for row in data if getattr(row, "session_id", None)}
+            {
+                (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
+                for row in data
+                if (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
+            }
         )
         if session_ids:
             # NOTE: This GROUP BY runs on every v1/UI page load. The IN clause
