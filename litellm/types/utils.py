@@ -291,6 +291,7 @@ class CallTypes(str, Enum):
     search = "search"
     asearch = "asearch"
     arealtime = "_arealtime"
+    aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
