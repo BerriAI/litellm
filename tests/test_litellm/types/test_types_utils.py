@@ -127,3 +127,98 @@ def test_usage_completion_tokens_details_text_tokens():
     # Verify round-trip serialization works
     new_usage = Usage(**dump_result)
     assert new_usage.completion_tokens_details.text_tokens == 12
+
+
+def test_chat_completion_token_logprob_null_top_logprobs():
+    """
+    Test that ChatCompletionTokenLogprob normalizes null top_logprobs to [].
+
+    Some providers return null for top_logprobs when logprobs=true but
+    top_logprobs is unset. The OpenAI spec requires top_logprobs to be an array.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21932
+    """
+    from litellm.types.utils import ChatCompletionTokenLogprob
+
+    logprob = ChatCompletionTokenLogprob(
+        token="Hello",
+        bytes=[72, 101, 108, 108, 111],
+        logprob=-0.31725305,
+        top_logprobs=None,
+    )
+    assert logprob.top_logprobs == []
+    assert isinstance(logprob.top_logprobs, list)
+
+
+def test_chat_completion_token_logprob_valid_top_logprobs():
+    """
+    Test that ChatCompletionTokenLogprob still accepts valid top_logprobs arrays.
+    """
+    from litellm.types.utils import ChatCompletionTokenLogprob, TopLogprob
+
+    logprob = ChatCompletionTokenLogprob(
+        token="Hello",
+        bytes=[72, 101, 108, 108, 111],
+        logprob=-0.31725305,
+        top_logprobs=[
+            TopLogprob(
+                token="Hello", logprob=-0.31725305, bytes=[72, 101, 108, 108, 111]
+            ),
+            TopLogprob(token="Hi", logprob=-1.3190403, bytes=[72, 105]),
+        ],
+    )
+    assert len(logprob.top_logprobs) == 2
+    assert logprob.top_logprobs[0].token == "Hello"
+
+
+def test_choice_logprobs_with_null_top_logprobs():
+    """
+    Test that ChoiceLogprobs correctly parses content tokens that have
+    null top_logprobs (the full nested parsing path).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21932
+    """
+    from litellm.types.utils import ChoiceLogprobs
+
+    logprobs_dict = {
+        "content": [
+            {
+                "token": "Sil",
+                "bytes": [83, 105, 108],
+                "logprob": -2.1518118381500244,
+                "top_logprobs": None,
+            },
+            {
+                "token": "ent",
+                "bytes": [101, 110, 116],
+                "logprob": -0.13957086205482483,
+                "top_logprobs": None,
+            },
+        ]
+    }
+
+    result = ChoiceLogprobs(**logprobs_dict)
+    assert result.content is not None
+    assert len(result.content) == 2
+    for token_logprob in result.content:
+        assert token_logprob.top_logprobs == []
+        assert isinstance(token_logprob.top_logprobs, list)
+
+
+def test_chat_completion_token_logprob_invalid_top_logprobs_rejected():
+    """
+    Test that invalid (non-list, non-null) top_logprobs values are still
+    rejected by Pydantic validation. The validator only normalizes null,
+    it does not coerce other invalid types.
+    """
+    from pydantic import ValidationError
+
+    from litellm.types.utils import ChatCompletionTokenLogprob
+
+    with pytest.raises(ValidationError):
+        ChatCompletionTokenLogprob(
+            token="Hello",
+            bytes=[72, 101, 108, 108, 111],
+            logprob=-0.31725305,
+            top_logprobs="invalid_string",
+        )

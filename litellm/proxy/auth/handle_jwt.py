@@ -8,6 +8,7 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 import fnmatch
 import os
+import re
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
 
 from cryptography import x509
@@ -235,7 +236,17 @@ class JWTHandler:
                         return self.litellm_jwtauth.team_id_default
                     else:
                         return default_value
-                # At this point, team_id is not the sentinel, so it should be a string
+                # AAD and other IdPs often send roles/groups as a list of strings.
+                # team_id_jwt_field is singular, so take the first element when a list
+                # is returned.  This avoids "unhashable type: 'list'" errors downstream.
+                if isinstance(team_id, list):
+                    if not team_id:
+                        return default_value
+                    verbose_proxy_logger.debug(
+                        f"JWT Auth: team_id_jwt_field '{self.litellm_jwtauth.team_id_jwt_field}' "
+                        f"returned a list {team_id}; using first element '{team_id[0]}' automatically."
+                    )
+                    team_id = team_id[0]
                 return team_id  # type: ignore[return-value]
             elif self.litellm_jwtauth.team_id_default is not None:
                 team_id = self.litellm_jwtauth.team_id_default
@@ -453,6 +464,52 @@ class JWTHandler:
             scopes = []
         return scopes
 
+    async def _resolve_jwks_url(self, url: str) -> str:
+        """
+        If url points to an OIDC discovery document (*.well-known/openid-configuration),
+        fetch it and return the jwks_uri contained within.  Otherwise return url unchanged.
+        This lets JWT_PUBLIC_KEY_URL be set to a well-known discovery endpoint instead of
+        requiring operators to manually find the JWKS URL.
+        """
+        if ".well-known/openid-configuration" not in url:
+            return url
+
+        cache_key = f"litellm_oidc_discovery_{url}"
+        cached_jwks_uri = await self.user_api_key_cache.async_get_cache(cache_key)
+        if cached_jwks_uri is not None:
+            return cached_jwks_uri
+
+        verbose_proxy_logger.debug(
+            f"JWT Auth: Fetching OIDC discovery document from {url}"
+        )
+        response = await self.http_handler.get(url)
+        if response.status_code != 200:
+            raise Exception(
+                f"JWT Auth: OIDC discovery endpoint {url} returned status {response.status_code}: {response.text}"
+            )
+        try:
+            discovery = response.json()
+        except Exception as e:
+            raise Exception(
+                f"JWT Auth: Failed to parse OIDC discovery document at {url}: {e}"
+            )
+
+        jwks_uri = discovery.get("jwks_uri")
+        if not jwks_uri:
+            raise Exception(
+                f"JWT Auth: OIDC discovery document at {url} does not contain a 'jwks_uri' field."
+            )
+
+        verbose_proxy_logger.debug(
+            f"JWT Auth: Resolved OIDC discovery {url} -> jwks_uri={jwks_uri}"
+        )
+        await self.user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=jwks_uri,
+            ttl=self.litellm_jwtauth.public_key_ttl,
+        )
+        return jwks_uri
+
     async def get_public_key(self, kid: Optional[str]) -> dict:
         keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
@@ -462,6 +519,7 @@ class JWTHandler:
         keys_url_list = [url.strip() for url in keys_url.split(",")]
 
         for key_url in keys_url_list:
+            key_url = await self._resolve_jwks_url(key_url)
             cache_key = f"litellm_jwt_auth_keys_{key_url}"
 
             cached_keys = await self.user_api_key_cache.async_get_cache(cache_key)
@@ -913,8 +971,30 @@ class JWTAuthManager:
         if jwt_handler.is_required_team_id() is True:
             team_id_field = jwt_handler.litellm_jwtauth.team_id_jwt_field
             team_alias_field = jwt_handler.litellm_jwtauth.team_alias_jwt_field
+            hint = ""
+            if team_id_field:
+                # "roles.0" — dot-notation numeric indexing is not supported
+                if "." in team_id_field:
+                    parts = team_id_field.rsplit(".", 1)
+                    if parts[-1].isdigit():
+                        base_field = parts[0]
+                        hint = (
+                            f" Hint: dot-notation array indexing (e.g. '{team_id_field}') is not "
+                            f"supported. Use '{base_field}' instead — LiteLLM automatically "
+                            f"uses the first element when the field value is a list."
+                        )
+                # "roles[0]" — bracket-notation indexing is also not supported in get_nested_value
+                elif "[" in team_id_field and team_id_field.endswith("]"):
+                    m = re.match(r"^(\w+)\[(\d+)\]$", team_id_field)
+                    if m:
+                        base_field = m.group(1)
+                        hint = (
+                            f" Hint: array indexing (e.g. '{team_id_field}') is not supported "
+                            f"in team_id_jwt_field. Use '{base_field}' instead — LiteLLM "
+                            f"automatically uses the first element when the field value is a list."
+                        )
             raise Exception(
-                f"No team found in token. Checked team_id field '{team_id_field}' and team_alias field '{team_alias_field}'"
+                f"No team found in token. Checked team_id field '{team_id_field}' and team_alias field '{team_alias_field}'.{hint}"
             )
 
         return individual_team_id, team_object

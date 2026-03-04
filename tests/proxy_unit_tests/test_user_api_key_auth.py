@@ -1044,8 +1044,13 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
         litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True}
     )
 
-    # Mock JWTAuthManager.auth_builder
+    # Mock enterprise license check and JWTAuthManager.auth_builder
+    # License check must be mocked to avoid environment variable pollution
+    # in parallel test execution
     with patch(
+        "litellm.proxy.proxy_server.premium_user",
+        True,
+    ), patch(
         "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
         return_value=mock_jwt_response,
     ):

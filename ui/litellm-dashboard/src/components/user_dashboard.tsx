@@ -93,15 +93,17 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
-  // check if window is not undefined
-  if (typeof window !== "undefined") {
-    window.addEventListener("beforeunload", function () {
-      // Clear session storage
+
+  // Clear session storage on page unload so next load fetches fresh data.
+  // Note: MCP auth tokens are persistent and should not be cleared on page refresh
+  // They are only cleared on logout
+  useEffect(() => {
+    const handleBeforeUnload = () => {
       sessionStorage.clear();
-      // Note: MCP auth tokens are persistent and should not be cleared on page refresh
-      // They are only cleared on logout
-    });
-  }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
 
   function formatUserRole(userRole: string) {
     if (!userRole) {

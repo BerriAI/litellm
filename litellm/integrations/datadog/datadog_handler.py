@@ -55,4 +55,15 @@ def get_datadog_tags(
         request_tags = standard_logging_object.get("request_tags", []) or []
         tags.extend(f"request_tag:{tag}" for tag in request_tags)
 
+        # Add Team Tag
+        metadata = standard_logging_object.get("metadata", {}) or {}
+        team_tag = (
+            metadata.get("user_api_key_team_alias")
+            or metadata.get("team_alias")
+            or metadata.get("user_api_key_team_id")
+            or metadata.get("team_id")
+        )
+        if team_tag:
+            tags.append(f"team:{team_tag}")
+
     return ",".join(tags)

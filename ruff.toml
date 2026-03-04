@@ -13,3 +13,6 @@ exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_conf
 "litellm/llms/azure_ai/embed/__init__.py" = ["F401"]
 "litellm/llms/azure_ai/rerank/__init__.py" = ["F401"]
 "litellm/llms/bedrock/chat/__init__.py" = ["F401"]
+"litellm/proxy/utils.py" = ["F401", "PLR0915"]
+"litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/content_filter.py" = ["PLR0915"]
+"litellm/proxy/guardrails/guardrail_hooks/guardrail_benchmarks/test_eval.py" = ["PLR0915"]

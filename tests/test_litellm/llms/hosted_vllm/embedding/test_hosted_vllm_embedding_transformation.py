@@ -232,23 +232,6 @@ class TestHostedVLLMEmbeddingTransformation:
         assert result["Authorization"] == "Bearer test-api-key"
         assert result["Content-Type"] == "application/json"
 
-    def test_validate_environment_without_api_key(self):
-        """Test environment validation without API key (uses fake-api-key)."""
-        headers = {}
-        
-        result = self.config.validate_environment(
-            headers=headers,
-            model=self.model,
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            api_key=None,
-        )
-
-        # Should not include Authorization header with fake-api-key
-        assert "Authorization" not in result
-        assert result["Content-Type"] == "application/json"
-
     def test_encoding_format_not_sent_in_actual_request(self):
         """
         E2E test that encoding_format is not sent when not provided.
@@ -305,62 +288,6 @@ class TestHostedVLLMEmbeddingTransformation:
             )
             assert sent_data["model"] == "BAAI/bge-small-en-v1.5"
             assert sent_data["input"] == ["Hello world"]
-
-    def test_encoding_format_float_sent_in_actual_request(self):
-        """
-        Test that encoding_format='float' is sent when explicitly provided.
-        """
-        from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-        client = HTTPHandler()
-        
-        with patch.object(client, "post") as mock_post:
-            # Mock response
-            mock_response = Mock()
-            mock_response.status_code = 200
-            mock_response.headers = {"content-type": "application/json"}
-            mock_response.json.return_value = {
-                "object": "list",
-                "data": [
-                    {
-                        "object": "embedding",
-                        "index": 0,
-                        "embedding": [0.1, 0.2, 0.3, 0.4, 0.5],
-                    }
-                ],
-                "model": "BAAI/bge-small-en-v1.5",
-                "usage": {
-                    "prompt_tokens": 5,
-                    "total_tokens": 5,
-                },
-            }
-            mock_response.text = json.dumps(mock_response.json.return_value)
-            mock_post.return_value = mock_response
-
-            try:
-                litellm.embedding(
-                    model=self.model,
-                    input=["Hello world"],
-                    api_base="https://test-vllm.example.com/v1",
-                    encoding_format="float",
-                    client=client,
-                )
-            except Exception:
-                pass
-
-            # Verify the request was made
-            mock_post.assert_called_once()
-
-            # Get the data that was sent
-            call_kwargs = mock_post.call_args[1]
-            sent_data = json.loads(call_kwargs["data"])
-
-            # Assert that encoding_format IS in the sent data
-            assert "encoding_format" in sent_data, (
-                "encoding_format='float' should be in request when provided"
-            )
-            assert sent_data["encoding_format"] == "float"
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

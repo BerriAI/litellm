@@ -223,12 +223,14 @@ def get_known_models_from_wildcard(
     except ValueError:  # safely fail
         return []
 
-    if litellm_params is None:  # need litellm params to extract litellm model name
-        return []
-
-    try:
-        provider = litellm_params.model.split("/", 1)[0]
-    except ValueError:
+    # Use provider from litellm_params when available, otherwise from wildcard prefix
+    # (e.g., "openai" from "openai/*" - needed for BYOK where wildcard isn't in router)
+    if litellm_params is not None:
+        try:
+            provider = litellm_params.model.split("/", 1)[0]
+        except ValueError:
+            provider = wildcard_provider_prefix
+    else:
         provider = wildcard_provider_prefix
 
     # get all known provider models
@@ -282,7 +284,7 @@ def _get_wildcard_models(
             ## get litellm params from model
             if llm_router is not None:
                 model_list = llm_router.get_model_list(model_name=model)
-                if model_list is not None:
+                if model_list:
                     for router_model in model_list:
                         wildcard_models = get_known_models_from_wildcard(
                             wildcard_model=model,
@@ -291,11 +293,22 @@ def _get_wildcard_models(
                             ),
                         )
                         all_wildcard_models.extend(wildcard_models)
+                else:
+                    # Router has no deployment for this wildcard (e.g., BYOK team models)
+                    # Fall back to expanding from known provider models
+                    wildcard_models = get_known_models_from_wildcard(
+                        wildcard_model=model, litellm_params=None
+                    )
+                    if wildcard_models:
+                        models_to_remove.add(model)
+                        all_wildcard_models.extend(wildcard_models)
             else:
                 # get all known provider models
-                wildcard_models = get_known_models_from_wildcard(wildcard_model=model)
+                wildcard_models = get_known_models_from_wildcard(
+                    wildcard_model=model, litellm_params=None
+                )
 
-                if wildcard_models is not None:
+                if wildcard_models:
                     models_to_remove.add(model)
                     all_wildcard_models.extend(wildcard_models)
 

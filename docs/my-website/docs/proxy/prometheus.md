@@ -113,6 +113,31 @@ litellm_settings:
 ```
 
 
+## Pod Health Metrics
+
+Use these to measure per-pod queue depth and diagnose latency that occurs **before** LiteLLM starts processing a request.
+
+| Metric Name | Type | Description |
+|---|---|---|
+| `litellm_in_flight_requests` | Gauge | Number of HTTP requests currently in-flight on this uvicorn worker. Tracks the pod's queue depth in real time. With multiple workers, values are summed across all live workers (`livesum`). |
+
+### When to use this
+
+LiteLLM measures latency from when its handler starts. If a request waits in uvicorn's event loop before the handler runs, that wait is invisible to LiteLLM's own logs. `litellm_in_flight_requests` shows how loaded the pod was at any point in time.
+
+```
+high in_flight_requests + high ALB TargetResponseTime → pod overloaded, scale out
+low  in_flight_requests + high ALB TargetResponseTime → delay is pre-ASGI (event loop blocking)
+```
+
+You can also check the current value directly without Prometheus:
+
+```bash
+curl http://localhost:4000/health/backlog \
+  -H "Authorization: Bearer sk-..."
+# {"in_flight_requests": 47}
+```
+
 ## Proxy Level Tracking Metrics
 
 Use this to track overall LiteLLM Proxy usage.
@@ -122,7 +147,7 @@ Use this to track overall LiteLLM Proxy usage.
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_proxy_failed_requests_metric`             | Total number of failed responses from proxy - the client did not get a success response from litellm proxy. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "user_email", "exception_status", "exception_class", "route", "model_id"`          |
-| `litellm_proxy_total_requests_metric`             | Total number of requests made to the proxy server - track number of client side requests. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "status_code", "user_email", "route", "model_id"`          |
+| `litellm_proxy_total_requests_metric`             | Total number of requests made to the proxy server - track number of client side requests. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "status_code", "user_email", "route", "model_id"`. Optionally includes `"stream"` — see [Emit Stream Label](#emit-stream-label).          |
 
 ### Callback Logging Metrics
 
@@ -214,9 +239,31 @@ litellm_settings:
 ```
 
 
+### Emit Stream Label
+
+Add a `stream` label to `litellm_proxy_total_requests_metric` to split requests by streaming vs. non-streaming. Disabled by default.
+
+```yaml title="config.yaml"
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_emit_stream_label: true
+```
+
+When enabled, `litellm_proxy_total_requests_metric` gains a `stream` label with values `"True"`, `"False"`, or `"None"`.
+
+```
+litellm_proxy_total_requests_metric{..., stream="True"} 42
+litellm_proxy_total_requests_metric{..., stream="False"} 100
+```
+
+:::note
+This label is opt-in because adding a new label to an existing metric changes its cardinality and breaks existing Prometheus queries / Grafana dashboards that target this metric. Enable it only on fresh deployments or when you are ready to update your dashboards.
+:::
+
+
 ## [BETA] Custom Metrics
 
-Track custom metrics on prometheus on all events mentioned above. 
+Track custom metrics on prometheus on all events mentioned above.
 
 ### Custom Metadata Labels
 

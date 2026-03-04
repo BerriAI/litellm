@@ -8,10 +8,10 @@ for line-by-line profiling.
 See performance_utils.md for detailed usage examples and documentation.
 """
 
-import asyncio
 import atexit
 import cProfile
 import functools
+import inspect
 import threading
 from pathlib import Path as PathLib
 from typing import Any, Callable, Optional
@@ -100,7 +100,7 @@ def profile_endpoint(sampling_rate: float = 1.0):
             global _last_profile_file_path
             _last_profile_file_path = path
 
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
                 is_sampling = _start_profiling_for_request(sampling_rate)

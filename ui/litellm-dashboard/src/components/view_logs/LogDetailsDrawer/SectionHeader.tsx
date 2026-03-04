@@ -19,9 +19,10 @@ interface SectionHeaderProps {
   onCopy: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  turnCount?: number;
 }
 
-export function SectionHeader({ type, tokens, cost, onCopy, isCollapsed, onToggleCollapse }: SectionHeaderProps) {
+export function SectionHeader({ type, tokens, cost, onCopy, isCollapsed, onToggleCollapse, turnCount }: SectionHeaderProps) {
   return (
     <div
       onClick={onToggleCollapse}
@@ -79,6 +80,13 @@ export function SectionHeader({ type, tokens, cost, onCopy, isCollapsed, onToggl
         {cost !== undefined && (
           <Text type="secondary" style={{ fontSize: 12 }}>
             Cost: ${cost.toFixed(6)}
+          </Text>
+        )}
+
+        {/* Turn count */}
+        {turnCount !== undefined && turnCount > 0 && (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Turns: {turnCount}
           </Text>
         )}
       </div>

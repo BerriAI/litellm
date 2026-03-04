@@ -37,7 +37,9 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    LIST_BATCHES_SUPPORTED_PROVIDERS,
     OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    ListBatchesSupportedProvider,
     LiteLLMBatch,
     LlmProviders,
 )
@@ -674,7 +676,7 @@ def retrieve_batch(
 async def alist_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure", "hosted_vllm", "vertex_ai"] = "openai",
+    custom_llm_provider: ListBatchesSupportedProvider = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -717,7 +719,7 @@ async def alist_batches(
 def list_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure", "hosted_vllm", "vertex_ai"] = "openai",
+    custom_llm_provider: ListBatchesSupportedProvider = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -843,8 +845,9 @@ def list_batches(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'list_batch'. Supported providers: openai, azure, vertex_ai.".format(
-                    custom_llm_provider
+                message="LiteLLM doesn't support {} for 'list_batch'. Supported providers: {}.".format(
+                    custom_llm_provider,
+                    ", ".join(sorted(LIST_BATCHES_SUPPORTED_PROVIDERS)),
                 ),
                 model="n/a",
                 llm_provider=custom_llm_provider,

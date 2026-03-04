@@ -62,3 +62,27 @@ def test_get_complete_model_list_order(key_models, team_models, proxy_model_list
         infer_model_from_keys=False,
         llm_router=Router(model_list=model_list),
     ) == expected
+
+
+def test_get_complete_model_list_byok_wildcard_expansion():
+    """
+    Test that wildcard models (e.g., openai/*) are expanded when the router has
+    no deployment for them - BYOK case where team has openai/* but proxy has
+    no openai config.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    # Router with empty model_list - no openai/* deployment (BYOK scenario)
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=["openai/*"],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=Router(model_list=[]),
+    )
+    # Should expand openai/* to actual OpenAI models
+    assert len(result) > 0
+    assert all(m.startswith("openai/") for m in result)
+    assert "openai/*" not in result
