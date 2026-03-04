@@ -177,7 +177,7 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
         updated_by="admin",
     )
     prisma = _make_prisma(find_unique_row=row)
-    result = await update_tool_policy(prisma, "my_tool", "blocked", "admin")
+    result = await update_tool_policy(prisma, "my_tool", updated_by="admin", input_policy="blocked")
     assert result is not None
     assert result.call_policy == "blocked"
     prisma.db.litellm_tooltable.upsert.assert_awaited_once()
