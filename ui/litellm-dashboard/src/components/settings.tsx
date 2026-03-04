@@ -425,7 +425,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     }
     NotificationsManager.success("Alerts updated successfully");
   };
-  const handleSaveChanges = (callback: any) => {
+  const handleSaveChanges = async (callback: any) => {
     if (!accessToken) {
       return;
     }
@@ -437,19 +437,28 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       ]),
     );
 
-    const payload = {
-      environment_variables: updatedVariables,
-      litellm_settings: {
-        success_callback: [callback.name],
-      },
-    };
+    const callbackType = (callback.type ?? "success") as "success" | "failure" | "success_and_failure";
+    const formValues = { ...updatedVariables, callback: callback.name };
+    const payload = buildCallbackPayload(
+      formValues,
+      callback.name,
+      callbacks,
+      true,
+      callbackType,
+      callbackSettings,
+    );
 
     try {
-      setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
+      NotificationsManager.success("Callback updated successfully");
+      if (userID && userRole) {
+        const data = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(data.callbacks);
+        setCallbackSettings(data.callback_settings ?? {});
+      }
     } catch (error) {
       NotificationsManager.fromBackend(error);
     }
-    NotificationsManager.success("Callback updated successfully");
   };
 
   const handleOk = () => {
@@ -730,6 +739,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         <Form
           form={addForm}
           onFinish={addNewCallbackCall}
+          initialValues={{ callback_type: "success" }}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -739,6 +749,16 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             selectedCallback={selectedCallback}
             onCallbackChange={handleSelectedCallbackChange}
           />
+
+          <FormItem name="callback_type" label="Mode" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { value: "success", label: "Success" },
+                { value: "failure", label: "Failure" },
+                { value: "success_and_failure", label: "Success & Failure" },
+              ]}
+            />
+          </FormItem>
 
           <DynamicParamsFields
             params={selectedCallbackParams}
