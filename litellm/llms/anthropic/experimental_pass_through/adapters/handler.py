@@ -78,7 +78,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             completion_kwargs["model"] = f"responses/{model}"
             
         reasoning_effort = completion_kwargs.get("reasoning_effort")
-        summary = thinking.get("summary") if isinstance(thinking, dict) else None
+        summary = thinking.get("summary")
         if isinstance(reasoning_effort, str) and reasoning_effort:
             reasoning_dict: Dict[str, Any] = {"effort": reasoning_effort}
             if summary:
