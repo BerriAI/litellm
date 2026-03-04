@@ -159,7 +159,7 @@ class PrismaWrapper:
             db_port = os.getenv("DATABASE_PORT")
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
-            db_schema = os.getenv("DATABASE_SCHEMA")
+            db_schema = (os.getenv("DATABASE_SCHEMA") or "").strip() or None
 
             token = generate_iam_auth_token(
                 db_host=db_host, db_port=db_port, db_user=db_user

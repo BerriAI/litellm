@@ -2402,7 +2402,9 @@ class PrismaClient:
             ]
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
-            pg_schema = os.getenv("DATABASE_SCHEMA", "public")
+            from litellm.proxy.db.db_schema import get_database_schema
+
+            pg_schema = get_database_schema()
             ret = await self.db.query_raw(
                 f"""
                 WITH existing_views AS (
@@ -5185,7 +5187,7 @@ def construct_database_url_from_env_vars() -> Optional[str]:
     database_username = os.getenv("DATABASE_USERNAME")
     database_password = os.getenv("DATABASE_PASSWORD")
     database_name = os.getenv("DATABASE_NAME")
-    database_schema = os.getenv("DATABASE_SCHEMA")
+    database_schema = (os.getenv("DATABASE_SCHEMA") or "").strip() or None
 
     if database_host and database_username and database_name:
         # Handle the problem of special character escaping in the database URL

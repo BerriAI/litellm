@@ -100,14 +100,18 @@ class FocusLiteLLMDatabase:
         """Return metadata about the spend table for diagnostics."""
         client = self._ensure_prisma_client()
 
+        from litellm.proxy.db.db_schema import get_database_schema
+
+        pg_schema = get_database_schema()
         info_query = """
         SELECT column_name, data_type, is_nullable
         FROM information_schema.columns
-        WHERE table_name = 'LiteLLM_DailyUserSpend'
+        WHERE table_schema = $1
+          AND table_name = 'LiteLLM_DailyUserSpend'
         ORDER BY ordinal_position;
         """
         try:
-            columns_response = await client.db.query_raw(info_query)
+            columns_response = await client.db.query_raw(info_query, pg_schema)
             return {"columns": columns_response, "table_name": "LiteLLM_DailyUserSpend"}
         except Exception as exc:
             raise RuntimeError(f"Error getting table info: {exc}") from exc
