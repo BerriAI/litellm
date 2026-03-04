@@ -12,6 +12,8 @@ import httpx
 import openai
 import psycopg2
 import pytest
+
+tenacity = pytest.importorskip("tenacity", reason="tenacity required for e2e batch tests")
 from tenacity import Retrying, stop_after_delay, wait_fixed
 
 sys.path.insert(0, os.path.abspath("../.."))
