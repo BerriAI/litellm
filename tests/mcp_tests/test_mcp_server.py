@@ -414,15 +414,15 @@ async def test_streamable_http_mcp_handler_mock():
     mock_send = AsyncMock()
 
     with patch(
-    "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-    True,
-), patch(
-    "litellm.proxy._experimental.mcp_server.server.session_manager",
-    mock_session_manager,
-), patch(
-    "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-    new=AsyncMock(return_value=(UserAPIKeyAuth(), None, [], {}, {}, {})),
-):
+        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+        True,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.session_manager",
+        mock_session_manager,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        new=AsyncMock(return_value=(UserAPIKeyAuth(), None, [], {}, {}, {})),
+    ):
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
         )
