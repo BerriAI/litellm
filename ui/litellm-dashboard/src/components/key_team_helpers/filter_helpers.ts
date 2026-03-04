@@ -1,4 +1,4 @@
-import { teamListCall, organizationListCall, keyAliasesCall, keyListCall } from "../networking";
+import { teamListCall, organizationListCall, keyListCall } from "../networking";
 import { Team } from "./key_list";
 import { Organization } from "../networking";
 
