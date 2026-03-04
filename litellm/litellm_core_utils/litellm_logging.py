@@ -5221,7 +5221,7 @@ def _enrich_cost_breakdown_with_cache_costs(
     cost_breakdown = logging_obj.cost_breakdown
     if cost_breakdown is None:
         return None
-    if "cache_read_input_cost" in cost_breakdown:
+    if "cache_read_input_cost" in cost_breakdown or "cache_write_input_cost" in cost_breakdown:
         return cost_breakdown
 
     try:
@@ -5277,7 +5277,9 @@ def _enrich_cost_breakdown_with_cache_costs(
                 cache_creation_cost=cache_creation_rate,
             )
     except Exception:
-        pass
+        verbose_logger.debug(
+            "Failed to enrich cost_breakdown with cache costs", exc_info=True
+        )
 
     return cost_breakdown
 
