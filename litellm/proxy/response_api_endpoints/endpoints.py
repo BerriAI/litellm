@@ -456,7 +456,7 @@ async def count_response_input_tokens(
                 status_code=400, detail={"error": "model parameter is required"}
             )
 
-        if not input_data:
+        if input_data is None:
             raise HTTPException(
                 status_code=400, detail={"error": "input parameter is required"}
             )
