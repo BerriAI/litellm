@@ -2736,6 +2736,30 @@ class CostBreakdown(TypedDict, total=False):
     margin_fixed_amount: float  # Fixed margin amount in USD (optional)
     margin_total_amount: float  # Total margin added in USD (optional)
 
+    # Granular input cost breakdown
+    input_cost_text: float  # Cost for non-cached text input tokens
+    input_cost_cache_read: float  # Cost for cache read/hit tokens
+    input_cost_cache_creation: float  # Cost for cache creation/write tokens
+    input_cost_audio: float  # Cost for audio input tokens
+
+    # Granular output cost breakdown
+    output_cost_text: float  # Cost for text output tokens
+    output_cost_reasoning: float  # Cost for reasoning output tokens
+    output_cost_audio: float  # Cost for audio output tokens
+
+    # Token counts for granular breakdown
+    input_tokens_text: int  # Number of non-cached text input tokens
+    input_tokens_cache_read: int  # Number of cache read/hit tokens
+    input_tokens_cache_creation: int  # Number of cache creation/write tokens
+    input_tokens_audio: int  # Number of audio input tokens
+    output_tokens_text: int  # Number of text output tokens
+    output_tokens_reasoning: int  # Number of reasoning output tokens
+    output_tokens_audio: int  # Number of audio output tokens
+
+    # Pricing tier indicator
+    above_128k_tokens: bool  # Whether above-128K token pricing was used
+    above_200k_tokens: bool  # Whether above-200K token pricing was used
+
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """Status fields for easy filtering and analytics"""
