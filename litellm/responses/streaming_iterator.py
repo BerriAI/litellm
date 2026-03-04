@@ -3,7 +3,7 @@ import json
 import time
 import traceback
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -687,9 +687,6 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 # ---------------------------------------------------------------------------
 # WebSocket mode streaming (bidirectional forwarding)
 # ---------------------------------------------------------------------------
-
-if TYPE_CHECKING:
-    from websockets.asyncio.client import ClientConnection as _WsClientConnection
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.thread_pool_executor import executor as _ws_executor
