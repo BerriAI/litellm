@@ -15,12 +15,6 @@ Notes:
 - The ChatGPT subscription backend rejects token limit fields (`max_tokens`, `max_output_tokens`, `max_completion_tokens`) and `metadata`. LiteLLM strips these fields for this provider.
 - `/v1/chat/completions` honors `stream`. When `stream` is false (default), LiteLLM aggregates the Responses stream into a single JSON response.
 
-Common GPT-5.3 model IDs:
-- `chatgpt/gpt-5.3-codex`
-- `chatgpt/gpt-5.3-codex-spark`
-- `chatgpt/gpt-5.3-chat-latest`
-- `chatgpt/gpt-5.3-instant`
-
 ## Authentication
 
 ChatGPT subscription access uses an OAuth device code flow:
