@@ -58,6 +58,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.guardrails.tool_name_extraction import (
+    TOOL_CAPABLE_CALL_TYPES,
+    extract_request_tool_names,
+)
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
@@ -220,7 +224,48 @@ async def _run_project_checks(
         )
 
 
-async def common_checks(
+async def check_tools_allowlist(
+    request_body: dict,
+    valid_token: Optional[UserAPIKeyAuth],
+    team_object: Optional[LiteLLM_TeamTable],
+    route: str,
+) -> None:
+    """
+    Enforce key/team tool allowlist (metadata.allowed_tools). No DB in hot path —
+    effective allowlist is read from valid_token.metadata and valid_token.team_metadata.
+    Raises ProxyException with tool_access_denied if a tool is not allowed.
+    """
+    from litellm.litellm_core_utils.api_route_to_call_types import (
+        get_call_types_for_route,
+    )
+
+    if valid_token is None:
+        return
+    call_types = get_call_types_for_route(route)
+    if not call_types or not any(ct.value in TOOL_CAPABLE_CALL_TYPES for ct in call_types):
+        return
+    tool_names = extract_request_tool_names(route, request_body)
+    if not tool_names:
+        return
+    key_meta = (valid_token.metadata or {}) if isinstance(valid_token.metadata, dict) else {}
+    team_meta = (valid_token.team_metadata or {}) if isinstance(valid_token.team_metadata, dict) else {}
+    key_allowed = key_meta.get("allowed_tools")
+    team_allowed = team_meta.get("allowed_tools")
+    effective = key_allowed if (isinstance(key_allowed, list) and len(key_allowed) > 0) else team_allowed
+    if not isinstance(effective, list) or len(effective) == 0:
+        return
+    allowed_set = {str(t) for t in effective}
+    disallowed = [n for n in tool_names if n not in allowed_set]
+    if disallowed:
+        raise ProxyException(
+            message=f"Tool(s) {disallowed} are not in the allowed tools list for this key/team.",
+            type=ProxyErrorTypes.tool_access_denied,
+            param="tools",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
+
+async def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
@@ -475,6 +520,14 @@ async def common_checks(
         request_body=request_body,
         team_object=team_object,
         valid_token=valid_token,
+    )
+
+    # 12. [OPTIONAL] Tool allowlist - key/team allowed_tools (no DB in hot path)
+    await check_tools_allowlist(
+        request_body=request_body,
+        valid_token=valid_token,
+        team_object=team_object,
+        route=route,
     )
 
     return True
