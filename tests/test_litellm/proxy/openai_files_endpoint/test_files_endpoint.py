@@ -1303,3 +1303,121 @@ def test_file_no_team_setting_preserves_caller(
     )
     assert expires_after["anchor"] == "created_at"
     assert expires_after["seconds"] == 86400
+
+
+def test_file_team_injects_when_caller_sends_nothing(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Team enforcement applies even when caller sends no expiry."""
+    expires_after = _post_file_with_team_metadata(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {
+                "anchor": "created_at",
+                "seconds": 3600,
+            }
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert expires_after["anchor"] == "created_at"
+    assert expires_after["seconds"] == 3600
+
+
+# ---------------------------------------------------------------------------
+# Team-level enforced_file_expires_after validation error tests
+# ---------------------------------------------------------------------------
+
+
+def _post_file_raw(monkeypatch, llm_router: Router, team_metadata: dict, form_data: dict):
+    """POST /v1/files and return the raw response (no status assertion)."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    dummy, _ = _make_capturing_managed_files()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = dummy
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    user_key = UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata)
+    app.dependency_overrides[user_api_key_auth] = lambda: user_key
+
+    test_file = ("mydata.jsonl", b'{"prompt": "Hello"}', "application/json")
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data=form_data,
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    return response
+
+
+def test_file_missing_anchor_key_returns_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Missing 'anchor' key in team metadata returns 500."""
+    response = _post_file_raw(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {"seconds": 3600},
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 500
+    assert "malformed" in response.json()["error"]["message"]
+
+
+def test_file_missing_seconds_key_returns_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Missing 'seconds' key in team metadata returns 500."""
+    response = _post_file_raw(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {"anchor": "created_at"},
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 500
+    assert "malformed" in response.json()["error"]["message"]
+
+
+def test_file_invalid_anchor_returns_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Invalid anchor value in team metadata returns 500."""
+    response = _post_file_raw(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {
+                "anchor": "updated_at",
+                "seconds": 3600,
+            },
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 500
+    assert "created_at" in response.json()["error"]["message"]
