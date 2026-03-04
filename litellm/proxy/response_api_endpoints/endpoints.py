@@ -464,8 +464,6 @@ async def count_response_input_tokens(
         # Convert Responses API `input` to chat messages format for the internal token counter
         messages: list = []
         instructions = data.get("instructions")
-        if instructions:
-            messages.append({"role": "system", "content": instructions})
 
         if isinstance(input_data, str):
             messages.append({"role": "user", "content": input_data})

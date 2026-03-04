@@ -71,7 +71,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         try:
             result = await openai_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
-                input=input_items or messages,
+                input=input_items if input_items is not None else [],
                 api_key=api_key,
                 api_base=api_base,
                 tools=tools,
