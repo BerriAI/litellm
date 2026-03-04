@@ -142,6 +142,11 @@ async def update_jwt_key_mapping(
                 status_code=409,
                 detail="A mapping with those claim values already exists.",
             )
+        if "foreign" in error_str or "p2003" in error_str:
+            raise HTTPException(
+                status_code=400,
+                detail="The provided key does not match an existing virtual key.",
+            )
         raise HTTPException(status_code=500, detail="Failed to update JWT key mapping.")
 
 
