@@ -470,7 +470,6 @@ async def count_response_input_tokens(
         if isinstance(input_data, str):
             messages.append({"role": "user", "content": input_data})
         elif isinstance(input_data, list):
-        elif isinstance(input_data, list):
             for item in input_data:
                 if isinstance(item, dict):
                     role = item.get("role", "user")
