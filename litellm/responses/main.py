@@ -1729,11 +1729,6 @@ async def _aresponses_websocket(
             )
         )
 
-    if responses_api_provider_config is None:
-        raise ValueError(
-            f"Responses API WebSocket mode is not supported for provider: {_custom_llm_provider}"
-        )
-
     resolved_api_base = (
         dynamic_api_base
         or litellm_params.api_base
@@ -1748,6 +1743,9 @@ async def _aresponses_websocket(
         or get_secret_str("OPENAI_API_KEY")
     )
 
+    # Extract params that we're passing explicitly to avoid duplicates in **kwargs
+    remaining_kwargs = {k: v for k, v in kwargs.items() if k not in {"user_api_key_dict", "litellm_metadata"}}
+
     await base_llm_http_handler.async_responses_websocket(
         model=model,
         websocket=websocket,
@@ -1758,4 +1756,6 @@ async def _aresponses_websocket(
         timeout=timeout,
         user_api_key_dict=kwargs.get("user_api_key_dict"),
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
+        custom_llm_provider=_custom_llm_provider,
+        **remaining_kwargs,
     )

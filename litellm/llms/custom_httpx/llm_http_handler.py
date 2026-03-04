@@ -4737,20 +4737,46 @@ class BaseLLMHTTPHandler:
         model: str,
         websocket: Any,
         logging_obj: LiteLLMLoggingObj,
-        responses_api_provider_config: BaseResponsesAPIConfig,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig],
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         timeout: Optional[float] = None,
         user_api_key_dict: Optional[Any] = None,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs: Any,
     ):
         """
         Handles Responses API WebSocket mode.
 
-        Opens a persistent WebSocket to the provider's /v1/responses endpoint
-        and proxies response.create events bidirectionally for lower-latency
-        agentic workflows.
+        For providers with native websocket support (OpenAI, Azure):
+        - Opens a persistent WebSocket to the provider's /v1/responses endpoint
+        - Proxies response.create events bidirectionally for lower-latency agentic workflows
+
+        For providers without native websocket support (all others):
+        - Uses ManagedResponsesWebSocketHandler which makes HTTP streaming calls
+        - Forwards events over the websocket connection
         """
+        if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
+            from litellm.responses.streaming_iterator import (
+                ManagedResponsesWebSocketHandler,
+            )
+
+            handler = ManagedResponsesWebSocketHandler(
+                websocket=websocket,
+                model=model,
+                logging_obj=logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                litellm_metadata=litellm_metadata,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
+            await handler.run()
+            return
+
         import websockets
         from websockets.asyncio.client import ClientConnection
 
@@ -4767,7 +4793,6 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_params={},
         )
-        # /responses -> wss:// URL
         ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
 
         try:
