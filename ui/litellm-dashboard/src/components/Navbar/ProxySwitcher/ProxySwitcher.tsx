@@ -13,9 +13,6 @@ interface ProxySwitcherProps {
 const ProxySwitcher: React.FC<ProxySwitcherProps> = ({ onManageClick }) => {
   const { connections, activeConnection, switchConnection } = useProxyConnection();
 
-  // Only show when there are multiple connections configured
-  if (connections.length <= 1) return null;
-
   const items: MenuProps["items"] = [
     ...connections.map((conn) => ({
       key: conn.id,
