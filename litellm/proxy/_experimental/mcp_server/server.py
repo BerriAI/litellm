@@ -44,7 +44,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_name,
     get_server_prefix,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
@@ -2254,6 +2254,29 @@ if MCP_AVAILABLE:
         ]
         return False
 
+    def _build_proxy_exception_response(e: ProxyException) -> JSONResponse:
+        """
+        Convert ProxyException to JSONResponse while preserving status + payload.
+
+        This prevents auth/business ProxyExceptions from being rewritten to generic
+        HTTP 500 responses in MCP handlers.
+        """
+        try:
+            status_code = int(str(e.code))
+        except (TypeError, ValueError):
+            status_code = 500
+
+        response = JSONResponse(
+            status_code=status_code,
+            content={"error": e.to_dict()},
+        )
+
+        if e.headers:
+            for header_key, header_value in e.headers.items():
+                response.headers[header_key] = header_value
+
+        return response
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -2341,6 +2364,19 @@ if MCP_AVAILABLE:
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
+        except ProxyException as e:
+            verbose_logger.warning(
+                "MCP request failed with ProxyException: %s",
+                getattr(e, "message", str(e)),
+            )
+            try:
+                error_response = _build_proxy_exception_response(e)
+                await error_response(scope, receive, send)
+            except Exception as response_error:
+                verbose_logger.exception(
+                    f"Failed to send ProxyException error response: {response_error}"
+                )
+                raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions
@@ -2397,6 +2433,19 @@ if MCP_AVAILABLE:
                 await asyncio.sleep(0.1)
 
             await sse_session_manager.handle_request(scope, receive, send)
+        except ProxyException as e:
+            verbose_logger.warning(
+                "MCP request failed with ProxyException: %s",
+                getattr(e, "message", str(e)),
+            )
+            try:
+                error_response = _build_proxy_exception_response(e)
+                await error_response(scope, receive, send)
+            except Exception as response_error:
+                verbose_logger.exception(
+                    f"Failed to send ProxyException error response: {response_error}"
+                )
+                raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response
