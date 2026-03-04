@@ -9,7 +9,7 @@ import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels,
 import { Form, Modal, Tag } from "antd";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import { useEffect, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "../../utils/roles";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -50,6 +50,7 @@ export default function KeyInfoView({
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -140,7 +141,7 @@ export default function KeyInfoView({
       formValues.key = currentKey;
 
       // Guard premium features
-      if (!premiumUser) {
+      if (!canEditGuardrails) {
         delete formValues.guardrails;
         delete formValues.prompts;
       }

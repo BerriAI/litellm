@@ -622,6 +622,8 @@ class LiteLLMRoutes(enum.Enum):
             "/global/activity/model",
             "/v1/models/{model_id}",
             "/models/{model_id}",
+            "/guardrails/list",
+            "/v2/guardrails/list",
         ]
         + spend_tracking_routes
         + key_management_routes

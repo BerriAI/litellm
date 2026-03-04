@@ -5460,8 +5460,8 @@ export const testMCPSemanticFilter = async (accessToken: string, model: string, 
 
 export const getGuardrailsList = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
-    const response = await fetch(url, {
+    const v2Url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
+    const response = await fetch(v2Url, {
       method: "GET",
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
@@ -5470,17 +5470,35 @@ export const getGuardrailsList = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
+      throw new Error(`v2 guardrails/list returned ${response.status}`);
     }
 
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error("Failed to get guardrails list:", error);
-    throw error;
+    console.log("v2/guardrails/list failed, falling back to v1:", error);
+    try {
+      const v1Url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/list` : `/guardrails/list`;
+      const fallbackResponse = await fetch(v1Url, {
+        method: "GET",
+        headers: {
+          [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!fallbackResponse.ok) {
+        const errorData = await fallbackResponse.json();
+        const errorMessage = deriveErrorMessage(errorData);
+        handleError(errorMessage);
+        throw new Error(errorMessage);
+      }
+
+      return await fallbackResponse.json();
+    } catch (fallbackError) {
+      console.error("Failed to get guardrails list:", fallbackError);
+      throw fallbackError;
+    }
   }
 };
 
