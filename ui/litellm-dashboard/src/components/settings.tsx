@@ -554,10 +554,11 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       await deleteCallback(accessToken, callbackToDelete.name);
       NotificationsManager.success(`Callback ${callbackToDelete.name} deleted successfully`);
 
-      // Refresh the callbacks list
+      // Refresh the callbacks list and callback settings
       if (userID && userRole) {
         const data = await getCallbacksCall(accessToken, userID, userRole);
         setCallbacks(data.callbacks);
+        setCallbackSettings(data.callback_settings ?? {});
       }
 
       setShowDeleteConfirmModal(false);

@@ -32,7 +32,7 @@ def get_callbacks_from_callback_settings(
         - success_only: run on success only
         - failure_only: run on failure only
     """
-    callbacks_both: List[Union[str, Dict[str, Any]]] = []
+    callbacks_both: List[str] = []
     success_only: List[str] = []
     failure_only: List[str] = []
 
