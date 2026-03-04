@@ -23209,6 +23209,19 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 8192
     },
+    "mistral.devstral-2-123b": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "mistral.magistral-small-2509": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "bedrock_converse",
@@ -34631,6 +34644,20 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.2e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "zai.glm-4.7-flash": {
+        "input_cost_per_token": 7e-08,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
