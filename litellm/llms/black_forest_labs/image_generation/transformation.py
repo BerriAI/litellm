@@ -127,7 +127,9 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
                 optional_params["width"] = width
                 optional_params["height"] = height
             except ValueError:
-                pass  # Ignore invalid size format
+                raise ValueError(
+                    f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024')."
+                )
 
     def validate_environment(
         self,
