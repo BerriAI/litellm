@@ -1159,39 +1159,6 @@ def function_setup(  # noqa: PLR0915
         raise e
 
 
-async def _client_async_logging_helper(
-    logging_obj: LiteLLMLoggingObject,
-    result,
-    start_time,
-    end_time,
-    is_completion_with_fallbacks: bool,
-):
-    if (
-        is_completion_with_fallbacks is False
-    ):  # don't log the parent event litellm.completion_with_fallbacks as a 'log_success_event', this will lead to double logging the same call - https://github.com/BerriAI/litellm/issues/7477
-        print_verbose(
-            f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
-        )
-        ################################################
-        # Async Logging Worker
-        ################################################
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=logging_obj.async_success_handler(
-                result=result, start_time=start_time, end_time=end_time
-            )
-        )
-
-        ################################################
-        # Sync Logging Worker
-        ################################################
-        logging_obj.handle_sync_success_callbacks_for_async_calls(
-            result=result,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
 
 def _get_wrapper_num_retries(
     kwargs: Dict[str, Any], exception: Exception
@@ -1931,15 +1898,25 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+            # Enqueue async callbacks synchronously (not via fire-and-forget task)
+            # to ensure they are processed even if the event loop shuts down
+            # shortly after the completion returns. Fixes #8842.
+            if not is_completion_with_fallbacks:
+                print_verbose(
+                    f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
                 )
-            )
+                from litellm.litellm_core_utils.logging_worker import (
+                    GLOBAL_LOGGING_WORKER,
+                )
+
+                GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                    async_coroutine=logging_obj.async_success_handler(
+                        result=result, start_time=start_time, end_time=end_time
+                    )
+                )
+            # Sync callbacks (e.g. langfuse, s3) must fire unconditionally —
+            # the fallbacks guard above only prevents double-firing of async
+            # callbacks (issue #7477), not sync ones.
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
                 start_time=start_time,
