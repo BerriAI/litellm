@@ -758,6 +758,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def get_base_model(model: Optional[str] = None) -> Optional[str]:
         return model
 
+    def get_token_counter(self) -> Optional["BaseTokenCounter"]:
+        from litellm.llms.openai.responses.count_tokens.token_counter import (
+            OpenAITokenCounter,
+        )
+
+        return OpenAITokenCounter()
+
     def get_model_response_iterator(
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
