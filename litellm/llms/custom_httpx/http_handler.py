@@ -31,6 +31,8 @@ from litellm.constants import (
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     DEFAULT_SSL_CIPHERS,
+    HTTPX_MAX_CONNECTIONS,
+    HTTPX_MAX_KEEPALIVE_CONNECTIONS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
@@ -391,6 +393,10 @@ class AsyncHTTPHandler:
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
+            limits=httpx.Limits(
+                max_connections=HTTPX_MAX_CONNECTIONS,
+                max_keepalive_connections=HTTPX_MAX_KEEPALIVE_CONNECTIONS,
+            ),
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
@@ -941,6 +947,10 @@ class HTTPHandler:
             self.client = httpx.Client(
                 transport=transport,
                 timeout=timeout,
+                limits=httpx.Limits(
+                    max_connections=HTTPX_MAX_CONNECTIONS,
+                    max_keepalive_connections=HTTPX_MAX_KEEPALIVE_CONNECTIONS,
+                ),
                 verify=ssl_config,
                 cert=cert,
                 headers=default_headers,

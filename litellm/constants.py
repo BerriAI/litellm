@@ -197,14 +197,34 @@ RUNWAYML_POLLING_TIMEOUT = int(
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
+# HTTPX connection pooling - prevents file descriptor exhaustion from unbounded connection growth
+# See: https://github.com/BerriAI/litellm/issues/13220
+
+
+def _safe_int_env(name: str, default: int) -> int:
+    """Parse an integer environment variable with a safe fallback."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        return default
+
+
+# NOTE: These values are read once at import time. Changing the env vars after
+# process start (e.g. via os.environ at runtime) will NOT affect existing or new
+# httpx.Client instances. This is intentional — connection pool limits must remain
+# stable for the lifetime of the process to avoid resource leaks.
+HTTPX_MAX_CONNECTIONS = _safe_int_env("LITELLM_HTTP_MAX_CONNECTIONS", 100)
+HTTPX_MAX_KEEPALIVE_CONNECTIONS = _safe_int_env("LITELLM_HTTP_MAX_KEEPALIVE", 20)
+
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
-AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
-AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(
-    os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500)
-)
-AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
-AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+AIOHTTP_CONNECTOR_LIMIT = get_env_int("AIOHTTP_CONNECTOR_LIMIT", 1000)
+AIOHTTP_CONNECTOR_LIMIT_PER_HOST = get_env_int("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500)
+AIOHTTP_KEEPALIVE_TIMEOUT = get_env_int("AIOHTTP_KEEPALIVE_TIMEOUT", 120)
+AIOHTTP_TTL_DNS_CACHE = get_env_int("AIOHTTP_TTL_DNS_CACHE", 300)
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78
