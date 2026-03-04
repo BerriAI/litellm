@@ -104,3 +104,4 @@ async def test_proxy_exception_preserves_status_code_in_sse_mcp():
     assert start_msg["status"] == 403, (
         f"Expected 403 but got {start_msg['status']}"
     )
+    
