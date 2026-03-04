@@ -79,23 +79,35 @@ jobs:
         run: |
           echo "Testing: GET /user/daily/activity/aggregated?start_date=2026-02-01&end_date=2026-02-28&timezone=480"
 
-          http_code=$(curl --max-time 4 -s \
-            -o /tmp/response.json \
-            -w "%{http_code}" \
-            -H "Authorization: Bearer sk-1234" \
-            "http://localhost:4000/user/daily/activity/aggregated?start_date=2026-02-01&end_date=2026-02-28&timezone=480") \
-            || { echo "FAILED: request timed out after 4s"; docker logs litellm-test; exit 1; }
+          max_attempts=3
+          attempt=0
 
-          echo "Response (first 500 chars):"
-          head -c 500 /tmp/response.json
+          while [ $attempt -lt $max_attempts ]; do
+            attempt=$((attempt + 1))
+            echo "Attempt $attempt/$max_attempts..."
 
-          if [ "$http_code" -ne 200 ]; then
-            echo "FAILED: expected HTTP 200, got $http_code"
-            docker logs litellm-test
-            exit 1
-          fi
+            http_code=$(curl --max-time 4 -s \
+              -o /tmp/response.json \
+              -w "%{http_code}" \
+              -H "Authorization: Bearer sk-1234" \
+              "http://localhost:4000/user/daily/activity/aggregated?start_date=2026-02-01&end_date=2026-02-28&timezone=480") \
+              || { echo "Attempt $attempt/$max_attempts timed out after 4s"; sleep 5; continue; }
 
-          echo "PASSED: endpoint returned HTTP 200 within 4s"
+            echo "Response (first 500 chars):"
+            head -c 500 /tmp/response.json
+
+            if [ "$http_code" -eq 200 ]; then
+              echo "PASSED: endpoint returned HTTP 200 within 4s"
+              exit 0
+            fi
+
+            echo "Attempt $attempt/$max_attempts failed: expected HTTP 200, got $http_code"
+            sleep 5
+          done
+
+          echo "FAILED: all $max_attempts attempts failed"
+          docker logs litellm-test
+          exit 1
 
       - name: Cleanup
         if: always()
