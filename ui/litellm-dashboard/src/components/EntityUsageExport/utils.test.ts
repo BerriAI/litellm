@@ -378,7 +378,7 @@ describe("EntityUsageExport utils", () => {
       }
     });
 
-    it("should use dash when team id is not available", () => {
+    it("should fall back to entity key when team id is not available in metadata", () => {
       const spendDataWithoutTeamId: EntitySpendData = {
         ...mockSpendData,
         results: [
@@ -408,8 +408,53 @@ describe("EntityUsageExport utils", () => {
       const result = generateDailyData(spendDataWithoutTeamId, "Team");
       const entry = result[0];
 
-      expect(entry["Team ID"]).toBe("-");
+      expect(entry["Team ID"]).toBe("entity1");
       expect(entry["Team"]).toBe("-");
+    });
+
+    it("should populate Customer ID from end_user when no team_id in metadata", () => {
+      const customerSpendData: EntitySpendData = {
+        ...mockSpendData,
+        results: [
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                "37": {
+                  metrics: {
+                    spend: 0.2735,
+                    api_requests: 252,
+                    successful_requests: 252,
+                    failed_requests: 0,
+                    total_tokens: 414370,
+                    prompt_tokens: 300000,
+                    completion_tokens: 114370,
+                  },
+                  api_key_breakdown: {
+                    "sk-key123": {
+                      metrics: {
+                        spend: 0.2735,
+                        api_requests: 252,
+                        successful_requests: 252,
+                        failed_requests: 0,
+                        total_tokens: 414370,
+                      },
+                      metadata: {},
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendData.metadata,
+      };
+
+      const result = generateDailyData(customerSpendData, "Customer");
+      const entry = result[0];
+
+      expect(entry["Customer ID"]).toBe("37");
+      expect(entry["Customer"]).toBe("-");
     });
 
     it("should format spend values correctly", () => {
@@ -1147,6 +1192,64 @@ describe("EntityUsageExport utils", () => {
       if (entryWithoutTeamId) {
         expect(entryWithoutTeamId["Team"]).toBe("-");
       }
+    });
+
+    it("should populate Customer ID from end_user when no team_id in metadata", () => {
+      const customerSpendDataWithModels: EntitySpendData = {
+        ...mockSpendDataWithModels,
+        results: [
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                "37": {
+                  metrics: {
+                    spend: 0.2735,
+                    api_requests: 252,
+                    successful_requests: 252,
+                    failed_requests: 0,
+                    total_tokens: 414370,
+                    prompt_tokens: 300000,
+                    completion_tokens: 114370,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                  },
+                  api_key_breakdown: {
+                    "sk-key123": {
+                      metrics: {
+                        spend: 0.2735,
+                        api_requests: 252,
+                        successful_requests: 252,
+                        failed_requests: 0,
+                        total_tokens: 414370,
+                      },
+                      metadata: {},
+                    },
+                  },
+                },
+              },
+              models: {
+                "vertex_ai/gemini-3-flash-preview": {
+                  metrics: {
+                    spend: 0.2735,
+                    api_requests: 252,
+                    successful_requests: 252,
+                    failed_requests: 0,
+                    total_tokens: 414370,
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendDataWithModels.metadata,
+      };
+
+      const result = generateDailyWithModelsData(customerSpendDataWithModels, "Customer");
+      const entry = result[0];
+
+      expect(entry["Customer ID"]).toBe("37");
+      expect(entry["Customer"]).toBe("-");
     });
 
     it("should handle empty models breakdown", () => {
