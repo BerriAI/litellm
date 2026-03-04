@@ -58,27 +58,31 @@ class TestResponsesAPIExceptionMappingFix:
         assert excinfo.value.model == model
         assert excinfo.value.llm_provider == custom_llm_provider
 
-    def test_valueerror_mapped_to_internal_server_error(self):
+litellm/litellm_core_utils/exception_mapping_utils.py    def test_valueerror_mapped_to_apiconnectionerror(self):
         """
-        Test that ValueError from internal transformation logic is correctly 
-        mapped to InternalServerError.
+        Test that ValueError is NOT caught as InternalServerError.
+        
+        ValueError is commonly used for user input validation (600+ instances)
+        and should fall through to APIConnectionError or be caught by provider-specific
+        error string matching to map to BadRequestError.
+        
+        Catching ValueError globally would cause a regression by misclassifying
+        legitimate user input validation as 500 errors instead of 4xx errors.
         """
         model = "gpt-4"
         custom_llm_provider = "openai"
         original_exception = ValueError("Invalid transformation parameter")
         
-        with pytest.raises(InternalServerError) as excinfo:
+        # ValueError should NOT be caught by our isinstance check
+        # It will fall through to APIConnectionError
+        with pytest.raises(APIConnectionError) as excinfo:
             exception_type(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 original_exception=original_exception,
             )
         
-        assert isinstance(excinfo.value, InternalServerError)
-        error_msg = str(excinfo.value)
-        assert "ValueError" in error_msg
-        assert "Internal error in LiteLLM" in error_msg
-        assert "Invalid transformation parameter" in error_msg
+        assert isinstance(excinfo.value, APIConnectionError)
         assert excinfo.value.model == model
         assert excinfo.value.llm_provider == custom_llm_provider
 
@@ -108,26 +112,26 @@ class TestResponsesAPIExceptionMappingFix:
         assert excinfo.value.model == model
         assert excinfo.value.llm_provider == custom_llm_provider
 
-    def test_attributeerror_mapped_to_internal_server_error(self):
+    def test_attributeerror_mapped_to_apiconnectionerror(self):
         """
-        Test that AttributeError from missing object attributes is correctly 
-        mapped to InternalServerError.
+        Test that AttributeError is NOT caught as InternalServerError.
+        
+        Similar to ValueError, AttributeError may be used intentionally in provider code
+        and should not be globally classified as a 500 Internal Server Error.
         """
         model = "gpt-4"
         custom_llm_provider = "openai"
         original_exception = AttributeError("'NoneType' object has no attribute 'get'")
         
-        with pytest.raises(InternalServerError) as excinfo:
+        # AttributeError should NOT be caught by our isinstance check
+        with pytest.raises(APIConnectionError) as excinfo:
             exception_type(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 original_exception=original_exception,
             )
         
-        assert isinstance(excinfo.value, InternalServerError)
-        error_msg = str(excinfo.value)
-        assert "AttributeError" in error_msg
-        assert "Internal error in LiteLLM" in error_msg
+        assert isinstance(excinfo.value, APIConnectionError)
 
     def test_http_error_still_mapped_to_apiconnectionerror(self):
         """
@@ -221,15 +225,12 @@ class TestResponsesAPIExceptionMappingFix:
 
     def test_internal_error_includes_error_type_in_message(self):
         """
-        Test that the original error type name is included in the error message.
-        
-        This makes it clear what kind of internal error occurred.
+        Test that the original error type name is included in the error message
+        for TypeError and KeyError (the only types we catch as InternalServerError).
         """
         test_cases = [
             (TypeError("test"), "TypeError"),
-            (ValueError("test"), "ValueError"),
             (KeyError("test"), "KeyError"),
-            (AttributeError("test"), "AttributeError"),
         ]
         
         for original_exception, expected_type_name in test_cases:

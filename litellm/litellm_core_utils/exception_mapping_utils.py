@@ -326,7 +326,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
 
             # Handle Python built-in exceptions that indicate internal bugs, not API errors
             # This applies to ALL providers to avoid misleading APIConnectionError messages
-            if isinstance(original_exception, (TypeError, ValueError, KeyError, AttributeError)):
+            # Note: Only catching TypeError and KeyError (rarely intentional).
+            # ValueError and AttributeError are intentionally NOT caught here as they're
+            # commonly used for user input validation (600+ instances in provider code)
+            # and should be mapped to 4xx errors, not 500 InternalServerError.
+            if isinstance(original_exception, (TypeError, KeyError)):
                 exception_mapping_worked = True
                 raise InternalServerError(
                     message=f"Internal error in LiteLLM: {type(original_exception).__name__}: {error_str}\n{traceback.format_exc()}",
