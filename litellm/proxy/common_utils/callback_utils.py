@@ -49,6 +49,9 @@ def get_callbacks_from_callback_settings(
                 success_only.append(callback_name)
             elif has_failure:
                 failure_only.append(callback_name)
+            else:
+                # Empty or unrecognised event_types — default to both
+                callbacks_both.append(callback_name)
         else:
             # Default: both success and failure (current behavior)
             callbacks_both.append(callback_name)
