@@ -4,6 +4,7 @@ OpenAI Responses API token counting handler.
 Uses httpx for HTTP requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
+import json
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -96,7 +97,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
-        except Exception as e:
+        except (httpx.RequestError, json.JSONDecodeError) as e:
             verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
             raise OpenAIError(
                 status_code=500,

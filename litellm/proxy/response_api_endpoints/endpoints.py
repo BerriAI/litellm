@@ -517,7 +517,7 @@ async def count_response_input_tokens(
             )
         )
         raise HTTPException(
-            status_code=500, detail={"error": f"Internal server error: {str(e)}"}
+            status_code=500, detail={"error": "Internal server error"}
         )
 
 

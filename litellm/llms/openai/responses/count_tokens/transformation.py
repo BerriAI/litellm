@@ -98,7 +98,7 @@ class OpenAICountTokensConfig:
             from system/developer messages.
         """
         input_items: List[Dict[str, Any]] = []
-        instructions: Optional[str] = None
+        instructions_parts: List[str] = []
 
         for msg in messages:
             role = msg.get("role", "")
@@ -107,7 +107,7 @@ class OpenAICountTokensConfig:
             if role in ("system", "developer"):
                 # Extract system/developer messages as instructions
                 if isinstance(content, str):
-                    instructions = content
+                    instructions_parts.append(content)
                 elif isinstance(content, list):
                     # Handle content blocks - extract text
                     text_parts = []
@@ -116,11 +116,23 @@ class OpenAICountTokensConfig:
                             text_parts.append(block.get("text", ""))
                         elif isinstance(block, str):
                             text_parts.append(block)
-                    instructions = "\n".join(text_parts)
+                    instructions_parts.append("\n".join(text_parts))
             elif role == "user":
                 input_items.append({"role": "user", "content": content})
             elif role == "assistant":
-                input_items.append({"role": "assistant", "content": content})
+                # Map tool_calls to Responses API function_call items
+                tool_calls = msg.get("tool_calls")
+                if tool_calls:
+                    for tc in tool_calls:
+                        func = tc.get("function", {})
+                        input_items.append({
+                            "type": "function_call",
+                            "call_id": tc.get("id", ""),
+                            "name": func.get("name", ""),
+                            "arguments": func.get("arguments", ""),
+                        })
+                else:
+                    input_items.append({"role": "assistant", "content": content})
             elif role == "tool":
                 input_items.append({
                     "type": "function_call_output",
@@ -128,4 +140,5 @@ class OpenAICountTokensConfig:
                     "output": content if isinstance(content, str) else str(content),
                 })
 
+        instructions = "\n".join(instructions_parts) if instructions_parts else None
         return input_items, instructions
