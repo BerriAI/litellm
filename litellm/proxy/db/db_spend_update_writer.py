@@ -368,10 +368,11 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
+        _agent_id_for_spend = payload_copy.get("agent_id")
         try:
             await self._update_agent_db(
                 response_cost=response_cost,
-                agent_id=payload_copy.get("agent_id"),
+                agent_id=_agent_id_for_spend,
                 prisma_client=prisma_client,
             )
         except Exception:
@@ -618,9 +619,6 @@ class DBSpendUpdateWriter:
     ):
         try:
             if agent_id is None or prisma_client is None:
-                verbose_proxy_logger.debug(
-                    "track_cost_callback: agent_id is None or prisma_client is None. Not tracking spend for agent"
-                )
                 return
 
             await self.spend_update_queue.add_update(
@@ -2054,9 +2052,6 @@ class DBSpendUpdateWriter:
             )
             return
         if payload["agent_id"] is None:
-            verbose_proxy_logger.debug(
-                "agent_id is None for request. Skipping incrementing agent spend."
-            )
             return
         payload_with_agent_id = cast(
             SpendLogsPayload,

@@ -115,9 +115,6 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
-from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-    EncryptedContentAffinityCheck,
-)
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -167,11 +164,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import (
-    ModelResponseStream,
-    StandardLoggingPayload,
-    Usage,
-)
+from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -1848,7 +1841,7 @@ class Router:
             finally:
                 if hasattr(model_response, "close"):
                     try:
-                        model_response.close()
+                        model_response.close()  # type: ignore[reportAttributeAccessIssue]
                     except BaseException as close_err:
                         verbose_router_logger.debug(
                             "stream_with_fallbacks: error closing model_response: %s",
