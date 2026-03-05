@@ -845,6 +845,11 @@ def run_server(  # noqa: PLR0915
                     should_update_prisma_schema,
                 )
 
+                # Ensure the Prisma Python client is generated. Docker
+                # images run 'prisma generate' at build time, but custom
+                # (non-Docker) installs may not have done so yet.
+                PrismaManager.ensure_client_generated()
+
                 if (
                     should_update_prisma_schema(
                         general_settings.get("disable_prisma_schema_update")

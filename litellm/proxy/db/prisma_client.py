@@ -3,9 +3,11 @@ This file contains the PrismaWrapper class, which is used to wrap the Prisma cli
 """
 
 import asyncio
+import importlib
 import os
 import random
 import subprocess
+import sys
 import time
 import urllib
 import urllib.parse
@@ -63,7 +65,8 @@ class PrismaWrapper:
                 # Now decode just the password/token
                 return urllib.parse.unquote(parsed.password)
             return None
-        except Exception:
+        except ImportError:
+
             return None
 
     def _parse_token_expiration(self, token: Optional[str]) -> Optional[datetime]:
@@ -359,6 +362,57 @@ class PrismaManager:
         return dname
 
     @staticmethod
+    def ensure_client_generated() -> None:
+        try:
+            prisma_module = importlib.import_module("prisma")
+            getattr(prisma_module, "Client")
+            return  # Client already importable — no need to regenerate
+        except (ImportError, AttributeError):
+            pass  # prisma not installed or not yet generated — continue to generate
+
+        verbose_proxy_logger.info(
+            "Prisma client not found – auto-generating via 'prisma generate'..."
+        )
+        prisma_dir = PrismaManager._get_prisma_dir()
+        try:
+            result = subprocess.run(
+                ["prisma", "generate"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=prisma_dir,
+            )
+            if result.returncode != 0:
+                verbose_proxy_logger.error(
+                    f"'prisma generate' failed (exit {result.returncode}): "
+                    f"{result.stderr}"
+                )
+                raise RuntimeError(
+                    f"'prisma generate' failed with exit code {result.returncode}. "
+                    f"stderr: {result.stderr}"
+                )
+            # Clear stale import cache and verify generated client is importable.
+            importlib.invalidate_caches()
+            for mod_name in list(sys.modules.keys()):
+                if mod_name == "prisma" or mod_name.startswith("prisma."):
+                    sys.modules.pop(mod_name, None)
+            prisma_module = importlib.import_module("prisma")
+            getattr(prisma_module, "Client")
+            verbose_proxy_logger.info("Prisma client generated successfully.")
+        except subprocess.TimeoutExpired as e:
+            timeout_val = getattr(e, "timeout", 120)
+            cmd = getattr(e, "cmd", ["prisma", "generate"])
+            raise RuntimeError(
+                f"'prisma generate' timed out after {timeout_val} seconds. "
+                f"Command: {cmd!r}. Prisma directory: {prisma_dir!r}."
+            ) from e
+        except (ImportError, AttributeError) as e:
+            raise RuntimeError(
+                "Prisma client import still failing after 'prisma generate'. "
+                f"cwd={prisma_dir}"
+            ) from e
+
+    @staticmethod
     def setup_database(use_migrate: bool = False) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
@@ -368,9 +422,7 @@ class PrismaManager:
         """
 
         for attempt in range(4):
-            original_dir = os.getcwd()
             prisma_dir = PrismaManager._get_prisma_dir()
-            os.chdir(prisma_dir)
             try:
                 if use_migrate:
                     try:
@@ -386,10 +438,12 @@ class PrismaManager:
                     return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
                 else:
                     # Use prisma db push with increased timeout
+                    # Pass cwd instead of os.chdir() to avoid mutating process-wide state
                     subprocess.run(
                         ["prisma", "db", "push", "--accept-data-loss"],
                         timeout=60,
                         check=True,
+                        cwd=prisma_dir,
                     )
                     return True
             except subprocess.TimeoutExpired:
@@ -406,8 +460,6 @@ class PrismaManager:
                     f"The process failed to execute. Details: {e}.{retry_msg}"
                 )
                 time.sleep(random.randrange(5, 15))
-            finally:
-                os.chdir(original_dir)
         return False
 
 
