@@ -1984,3 +1984,123 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
 
     # tool_name_mapping should be empty for short tool names
     assert tool_name_mapping == {}
+
+
+def test_translate_tool_result_with_unrecognized_content_type():
+    """
+    Test that tool_result messages with unrecognized content types
+    (e.g. tool_reference) are preserved and not silently dropped.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22841
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    # Multiple unrecognized content items inside tool_result
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "content": [
+                        {"type": "tool_reference", "tool_name": "WebFetch"},
+                        {"type": "tool_reference", "tool_name": "Bash"},
+                    ],
+                    "tool_use_id": "toolu_bdrk_01VF2YzMxv46Vya6iG1MfL34",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+
+    result = adapter.translate_anthropic_messages_to_openai(messages)
+
+    # The tool_result must NOT be dropped
+    assert len(result) == 1, (
+        f"Expected 1 message but got {len(result)} – tool_result was dropped"
+    )
+    msg = result[0]
+    assert msg["role"] == "tool"
+    assert msg["tool_call_id"] == "toolu_bdrk_01VF2YzMxv46Vya6iG1MfL34"
+
+    # Content should be a list with 2 text parts (serialised JSON)
+    assert isinstance(msg["content"], list)
+    assert len(msg["content"]) == 2
+    for part in msg["content"]:
+        assert part["type"] == "text"
+        assert "tool_reference" in part["text"]
+
+
+def test_translate_tool_result_single_unrecognized_content_type():
+    """
+    When tool_result has a single-element content list with an unrecognized
+    type, the message must still be preserved.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22841
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "content": [
+                        {"type": "tool_reference", "tool_name": "WebFetch"},
+                    ],
+                    "tool_use_id": "toolu_xxx",
+                }
+            ],
+        }
+    ]
+
+    result = adapter.translate_anthropic_messages_to_openai(messages)
+
+    assert len(result) == 1
+    msg = result[0]
+    assert msg["role"] == "tool"
+    assert msg["tool_call_id"] == "toolu_xxx"
+    # Single item: content is a plain JSON string
+    assert isinstance(msg["content"], str)
+    assert "tool_reference" in msg["content"]
+
+
+def test_translate_tool_result_mixed_known_and_unknown_content():
+    """
+    When tool_result content mixes known types (text) with unknown types,
+    all items must be preserved.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22841
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "content": [
+                        {"type": "text", "text": "some result"},
+                        {"type": "tool_reference", "tool_name": "WebFetch"},
+                    ],
+                    "tool_use_id": "toolu_yyy",
+                }
+            ],
+        }
+    ]
+
+    result = adapter.translate_anthropic_messages_to_openai(messages)
+
+    assert len(result) == 1
+    msg = result[0]
+    assert msg["role"] == "tool"
+    assert isinstance(msg["content"], list)
+    assert len(msg["content"]) == 2
+    # First part is the known text
+    assert msg["content"][0]["type"] == "text"
+    assert msg["content"][0]["text"] == "some result"
+    # Second part is the serialised unknown content
+    assert msg["content"][1]["type"] == "text"
+    assert "tool_reference" in msg["content"][1]["text"]
