@@ -349,6 +349,57 @@ async def test_update_hashicorp_config_preserves_existing_sensitive_fields(
 
 
 @pytest.mark.asyncio
+async def test_update_hashicorp_config_merges_env_vars_when_no_db_record(
+    client, monkeypatch
+):
+    """POST without sensitive fields and no DB record should merge from env vars."""
+    mock_configoverrides = MagicMock()
+    mock_configoverrides.find_unique = AsyncMock(return_value=None)
+    mock_configoverrides.upsert = AsyncMock(return_value=None)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_configoverrides = mock_configoverrides
+
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.initialize_secret_manager = MagicMock()
+    mock_proxy_config._last_hashicorp_vault_config = None
+
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "proxy_config", mock_proxy_config)
+
+    # Simulate existing env var token (set before UI was used)
+    monkeypatch.setenv("HCP_VAULT_TOKEN", "env-token")
+
+    with patch(
+        "litellm.proxy.management_endpoints.config_override_endpoints.encrypt_value_helper"
+    ) as mock_encrypt:
+        mock_encrypt.side_effect = lambda v: f"enc_{v}"
+
+        app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+        )
+
+        try:
+            # Only send vault_addr — token should merge from env var
+            response = client.post(
+                "/config_overrides/hashicorp_vault",
+                json={"vault_addr": "https://vault.new.com"},
+            )
+            assert response.status_code == 200
+
+            upsert_call = mock_configoverrides.upsert.call_args
+            create_data = json.loads(
+                upsert_call.kwargs["data"]["create"]["config_value"]
+            )
+            assert create_data["vault_addr"] == "https://vault.new.com"
+            assert create_data["vault_token"] == "enc_env-token"
+        finally:
+            app.dependency_overrides.pop(ps.user_api_key_auth, None)
+            os.environ.pop("HCP_VAULT_ADDR", None)
+
+
+@pytest.mark.asyncio
 async def test_update_hashicorp_config_init_failure_restores_env_vars(
     client, monkeypatch
 ):

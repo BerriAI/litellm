@@ -178,7 +178,7 @@ async def update_hashicorp_vault_config(
 
     config_data = config.model_dump(exclude_none=True)
 
-    # Merge with existing DB record: preserve sensitive fields the user didn't re-enter
+    # Merge sensitive fields the user didn't re-enter: try DB first, fall back to env vars
     existing_record = await prisma_client.db.litellm_configoverrides.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
@@ -190,6 +190,12 @@ async def update_hashicorp_vault_config(
         for field in HASHICORP_SENSITIVE_FIELDS:
             if field not in config_data and existing_decrypted.get(field):
                 config_data[field] = existing_decrypted[field]
+    else:
+        # No DB record yet — merge from current env vars
+        env_values = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+        for field in HASHICORP_SENSITIVE_FIELDS:
+            if field not in config_data and env_values.get(field):
+                config_data[field] = env_values[field]
 
     # Validate that the config has enough fields to initialize
     has_vault_addr = bool(config_data.get("vault_addr"))
