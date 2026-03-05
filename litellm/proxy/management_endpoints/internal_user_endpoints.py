@@ -766,6 +766,19 @@ async def user_info_v2(
                 detail="user_id is required",
             )
 
+        # Non-admin users can only query their own info
+        if (
+            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+            and user_id != user_api_key_dict.user_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not allowed to access other user's info. Your user_id={}, requested user_id={}".format(
+                    user_api_key_dict.user_id, user_id
+                ),
+            )
+
         user_info = await prisma_client.get_data(user_id=user_id)
 
         if user_info is None:

@@ -1509,3 +1509,35 @@ async def test_user_info_v1_has_deprecation_header(mocker):
     # Deprecation headers should be set on the response object
     assert mock_response.headers.get("Deprecation") == "true"
     assert "successor-version" in mock_response.headers.get("Link", "")
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_non_admin_cannot_query_other_user(mocker):
+    """
+    Test that a non-admin user gets 403 when querying another user's info
+    via /v2/user/info endpoint handler (defense-in-depth).
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="user-A", user_role="internal_user"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            user_id="user-B",
+            user_api_key_dict=mock_user_api_key_dict,
+            request=mock_request,
+        )
+
+    assert exc_info.value.code == "403"
+    assert "Not allowed" in str(exc_info.value.message)
