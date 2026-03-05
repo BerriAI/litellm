@@ -3142,10 +3142,12 @@ class TestPKCEFunctionality:
         test_state = "test_oauth_state_123"
         mock_request.query_params = {"state": test_state}
 
-        # Mock cache with async methods
+        # Mock cache with async methods — use dict format (primary path)
         mock_cache = MagicMock()
         test_code_verifier = "test_code_verifier_abc123xyz"
-        mock_cache.async_get_cache = AsyncMock(return_value=test_code_verifier)
+        mock_cache.async_get_cache = AsyncMock(
+            return_value={"code_verifier": test_code_verifier}
+        )
         mock_cache.async_delete_cache = AsyncMock()
 
         with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):

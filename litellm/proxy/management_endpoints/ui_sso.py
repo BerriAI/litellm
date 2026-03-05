@@ -2593,7 +2593,7 @@ class SSOAuthenticationHandler:
         Returns a combined dict of the token response and user info, suitable
         for passing to a response_convertor.
         """
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "PKCE: performing direct token exchange (code_verifier length=%d)",
             len(code_verifier),
         )
