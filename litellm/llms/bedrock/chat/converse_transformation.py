@@ -511,6 +511,7 @@ class AmazonConverseConfig(BaseConfig):
             "response_format",
             "requestMetadata",
             "service_tier",
+            "parallel_tool_calls",
         ]
 
         if (
@@ -913,6 +914,13 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
+            if param == "parallel_tool_calls":
+                disable_parallel = not value
+                optional_params["_parallel_tool_use_config"] = {
+                    "tool_choice": {
+                        "disable_parallel_tool_use": disable_parallel
+                    }
+                }
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
@@ -1771,6 +1779,92 @@ class AmazonConverseConfig(BaseConfig):
 
         return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
+    @staticmethod
+    def _unwrap_bedrock_properties(json_str: str) -> str:
+        """
+        Unwrap Bedrock's response_format JSON structure.
+
+        If the JSON has a single "properties" key, extract its value.
+        Otherwise, return the original string.
+
+        Args:
+            json_str: JSON string to unwrap
+
+        Returns:
+            Unwrapped JSON string or original if unwrapping not needed
+        """
+        try:
+            response_data = json.loads(json_str)
+            if (
+                isinstance(response_data, dict)
+                and "properties" in response_data
+                and len(response_data) == 1
+            ):
+                response_data = response_data["properties"]
+                return json.dumps(response_data)
+        except json.JSONDecodeError:
+            pass
+        return json_str
+
+    @staticmethod
+    def _filter_json_mode_tools(
+        json_mode: Optional[bool],
+        tools: List[ChatCompletionToolCallChunk],
+        chat_completion_message: ChatCompletionResponseMessage,
+    ) -> Optional[List[ChatCompletionToolCallChunk]]:
+        """
+        When json_mode is True, Bedrock may return the internal `json_tool_call`
+        tool alongside real user-defined tools. This method handles 3 scenarios:
+
+        1. Only json_tool_call present  -> convert to text content, return None
+        2. Mixed json_tool_call + real  -> filter out json_tool_call, return real tools
+        3. No json_tool_call / no json_mode -> return tools as-is
+        """
+        if not json_mode or not tools:
+            return tools if tools else None
+
+        json_tool_indices = [
+            i
+            for i, t in enumerate(tools)
+            if t["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
+        ]
+
+        if not json_tool_indices:
+            # No json_tool_call found, return tools unchanged
+            return tools
+
+        if len(json_tool_indices) == len(tools):
+            # All tools are json_tool_call — convert first one to content
+            verbose_logger.debug(
+                "Processing JSON tool call response for response_format"
+            )
+            json_mode_content_str: Optional[str] = tools[0]["function"].get(
+                "arguments"
+            )
+            if json_mode_content_str is not None:
+                json_mode_content_str = AmazonConverseConfig._unwrap_bedrock_properties(
+                    json_mode_content_str
+                )
+                chat_completion_message["content"] = json_mode_content_str
+            return None
+
+        # Mixed: filter out json_tool_call, keep real tools.
+        # Preserve the json_tool_call content as message text so the structured
+        # output from response_format is not silently lost.
+        first_idx = json_tool_indices[0]
+        json_mode_args = tools[first_idx]["function"].get("arguments")
+        if json_mode_args is not None:
+            json_mode_args = AmazonConverseConfig._unwrap_bedrock_properties(
+                json_mode_args
+            )
+            existing = chat_completion_message.get("content") or ""
+            chat_completion_message["content"] = (
+                existing + json_mode_args if existing else json_mode_args
+            )
+
+        real_tools = [t for i, t in enumerate(tools) if i not in json_tool_indices]
+        return real_tools if real_tools else None
+
     def _transform_response(  # noqa: PLR0915
         self,
         model: str,
@@ -1793,7 +1887,7 @@ class AmazonConverseConfig(BaseConfig):
                 additional_args={"complete_input_dict": data},
             )
 
-        json_mode: Optional[bool] = optional_params.pop("json_mode", None)
+        json_mode: Optional[bool] = optional_params.get("json_mode", None)
         ## RESPONSE OBJECT
         try:
             completion_response = ConverseResponseBlock(**response.json())  # type: ignore
@@ -1877,37 +1971,13 @@ class AmazonConverseConfig(BaseConfig):
                 self._transform_thinking_blocks(reasoningContentBlocks)
             )
         chat_completion_message["content"] = content_str
-        if (
-            json_mode is True
-            and tools is not None
-            and len(tools) == 1
-            and tools[0]["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
-        ):
-            verbose_logger.debug(
-                "Processing JSON tool call response for response_format"
-            )
-            json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
-            if json_mode_content_str is not None:
-                # Bedrock returns the response wrapped in a "properties" object
-                # We need to extract the actual content from this wrapper
-                try:
-                    response_data = json.loads(json_mode_content_str)
-
-                    # If Bedrock wrapped the response in "properties", extract the content
-                    if (
-                        isinstance(response_data, dict)
-                        and "properties" in response_data
-                        and len(response_data) == 1
-                    ):
-                        response_data = response_data["properties"]
-                        json_mode_content_str = json.dumps(response_data)
-                except json.JSONDecodeError:
-                    # If parsing fails, use the original response
-                    pass
-
-                chat_completion_message["content"] = json_mode_content_str
-        elif tools:
-            chat_completion_message["tool_calls"] = tools
+        filtered_tools = self._filter_json_mode_tools(
+            json_mode=json_mode,
+            tools=tools,
+            chat_completion_message=chat_completion_message,
+        )
+        if filtered_tools:
+            chat_completion_message["tool_calls"] = filtered_tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
         usage = self._transform_usage(completion_response["usage"])

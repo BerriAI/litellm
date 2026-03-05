@@ -260,6 +260,7 @@ model LiteLLM_ObjectPermissionTable {
   vector_stores         String[]       @default([])
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])
+  blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -276,6 +277,7 @@ model LiteLLM_MCPServerTable {
   alias        String?
   description  String?
   url          String?
+  spec_path    String?
   transport    String         @default("sse")
   auth_type    String?        
   credentials  Json?          @default("{}")
@@ -300,7 +302,7 @@ model LiteLLM_MCPServerTable {
   token_url          String?
   registration_url   String?
   allow_all_keys Boolean @default(false)
-  available_on_public_internet Boolean @default(false)
+  available_on_public_internet Boolean @default(true)
 }
 
 // Generate Tokens for Proxy
@@ -871,6 +873,13 @@ model LiteLLM_GuardrailsTable {
   team_id String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+  // Submission lifecycle. Possible values: pending_review (team-registered, awaiting approval), active (approved), rejected
+  status String @default("active")
+  submitted_at DateTime?
+  reviewed_at DateTime?
+  // submitted_by_user_id and submitted_by_email live in guardrail_info JSON
+
+  @@index([status])
 }
 
 // Daily guardrail metrics for usage dashboard (one row per guardrail per day)
@@ -919,6 +928,16 @@ model LiteLLM_SpendLogGuardrailIndex {
   @@id([request_id, guardrail_id])
   @@index([guardrail_id, start_time])
   @@index([policy_id, start_time])
+}
+
+// Index for fast "last N logs for tool" from SpendLogs – see how a tool is called in production
+model LiteLLM_SpendLogToolIndex {
+  request_id String
+  tool_name  String   // matches LiteLLM_ToolTable.tool_name; join for input_policy/output_policy etc.
+  start_time DateTime
+
+  @@id([request_id, tool_name])
+  @@index([tool_name, start_time])
 }
 
 // Prompt table for storing prompt configurations
@@ -1058,26 +1077,31 @@ model LiteLLM_PolicyAttachmentTable {
   updated_by       String?
 }
 
-// Global tool registry - auto-discovered from LLM responses; admins set call_policy here
+// Global tool registry - auto-discovered from LLM responses; admins set input_policy/output_policy here
 model LiteLLM_ToolTable {
-  tool_id     String   @id @default(uuid())
-  tool_name   String   @unique   // e.g. "huggingface_remote-mcp__dynamic_space"
-  origin      String?            // MCP server name or "user_defined"
-  call_policy String   @default("untrusted")  // "trusted" | "untrusted" | "dual_llm" | "blocked"
-  call_count  Int      @default(0)            // cumulative number of times this tool was seen
-  assignments Json?    @default("{}")
-  key_hash    String?            // hash of the virtual key that first called this tool
-  team_id     String?            // team that first called this tool
-  key_alias   String?            // human-readable alias of the virtual key
-  created_at  DateTime @default(now())
-  created_by  String?
-  updated_at  DateTime @default(now()) @updatedAt
-  updated_by  String?
+  tool_id       String    @id @default(uuid())
+  tool_name     String    @unique   // e.g. "huggingface_remote-mcp__dynamic_space"
+  origin        String?             // MCP server name or "user_defined"
+  input_policy  String    @default("untrusted")  // "trusted" | "untrusted" | "blocked"
+  output_policy String    @default("untrusted")  // "trusted" | "untrusted"
+  call_count    Int       @default(0)             // cumulative number of times this tool was seen
+  assignments   Json?     @default("{}")
+  key_hash      String?             // hash of the virtual key that first called this tool
+  team_id       String?             // team that first called this tool
+  key_alias     String?             // human-readable alias of the virtual key
+  user_agent    String?             // user-agent of the first request that discovered this tool
+  last_used_at  DateTime?           // timestamp of the most recent call
+  created_at    DateTime  @default(now())
+  created_by    String?
+  updated_at    DateTime  @default(now()) @updatedAt
+  updated_by    String?
 
-  @@index([call_policy])
+  @@index([input_policy])
+  @@index([output_policy])
   @@index([team_id])
 }
 
+// Per-(tool, team/key) policy overrides. When present, override replaces global tool policy for that scope.
 //Unified Access Groups table for storing unified access groups
 model LiteLLM_AccessGroupTable {
   access_group_id    String   @id @default(uuid())
@@ -1096,4 +1120,19 @@ model LiteLLM_AccessGroupTable {
   created_by         String?
   updated_at         DateTime @default(now()) @updatedAt
   updated_by         String?
+}
+// Claude Code Plugin Marketplace table
+model LiteLLM_ClaudeCodePluginTable {
+  id            String    @id @default(uuid())
+  name          String    @unique
+  version       String?
+  description   String?
+  manifest_json String?
+  files_json    String?   @default("{}")
+  enabled       Boolean   @default(true)
+  created_at    DateTime? @default(now())
+  updated_at    DateTime? @default(now()) @updatedAt
+  created_by    String?
+
+  @@map("LiteLLM_ClaudeCodePluginTable")
 }
