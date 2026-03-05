@@ -646,6 +646,7 @@ async def pass_through_request(  # noqa: PLR0915
     _parsed_body: Optional[dict] = None
     # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
     kwargs: Optional[dict] = None
+    logging_obj: Optional[Logging] = None
 
     #########################################################
     try:
@@ -959,10 +960,8 @@ async def pass_through_request(  # noqa: PLR0915
 
         # Pass the existing logging_obj so _handle_logging_proxy_only_error
         # uses it (preserves call_type="pass_through_endpoint" for dedup)
-        try:
+        if logging_obj is not None:
             request_payload["litellm_logging_obj"] = logging_obj
-        except NameError:
-            pass
 
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -1705,10 +1704,8 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                 request_payload[key] = value
 
         # Pass the existing logging_obj (preserves call_type for dedup)
-        try:
+        if logging_obj is not None:
             request_payload["litellm_logging_obj"] = logging_obj
-        except NameError:
-            pass
 
         # Log the connection failure using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
@@ -1737,10 +1734,8 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                 request_payload[key] = value
 
         # Pass the existing logging_obj (preserves call_type for dedup)
-        try:
+        if logging_obj is not None:
             request_payload["litellm_logging_obj"] = logging_obj
-        except NameError:
-            pass
 
         # Log the unexpected error using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
