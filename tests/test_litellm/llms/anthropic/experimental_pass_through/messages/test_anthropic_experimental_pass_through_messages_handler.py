@@ -322,6 +322,31 @@ class TestThinkingSummaryPreservation:
         finally:
             litellm.disable_default_reasoning_summary = original
 
+    def test_summary_excluded_when_env_var_set(self):
+        """When LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY env var is true, summary is not added."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = False
+            os.environ["LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY"] = "true"
+            completion_kwargs = {
+                "model": "responses/gpt-5.2",
+                "custom_llm_provider": "openai",
+                "reasoning_effort": "high",
+            }
+            LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+                completion_kwargs, thinking={"type": "enabled", "budget_tokens": 10000}
+            )
+            assert completion_kwargs["reasoning_effort"] == {"effort": "high"}
+            assert "summary" not in completion_kwargs["reasoning_effort"]
+        finally:
+            litellm.disable_default_reasoning_summary = original
+            os.environ.pop("LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY", None)
+
     def test_user_provided_summary_preserved_even_when_flag_off(self):
         """When user already set summary in dict reasoning_effort, it's preserved regardless of flag."""
         import litellm
