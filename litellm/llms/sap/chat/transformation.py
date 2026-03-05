@@ -211,7 +211,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
         # LangChain agents pass strict=true at top level, which fails for GPT models
         # Anthropic models accept strict, so preserve it for them
-        if model.startswith("gpt"):
+        if model.startswith("gpt") and "strict" in optional_params:
             optional_params.pop("strict")
 
         def _build_prompt_module(
