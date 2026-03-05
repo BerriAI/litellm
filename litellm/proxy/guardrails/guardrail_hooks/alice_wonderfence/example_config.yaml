@@ -6,8 +6,6 @@
 # Environment variables:
 #   ALICE_API_KEY          - Required: API key for WonderFence
 #   ALICE_APP_NAME         - Optional: Application name (default: litellm)
-#   ALICE_RETRY_MAX        - Optional: Max retries for API calls (SDK default: 3)
-#   ALICE_RETRY_BASE_DELAY - Optional: Base retry delay in seconds (SDK default: 1.0)
 #   OPENAI_API_KEY               - Required: API key for OpenAI
 
 model_list:

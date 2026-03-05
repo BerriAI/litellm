@@ -48,7 +48,7 @@ guardrails:
       mode: ["pre_call", "post_call"]  # Evaluate both input and output
       api_key: os.environ/ALICE_API_KEY
       app_name: os.environ/ALICE_APP_NAME  # Optional
-      api_timeout: 10.0                          # Timeout in seconds
+      api_timeout: 20.0                          # Timeout in seconds
       default_on: true
 
 general_settings:

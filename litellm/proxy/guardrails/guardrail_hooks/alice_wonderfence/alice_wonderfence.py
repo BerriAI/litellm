@@ -47,7 +47,7 @@ class WonderFenceGuardrail(CustomGuardrail):
         api_key: str = "",
         api_base: Optional[str] = None,
         app_name: Optional[str] = None,
-        api_timeout: float =20.0,
+        api_timeout: float = 20.0,
         platform: Optional[str] = None,
         event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
         default_on: bool = True,
