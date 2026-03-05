@@ -401,7 +401,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     </div>
                   </div>
                 </div>
-                <div className="w-full px-6 mt-6">
+                <div className="w-full mt-6">
                   <DataTable
                     data={filteredServers}
                     columns={columns}
