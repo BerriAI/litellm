@@ -510,6 +510,67 @@ def test_azure_with_custom_api_base_and_key():
         assert response.status_code == 200  # type: ignore[union-attr]
 
 
+def test_content_param_forwarded_to_build_request():
+    """
+    Regression test: the `content` parameter passed to llm_passthrough_route
+    must be forwarded to build_request instead of silently dropped.
+    When content is provided and signed_json_body is None, build_request should
+    receive content=<value> and data=None, json=None.
+    """
+    client = HTTPHandler()
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://my-azure.openai.azure.com/openai/deployments/gpt-4/chat/completions"),
+        "https://my-azure.openai.azure.com",
+    )
+    mock_provider_config.get_api_key.return_value = "test-key"
+    mock_provider_config.validate_environment.return_value = {"api-key": "test-key"}
+    # sign_request returns (headers, None) — no signed body, so content should be used
+    mock_provider_config.sign_request.return_value = ({"api-key": "test-key"}, None)
+    mock_provider_config.is_streaming_request.return_value = False
+
+    raw_content = b'{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}'
+
+    with patch(
+        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+        return_value=mock_provider_config,
+    ), patch(
+        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+        return_value={},
+    ), patch(
+        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+        return_value=("gpt-4", "azure", "test-key", "https://my-azure.openai.azure.com"),
+    ), patch.object(
+        client.client, "send", return_value=MagicMock(status_code=200)
+    ), patch.object(
+        client.client, "build_request"
+    ) as mock_build_request:
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.update_environment_variables = MagicMock()
+
+        llm_passthrough_route(
+            model="azure/gpt-4",
+            endpoint="openai/deployments/gpt-4/chat/completions",
+            method="POST",
+            custom_llm_provider="azure",
+            content=raw_content,
+            data=None,
+            json=None,
+            client=client,
+            litellm_logging_obj=mock_logging_obj,
+        )
+
+        mock_build_request.assert_called_once()
+        call_kwargs = mock_build_request.call_args.kwargs
+        # content must be forwarded (not dropped)
+        assert call_kwargs["content"] == raw_content
+        # data and json must be None when content is provided
+        assert call_kwargs["data"] is None
+        assert call_kwargs["json"] is None
+
+
 def _make_429_streaming_response() -> MagicMock:
     """Build a mock httpx.Response that looks like a streaming 429 from Azure."""
     error_body = json.dumps(

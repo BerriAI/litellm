@@ -427,5 +427,8 @@ async def _async_streaming(
             )
         )
     except Exception:
-        await iter_response.aclose()
+        try:
+            await iter_response.aclose()
+        except Exception:
+            pass
         raise
