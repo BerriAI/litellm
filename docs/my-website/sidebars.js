@@ -608,6 +608,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_openapi",
             "mcp_oauth",
             "mcp_public_internet",
             "mcp_semantic_filter",
