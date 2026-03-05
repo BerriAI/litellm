@@ -37,14 +37,16 @@ def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
             cur = json.loads(cur)
         except json.JSONDecodeError:
             verbose_logger.warning(
-                "SAP service key is a string but not valid JSON."
+                "SAP service key or VCAP service is a string but not valid JSON."
             )
             return None
     for k in path:
-        if not isinstance(cur, dict) or k not in cur:
+        if not isinstance(cur, dict):
             verbose_logger.warning(
-                f"SAP service key has unexpected type '{type(cur).__name__}' (expected dict or JSON string). "
+                f"SAP service key or VCAP service traversal hit non-dict type '{type(cur).__name__}' at key '{k}'."
             )
+            return None
+        if k not in cur:
             return None
         cur = cur[k]
     return cur
@@ -218,13 +220,15 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
         Source("kwargs",
                lambda cv: _str_or_none(kwargs.get(cv.name))),
         Source("service key",
-               lambda cv: _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))), # type: ignore[arg-type]
+               lambda cv: _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))
+               if service_key else None), # type: ignore[arg-type]
         Source("environment variables",
                lambda cv: _str_or_none(os.environ.get(f'AICORE_{cv.name.upper()}'))),
         Source("config file",
                lambda cv: _str_or_none(config.get(f'AICORE_{cv.name.upper()}') or config.get(cv.name))),
         Source("VCAP service",
-               lambda cv: _get_nested(vcap_service, ("credentials",) + cv.vcap_key if cv.vcap_key else (cv.name,))), # type: ignore[arg-type]
+               lambda cv: _get_nested(vcap_service, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,))
+               if vcap_service else None), # type: ignore[arg-type]
     ]
 
     credentials = resolve_credentials(sources)
