@@ -155,9 +155,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
 
                 if should_start_new_block and not self.sent_content_block_finish:
-                    # Queue the sequence: content_block_stop -> content_block_start
-                    # The trigger chunk itself is not emitted as a delta since the
-                    # content_block_start already carries the relevant information.
+                    # Queue the sequence: content_block_stop -> content_block_start -> delta
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
@@ -171,6 +169,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": self.current_content_block_start,
                         }
                     )
+                    self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
@@ -320,19 +319,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
-                        # Queue the sequence: content_block_stop -> content_block_start
-                        # The trigger chunk itself is not emitted as a delta since the
-                        # content_block_start already carries the relevant information.
-
-                        # 1. Stop current content block
+                        # Queue the sequence: content_block_stop -> content_block_start -> delta
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
                                 "index": max(self.current_content_block_index - 1, 0),
                             }
                         )
-
-                        # 2. Start new content block
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_start",
@@ -340,18 +333,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
-
-                        # Reset state for new block
+                        self.chunk_queue.append(processed_chunk)
                         self.sent_content_block_finish = False
-
-                        # Return the first queued item
                         return self.chunk_queue.popleft()
 
                     if (
                         processed_chunk["type"] == "message_delta"
                         and self.sent_content_block_finish is False
                     ):
-                        # Queue both the content_block_stop and the holding chunk
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
@@ -367,14 +356,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         else:
                             self.chunk_queue.append(processed_chunk)
                         return self.chunk_queue.popleft()
-                    elif self.holding_chunk is not None:
-                        # Queue both chunks
-                        self.chunk_queue.append(self.holding_chunk)
-                        self.chunk_queue.append(processed_chunk)
-                        self.holding_chunk = None
-                        return self.chunk_queue.popleft()
                     else:
-                        # Queue the current chunk
                         self.chunk_queue.append(processed_chunk)
                         return self.chunk_queue.popleft()
 
@@ -383,10 +365,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if self.holding_stop_reason_chunk is not None:
                     self.chunk_queue.append(self.holding_stop_reason_chunk)
                     self.holding_stop_reason_chunk = None
-
-                if self.holding_chunk is not None:
-                    self.chunk_queue.append(self.holding_chunk)
-                    self.holding_chunk = None
 
             if not self.sent_last_message:
                 self.sent_last_message = True

@@ -377,6 +377,14 @@ async def test_thinking_stream_no_content_loss_async():
     assert len(thinking_deltas) >= 1, "Should have at least one thinking/signature delta"
     assert len(text_deltas) >= 1, "Should have at least one text delta"
 
+    # Verify full accumulated text content matches expected output (no dropped deltas)
+    accumulated_text = "".join(
+        d.get("delta", {}).get("text", "") for d in text_deltas
+    )
+    assert accumulated_text == "The answer is 4.", (
+        f"Expected accumulated text 'The answer is 4.', got {accumulated_text!r}"
+    )
+
 
 def test_thinking_stream_no_content_loss_sync():
     """Sync: all thinking deltas and text deltas must be present (no dropped chunks)."""
@@ -398,6 +406,14 @@ def test_thinking_stream_no_content_loss_sync():
 
     assert len(thinking_deltas) >= 1, "Should have at least one thinking/signature delta"
     assert len(text_deltas) >= 1, "Should have at least one text delta"
+
+    # Verify full accumulated text content matches expected output (no dropped deltas)
+    accumulated_text = "".join(
+        d.get("delta", {}).get("text", "") for d in text_deltas
+    )
+    assert accumulated_text == "The answer is 4.", (
+        f"Expected accumulated text 'The answer is 4.', got {accumulated_text!r}"
+    )
 
 
 @pytest.mark.asyncio
