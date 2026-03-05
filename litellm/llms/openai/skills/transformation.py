@@ -4,6 +4,9 @@ OpenAI Skills API configuration and transformations
 
 from typing import Any, Dict, Optional, Tuple
 
+import base64
+import datetime
+
 import httpx
 
 import litellm
@@ -282,7 +285,6 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             return raw_response.json()
         content = raw_response.content
         if isinstance(content, bytes):
-            import base64
             content = base64.b64encode(content).decode("ascii")
         return {
             "content": content,
@@ -437,7 +439,6 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             return raw_response.json()
         content = raw_response.content
         if isinstance(content, bytes):
-            import base64
             content = base64.b64encode(content).decode("ascii")
         return {
             "content": content,
@@ -459,8 +460,6 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
           - object → type
           - no 'source' field → default to 'custom'
         """
-        import datetime
-
         created_ts = data.get("created_at", 0)
         if isinstance(created_ts, (int, float)):
             created_at_str = datetime.datetime.fromtimestamp(
@@ -494,8 +493,6 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
     @staticmethod
     def _openai_version_to_canonical(data: dict) -> SkillVersion:
         """Map OpenAI Skill Version JSON to canonical SkillVersion model."""
-        import datetime
-
         created_ts = data.get("created_at", 0)
         if isinstance(created_ts, (int, float)):
             created_at_str = datetime.datetime.fromtimestamp(
@@ -506,7 +503,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
 
         return SkillVersion(
             id=data["id"],
-            skill_id=data.get("skill_id", ""),
+            skill_id=data.get("skill_id") or data.get("id", ""),
             version=str(data["version"]) if data.get("version") is not None else None,
             created_at=created_at_str,
             display_title=data.get("name"),
