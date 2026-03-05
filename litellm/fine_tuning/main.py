@@ -127,7 +127,7 @@ async def acreate_fine_tuning_job(
 
 
 @client
-def create_fine_tuning_job(
+def create_fine_tuning_job(  # noqa: PLR0915
     model: str,
     training_file: str,
     hyperparameters: Optional[dict] = {},
