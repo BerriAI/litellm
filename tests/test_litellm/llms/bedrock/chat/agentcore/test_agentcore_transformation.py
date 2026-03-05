@@ -134,7 +134,9 @@ class TestAgentCoreStreamingToolFlow:
         ):
             chunks.append(chunk)
 
-        assert len(chunks) >= 3
+        # 2 content deltas + 1 metadata + 1 final message = 4 chunks;
+        # toolUse event should not produce an extra chunk.
+        assert len(chunks) == 4
 
         stop_indices = [
             i
@@ -142,6 +144,10 @@ class TestAgentCoreStreamingToolFlow:
             if chunk.choices[0].finish_reason == "stop"
         ]
         assert stop_indices == [len(chunks) - 1]
+
+        # Ensure toolUse event does not produce a chunk with unexpected finish_reason
+        for chunk in chunks[:-1]:
+            assert chunk.choices[0].finish_reason is None
 
         content_parts = [
             chunk.choices[0].delta.content
@@ -163,7 +169,8 @@ class TestAgentCoreStreamingToolFlow:
             )
         )
 
-        assert len(chunks) >= 3
+        # 2 content deltas + 1 metadata + 1 final message = 4 chunks
+        assert len(chunks) == 4
 
         stop_indices = [
             i
@@ -171,6 +178,10 @@ class TestAgentCoreStreamingToolFlow:
             if chunk.choices[0].finish_reason == "stop"
         ]
         assert stop_indices == [len(chunks) - 1]
+
+        # Ensure toolUse event does not produce a chunk with unexpected finish_reason
+        for chunk in chunks[:-1]:
+            assert chunk.choices[0].finish_reason is None
 
         content_parts = [
             chunk.choices[0].delta.content
