@@ -7,8 +7,6 @@ Featherless AI is an OpenAI-compatible provider with a few customizations.
 
 import os
 import sys
-from typing import Dict, List, Optional
-from unittest.mock import patch
 
 import pytest
 
@@ -148,6 +146,45 @@ class TestFeatherlessAIConfig:
                 drop_params=False,
             )
         assert "Featherless AI doesn't support tools=" in str(excinfo.value)
+
+    def test_get_provider_info_with_featherless_ai_api_key(self, monkeypatch):
+        """Test that FEATHERLESS_AI_API_KEY env var is picked up correctly"""
+        config = FeatherlessAIConfig()
+        for key in ("FEATHERLESS_AI_API_KEY", "FEATHERLESS_API_KEY",
+                     "FEATHERLESS_AI_API_BASE", "FEATHERLESS_API_BASE"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("FEATHERLESS_AI_API_KEY", "key-from-ai-env")
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            api_base=None, api_key=None
+        )
+        assert api_key == "key-from-ai-env"
+        assert api_base == "https://api.featherless.ai/v1"
+
+    def test_get_provider_info_with_legacy_featherless_api_key(self, monkeypatch):
+        """Test that legacy FEATHERLESS_API_KEY env var still works"""
+        config = FeatherlessAIConfig()
+        for key in ("FEATHERLESS_AI_API_KEY", "FEATHERLESS_API_KEY",
+                     "FEATHERLESS_AI_API_BASE", "FEATHERLESS_API_BASE"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("FEATHERLESS_API_KEY", "key-from-legacy-env")
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            api_base=None, api_key=None
+        )
+        assert api_key == "key-from-legacy-env"
+        assert api_base == "https://api.featherless.ai/v1"
+
+    def test_get_provider_info_prefers_featherless_ai_key_over_legacy(self, monkeypatch):
+        """Test that FEATHERLESS_AI_API_KEY takes precedence over FEATHERLESS_API_KEY"""
+        config = FeatherlessAIConfig()
+        for key in ("FEATHERLESS_AI_API_KEY", "FEATHERLESS_API_KEY",
+                     "FEATHERLESS_AI_API_BASE", "FEATHERLESS_API_BASE"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("FEATHERLESS_AI_API_KEY", "preferred-key")
+        monkeypatch.setenv("FEATHERLESS_API_KEY", "legacy-key")
+        _, api_key = config._get_openai_compatible_provider_info(
+            api_base=None, api_key=None
+        )
+        assert api_key == "preferred-key"
 
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""

@@ -65,6 +65,42 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert self.config._map_size_to_aspect_ratio("896x1280") == "3:4"
         assert self.config._map_size_to_aspect_ratio("unknown") == "1:1"  # default
 
+    def test_get_supported_openai_params_includes_native_gemini_params(self):
+        """Test that native Gemini imageConfig params are supported"""
+        supported = self.config.get_supported_openai_params("gemini-3-pro-image-preview")
+        assert "aspectRatio" in supported
+        assert "aspect_ratio" in supported
+        assert "imageSize" in supported
+        assert "image_size" in supported
+
+    def test_map_openai_params_aspect_ratio_camel_case(self):
+        """Test mapping native aspectRatio parameter"""
+        result = self.config.map_openai_params(
+            {"aspectRatio": "9:16"}, {}, "gemini-3-pro-image-preview", False
+        )
+        assert result["aspectRatio"] == "9:16"
+
+    def test_map_openai_params_aspect_ratio_snake_case(self):
+        """Test mapping native aspect_ratio parameter"""
+        result = self.config.map_openai_params(
+            {"aspect_ratio": "16:9"}, {}, "gemini-3-pro-image-preview", False
+        )
+        assert result["aspectRatio"] == "16:9"
+
+    def test_map_openai_params_image_size_camel_case(self):
+        """Test mapping native imageSize parameter"""
+        result = self.config.map_openai_params(
+            {"imageSize": "4K"}, {}, "gemini-3-pro-image-preview", False
+        )
+        assert result["imageSize"] == "4K"
+
+    def test_map_openai_params_image_size_snake_case(self):
+        """Test mapping native image_size parameter"""
+        result = self.config.map_openai_params(
+            {"image_size": "2K"}, {}, "gemini-3-pro-image-preview", False
+        )
+        assert result["imageSize"] == "2K"
+
     def test_transform_image_generation_request_basic(self):
         """Test basic request transformation"""
         request = self.config.transform_image_generation_request(

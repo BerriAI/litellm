@@ -1035,9 +1035,13 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
         parsed_args = parse_tool_call_arguments(
             tool_arguments, tool_name=tool_name, context="Anthropic XML tool invoke"
         )
-        parameters = "".join(
-            f"<{param}>{val}</{param}>\n" for param, val in parsed_args.items()
-        )
+        if isinstance(parsed_args, dict):
+            parameters = "".join(
+                f"<{param}>{val}</{param}>\n"
+                for param, val in parsed_args.items()
+            )
+        else:
+            parameters = f"<result>{parsed_args}</result>\n"
         invokes += (
             "<invoke>\n"
             f"<tool_name>{tool_name}</tool_name>\n"

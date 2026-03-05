@@ -210,7 +210,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     },
     {
       id: "organization_id",
-      accessorKey: "organization_id",
+      accessorKey: "org_id",
       header: "Organization ID",
       size: 140,
       enableSorting: false,

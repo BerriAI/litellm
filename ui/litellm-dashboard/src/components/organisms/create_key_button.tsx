@@ -1,5 +1,7 @@
 "use client";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -21,6 +23,7 @@ import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings"
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import TeamDropdown from "../common_components/team_dropdown";
+import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
@@ -143,6 +146,10 @@ export const fetchUserModels = async (
  */
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const { data: projects, isLoading: isProjectsLoading } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -157,6 +164,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
@@ -184,6 +192,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
     setSelectedAgentId(null);
+    setSelectedProjectId(null);
   };
 
   const handleCancel = () => {
@@ -200,6 +209,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
     setSelectedAgentId(null);
+    setSelectedProjectId(null);
   };
 
   useEffect(() => {
@@ -468,6 +478,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   };
 
   useEffect(() => {
+    if (selectedProjectId) {
+      // When a project is selected, use the project's models
+      const project = projects?.find((p) => p.project_id === selectedProjectId);
+      const projectModels = project?.models ?? [];
+      setModelsToPick(projectModels);
+      form.setFieldValue("models", []);
+      return;
+    }
     if (userID && userRole && accessToken) {
       fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam?.team_id ?? null).then((models) => {
         let allModels = Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models]));
@@ -475,7 +493,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       });
     }
     form.setFieldValue("models", []);
-  }, [selectedCreateKeyTeam, accessToken, userID, userRole]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole]);
+
+  // Sync team when project is selected but teams loaded later (race condition)
+  useEffect(() => {
+    if (!selectedProjectId || !teams) return;
+    const project = projects?.find((p) => p.project_id === selectedProjectId);
+    if (!project?.team_id) return;
+    // If team is already set correctly, skip
+    if (selectedCreateKeyTeam?.team_id === project.team_id) return;
+    const projectTeam = teams.find((t) => t.team_id === project.team_id) || null;
+    if (projectTeam) {
+      setSelectedCreateKeyTeam(projectTeam);
+      form.setFieldValue("team_id", projectTeam.team_id);
+    }
+  }, [teams, selectedProjectId, projects]);
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
@@ -653,12 +686,45 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
             >
               <TeamDropdown
                 teams={teams}
+                disabled={selectedProjectId !== null}
+                loading={!teams}
                 onChange={(teamId) => {
                   const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
                   setSelectedCreateKeyTeam(selectedTeam);
+                  setSelectedProjectId(null);
+                  form.setFieldValue("project_id", undefined);
                 }}
               />
             </Form.Item>
+            {enableProjectsUI && (
+              <Form.Item
+                label={
+                  <span>
+                    Project{" "}
+                    <Tooltip title="Assign this key to a project. Selecting a project will lock the team to the project's team.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="project_id"
+                className="mt-4"
+              >
+                <ProjectDropdown
+                  projects={projects}
+                  teamId={selectedCreateKeyTeam?.team_id}
+                  loading={isProjectsLoading || !teams}
+                  onChange={(projectId) => {
+                    if (!projectId) {
+                      setSelectedProjectId(null);
+                      setSelectedCreateKeyTeam(null);
+                      form.setFieldValue("team_id", undefined);
+                      return;
+                    }
+                    setSelectedProjectId(projectId);
+                  }}
+                />
+              </Form.Item>
+            )}
           </div>
 
           {/* Show message when team selection is required */}
@@ -706,21 +772,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 label={
                   <span>
                     Models{" "}
-                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team. Leave empty to allow access to all models.">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
                 }
                 name="models"
-                rules={
-                  keyType === "management" || keyType === "read_only"
-                    ? []
-                    : [{ required: true, message: "Please select a model" }]
-                }
+                rules={[]}
                 help={
                   keyType === "management" || keyType === "read_only"
                     ? "Models field is disabled for this key type"
-                    : "required"
+                    : "optional - leave empty to allow access to all models"
                 }
                 className="mt-4"
               >
@@ -735,9 +797,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     }
                   }}
                 >
-                  <Option key="all-team-models" value="all-team-models">
-                    All Team Models
-                  </Option>
+                  {!selectedProjectId && (
+                    <Option key="all-team-models" value="all-team-models">
+                      All Team Models
+                    </Option>
+                  )}
                   {modelsToPick.map((model: string) => (
                     <Option key={model} value={model}>
                       {getModelDisplayName(model)}
@@ -933,7 +997,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     name="guardrails"
                     className="mt-4"
                     help={
-                      premiumUser
+                      canEditGuardrails
                         ? "Select existing guardrails or enter new ones"
                         : "Premium feature - Upgrade to set guardrails by key"
                     }
@@ -941,9 +1005,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <Select
                       mode="tags"
                       style={{ width: "100%" }}
-                      disabled={!premiumUser}
+                      disabled={!canEditGuardrails}
                       placeholder={
-                        !premiumUser
+                        !canEditGuardrails
                           ? "Premium feature - Upgrade to set guardrails by key"
                           : "Select or enter guardrails"
                       }
@@ -970,12 +1034,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     valuePropName="checked"
                     help={
-                      premiumUser
+                      canEditGuardrails
                         ? "Bypass global guardrails for this key"
                         : "Premium feature - Upgrade to disable global guardrails by key"
                     }
                   >
-                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+                    <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
                   <Form.Item
                     label={

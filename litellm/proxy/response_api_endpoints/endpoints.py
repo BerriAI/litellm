@@ -1,14 +1,21 @@
 import asyncio
+import json
 import time
-from typing import Any, AsyncIterator, Optional, cast
+from typing import Any, AsyncIterator, Dict, Optional, cast
 from uuid import uuid4
 
+import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.websockets import WebSocket
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    UserAPIKeyAuth,
+    user_api_key_auth,
+    user_api_key_auth_websocket,
+)
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
@@ -904,3 +911,121 @@ async def cancel_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+
+@router.websocket("/v1/responses")
+@router.websocket("/responses")
+async def responses_websocket_endpoint(
+    websocket: WebSocket,
+    model: str = fastapi.Query(
+        ..., description="The model to use for the responses WebSocket session."
+    ),
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
+    """
+    Responses API WebSocket mode endpoint.
+
+    Keeps a persistent WebSocket connection for response.create events,
+    enabling lower-latency agentic workflows with many tool-call round trips.
+
+    See: https://developers.openai.com/api/docs/guides/websocket-mode/
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+    from litellm.proxy.route_llm_request import route_request
+
+    # Accept the WebSocket handshake
+    requested_protocols = [
+        p.strip()
+        for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if p.strip()
+    ]
+    accept_kwargs: dict = {}
+    if requested_protocols:
+        accept_kwargs["subprotocol"] = requested_protocols[0]
+    await websocket.accept(**accept_kwargs)
+
+    data: Dict[str, Any] = {
+        "model": model,
+        "websocket": websocket,
+    }
+
+    # Construct a synthetic Request for pre-call processing
+    headers_list = list(websocket.scope.get("headers") or [])
+    scope: Dict[str, Any] = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/responses",
+        "headers": headers_list,
+    }
+    request = Request(scope=scope)
+    request._url = websocket.url
+
+    async def return_body():
+        return f'{{"model": "{model}"}}'.encode()
+
+    request.body = return_body  # type: ignore
+
+    # Phase 1: pre-call processing (auth, guardrails, rate limits)
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            model=model,
+            route_type="_aresponses_websocket",
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception("Responses WebSocket pre-call error")
+        try:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "pre_call_error",
+                            "message": str(e),
+                        },
+                    }
+                )
+            )
+        except Exception:
+            pass
+        await websocket.close(code=1011, reason="Pre-call error")
+        return
+
+    # Phase 2: route to upstream provider
+    try:
+        data["user_api_key_dict"] = user_api_key_dict
+        llm_call = await route_request(
+            data=data,
+            route_type="_aresponses_websocket",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        await llm_call
+    except Exception:
+        verbose_proxy_logger.exception("Responses WebSocket error")
+        await websocket.close(code=1011, reason="Internal server error")
