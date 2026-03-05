@@ -348,7 +348,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               />
             ) : (
               <div className="w-full h-full">
-                <div className="w-full px-6">
+                <div className="w-full">
                   <div className="flex flex-col space-y-4">
                     <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
                       <div className="flex items-center gap-4">
@@ -401,7 +401,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     </div>
                   </div>
                 </div>
-                <div className="w-full px-6 mt-6">
+                <div className="w-full mt-6">
                   <DataTable
                     data={filteredServers}
                     columns={columns}
