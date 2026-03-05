@@ -26,6 +26,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
@@ -417,6 +418,12 @@ class AmazonAnthropicClaudeMessagesConfig(
                 output_format=output_format,
                 anthropic_messages_request=anthropic_messages_request,
             )
+
+        # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
+        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
+        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # Ref: https://github.com/BerriAI/litellm/issues/22847
+        remove_custom_field_from_tools(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
