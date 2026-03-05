@@ -61,7 +61,7 @@ class TestOpenAISkillsConfigValidateEnvironment:
         params = GenericLiteLLMParams(api_key=None, api_base=None)
         with patch("litellm.api_key", None), \
              patch("litellm.openai_key", None), \
-             patch("litellm.secret_managers.main.get_secret_str", return_value=None):
+             patch("litellm.llms.openai.skills.transformation.get_secret_str", return_value=None):
             with pytest.raises(ValueError, match="OPENAI_API_KEY is required"):
                 config.validate_environment(headers={}, litellm_params=params)
 

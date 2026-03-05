@@ -28,28 +28,31 @@ from litellm.types.llms.anthropic_skills import (
     ListSkillsResponse,
     Skill,
 )
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 router = APIRouter()
 
-_OPENAI_ONLY_OPERATIONS = frozenset({
-    "update", "content", "create_version", "list_versions",
-    "get_version", "delete_version", "get_version_content",
-})
 
-
-def _validate_openai_only_provider(
+def _validate_provider_supports_operation(
     operation: str, custom_llm_provider: str
 ) -> None:
-    """Raise 400 if a non-OpenAI provider is used on an OpenAI-only endpoint."""
-    if operation not in _OPENAI_ONLY_OPERATIONS:
-        raise ValueError(f"Unknown OpenAI-only operation: '{operation}'")
-    if custom_llm_provider != "openai":
+    """Raise 400 if the provider does not support the requested operation."""
+    config = ProviderConfigManager.get_provider_skills_api_config(
+        LlmProviders(custom_llm_provider)
+    )
+    if config is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Provider '{custom_llm_provider}' does not support the Skills API.",
+        )
+    if operation not in config.supported_operations:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"The '{operation}' operation is only supported by OpenAI's Skills API. "
-                f"Got custom_llm_provider='{custom_llm_provider}'. "
-                "Set custom_llm_provider='openai' or omit it to use the default."
+                f"The '{operation}' operation is not supported by "
+                f"'{custom_llm_provider}'. "
+                f"Supported operations: {sorted(config.supported_operations)}."
             ),
         )
 
@@ -539,7 +542,7 @@ async def update_skill_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    _validate_openai_only_provider("update", data["custom_llm_provider"])
+    _validate_provider_supports_operation("update", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -618,7 +621,7 @@ async def get_skill_content_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    _validate_openai_only_provider("content", data["custom_llm_provider"])
+    _validate_provider_supports_operation("content", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -698,7 +701,7 @@ async def create_skill_version_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    _validate_openai_only_provider("create_version", data["custom_llm_provider"])
+    _validate_provider_supports_operation("create_version", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -786,7 +789,7 @@ async def list_skill_versions_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    _validate_openai_only_provider("list_versions", data["custom_llm_provider"])
+    _validate_provider_supports_operation("list_versions", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -867,7 +870,7 @@ async def get_skill_version_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    _validate_openai_only_provider("get_version", data["custom_llm_provider"])
+    _validate_provider_supports_operation("get_version", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -948,7 +951,7 @@ async def delete_skill_version_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    _validate_openai_only_provider("delete_version", data["custom_llm_provider"])
+    _validate_provider_supports_operation("delete_version", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -1029,7 +1032,7 @@ async def get_skill_version_content_endpoint(
     
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    _validate_openai_only_provider("get_version_content", data["custom_llm_provider"])
+    _validate_provider_supports_operation("get_version_content", data["custom_llm_provider"])
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
