@@ -4,7 +4,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
 function formatUserRole(userRole: string) {
@@ -39,6 +39,7 @@ function formatUserRole(userRole: string) {
 const useAuthorized = () => {
   const router = useRouter();
   const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
+  const hasRedirected = useRef(false);
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
 
@@ -51,11 +52,13 @@ const useAuthorized = () => {
   useEffect(() => {
     if (isLoading) return;
 
-    if (!isAuthorized) {
+    if (!isAuthorized && !hasRedirected.current) {
+      hasRedirected.current = true;
       if (token) {
         clearTokenCookies();
       }
-      router.replace(`${getProxyBaseUrl()}/ui/login`);
+      const loginPath = `${getProxyBaseUrl()}/ui/login`;
+      router.replace(loginPath);
     }
   }, [isLoading, isAuthorized, token, router]);
 

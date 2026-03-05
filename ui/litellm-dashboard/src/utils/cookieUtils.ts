@@ -29,17 +29,17 @@ export function clearTokenCookies() {
   const sameSiteValues = ["Lax", "Strict", "None"];
 
   paths.forEach((path) => {
-    // Basic clearing
-    document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path};`;
+    // Basic clearing with both expires and Max-Age for maximum compatibility
+    document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; Max-Age=0; path=${path};`;
 
     // With domain
-    document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=${domain};`;
+    document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; Max-Age=0; path=${path}; domain=${domain};`;
 
     // Try different SameSite values
     sameSiteValues.forEach((sameSite) => {
       const secureFlag = sameSite === "None" ? " Secure;" : "";
-      document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; SameSite=${sameSite};${secureFlag}`;
-      document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=${domain}; SameSite=${sameSite};${secureFlag}`;
+      document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; Max-Age=0; path=${path}; SameSite=${sameSite};${secureFlag}`;
+      document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; Max-Age=0; path=${path}; domain=${domain}; SameSite=${sameSite};${secureFlag}`;
     });
   });
 

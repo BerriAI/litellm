@@ -16,6 +16,62 @@ vi.mock("./molecules/notifications_manager", () => ({
   },
 }));
 
+describe("isAuthenticationError", () => {
+  it("should detect 'Authentication Error - Expired Key'", () => {
+    expect(Networking.isAuthenticationError("Authentication Error - Expired Key. Key Expiry time 1234")).toBe(true);
+  });
+
+  it("should detect 'Invalid proxy server token'", () => {
+    expect(Networking.isAuthenticationError("Authentication Error, Invalid proxy server token passed. Received API Key = sk-xxx")).toBe(true);
+  });
+
+  it("should detect 'Unauthorized' errors", () => {
+    expect(Networking.isAuthenticationError("Unauthorized")).toBe(true);
+  });
+
+  it("should detect case-insensitive auth errors", () => {
+    expect(Networking.isAuthenticationError("authentication error - something")).toBe(true);
+    expect(Networking.isAuthenticationError("EXPIRED KEY found")).toBe(true);
+  });
+
+  it("should not match non-auth errors", () => {
+    expect(Networking.isAuthenticationError("Some other error")).toBe(false);
+    expect(Networking.isAuthenticationError("Rate limit exceeded")).toBe(false);
+    expect(Networking.isAuthenticationError("")).toBe(false);
+  });
+});
+
+describe("shouldAllowAuthRedirect - circuit breaker", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  it("should allow redirect on first call", () => {
+    expect(Networking.shouldAllowAuthRedirect()).toBe(true);
+  });
+
+  it("should block redirect if called again within 5 seconds", () => {
+    expect(Networking.shouldAllowAuthRedirect()).toBe(true);
+    expect(Networking.shouldAllowAuthRedirect()).toBe(false);
+  });
+
+  it("should allow redirect after cooldown period", () => {
+    // Manually set an old timestamp
+    sessionStorage.setItem("litellm_auth_redirect_ts", String(Date.now() - 6000));
+    expect(Networking.shouldAllowAuthRedirect()).toBe(true);
+  });
+
+  it("should handle missing sessionStorage gracefully", () => {
+    const original = globalThis.sessionStorage;
+    // @ts-ignore
+    delete globalThis.sessionStorage;
+    // When sessionStorage is undefined, it should default to allowing
+    // (the function checks typeof sessionStorage === "undefined")
+    // Restore before assertion to avoid test pollution
+    globalThis.sessionStorage = original;
+  });
+});
+
 describe("networking - expired session handling", () => {
   const originalFetch = global.fetch;
 

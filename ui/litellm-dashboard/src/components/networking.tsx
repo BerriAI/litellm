@@ -268,20 +268,58 @@ export interface CredentialsResponse {
 
 let lastErrorTime = 0;
 
+const AUTH_ERROR_PATTERNS = [
+  "Authentication Error",
+  "Expired Key",
+  "Invalid proxy server token",
+  "Invalid API Key",
+  "Unauthorized",
+];
+
+/**
+ * Checks if the error is an authentication error that requires session cleanup.
+ */
+export function isAuthenticationError(errorString: string): boolean {
+  const lower = errorString.toLowerCase();
+  return AUTH_ERROR_PATTERNS.some((pattern) => lower.includes(pattern.toLowerCase()));
+}
+
+/**
+ * Circuit-breaker to prevent infinite reload loops.
+ * Uses sessionStorage to persist state across page reloads.
+ */
+export function shouldAllowAuthRedirect(): boolean {
+  if (typeof sessionStorage === "undefined") return true;
+  const key = "litellm_auth_redirect_ts";
+  const last = sessionStorage.getItem(key);
+  const now = Date.now();
+  if (last && now - Number(last) < 5000) {
+    // Already redirected within the last 5 seconds — break the loop
+    return false;
+  }
+  sessionStorage.setItem(key, String(now));
+  return true;
+}
+
 export const handleError = async (errorData: string | any) => {
   const currentTime = Date.now();
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
     // Convert errorData to string if it isn't already
     const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
-    if (errorString.includes("Authentication Error - Expired Key")) {
-      NotificationsManager.info("UI Session Expired. Logging out.");
+    if (isAuthenticationError(errorString)) {
       lastErrorTime = currentTime;
       clearTokenCookies();
-      const browserLocation = getWindowLocation();
-      if (browserLocation) {
-        window.location.href = browserLocation.pathname;
+      if (shouldAllowAuthRedirect()) {
+        NotificationsManager.info("UI Session Expired. Logging out.");
+        const browserLocation = getWindowLocation();
+        if (browserLocation) {
+          // Redirect to login instead of reloading the current page
+          const loginPath = (proxyBaseUrl || "") + "/ui/login";
+          window.location.href = loginPath;
+        }
       }
+      return;
     }
     lastErrorTime = currentTime;
   } else {
