@@ -2001,7 +2001,6 @@ class ExperimentalUIJWTToken:
             token=CLI_JWT_TOKEN_NAME,
             key_name=CLI_JWT_TOKEN_NAME,
             key_alias=CLI_JWT_TOKEN_NAME,
-            max_budget=litellm.max_ui_session_budget,
             expires=expires,
             user_id=user_info.user_id,
             team_id=_team_id,
