@@ -455,7 +455,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             ):
                 if max_tokens <= budget_tokens:
                     adjusted = math.ceil(budget_tokens) + 1024
-                    verbose_logger.warning(
+                    verbose_logger.info(
                         "WebSearchInterception: max_tokens=%s <= thinking.budget_tokens=%s, "
                         "adjusting to %s to satisfy Anthropic API constraint",
                         max_tokens, budget_tokens, adjusted,
