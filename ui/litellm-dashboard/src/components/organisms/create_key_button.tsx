@@ -772,21 +772,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 label={
                   <span>
                     Models{" "}
-                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team. Leave empty to allow access to all models.">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
                 }
                 name="models"
-                rules={
-                  keyType === "management" || keyType === "read_only"
-                    ? []
-                    : [{ required: true, message: "Please select a model" }]
-                }
+                rules={[]}
                 help={
                   keyType === "management" || keyType === "read_only"
                     ? "Models field is disabled for this key type"
-                    : "required"
+                    : "optional - leave empty to allow access to all models"
                 }
                 className="mt-4"
               >
