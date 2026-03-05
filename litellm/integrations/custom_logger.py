@@ -8,6 +8,7 @@ from typing import (
     AsyncGenerator,
     Dict,
     List,
+    NamedTuple,
     Optional,
     Tuple,
     Union,
@@ -43,6 +44,9 @@ if TYPE_CHECKING:
         MCPPreCallRequestObject,
         MCPPreCallResponseObject,
     )
+    from litellm.types.llms.anthropic_messages.anthropic_response import (
+        AnthropicMessagesResponse,
+    )
     from litellm.types.router import PreRoutingHookResponse
 
     Span = Union[_Span, Any]
@@ -56,12 +60,26 @@ else:
     MCPDuringCallRequestObject = Any
     MCPDuringCallResponseObject = Any
     PreRoutingHookResponse = Any
+    AnthropicMessagesResponse = Any
 
 
 _BASE64_INLINE_PATTERN = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
     re.MULTILINE,
 )
+
+
+class ToolCallResult(NamedTuple):
+    """Result of executing a single tool call via async_execute_tool_calls."""
+
+    tool_call_id: str
+    """The id of the tool_use block that was executed."""
+
+    content: str
+    """Text result to return to the model."""
+
+    is_error: bool
+    """Whether this result represents an error."""
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -532,6 +550,34 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Useful if you want to modiy the standard logging payload after the MCP tool call is made.
         """
         return None
+
+    #########################################################
+    # TOOL EXECUTION HOOKS (simplified tool interception)
+    #########################################################
+
+    async def async_execute_tool_calls(
+        self,
+        response: Union["AnthropicMessagesResponse", ModelResponse],
+        kwargs: Dict,
+    ) -> List[ToolCallResult]:
+        """
+        Detect and execute tool calls in the model response.
+
+        This is the simplified alternative to the two-step
+        async_should_run_agentic_loop / async_run_agentic_loop pattern.
+        Callbacks only need to detect tool calls and return results — the
+        framework handles message construction, thinking block preservation,
+        max_tokens adjustment, kwargs cleanup, and follow-up API requests.
+
+        Args:
+            response: Model response (AnthropicMessagesResponse dict, or ModelResponse)
+            kwargs: Full request kwargs (includes custom_llm_provider, tools, etc.)
+
+        Returns:
+            List of ToolCallResult for tool calls this callback handled.
+            Empty list means nothing was handled (skip this callback).
+        """
+        return []
 
     #########################################################
     # AGENTIC LOOP HOOKS (for litellm.messages + future completion support)
