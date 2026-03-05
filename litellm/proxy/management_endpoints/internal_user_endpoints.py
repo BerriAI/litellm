@@ -776,7 +776,7 @@ async def user_info_v2(
 
         return UserInfoV2Response(
             user_id=user_id,
-            user_info=user_info,
+            user_info=user_info.model_dump(),
         )
     except Exception as e:
         verbose_proxy_logger.exception(
