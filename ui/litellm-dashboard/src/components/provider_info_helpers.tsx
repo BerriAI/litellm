@@ -8,7 +8,7 @@ export enum Providers {
   ANTHROPIC_TEXT = "Anthropic Text",
   AssemblyAI = "AssemblyAI",
   AUTO_ROUTER = "Auto Router",
-  Bedrock = "Amazon Bedrock",\
+  Bedrock = "Amazon Bedrock",
   BedrockMantle = "Amazon Bedrock Mantle",
   SageMaker = "AWS SageMaker",
   Azure = "Azure",
