@@ -335,7 +335,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         return return_inputs
 
     @log_guardrail_information
-    async def apply_guardrail(
+    async def apply_guardrail(  # noqa: PLR0915
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,

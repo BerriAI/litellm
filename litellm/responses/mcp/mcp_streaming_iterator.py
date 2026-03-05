@@ -391,7 +391,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> ResponsesAPIStreamingResponse:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:  # noqa: PLR0915
         """
         Phase-based streaming:
         1. initial_response - Stream the first LLM response (includes response.created, response.in_progress, response.output_item.added)
