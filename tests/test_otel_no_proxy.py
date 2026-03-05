@@ -162,6 +162,10 @@ class TestOtelInitializationWithoutProxy(unittest.TestCase):
                 raise ImportError("Simulated: proxy_server not available")
             return original_import(name, *args, **kwargs)
 
+        # Remove cached modules so __import__ mock is actually hit
+        sys.modules.pop("litellm.proxy.proxy_server", None)
+        sys.modules.pop("litellm.proxy", None)
+
         with patch("builtins.__import__", side_effect=mock_import):
             otel = OpenTelemetry()
             assert otel is not None

@@ -277,6 +277,14 @@ async def create_interaction(
 
     data = await _read_request_body(request=request)
 
+    # `agent` and `model` are mutually exclusive in the Interactions API.
+    # Sending both is ambiguous — reject early with a clear error.
+    if data.get("agent") and data.get("model"):
+        raise HTTPException(
+            status_code=400,
+            detail="'agent' and 'model' are mutually exclusive. Provide one or the other, not both.",
+        )
+
     # Default to gemini provider for interactions
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = "gemini"
