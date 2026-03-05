@@ -75,6 +75,8 @@ class LoggingWorker:
         self._sem = None
         self._worker_task = None
         self._running_tasks.clear()
+        self._aggressive_clear_in_progress = False
+        self._last_aggressive_clear_time = 0.0
 
     def _ensure_queue(self) -> None:
         """Initialize the queue if it doesn't exist or if event loop has changed."""
