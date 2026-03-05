@@ -1190,3 +1190,62 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
             request_data={},
         )
     assert "Only proxy admin can be used to generate" in str(exc_info.value)
+
+
+def test_v2_user_info_non_admin_blocked_for_other_user():
+    """
+    Test that /v2/user/info blocks non-admin users from querying another user's info.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="user-A",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        user_id="user-A",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"user_id": "user-B"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/v2/user/info",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "key not allowed to access this user's info" in str(exc_info.value.detail)
+
+
+def test_v2_user_info_non_admin_allowed_for_own_user():
+    """
+    Test that /v2/user/info allows non-admin users to query their own info.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="user-A",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        user_id="user-A",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"user_id": "user-A"}
+
+    # Should not raise
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/v2/user/info",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )

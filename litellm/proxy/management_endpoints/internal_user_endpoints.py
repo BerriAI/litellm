@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -43,6 +44,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
+    UserInfoV2Response,
     UserListResponse,
     UserUpdateResult,
 )
@@ -704,10 +706,82 @@ async def user_info(
             user_id=user_id, user_info=_user_info, keys=returned_keys, teams=team_list
         )
 
-        return response_data
+        response = JSONResponse(content=response_data.model_dump(mode="json"))
+        response.headers["Deprecation"] = "true"
+        response.headers[
+            "Link"
+        ] = '</v2/user/info>; rel="successor-version"'
+        return response
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        raise handle_exception_on_proxy(e)
+
+
+@router.get(
+    "/v2/user/info",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=UserInfoV2Response,
+)
+@management_endpoint_wrapper
+async def user_info_v2(
+    request: Request,
+    user_id: Optional[str] = fastapi.Query(
+        default=None, description="User ID in the request parameters"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Lightweight endpoint that returns only the user profile.
+
+    Use /key/list?user_id=<user_id> for keys and
+    /v2/team/list?user_id=<user_id> for teams.
+
+    Example request:
+    ```
+    curl -X GET 'http://localhost:4000/v2/user/info?user_id=krrish7%40berri.ai' \
+    --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if user_id is not None and " " in user_id:
+            user_id = get_user_id_from_request(request=request)
+
+        if prisma_client is None:
+            raise Exception(
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        if user_id is None:
+            user_id = user_api_key_dict.user_id
+
+        if user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="user_id is required",
+            )
+
+        user_info = await prisma_client.get_data(user_id=user_id)
+
+        if user_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"User {user_id} not found",
+            )
+
+        return UserInfoV2Response(
+            user_id=user_id,
+            user_info=user_info,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.user_info_v2(): Exception occured - {}".format(
                 str(e)
             )
         )

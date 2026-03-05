@@ -481,6 +481,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/list",
         "/team/available",
         "/user/info",
+        "/v2/user/info",
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
