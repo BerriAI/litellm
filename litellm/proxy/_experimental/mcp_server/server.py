@@ -2096,6 +2096,11 @@ if MCP_AVAILABLE:
         # Match /mcp/<servers_and_maybe_path>
         # Where servers can be comma-separated list of server names
         # Server names can contain slashes (e.g., "custom_solutions/user_123")
+        #
+        # Note on ambiguous paths like /a/mcp/mcp: the regex anchors on the
+        # leading /mcp/ prefix, so "/a/mcp/mcp" does NOT match (it starts with
+        # "/a/", not "/mcp/").  Only paths starting with exactly "/mcp/" enter
+        # the server-name extraction logic.
         mcp_path_match = re.match(r"^/mcp/([^?#]+)(?:\?.*)?(?:#.*)?$", path)
         if mcp_path_match:
             servers_and_path = mcp_path_match.group(1)

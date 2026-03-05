@@ -902,7 +902,7 @@ def test_get_mcp_servers_in_path_supports_server_scoped_mount_form():
     ]
 
     # Negative cases: these must NOT match the server-scoped mount regex
-    assert _get_mcp_servers_in_path("/mcp") is None or _get_mcp_servers_in_path("/mcp") != ["mcp"]
+    assert _get_mcp_servers_in_path("/mcp") is None
     assert _get_mcp_servers_in_path("/github_onprem/not_mcp") is None
 
 
