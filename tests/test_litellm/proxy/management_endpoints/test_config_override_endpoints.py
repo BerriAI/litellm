@@ -285,6 +285,70 @@ async def test_update_hashicorp_config_excludes_none_fields(client, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_update_hashicorp_config_preserves_existing_sensitive_fields(
+    client, monkeypatch
+):
+    """POST without sensitive fields should merge them from the existing DB record."""
+    existing_record = MagicMock()
+    existing_record.config_value = json.dumps(
+        {
+            "vault_addr": "https://vault.old.com",
+            "vault_token": "enc_old-token",
+            "approle_role_id": "enc_old-role",
+        }
+    )
+
+    mock_configoverrides = MagicMock()
+    mock_configoverrides.find_unique = AsyncMock(return_value=existing_record)
+    mock_configoverrides.upsert = AsyncMock(return_value=None)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_configoverrides = mock_configoverrides
+
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.initialize_secret_manager = MagicMock()
+    mock_proxy_config._last_hashicorp_vault_config = None
+
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "proxy_config", mock_proxy_config)
+
+    with patch(
+        "litellm.proxy.management_endpoints.config_override_endpoints.encrypt_value_helper"
+    ) as mock_encrypt, patch(
+        "litellm.proxy.management_endpoints.config_override_endpoints.decrypt_value_helper"
+    ) as mock_decrypt:
+        mock_encrypt.side_effect = lambda v: f"enc_{v}"
+        mock_decrypt.side_effect = lambda v, **kwargs: v.replace("enc_", "")
+
+        app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+        )
+
+        try:
+            # Only send vault_addr — no vault_token or approle_role_id
+            response = client.post(
+                "/config_overrides/hashicorp_vault",
+                json={"vault_addr": "https://vault.new.com"},
+            )
+            assert response.status_code == 200
+
+            # Verify the upserted data preserved existing sensitive fields
+            upsert_call = mock_configoverrides.upsert.call_args
+            create_data = json.loads(
+                upsert_call.kwargs["data"]["create"]["config_value"]
+            )
+            assert create_data["vault_addr"] == "https://vault.new.com"
+            assert create_data["vault_token"] == "enc_old-token"
+            assert create_data["approle_role_id"] == "enc_old-role"
+        finally:
+            app.dependency_overrides.pop(ps.user_api_key_auth, None)
+            os.environ.pop("HCP_VAULT_ADDR", None)
+            os.environ.pop("HCP_VAULT_TOKEN", None)
+            os.environ.pop("HCP_VAULT_APPROLE_ROLE_ID", None)
+
+
+@pytest.mark.asyncio
 async def test_update_hashicorp_config_init_failure_restores_env_vars(
     client, monkeypatch
 ):
@@ -355,7 +419,7 @@ async def test_update_hashicorp_config_missing_vault_addr(client, monkeypatch):
             json={"vault_token": "some-token"},
         )
         assert response.status_code == 400
-        assert "vault_addr" in response.json()["detail"]["error"]
+        assert "Vault Address" in response.json()["detail"]["error"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
