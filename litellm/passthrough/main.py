@@ -410,8 +410,8 @@ async def _async_streaming(
     litellm_logging_obj: "LiteLLMLoggingObj",
     provider_config: "BasePassthroughConfig",
 ):
+    iter_response = await response
     try:
-        iter_response = await response
         iter_response.raise_for_status()
         raw_bytes: List[bytes] = []
 
@@ -427,4 +427,5 @@ async def _async_streaming(
             )
         )
     except Exception:
+        await iter_response.aclose()
         raise
