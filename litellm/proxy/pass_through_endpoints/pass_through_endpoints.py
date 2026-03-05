@@ -84,7 +84,7 @@ _registered_pass_through_routes: Dict[
 # 2. On config reload, adapter UUIDs are regenerated, so stale routes may
 #    accumulate in _registered_pass_through_routes until the process
 #    restarts.  A full clear-and-rebuild strategy would fix this.
-_seen_adapter_targets: set = set()
+_seen_adapter_targets: dict = {}
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
@@ -1116,26 +1116,25 @@ def create_pass_through_route(
             adapter = target
         else:
             adapter = get_instance_fn(value=target)
-        adapter_id = str(uuid.uuid4())
-
-        # Thread safety note: this runs at startup during config loading,
-        # so concurrent access is not a concern here.
-        if not isinstance(litellm.adapters, list):
-            verbose_proxy_logger.warning(
-                "litellm.adapters was %s, coercing to list",
-                type(litellm.adapters).__name__,
-            )
-            litellm.adapters = list(litellm.adapters)
-
-        # Deduplicate: skip if an adapter for this endpoint path already exists.
-        # Track by target key in a module-level set so the adapter dict stays
-        # compliant with the AdapterItem TypedDict (id + adapter only).
-        # NOTE: qualname-based dedup may silently drop a second adapter of the
-        # same class — see _seen_adapter_targets doc comment for details.
+        # Deduplicate: reuse existing adapter_id when the same target is
+        # registered more than once (e.g. exact path + subpath routes).
         _target_key = target if isinstance(target, str) else type(target).__qualname__
-        if _target_key not in _seen_adapter_targets:
-            _seen_adapter_targets.add(_target_key)
+        if _target_key in _seen_adapter_targets:
+            adapter_id = _seen_adapter_targets[_target_key]
+        else:
+            adapter_id = str(uuid.uuid4())
+
+            # Thread safety note: this runs at startup during config loading,
+            # so concurrent access is not a concern here.
+            if not isinstance(litellm.adapters, list):
+                verbose_proxy_logger.warning(
+                    "litellm.adapters was %s, coercing to list",
+                    type(litellm.adapters).__name__,
+                )
+                litellm.adapters = list(litellm.adapters)
+
             litellm.adapters.append({"id": adapter_id, "adapter": adapter})
+            _seen_adapter_targets[_target_key] = adapter_id
 
         async def endpoint_func(  # type: ignore
             request: Request,

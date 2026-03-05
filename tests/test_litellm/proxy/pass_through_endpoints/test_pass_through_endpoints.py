@@ -2423,3 +2423,60 @@ def test_create_pass_through_route_accumulates_multiple_adapters(monkeypatch):
     finally:
         _registered_pass_through_routes.clear()
         _seen_adapter_targets.clear()
+
+
+def test_subpath_reuses_adapter_id(monkeypatch):
+    """
+    Regression for #22746:
+    When include_subpath=True, create_pass_through_route is called twice for the
+    same target (exact path + wildcard).  The second call must reuse the existing
+    adapter_id instead of generating a new unregistered one.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
+        _seen_adapter_targets,
+        create_pass_through_route,
+    )
+
+    import litellm
+
+    class DummyAdapter(CustomLogger):
+        pass
+
+    monkeypatch.setattr(litellm, "adapters", [])
+    _registered_pass_through_routes.clear()
+    _seen_adapter_targets.clear()
+
+    try:
+        adapter_instance = DummyAdapter()
+
+        create_pass_through_route(
+            endpoint="/v1/test-endpoint",
+            target=adapter_instance,
+            custom_headers=None,
+            _forward_headers=False,
+            _merge_query_params=False,
+            dependencies=None,
+        )
+
+        # Capture state after first registration
+        assert len(litellm.adapters) == 1
+        first_adapter_id = litellm.adapters[0]["id"]
+
+        create_pass_through_route(
+            endpoint="/v1/test-endpoint/{subpath:path}",
+            target=adapter_instance,
+            custom_headers=None,
+            _forward_headers=False,
+            _merge_query_params=False,
+            dependencies=None,
+        )
+
+        # Still only one adapter entry (no duplicate)
+        assert len(litellm.adapters) == 1
+        # The seen dict should map to the same adapter_id
+        target_key = type(adapter_instance).__qualname__
+        assert _seen_adapter_targets[target_key] == first_adapter_id
+    finally:
+        _registered_pass_through_routes.clear()
+        _seen_adapter_targets.clear()
