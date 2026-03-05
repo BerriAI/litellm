@@ -490,7 +490,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             updated_at_str = created_at_str
 
         return Skill(
-            id=data["id"],
+            id=data.get("id", ""),
             created_at=created_at_str,
             default_version=str(data["default_version"]) if data.get("default_version") is not None else None,
             display_title=data.get("name"),
@@ -512,7 +512,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             created_at_str = str(created_ts)
 
         return SkillVersion(
-            id=data["id"],
+            id=data.get("id", ""),
             skill_id=data.get("skill_id", ""),
             version=str(data["version"]) if data.get("version") is not None else None,
             created_at=created_at_str,

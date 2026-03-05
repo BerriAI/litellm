@@ -38,9 +38,14 @@ def _validate_provider_supports_operation(
     operation: str, custom_llm_provider: str
 ) -> None:
     """Raise 400 if the provider does not support the requested operation."""
-    config = ProviderConfigManager.get_provider_skills_api_config(
-        LlmProviders(custom_llm_provider)
-    )
+    try:
+        provider_enum = LlmProviders(custom_llm_provider)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported provider: '{custom_llm_provider}'.",
+        )
+    config = ProviderConfigManager.get_provider_skills_api_config(provider_enum)
     if config is None:
         raise HTTPException(
             status_code=400,
