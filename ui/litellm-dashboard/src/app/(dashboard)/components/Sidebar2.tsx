@@ -20,6 +20,7 @@ import {
   ToolOutlined,
   TagsOutlined,
   AuditOutlined,
+  MessageOutlined,
 } from "@ant-design/icons";
 // import {
 //   all_admin_roles,
@@ -47,6 +48,7 @@ interface SidebarProps {
 
 interface MenuItemCfg {
   key: string;
+  newTab?: boolean;
   page: string; // legacy id; we map this to a path below
   label: string;
   roles?: string[];
@@ -105,6 +107,8 @@ const routeFor = (slug: string): string => {
       return "guardrails";
     case "policies":
       return "policies";
+    case "chat":
+      return "chat";
 
     // tools
     case "mcp-servers":
@@ -156,6 +160,7 @@ const toHref = (slugOrPath: string) => {
 // ----- Menu config (unchanged labels/icons; same appearance) -----
 const menuItems: MenuItemCfg[] = [
   { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined style={{ fontSize: 18 }} /> },
+  { key: "29", page: "chat", label: "Chat", icon: <MessageOutlined style={{ fontSize: 18 }} />, newTab: true },
   {
     key: "3",
     page: "llm-playground",
@@ -371,19 +376,29 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
   }, [pathname, filteredMenuItems, defaultSelectedKey]);
 
   // ----- Navigation -----
-  const goTo = (slug: string) => {
+  const goTo = (slug: string, newTab?: boolean) => {
     const href = toHref(slug);
-    router.push(href);
+    if (newTab) {
+      window.open(href, "_blank");
+    } else {
+      router.push(href);
+    }
   };
 
   // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
   // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
-  const renderNavLink = (label: string, page: string): React.ReactNode => {
+  const renderNavLink = (label: string, page: string, newTab?: boolean): React.ReactNode => {
     const href = toHref(page);
     return (
       <a
         href={href}
+        target={newTab ? "_blank" : undefined}
+        rel={newTab ? "noopener noreferrer" : undefined}
         onClick={(e) => {
+          if (newTab) {
+            e.stopPropagation();
+            return;
+          }
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
             e.stopPropagation();
             return;
@@ -435,14 +450,14 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
             items={filteredMenuItems.map((item) => ({
               key: item.key,
               icon: item.icon,
-              label: renderNavLink(item.label, item.page),
+              label: renderNavLink(item.label, item.page, item.newTab),
               children: item.children?.map((child) => ({
                 key: child.key,
                 icon: child.icon,
-                label: renderNavLink(child.label, child.page),
-                onClick: () => goTo(child.page),
+                label: renderNavLink(child.label, child.page, child.newTab),
+                onClick: () => goTo(child.page, child.newTab),
               })),
-              onClick: !item.children ? () => goTo(item.page) : undefined,
+              onClick: !item.children ? () => goTo(item.page, item.newTab) : undefined,
             }))}
           />
         </ConfigProvider>
