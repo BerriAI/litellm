@@ -400,6 +400,142 @@ async def cursor_chat_completions(
         )
 
 
+@router.post(
+    "/v1/responses/input_tokens",
+    tags=["responses"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/responses/input_tokens",
+    tags=["responses"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/openai/v1/responses/input_tokens",
+    tags=["responses"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def count_response_input_tokens(
+    request: Request,
+):
+    """
+    Count input tokens for OpenAI Responses API format.
+
+    This endpoint follows the OpenAI Responses API token counting specification.
+    It accepts the same parameters as the /v1/responses endpoint but returns
+    token counts instead of generating a response.
+
+    Example usage:
+    ```
+    curl -X POST "http://localhost:4000/v1/responses/input_tokens" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-key" \
+      -d '{
+        "model": "gpt-4o",
+        "input": "Hello, how are you?"
+      }'
+    ```
+
+    Returns: {"input_tokens": <number>}
+    """
+    from litellm.proxy.proxy_server import (
+        _read_request_body,
+        token_counter as internal_token_counter,
+    )
+
+    try:
+        request_data = await _read_request_body(request=request)
+        data: dict = {**request_data}
+
+        model_name = data.get("model")
+        input_data = data.get("input")
+
+        if not model_name:
+            raise HTTPException(
+                status_code=400, detail={"error": "model parameter is required"}
+            )
+
+        if input_data is None:
+            raise HTTPException(
+                status_code=400, detail={"error": "input parameter is required"}
+            )
+
+        # Convert Responses API `input` to chat messages format for the internal token counter
+        messages: list = []
+        instructions = data.get("instructions")
+
+        if isinstance(input_data, str):
+            messages.append({"role": "user", "content": input_data})
+        elif isinstance(input_data, list):
+            for item in input_data:
+                if isinstance(item, dict):
+                    role = item.get("role", "user")
+                    content = item.get("content", "")
+                    if item.get("type") == "function_call_output":
+                        messages.append({
+                            "role": "tool",
+                            "content": item.get("output", ""),
+                            "tool_call_id": item.get("call_id", ""),
+                        })
+                    elif item.get("type") == "function_call":
+                        messages.append({
+                            "role": "assistant",
+                            "tool_calls": [{
+                                "id": item.get("call_id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": item.get("name", ""),
+                                    "arguments": item.get("arguments", ""),
+                                },
+                            }],
+                        })
+                    else:
+                        messages.append({"role": role, "content": content})
+                elif isinstance(item, str):
+                    messages.append({"role": "user", "content": item})
+
+        from litellm.proxy._types import TokenCountRequest
+        from litellm.types.utils import TokenCountResponse
+
+        token_request = TokenCountRequest(
+            model=model_name,
+            messages=messages,
+            tools=data.get("tools"),
+            system=instructions,
+        )
+
+        token_response = await internal_token_counter(
+            request=token_request,
+            call_endpoint=True,
+        )
+
+        _token_response_dict: dict = {}
+        if isinstance(token_response, TokenCountResponse):
+            _token_response_dict = token_response.model_dump()
+        elif isinstance(token_response, dict):
+            _token_response_dict = token_response
+
+        return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
+
+    except HTTPException:
+        raise
+    except ProxyException as e:
+        status_code = int(e.code) if e.code and e.code.isdigit() else 500
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": e.message},
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.response_api_endpoints.count_response_input_tokens(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        raise HTTPException(
+            status_code=500, detail={"error": "Internal server error"}
+        )
+
+
 @router.get(
     "/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
@@ -904,3 +1040,5 @@ async def cancel_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+
