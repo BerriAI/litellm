@@ -866,4 +866,4 @@ class PreRoutingHookResponse(BaseModel):
     """
 
     model: str
-    messages: Optional[List[Dict[str, str]]]
+    messages: Optional[List[Dict[str, Any]]]
