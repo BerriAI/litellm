@@ -228,12 +228,6 @@ const menuItems: MenuItemCfg[] = [
         icon: <DatabaseOutlined style={{ fontSize: 18 }} />,
         roles: all_admin_roles,
       },
-      {
-        key: "29",
-        page: "byok-demo",
-        label: "BYOK Demo",
-        icon: <KeyOutlined style={{ fontSize: 18 }} />,
-      },
     ],
   },
   {

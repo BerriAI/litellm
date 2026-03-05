@@ -1095,6 +1095,10 @@ if MCP_AVAILABLE:
             )
         if payload.save:
             await store_user_credential(prisma_client, user_id, server_id, payload.credential)
+            from litellm.proxy._experimental.mcp_server.server import (
+                _invalidate_byok_cred_cache,
+            )
+            _invalidate_byok_cred_cache(user_id, server_id)
             return MCPUserCredentialResponse(server_id=server_id, has_credential=True)
         # save=False: credential not persisted
         return MCPUserCredentialResponse(server_id=server_id, has_credential=False)

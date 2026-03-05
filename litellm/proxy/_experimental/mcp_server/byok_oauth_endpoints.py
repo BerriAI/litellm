@@ -39,6 +39,8 @@ _byok_auth_codes: Dict[str, dict] = {}
 
 # Authorization codes expire after 5 minutes.
 _AUTH_CODE_TTL_SECONDS = 300
+# Hard cap to prevent memory exhaustion from incomplete OAuth flows.
+_AUTH_CODES_MAX_SIZE = 1000
 
 router = APIRouter(tags=["mcp"])
 
@@ -648,6 +650,11 @@ async def byok_authorize_post(
     if parsed_uri.scheme not in ("http", "https"):
         raise HTTPException(status_code=400, detail="Invalid redirect_uri scheme")
 
+    # Reject new codes if the store is at capacity (prevents memory exhaustion
+    # from a burst of abandoned OAuth flows).
+    if len(_byok_auth_codes) >= _AUTH_CODES_MAX_SIZE:
+        raise HTTPException(status_code=503, detail="Too many pending authorization flows")
+
     if code_challenge_method != "S256":
         raise HTTPException(
             status_code=400, detail="Only S256 code_challenge_method is supported"
@@ -733,6 +740,12 @@ async def byok_token(
                 server_id=server_id,
                 credential=api_key_value,
             )
+            # Invalidate any cached negative result so the user isn't blocked
+            # for up to the TTL period after completing the OAuth flow.
+            from litellm.proxy._experimental.mcp_server.server import (
+                _invalidate_byok_cred_cache,
+            )
+            _invalidate_byok_cred_cache(user_id, server_id)
         except Exception as exc:
             verbose_proxy_logger.error(
                 "byok_token: failed to store user credential for user=%s server=%s: %s",
@@ -755,6 +768,9 @@ async def byok_token(
     payload = {
         "user_id": user_id,
         "server_id": server_id,
+        # "type" distinguishes this from regular proxy auth tokens.
+        # The proxy's SSO JWT path uses asymmetric keys (RS256/ES256), so an
+        # HS256 token signed with master_key cannot be accepted there.
         "type": "byok_session",
         "iat": now,
         "exp": now + 3600,
