@@ -123,6 +123,7 @@ def test_cost_calculator_with_usage(monkeypatch):
 
     # Invalidate caches after modifying litellm.model_cost
     from litellm.utils import _invalidate_model_cost_lowercase_map
+
     _invalidate_model_cost_lowercase_map()
 
     result = response_cost_calculator(
@@ -417,9 +418,7 @@ def test_azure_audio_output_cost_calculation():
     model_info = litellm.get_model_info("azure/gpt-audio-2025-08-28")
 
     # Calculate expected cost
-    expected_input_cost = (
-        model_info["input_cost_per_token"] * 17  # text tokens
-    )
+    expected_input_cost = model_info["input_cost_per_token"] * 17  # text tokens
     expected_output_cost = (
         model_info["output_cost_per_token"] * 110  # text tokens
         + model_info["output_cost_per_audio_token"] * 482  # audio tokens
@@ -431,14 +430,14 @@ def test_azure_audio_output_cost_calculation():
     wrong_total_cost = expected_input_cost + wrong_output_cost
 
     # Verify audio tokens are NOT charged at text rate (the bug)
-    assert abs(cost - wrong_total_cost) > 0.001, (
-        "Bug: Audio tokens are being charged at text token rate"
-    )
+    assert (
+        abs(cost - wrong_total_cost) > 0.001
+    ), "Bug: Audio tokens are being charged at text token rate"
 
     # Verify cost matches
-    assert abs(cost - expected_total_cost) < 0.0000001, (
-        f"Expected cost {expected_total_cost}, got {cost}"
-    )
+    assert (
+        abs(cost - expected_total_cost) < 0.0000001
+    ), f"Expected cost {expected_total_cost}, got {cost}"
 
 
 def test_default_image_cost_calculator(monkeypatch):
@@ -952,12 +951,12 @@ def test_azure_ai_cache_cost_calculation():
     print(f"Output cost: {output_cost}, Expected: {expected_output_cost}")
     print(f"Total cost: {total_cost}")
 
-    assert abs(input_cost - expected_input_cost) < 1e-10, (
-        f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
-    )
-    assert abs(output_cost - expected_output_cost) < 1e-10, (
-        f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
-    )
+    assert (
+        abs(input_cost - expected_input_cost) < 1e-10
+    ), f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
+    assert (
+        abs(output_cost - expected_output_cost) < 1e-10
+    ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
 
 
 def test_cost_discount_vertex_ai():
@@ -1730,7 +1729,7 @@ def test_gemini_without_cache_tokens_details():
             "promptTokensDetails": [
                 {"modality": "TEXT", "tokenCount": 6},
                 {"modality": "IMAGE", "tokenCount": 258},
-            ]
+            ],
             # No cacheTokensDetails
         }
     }
@@ -1825,7 +1824,9 @@ def test_gemini_implicit_caching_cost_calculation():
         f"Cached tokens may not be using reduced pricing."
     )
 
-    print("✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly")
+    print(
+        "✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly"
+    )
 
 
 def test_additional_costs_only_for_azure_ai():
@@ -1866,3 +1867,86 @@ def test_additional_costs_only_for_azure_ai():
         completion_tokens=50,
     )
     assert result is None, "Vertex AI should have no additional costs"
+
+
+def test_huggingface_custom_cost_per_token(monkeypatch):
+    """
+    Test that HuggingFace models respect custom cost settings
+    (input_cost_per_token, output_cost_per_token) registered via
+    litellm.register_model, instead of always returning $0.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22863
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    # Register HuggingFace model with custom pricing
+    input_cost = 1e-06
+    output_cost = 3e-06
+    litellm.register_model(
+        {
+            "huggingface/moonshotai/Kimi-K2-Instruct-0905": {
+                "input_cost_per_token": input_cost,
+                "output_cost_per_token": output_cost,
+                "litellm_provider": "huggingface",
+                "max_tokens": 4096,
+                "mode": "chat",
+            }
+        }
+    )
+    _invalidate_model_cost_lowercase_map()
+
+    prompt_tokens = 100
+    completion_tokens = 50
+
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    response = ModelResponse(
+        id="test-id",
+        model="huggingface/moonshotai/Kimi-K2-Instruct-0905",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="huggingface/moonshotai/Kimi-K2-Instruct-0905",
+        custom_llm_provider="huggingface",
+    )
+
+    expected_cost = (prompt_tokens * input_cost) + (completion_tokens * output_cost)
+    assert cost > 0, (
+        f"HuggingFace model cost should not be $0 when custom pricing is set. "
+        f"Got {cost}, expected {expected_cost}"
+    )
+    assert cost == pytest.approx(
+        expected_cost
+    ), f"Cost mismatch: got {cost}, expected {expected_cost}"
+
+
+def test_huggingface_no_custom_cost_returns_zero():
+    """
+    Test that HuggingFace models without custom pricing still return $0
+    (the previous default behavior is preserved).
+
+    Ensures the fix for #22863 doesn't break existing behavior for
+    HuggingFace models without custom pricing.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    _invalidate_model_cost_lowercase_map()
+
+    model_info = litellm.get_model_info(
+        model="some-unknown-hf-model",
+        custom_llm_provider="huggingface",
+    )
+    assert model_info["input_cost_per_token"] == 0
+    assert model_info["output_cost_per_token"] == 0

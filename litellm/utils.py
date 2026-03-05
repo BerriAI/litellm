@@ -5492,7 +5492,10 @@ def _get_model_info_helper(  # noqa: PLR0915
         split_model = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
         #########################
-        if custom_llm_provider == "huggingface":
+        if (
+            custom_llm_provider == "huggingface"
+            and not _is_potential_model_name_in_model_cost(potential_model_names)
+        ):
             max_tokens = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
