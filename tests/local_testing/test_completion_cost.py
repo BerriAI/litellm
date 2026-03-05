@@ -2983,6 +2983,30 @@ def test_cost_calculator_base_model_cross_provider_direct():
     assert cost > 0
 
 
+def test_cost_calculator_base_model_cross_provider_hidden_params_guard():
+    """
+    Verify that hidden_params.custom_llm_provider does not undo the
+    base_model provider override when the response carries a stale provider.
+    """
+    from litellm import ModelResponse, Usage
+
+    resp = ModelResponse(
+        id="chatcmpl-guard",
+        model="gemini/gemini-2.0-flash",
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    # Simulate hidden_params carrying the original (wrong) provider
+    resp._hidden_params = {"custom_llm_provider": "anthropic"}
+
+    cost = completion_cost(
+        model="anthropic/my-custom-deployment",
+        completion_response=resp,
+        base_model="gemini/gemini-2.0-flash",
+        custom_llm_provider="anthropic",
+    )
+    assert cost > 0
+
+
 def test_cost_calculator_base_model_same_provider_no_regression():
     """
     When base_model has the same provider prefix as the deployment,
