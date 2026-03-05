@@ -4215,6 +4215,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     team_id: Optional[str]  # team that triggered discovery
     key_alias: Optional[str]  # human-readable key alias
     user_agent: Optional[str]  # HTTP User-Agent of the caller
+    agent_id: Optional[str]  # agent that triggered this tool call
 
 
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):

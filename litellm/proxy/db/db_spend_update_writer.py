@@ -215,6 +215,7 @@ class DBSpendUpdateWriter:
             _metadata = _litellm_params.get("metadata") or {}
             key_alias = _metadata.get("user_api_key_alias") or None
             user_agent = _metadata.get("user_agent") or None
+            agent_id: Optional[str] = kwargs.get("agent_id") or _metadata.get("agent_id") or None
 
             def _enqueue(tool_name: str, origin: str = "user_defined") -> None:
                 self.tool_discovery_queue.add_update(
@@ -225,6 +226,7 @@ class DBSpendUpdateWriter:
                         team_id=team_id,
                         key_alias=key_alias,
                         user_agent=user_agent,
+                        agent_id=agent_id,
                     )
                 )
 

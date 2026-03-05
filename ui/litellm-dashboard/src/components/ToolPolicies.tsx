@@ -40,7 +40,7 @@ function getTrendSubtitle(newToday: number, newYesterday: number): string | unde
   return `${diff} since yesterday`;
 }
 
-type SortField = "tool_name" | "input_policy" | "output_policy" | "team_id" | "key_alias" | "created_at" | "call_count";
+type SortField = "tool_name" | "input_policy" | "output_policy" | "team_id" | "key_alias" | "created_at" | "call_count" | "agent_id";
 
 interface FilterValues {
   [key: string]: string;
@@ -226,6 +226,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
         (t.team_id ?? "").toLowerCase().includes(q) ||
         (t.key_alias ?? "").toLowerCase().includes(q) ||
         (t.key_hash ?? "").toLowerCase().includes(q) ||
+        (t.agent_id ?? "").toLowerCase().includes(q) ||
         t.input_policy.toLowerCase().includes(q) ||
         t.output_policy.toLowerCase().includes(q);
       if (!matchesSearch) return false;
@@ -447,19 +448,22 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
               <TableHeaderCell className="py-1 h-8">
                 <SortHeader label="Key Name" field="key_alias" />
               </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Agent ID" field="agent_id" />
+              </TableHeaderCell>
               <TableHeaderCell className="py-1 h-8">User Agent</TableHeaderCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={9} className="h-8 text-center text-gray-500">
+                <TableCell colSpan={10} className="h-8 text-center text-gray-500">
                   Loading tools…
                 </TableCell>
               </TableRow>
             ) : paginated.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="h-8 text-center text-gray-500">
+                <TableCell colSpan={10} className="h-8 text-center text-gray-500">
                   No tools discovered yet. Make a chat completion that returns tool_calls to start auto-discovery.
                 </TableCell>
               </TableRow>
@@ -518,6 +522,11 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <Tooltip title={tool.key_alias ?? "-"}>
                       <span className="max-w-[15ch] truncate block">{tool.key_alias ?? "-"}</span>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
+                    <Tooltip title={tool.agent_id ?? "-"}>
+                      <span className="font-mono max-w-[15ch] truncate block text-xs text-gray-500">{tool.agent_id ?? "-"}</span>
                     </Tooltip>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">

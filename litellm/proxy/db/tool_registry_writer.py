@@ -40,6 +40,7 @@ def _row_to_model(row: Union[dict, Any]) -> LiteLLM_ToolTableRow:
                 "team_id",
                 "key_alias",
                 "user_agent",
+                "agent_id",
                 "last_used_at",
                 "created_at",
                 "updated_at",
@@ -59,6 +60,7 @@ def _row_to_model(row: Union[dict, Any]) -> LiteLLM_ToolTableRow:
         team_id=row.get("team_id"),
         key_alias=row.get("key_alias"),
         user_agent=row.get("user_agent"),
+        agent_id=row.get("agent_id"),
         last_used_at=row.get("last_used_at"),
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
@@ -93,6 +95,7 @@ async def batch_upsert_tools(
             team_id = item.get("team_id")
             key_alias = item.get("key_alias")
             user_agent = item.get("user_agent")
+            agent_id = item.get("agent_id")
             await table.upsert(
                 where={"tool_name": tool_name},
                 data={
@@ -109,6 +112,7 @@ async def batch_upsert_tools(
                         "team_id": team_id,
                         "key_alias": key_alias,
                         "user_agent": user_agent,
+                        "agent_id": agent_id,
                         "last_used_at": now,
                     },
                     "update": {
