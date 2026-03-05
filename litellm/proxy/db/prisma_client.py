@@ -433,8 +433,6 @@ class PrismaManager:
                         )
                         return False
 
-                    prisma_dir = PrismaManager._get_prisma_dir()
-
                     return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
                 else:
                     # Use prisma db push with increased timeout

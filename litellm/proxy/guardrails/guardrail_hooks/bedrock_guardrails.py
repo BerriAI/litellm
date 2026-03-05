@@ -679,22 +679,37 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 content, max_chars=self.BEDROCK_GUARDRAIL_MAX_CHARS
             )
             responses: List[Tuple[BedrockGuardrailResponse, dict]] = []
-            for chunk in chunks:
-                chunk_request = copy.deepcopy(bedrock_request_data)
-                chunk_request["content"] = chunk
-                resp, json_resp = await self._make_single_bedrock_api_request(
-                    bedrock_request_data=chunk_request,
-                    credentials=credentials,
-                    aws_region_name=aws_region_name,
-                    api_key=api_key,
-                    request_data=request_data,
-                    start_time=start_time,
-                    event_type=event_type,
-                )
-                responses.append((resp, json_resp))
-                # Stop processing remaining chunks if this one was blocked
-                if self._should_raise_guardrail_blocked_exception(resp):
-                    break
+            try:
+                for chunk in chunks:
+                    chunk_request = copy.deepcopy(bedrock_request_data)
+                    chunk_request["content"] = chunk
+                    resp, json_resp = await self._make_single_bedrock_api_request(
+                        bedrock_request_data=chunk_request,
+                        credentials=credentials,
+                        aws_region_name=aws_region_name,
+                        api_key=api_key,
+                        request_data=request_data,
+                        start_time=start_time,
+                        event_type=event_type,
+                    )
+                    responses.append((resp, json_resp))
+                    # Stop processing remaining chunks if this one was blocked
+                    if self._should_raise_guardrail_blocked_exception(resp):
+                        break
+            except HTTPException:
+                # Merge and log accumulated responses from successful chunks before re-raising
+                if responses:
+                    bedrock_guardrail_response, merged_json = (
+                        self._merge_guardrail_responses(responses)
+                    )
+                    verbose_proxy_logger.warning(
+                        "Partial guardrail coverage: %d/%d chunks processed successfully. "
+                        "Accumulated assessments: %s",
+                        len(responses),
+                        len(list(chunks)),
+                        merged_json.get("assessments", []),
+                    )
+                raise
 
             bedrock_guardrail_response, merged_json = (
                 self._merge_guardrail_responses(responses)
