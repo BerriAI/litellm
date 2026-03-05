@@ -219,11 +219,14 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
-        # Allow per-request auth override (e.g. BYOK credential set via ContextVar)
+        # Allow per-request auth override (e.g. BYOK credential set via ContextVar).
+        # The ContextVar holds the full Authorization header value, including the
+        # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
+        # server.py based on the server's configured auth_type.
         effective_headers = dict(headers)
         override_auth = _request_auth_header.get()
         if override_auth:
-            effective_headers["Authorization"] = f"Bearer {override_auth}"
+            effective_headers["Authorization"] = override_auth
 
         # Build URL from base_url and path
         url = base_url + path

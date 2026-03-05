@@ -1128,6 +1128,10 @@ if MCP_AVAILABLE:
             await delete_user_credential(prisma_client, user_id, server_id)
         except Exception:
             pass  # Already deleted or didn't exist
+        from litellm.proxy._experimental.mcp_server.server import (
+            _invalidate_byok_cred_cache,
+        )
+        _invalidate_byok_cred_cache(user_id, server_id)
         return MCPUserCredentialResponse(server_id=server_id, has_credential=False)
 
     @router.put(

@@ -1743,7 +1743,18 @@ if MCP_AVAILABLE:
             verbose_logger.debug(f"Executing local registry tool: {name}")
             # For BYOK servers the credential must be injected via a ContextVar
             # because the tool function has headers baked into its closure.
-            _auth_token = _request_auth_header.set(mcp_auth_header)
+            # Pre-format the full Authorization header value using the server's
+            # configured auth_type so the generator doesn't need to know the prefix.
+            auth_header_value: Optional[str] = None
+            if mcp_auth_header:
+                server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
+                if server_auth_type == MCPAuth.api_key:
+                    auth_header_value = f"ApiKey {mcp_auth_header}"
+                elif server_auth_type == MCPAuth.basic:
+                    auth_header_value = f"Basic {mcp_auth_header}"
+                else:
+                    auth_header_value = f"Bearer {mcp_auth_header}"
+            _auth_token = _request_auth_header.set(auth_header_value)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)
             finally:
