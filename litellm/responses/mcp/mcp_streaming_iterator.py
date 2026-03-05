@@ -274,10 +274,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.finished = False
 
         # Event queues and generation flags
-        self.mcp_discovery_events: deque[
-            ResponsesAPIStreamingResponse
-        ] = deque(mcp_events)  # Pre-generated MCP discovery events
-        self.tool_execution_events: deque[ResponsesAPIStreamingResponse] = deque()
+        self.mcp_discovery_events: "deque[ResponsesAPIStreamingResponse]" = deque(
+            mcp_events
+        )  # Pre-generated MCP discovery events
+        self.tool_execution_events: "deque[ResponsesAPIStreamingResponse]" = deque()
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = self.mcp_discovery_events  # Shared reference for backward compat
         self.tool_server_map = tool_server_map
