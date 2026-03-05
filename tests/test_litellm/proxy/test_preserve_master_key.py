@@ -30,10 +30,12 @@ async def test_master_key_preserved_when_env_var_absent():
         ), patch(
             "litellm.proxy.proxy_server._license_check"
         ):
-            # Run only the master_key portion of startup by calling and
-            # immediately stopping (the rest of startup needs DB, etc.)
+            # proxy_startup_event is an @asynccontextmanager, so we must
+            # enter it with `async with` — a bare `await` would only create
+            # the generator object without executing the function body.
             try:
-                await proxy_server.proxy_startup_event(app=AsyncMock())
+                async with proxy_server.proxy_startup_event(app=AsyncMock()):
+                    pass
             except Exception:
                 # Startup will fail on DB/router setup — we only care about
                 # the master_key guard at the top of the function.

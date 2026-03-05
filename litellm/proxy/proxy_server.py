@@ -777,7 +777,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     # unconditionally assigning None here would discard that value when the
     # LITELLM_MASTER_KEY env var is absent (e.g. programmatic startup, tests).
     _env_master_key = get_secret_str("LITELLM_MASTER_KEY")
-    if _env_master_key:
+    if _env_master_key is not None:
         master_key = _env_master_key
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
