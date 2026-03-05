@@ -1127,8 +1127,9 @@ def completion_cost(  # noqa: PLR0915
                         "output_cost_per_token": _output_cost if _output_cost is not None else 0.0,
                     }
                 # Also extract custom_cost_per_second if available
+                # Prefer input_cost_per_second; fall back to output_cost_per_second
                 if custom_cost_per_second is None:
-                    _cost_per_second = _model_info.get("input_cost_per_second")
+                    _cost_per_second = _model_info.get("input_cost_per_second") or _model_info.get("output_cost_per_second")
                     if _cost_per_second is not None:
                         custom_cost_per_second = _cost_per_second
 
