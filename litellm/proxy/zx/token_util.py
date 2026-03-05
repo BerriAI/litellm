@@ -92,7 +92,7 @@ async def create_or_get_user_key(
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     key_alias: Optional[str] = None,
     key_metadata: Optional[dict] = {},
-) -> tuple[bool, str, Optional[str]]:
+) -> tuple[bool, str]:
     if dept_id is None or dept_id.strip() == "":
         dept_id = "none_dept_id"
     if user_api_key_dict is None:
@@ -109,13 +109,13 @@ async def create_or_get_user_key(
         ),
         page=1,
         size=25,
-        key_alias=None,
+        key_alias=key_alias,
         user_api_key_dict=user_api_key_dict,
         user_id=user_id,
         team_id=None,
         organization_id=None,
         key_hash=None,
-        return_full_object=True,
+        return_full_object=False,
         include_team_keys=True,
         include_created_by_keys=True,
         sort_by=None,
@@ -123,66 +123,16 @@ async def create_or_get_user_key(
         expand=None,
         status=None,
     )
+
     key_total_count = keys.get("total_count", 0) or 0
-    if key_total_count > 0:
-        key_infos: list[UserAPIKeyAuth] = keys.get("keys", [])  # type: ignore
-        # 按 key_alias 过滤
-        matching_keys = [k for k in key_infos if k.key_alias == key_alias]
-
-        if len(matching_keys) > 1:
-            # 如果有 device_id，按 metadata 进一步过滤
-            if key_metadata and "device_id" in key_metadata:
-                device_id = key_metadata["device_id"]
-                device_matching_keys = [
-                    k
-                    for k in matching_keys
-                    if k.metadata and k.metadata.get("device_id") == device_id
-                ]
-                if device_matching_keys:
-                    matching_keys = device_matching_keys
-
-            if len(matching_keys) > 1:
-                raise RuntimeError(
-                    f"key_alias [{key_alias}] 有多个匹配的 key，无法确定: {len(matching_keys)}"
-                )
-
-        if len(matching_keys) == 1:
-            key_info = matching_keys[0]
-            if key_info and key_info.token:
-                # 如果新 metadata 中有 device_id，需要合并到旧 key 的 metadata 中
-                if key_metadata and "device_id" in key_metadata:
-                    try:
-                        # 保留旧 metadata 中的所有字段，只补充新的 device_id 和 device_name
-                        merged_metadata = (
-                            key_info.metadata.copy() if key_info.metadata else {}
-                        )
-                        merged_metadata["device_id"] = key_metadata.get("device_id")
-                        merged_metadata["device_name"] = key_metadata.get(
-                            "device_name", "unknown"
-                        )
-
-                        # 更新旧 key 的 metadata
-                        update_request = UpdateKeyRequest(
-                            key=key_info.token, metadata=merged_metadata
-                        )
-                        await key_management_endpoints.update_key_fn(
-                            request=Request({"type": "http", "query_string": ""}),
-                            data=update_request,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_changed_by=provider,
-                        )
-                        logger.info(
-                            f"user[{user_id}:{org_email}] key[{key_info.token}] metadata merged with device_id"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"user[{user_id}:{org_email}] failed to merge key metadata: {e}"
-                        )
-                        # 不阻塞返回，继续返回现有 key
-
-                # 计算旧 key 的哈希值，用于关联客户端设备与旧 key
-                key_hash = hashlib.sha256(key_info.token.encode()).hexdigest()
-                return (False, key_info.token, key_hash)
+    if key_total_count > 1:
+        raise RuntimeError(
+            f"user [{org_email}] 的 key[{key_alias}] 有多个匹配的 key，无法确定: {key_total_count}"
+        )
+    if key_total_count == 1:
+        key_token = keys.get('keys', [])[0]
+        if key_token and isinstance(key_token, str):
+            return (False, key_token)
 
     teams = await team_endpoints.list_team(
         Request(
@@ -271,5 +221,4 @@ async def create_or_get_user_key(
     )
     logger.info(f"user[{user_id}:{org_email}] key[{key_alias}] create start")
 
-    # 新创建的 key 无 key_hash（仅旧 key 需要计算 hash 用于关联）
-    return (True, key_res.key, None)
+    return (True, key_res.key)

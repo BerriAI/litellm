@@ -204,22 +204,23 @@ async def cli_get_key(
     device_id = store.data.get("key_metadata", {}).get("device_id")
     device_name = store.data.get("key_metadata", {}).get("device_name", "unknown")
 
-    # 构建 key_alias：优先使用 device_id，如果不存在则使用旧逻辑
     key_alias = None
-    if device_id:
-        # 新的设备级 key_alias 规则
-        key_alias = f"{org_email}--{device_id}"
-    elif type is not None and type.strip().startswith("assistant-"):
-        # 旧的逻辑：基于 type 构建 key_alias
+    if type is not None and type.strip().startswith("assistant-"):
         key_alias = f"{org_email.split('@')[0]}--{type.strip()}"
+    if key_alias is None:
+        key_alias = org_email
+    if key_alias and device_id:
+        # 添加设备级 key_alias 规则
+        key_alias = f"{key_alias}--{device_id}"
 
     # 准备 key_metadata，包含 device_id 和 device_name
     key_metadata = store.data.get("key_metadata", {}).copy()
+    key_metadata["user_email"] = org_email
     if device_id:
         key_metadata["device_id"] = device_id
         key_metadata["device_name"] = device_name
 
-    (created, key_or_key_id, key_hash) = await create_or_get_user_key(
+    (created, key_or_key_id) = await create_or_get_user_key(
         "ai_developer",
         user_id,
         user_name,
@@ -241,14 +242,6 @@ async def cli_get_key(
         )
         if key_res is not None:
             key = key_res.key
-
-        # 设置 key_hash 到 store.data，用于关联客户端设备与旧 key
-        if key_hash:
-            store.data["key_hash"] = key_hash
-            logger.info(f"user[{user_id}] key_hash set for legacy key association")
-
-        # 注：旧 key 的 metadata 已在 create_or_get_user_key 中合并完成
-        # 如果需要额外的元数据处理，可在此扩展
 
     return {"key": key}
 
