@@ -11058,6 +11058,7 @@ async def get_image():
 
     cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
     cache_path = os.path.join(cache_dir, "cached_logo.jpg")
+    cache_type_path = os.path.join(cache_dir, "cached_logo_type.txt")
 
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
@@ -11066,6 +11067,17 @@ async def get_image():
         media_type, _ = mimetypes.guess_type(path)
         if media_type and media_type.startswith("image/"):
             return media_type
+        return "image/jpeg"
+
+    def _read_cached_media_type() -> str:
+        if os.path.exists(cache_type_path):
+            try:
+                with open(cache_type_path) as f:
+                    cached_type = f.read().strip()
+                if cached_type.startswith("image/"):
+                    return cached_type
+            except OSError:
+                pass
         return "image/jpeg"
 
     # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
@@ -11080,7 +11092,7 @@ async def get_image():
 
     # [OPTIMIZATION] For HTTP URLs and default logo, check if the cached image exists
     if os.path.exists(cache_path):
-        return FileResponse(cache_path, media_type="image/jpeg")
+        return FileResponse(cache_path, media_type=_read_cached_media_type())
 
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
@@ -11099,8 +11111,22 @@ async def get_image():
                 with open(cache_path, "wb") as f:
                     f.write(response.content)
 
+                # Persist the upstream Content-Type so it survives restarts
+                content_type = (
+                    response.headers.get("content-type", "image/jpeg")
+                    .split(";")[0]
+                    .strip()
+                )
+                if not content_type.startswith("image/"):
+                    content_type = "image/jpeg"
+                try:
+                    with open(cache_type_path, "w") as f:
+                        f.write(content_type)
+                except OSError:
+                    pass
+
                 # Return the cached image as a FileResponse
-                return FileResponse(cache_path, media_type="image/jpeg")
+                return FileResponse(cache_path, media_type=content_type)
             else:
                 # Handle the case when the image cannot be downloaded
                 return FileResponse(default_logo, media_type="image/jpeg")
