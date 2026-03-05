@@ -42,6 +42,7 @@ def test_all_handler_implementations_accept_request_data():
         "litellm.llms.openai.completion.guardrail_translation.handler",
     ]
 
+    validated_count = 0
     for module_path in handlers:
         try:
             mod = importlib.import_module(module_path)
@@ -64,3 +65,8 @@ def test_all_handler_implementations_accept_request_data():
                 f"{module_path}.{name}.process_output_response() "
                 f"must accept 'request_data' to match BaseTranslation."
             )
+            validated_count += 1
+
+    assert validated_count > 0, (
+        "No handler classes were validated — all imports failed or no matching classes found."
+    )
