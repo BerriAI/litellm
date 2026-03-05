@@ -716,10 +716,13 @@ async def user_info(
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     """
-    Admin UI Endpoint - Returns All Teams and Keys when Proxy Admin is querying
+    Admin UI Endpoint - Returns teams and a limited set of recent keys when
+    Proxy Admin is querying.
 
     - get all teams in LiteLLM_TeamTable
-    - get all keys in LiteLLM_VerificationToken table
+    - get *recent* keys in LiteLLM_VerificationToken table (capped to avoid
+      OOM / timeout with large key counts — the UI uses the paginated
+      /key/list endpoint for full key browsing)
 
     Why separate helper for proxy admin ?
         - To get Faster UI load times, get all teams and virtual keys in 1 query
@@ -727,17 +730,26 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
 
     from litellm.proxy.proxy_server import prisma_client
 
+    # Limit keys returned to prevent OOM with large key counts (e.g. 380k+).
+    # The Virtual Keys UI uses the paginated /key/list endpoint for browsing.
+    _ADMIN_KEY_LIMIT = 100
+
     sql_query = """
         SELECT 
             (SELECT json_agg(t.*) FROM "LiteLLM_TeamTable" t) as teams,
-            (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id != 'litellm-dashboard' OR k.team_id IS NULL) as keys
+            (SELECT json_agg(sub.*) FROM (
+                SELECT k.* FROM "LiteLLM_VerificationToken" k
+                WHERE k.team_id != 'litellm-dashboard' OR k.team_id IS NULL
+                ORDER BY k.created_at DESC
+                LIMIT $1
+            ) sub) as keys
     """
     if prisma_client is None:
         raise Exception(
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
-    results = await prisma_client.db.query_raw(sql_query)
+    results = await prisma_client.db.query_raw(sql_query, _ADMIN_KEY_LIMIT)
 
     verbose_proxy_logger.debug("results_keys: %s", results)
 
@@ -754,11 +766,11 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
     _teams_in_db.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
-    
+
     # Get admin's own user_id and user_info
     admin_user_id = user_api_key_dict.user_id
     admin_user_info = None
-    
+
     if admin_user_id is not None:
         admin_user_info = await prisma_client.get_data(user_id=admin_user_id)
         if admin_user_info is not None:
@@ -767,7 +779,7 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
                 if isinstance(admin_user_info, BaseModel)
                 else admin_user_info
             )
-    
+
     return UserInfoResponse(
         user_id=admin_user_id,
         user_info=admin_user_info,
