@@ -255,8 +255,9 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
     assert mock_prisma_client.get_data.await_count == 1
 
 
-def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
+def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values, monkeypatch):
     """Test generating CLI JWT token with default 24-hour expiration"""
+    monkeypatch.setattr(litellm, "max_cli_session_budget", None)
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
@@ -287,6 +288,8 @@ def test_get_cli_jwt_auth_token_custom_expiration(
 
     from litellm import constants
     from litellm.proxy.auth import auth_checks
+
+    monkeypatch.setattr(litellm, "max_cli_session_budget", None)
 
     # Set custom expiration to 48 hours
     monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
