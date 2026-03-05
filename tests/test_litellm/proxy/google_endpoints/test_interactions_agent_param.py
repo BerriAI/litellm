@@ -52,7 +52,7 @@ class TestInteractionsAgentParameter:
     @pytest.mark.parametrize(
         "request_body, expected_model",
         [
-            pytest.param({"agent": "deep-research-pro-preview-12-2025", "input": "Research", "background": True}, "deep-research-pro-preview-12-2025", id="agent-only"),
+            pytest.param({"agent": "deep-research-pro-preview-12-2025", "input": "Research", "background": True}, None, id="agent-only"),
             pytest.param({"model": "gemini/gemini-2.5-flash", "input": "Hello"}, "gemini/gemini-2.5-flash", id="model-only"),
             pytest.param({"input": "Test"}, None, id="neither"),
         ],
@@ -67,9 +67,12 @@ class TestInteractionsAgentParameter:
             response = client.post("/v1beta/interactions", json=request_body, headers={"Authorization": "Bearer sk-test"})
             assert response.status_code == 200
             assert mock.call_args.kwargs["model"] == expected_model
+            # When agent is provided, verify it's preserved in the forwarded data
+            if "agent" in request_body:
+                assert request_body["agent"] in str(mock.call_args)
 
     def test_both_agent_and_model_agent_takes_precedence(self):
-        """When both agent and model are provided, agent wins (non-breaking)."""
+        """When both agent and model are provided, agent wins — model is dropped."""
         client = _build_test_client()
         with _patch_endpoint_dependencies(), patch(
             "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
@@ -82,4 +85,7 @@ class TestInteractionsAgentParameter:
                 headers={"Authorization": "Bearer sk-test"},
             )
             assert response.status_code == 200
-            assert mock.call_args.kwargs["model"] == "deep-research-pro-preview-12-2025"
+            # model is dropped when agent is present
+            assert mock.call_args.kwargs["model"] is None
+            # agent must be preserved in forwarded data
+            assert "deep-research-pro-preview-12-2025" in str(mock.call_args)
