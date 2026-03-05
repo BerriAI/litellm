@@ -6621,3 +6621,88 @@ async def test_mcp_validation_key_update_rejects_disallowed_server(monkeypatch):
     exc = exc_info.value
     # The 403 HTTPException is re-raised as a ProxyException
     assert "403" in str(exc) or (hasattr(exc, "code") and str(exc.code) == "403")
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_access_groups_for_user_non_admin():
+    """Non-admin user only gets access groups from their teams, not all groups."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        LiteLLM_TeamTableCachedObj,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        get_allowed_mcp_access_groups_for_user,
+    )
+
+    user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-user",
+        user_id="u1",
+        team_id="team-1",
+    )
+
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-1",
+            mcp_access_groups=["group-a", "group-b"],
+        ),
+    )
+
+    mock_prisma = MagicMock()
+    mock_cache = MagicMock()
+
+    async def mock_get_team(**kwargs):
+        return team_obj
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.ui_session_utils.build_effective_auth_contexts",
+            AsyncMock(return_value=[user]),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            mock_get_team,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            mock_cache,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            MagicMock(),
+        ),
+    ):
+        result = await get_allowed_mcp_access_groups_for_user(
+            user_api_key_dict=user,
+            prisma_client=mock_prisma,
+        )
+
+    assert result == {"group-a", "group-b"}
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_access_groups_for_user_admin_returns_none():
+    """Admin users get None (meaning all groups are allowed) from the helper."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        get_allowed_mcp_access_groups_for_user,
+    )
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin",
+        user_id="admin-1",
+    )
+
+    result = await get_allowed_mcp_access_groups_for_user(
+        user_api_key_dict=admin,
+        prisma_client=MagicMock(),
+    )
+
+    assert result is None

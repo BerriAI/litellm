@@ -5,7 +5,7 @@ organizations, teams, and keys.
 
 import json
 from litellm._uuid import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from fastapi import HTTPException
 
@@ -13,6 +13,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 from litellm.proxy.utils import PrismaClient
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+if TYPE_CHECKING:
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
         
 
 
@@ -181,6 +184,60 @@ async def _set_object_permission(
     data_json["object_permission_id"] = created_permission.object_permission_id
     data_json.pop("object_permission")
     return data_json
+
+
+async def get_allowed_mcp_access_groups_for_user(
+    user_api_key_dict: "UserAPIKeyAuth",
+    prisma_client: Optional[PrismaClient],
+) -> Optional[Set[str]]:
+    """
+    Return the set of MCP access group IDs visible to the user (via their teams or key).
+    Returns None for admins, meaning they can see all access groups.
+
+    Used to filter the /v1/mcp/access_groups response for non-admin users so the
+    UI only shows access groups the user can actually assign.
+    """
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+    if _user_has_admin_view(user_api_key_dict):
+        return None  # Admins see everything
+
+    try:
+        from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+            build_effective_auth_contexts,
+        )
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+    except ImportError:
+        return set()
+
+    if prisma_client is None or user_api_key_cache is None:
+        return set()
+
+    allowed_groups: Set[str] = set()
+
+    auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+    for auth_context in auth_contexts:
+        if auth_context.team_id:
+            try:
+                team_obj = await get_team_object(
+                    team_id=auth_context.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except HTTPException:
+                continue
+            if team_obj and team_obj.object_permission:
+                groups = team_obj.object_permission.mcp_access_groups or []
+                allowed_groups.update(groups)
+
+    if user_api_key_dict.object_permission:
+        key_groups = user_api_key_dict.object_permission.mcp_access_groups or []
+        allowed_groups.update(key_groups)
+
+    return allowed_groups
 
 
 async def validate_key_mcp_servers_against_team(
