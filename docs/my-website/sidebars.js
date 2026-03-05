@@ -793,6 +793,7 @@ const sidebars = {
             "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
             "providers/bedrock_vector_store",
+            "providers/bedrock_mantle",
           ]
         },
         "providers/litellm_proxy",
