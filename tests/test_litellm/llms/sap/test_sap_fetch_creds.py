@@ -32,10 +32,11 @@ mock_sap_vcap_service_key_dict = {
     }]
 }
 def _prep_env(monkeypatch):
-    for var in ("AICORE_CLIENT_ID", "AICORE_CLIENT_SECRET", "AICORE_AUTH_URL",
+    for var in ("AICORE_CLIENT_ID", "AICORE_CLIENT_SECRET", "AICORE_AUTH_URL", "AICORE_RESOURCE_GROUP",
                 "AICORE_BASE_URL", "AICORE_CERT_URL", "AICORE_SERVICE_KEY", "VCAP_SERVICES"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
+    monkeypatch.setattr('litellm.sap_service_key', None)
 
 def test_sap_fetch_creds_from_env_service_key(monkeypatch):
     _prep_env(monkeypatch)

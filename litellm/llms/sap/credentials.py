@@ -167,13 +167,10 @@ def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
 def _env_name(name: str) -> str:
     return f"AICORE_{name.upper()}"
 
-def extract_credentials(source: Source, exclude: Optional[List[str]] = None) -> Dict[str, str]:
+def extract_credentials(source: Source) -> Dict[str, str]:
     """Extract all credentials from a source."""
-    exclude = exclude or []
     credentials = {}
     for cv in CREDENTIAL_VALUES:
-        if cv.name in exclude:
-            continue
         value = source.get(cv)
         if value is not None:
             credentials[cv.name] = cv.transform_fn(value) if cv.transform_fn else value
