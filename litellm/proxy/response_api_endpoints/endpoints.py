@@ -417,7 +417,6 @@ async def cursor_chat_completions(
 )
 async def count_response_input_tokens(
     request: Request,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Count input tokens for OpenAI Responses API format.

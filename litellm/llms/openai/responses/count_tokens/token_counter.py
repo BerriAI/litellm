@@ -68,6 +68,10 @@ class OpenAITokenCounter(BaseTokenCounter):
         if instructions is None and system is not None:
             instructions = system if isinstance(system, str) else str(system)
 
+        # If no input items were produced (e.g., system-only messages), fall back to local counting
+        if not input_items:
+            return None
+
         try:
             result = await openai_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,

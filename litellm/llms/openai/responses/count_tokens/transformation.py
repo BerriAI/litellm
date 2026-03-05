@@ -75,12 +75,15 @@ class OpenAICountTokensConfig:
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                transformed.append({
+                item: Dict[str, Any] = {
                     "type": "function",
                     "name": func.get("name", ""),
                     "description": func.get("description", ""),
                     "parameters": func.get("parameters", {}),
-                })
+                }
+                if "strict" in func:
+                    item["strict"] = func["strict"]
+                transformed.append(item)
             else:
                 # Pass through non-function tools (e.g., web_search, file_search)
                 transformed.append(tool)
