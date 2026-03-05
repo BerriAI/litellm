@@ -77,7 +77,37 @@ def test_embedding_cache_merge_preserves_global_indices_on_miss_merge():
     assert response.data[0].index == 0
     assert response.data[1].index == 1
 
-    # Also verify behavior when the API response data contains dict items
+    # Also verify behavior when the API response data contains dict items.
+    # Create a fresh caching_handler_response to avoid reusing mutated state.
+    (
+        final_embedding_cached_response2,
+        embedding_all_elements_cache_hit2,
+    ) = llm_caching_handler._process_async_embedding_cached_response(
+        final_embedding_cached_response=None,
+        cached_result=[
+            {
+                "embedding": [0.1, 0.2],
+                "model": "text-embedding-3-small",
+            },
+            None,
+        ],
+        kwargs={
+            "model": "text-embedding-3-small",
+            "input": ["cached-input", "new-input"],
+        },
+        logging_obj=mock_logging_obj,
+        start_time=datetime.now(),
+        model="text-embedding-3-small",
+    )
+
+    caching_handler_response2 = MagicMock()
+    caching_handler_response2.final_embedding_cached_response = (
+        final_embedding_cached_response2
+    )
+    caching_handler_response2.embedding_all_elements_cache_hit = (
+        embedding_all_elements_cache_hit2
+    )
+
     dict_api_response = MagicMock()
     dict_api_response.model = "text-embedding-3-small"
     dict_api_response.usage = None
@@ -91,7 +121,7 @@ def test_embedding_cache_merge_preserves_global_indices_on_miss_merge():
 
     response_with_dicts = (
         llm_caching_handler._combine_cached_embedding_response_with_api_result(
-            _caching_handler_response=caching_handler_response,
+            _caching_handler_response=caching_handler_response2,
             embedding_response=dict_api_response,
             start_time=datetime.now(),
             end_time=datetime.now(),
