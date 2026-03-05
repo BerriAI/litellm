@@ -582,9 +582,6 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     if "budget_duration" in data_json:
         data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
-    if "initial_budget_reset_at" in data_json:
-        data_json["budget_reset_at"] = data_json.pop("initial_budget_reset_at", None)
-
     if user_api_key_dict.user_id is not None:
         data_json["created_by"] = user_api_key_dict.user_id
         data_json["updated_by"] = user_api_key_dict.user_id
@@ -2091,7 +2088,10 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             if _reset_candidate.tzinfo is None:
                 _reset_candidate = _reset_candidate.replace(tzinfo=timezone.utc)
             reset_at = _reset_candidate
-        except Exception:
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to parse budget_reset_at value: {budget_reset_at}. Error: {e}. Falling back to budget_duration-based computation."
+            )
             if budget_duration is None: # fallback to one-time budget
                 reset_at = None
             else:

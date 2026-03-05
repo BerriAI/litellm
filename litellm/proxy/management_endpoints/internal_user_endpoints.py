@@ -780,7 +780,10 @@ def _update_internal_user_params(
             # ensure timezone aware
             if _reset_at.tzinfo is None:
                 _reset_at = _reset_at.replace(tzinfo=timezone.utc)
-        except Exception:
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to parse initial_budget_reset_at value: {_reset_at}. Error: {e}. Falling back to None."
+            )
             _reset_at = None
         non_default_values["budget_reset_at"] = _reset_at
     elif "initial_budget_reset_at" in non_default_values:
