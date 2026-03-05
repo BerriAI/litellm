@@ -241,6 +241,7 @@ def create_skill(
 async def alist_skills(
     limit: Optional[int] = None,
     page: Optional[str] = None,
+    before: Optional[str] = None,
     source: Optional[str] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
@@ -254,6 +255,7 @@ async def alist_skills(
     Args:
         limit: Number of results to return per page (max 100, default 20)
         page: Pagination token for fetching a specific page of results
+        before: Cursor for reverse pagination (OpenAI only)
         source: Filter skills by source ('custom' or 'anthropic')
         extra_headers: Additional headers for the request
         extra_query: Additional query parameters
@@ -273,6 +275,7 @@ async def alist_skills(
             list_skills,
             limit=limit,
             page=page,
+            before=before,
             source=source,
             extra_headers=extra_headers,
             extra_query=extra_query,
@@ -304,6 +307,7 @@ async def alist_skills(
 def list_skills(
     limit: Optional[int] = None,
     page: Optional[str] = None,
+    before: Optional[str] = None,
     source: Optional[str] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
@@ -317,6 +321,7 @@ def list_skills(
     Args:
         limit: Number of results to return per page (max 100, default 20)
         page: Pagination token for fetching a specific page of results
+        before: Cursor for reverse pagination (OpenAI only)
         source: Filter skills by source ('custom' or 'anthropic')
         extra_headers: Additional headers for the request
         extra_query: Additional query parameters
@@ -366,6 +371,8 @@ def list_skills(
             list_params["limit"] = limit
         if page is not None:
             list_params["page"] = page
+        if before is not None:
+            list_params["before"] = before
         if source is not None:
             list_params["source"] = source
 

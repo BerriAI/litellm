@@ -505,7 +505,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
 
         return SkillVersion(
             id=data["id"],
-            skill_id=data.get("skill_id") or data.get("id", ""),
+            skill_id=data.get("skill_id", ""),
             version=str(data["version"]) if data.get("version") is not None else None,
             created_at=created_at_str,
             display_title=data.get("name"),
