@@ -15,6 +15,7 @@ export const mcpServerColumns = (
   {
     accessorKey: "server_id",
     header: "Server ID",
+    enableSorting: true,
     cell: ({ row }) => (
       <button
         onClick={() => onView(row.original.server_id)}
@@ -27,10 +28,12 @@ export const mcpServerColumns = (
   {
     accessorKey: "server_name",
     header: "Name",
+    enableSorting: true,
   },
   {
     accessorKey: "alias",
     header: "Alias",
+    enableSorting: true,
   },
   {
     id: "url",
@@ -47,6 +50,7 @@ export const mcpServerColumns = (
   {
     accessorKey: "transport",
     header: "Transport",
+    enableSorting: true,
     cell: ({ row }) => {
       const transport = row.original.transport || "http";
       const specPath = row.original.spec_path;
@@ -58,6 +62,7 @@ export const mcpServerColumns = (
   {
     accessorKey: "auth_type",
     header: "Auth Type",
+    enableSorting: true,
     cell: ({ getValue }) => <span>{(getValue() as string) || "none"}</span>,
   },
   {
@@ -166,6 +171,7 @@ export const mcpServerColumns = (
   {
     header: "Created At",
     accessorKey: "created_at",
+    enableSorting: true,
     sortingFn: "datetime",
     cell: ({ row }) => {
       const server = row.original;
@@ -177,6 +183,7 @@ export const mcpServerColumns = (
   {
     header: "Updated At",
     accessorKey: "updated_at",
+    enableSorting: true,
     sortingFn: "datetime",
     cell: ({ row }) => {
       const server = row.original;
