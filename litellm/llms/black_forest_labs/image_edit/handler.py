@@ -166,7 +166,6 @@ class BlackForestLabsImageEdit:
             initial_response=response,
             headers=headers,
             sync_client=sync_client,
-            timeout=timeout,
         )
 
         # Transform response
@@ -270,7 +269,6 @@ class BlackForestLabsImageEdit:
             initial_response=response,
             headers=headers,
             async_client=async_client,
-            timeout=timeout,
         )
 
         # Transform response
@@ -343,7 +341,6 @@ class BlackForestLabsImageEdit:
             response = sync_client.get(
                 url=polling_url,
                 headers=polling_headers,
-                timeout=timeout,
             )
 
             if response.status_code != 200:
@@ -424,7 +421,6 @@ class BlackForestLabsImageEdit:
             response = await async_client.get(
                 url=polling_url,
                 headers=polling_headers,
-                timeout=timeout,
             )
 
             if response.status_code != 200:
