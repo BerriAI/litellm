@@ -1084,6 +1084,30 @@ def completion_cost(  # noqa: PLR0915
             elif isinstance(cost_per_token_usage_object, dict):
                 service_tier = cost_per_token_usage_object.get("service_tier")
 
+        # Extract custom_cost_per_token from litellm_logging_obj when custom_pricing=True
+        # This enables cost calculation for custom/HuggingFace providers with per-deployment pricing
+        if (
+            custom_pricing is True
+            and custom_cost_per_token is None
+            and litellm_logging_obj is not None
+        ):
+            _litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
+            if _litellm_params is not None:
+                _metadata = _litellm_params.get("metadata", {}) or {}
+                _model_info = _metadata.get("model_info", {}) or {}
+                _input_cost = _model_info.get("input_cost_per_token")
+                _output_cost = _model_info.get("output_cost_per_token")
+                if _input_cost is not None or _output_cost is not None:
+                    custom_cost_per_token = {
+                        "input_cost_per_token": _input_cost if _input_cost is not None else 0.0,
+                        "output_cost_per_token": _output_cost if _output_cost is not None else 0.0,
+                    }
+                # Also extract custom_cost_per_second if available
+                if custom_cost_per_second is None:
+                    _cost_per_second = _model_info.get("input_cost_per_second")
+                    if _cost_per_second is not None:
+                        custom_cost_per_second = _cost_per_second
+
         selected_model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
