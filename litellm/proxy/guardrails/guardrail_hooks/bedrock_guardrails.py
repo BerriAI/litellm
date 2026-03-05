@@ -660,14 +660,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # --- chunking logic ---
         content = bedrock_request_data.get("content", [])
-        total_chars = 0
-        for item in content:
-            text_obj = item.get("text") or {}
-            if isinstance(text_obj, dict):
-                text_val = text_obj.get("text") or ""
-            else:
-                text_val = ""
-            total_chars += len(text_val)
+        total_chars = sum(
+            len(BedrockGuardrail._extract_content_text(item)) for item in content
+        )
 
         if total_chars > self.BEDROCK_GUARDRAIL_MAX_CHARS:
             verbose_proxy_logger.info(

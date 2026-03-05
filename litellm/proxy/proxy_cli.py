@@ -848,7 +848,13 @@ def run_server(  # noqa: PLR0915
                 # Ensure the Prisma Python client is generated. Docker
                 # images run 'prisma generate' at build time, but custom
                 # (non-Docker) installs may not have done so yet.
-                PrismaManager.ensure_client_generated()
+                try:
+                    PrismaManager.ensure_client_generated()
+                except RuntimeError:
+                    verbose_proxy_logger.warning(
+                        "Prisma client auto-generation failed — "
+                        "setup_database will retry schema push"
+                    )
 
                 if (
                     should_update_prisma_schema(
