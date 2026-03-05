@@ -1189,6 +1189,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
+        # --- PII unmasking path (output_parse_pii=True, response phase) ---
+        # When output_parse_pii is enabled, the LLM's response text contains PII
+        # tokens (e.g. "<PERSON>_a1b2c3d4e5f6") that must be replaced with the
+        # original values before the response is returned to the caller.
+        # pii_tokens is a dict {token: original_text} built during the input
+        # (masking) phase and forwarded via request_data by the unified guardrail.
+        if input_type == "response" and self.output_parse_pii:
+            pii_tokens: Dict[str, str] = (request_data or {}).get("pii_tokens", {})
+            texts = inputs.get("texts", [])
+            inputs["texts"] = [self._unmask_pii_text(t, pii_tokens) for t in texts]
+            return inputs
+
         texts = inputs.get("texts", [])
 
         new_texts = []
