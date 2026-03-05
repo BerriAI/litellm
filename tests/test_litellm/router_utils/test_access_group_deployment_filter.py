@@ -352,11 +352,13 @@ class TestFilterDeploymentsByAccessGroups:
         result_ids = [d["model_info"]["id"] for d in result]
         assert result_ids == ["deployment-multi"]
 
-    def test_safety_net_returns_original_if_all_filtered(self):
+    def test_returns_empty_list_when_no_matching_deployments(self):
         """
-        If filtering would remove ALL deployments, return original list
-        as a safety net to not break routing.
+        If filtering removes ALL deployments (key's access group doesn't match
+        any deployment's access group), return empty list so downstream routing
+        raises "no healthy deployments" — not silently bypass access control.
         """
+        # Only a prod_models deployment exists
         deployments = [
             {
                 "model_info": {
@@ -366,39 +368,22 @@ class TestFilterDeploymentsByAccessGroups:
                 "model_name": "gpt-4o",
             },
         ]
-        # Key has access to "nonexistent_group" which isn't on any deployment,
-        # but also has "other_group" which IS a known group on some deployment.
-        # Actually, for the safety net to trigger, the key must match an access group
-        # that exists on OTHER deployments, but this specific set has no overlap.
-        # Let's set up: key has dev_models, but only prod_models deployment exists.
+        # Key has access only to dev_models — no overlap with prod_models
         request_kwargs = {
             "metadata": {
                 "user_api_key_auth": _make_auth(access_group_ids=["dev_models"])
             }
         }
-        # First, add a dummy deployment so dev_models is a known group
-        deployments_with_dev_known = deployments + [
-            {
-                "model_info": {
-                    "id": "deployment-dev-other-model",
-                    "access_groups": ["dev_models"],
-                },
-                "model_name": "gpt-3.5-turbo",  # different model
-            },
-        ]
-        # When filtering gpt-4o deployments, only deployment-prod has that model,
-        # but it's in prod_models, not dev_models. The dev deployment is for gpt-3.5.
-        # However, the function operates on the already-filtered-by-model-name list.
-        # So let's just pass the prod-only deployment:
+        # dev_models is a known group (it's in key_access_groups via access_group_ids),
+        # but no deployment belongs to it → filtered list is empty
         result = filter_deployments_by_access_groups(
             model="gpt-4o",
             healthy_deployments=deployments,
             request_kwargs=request_kwargs,
         )
-        # dev_models isn't on any deployment in the list, so key_access_groups
-        # won't intersect with deployment groups → function returns original
-        # (the "no overlap" path returns early)
-        assert len(result) == 1
+        # Must return empty list — not the original list — to let routing fail
+        # with "no healthy deployments" and surface the misconfiguration
+        assert result == []
 
     def test_mixed_models_and_access_group_ids(self):
         """

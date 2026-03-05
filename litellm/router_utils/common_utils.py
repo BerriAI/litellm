@@ -74,6 +74,8 @@ def filter_team_based_models(
         for deployment in healthy_deployments
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
+
+
 def filter_deployments_by_access_groups(
     model: str,
     healthy_deployments: Union[List[Dict], Dict],
@@ -93,7 +95,7 @@ def filter_deployments_by_access_groups(
     - Keys with direct model access (model name in key's models list) → no filtering
     - Keys with wildcard access ("*" or "all-proxy-models") → no filtering
     - Deployments without access_groups → always kept (unrestricted)
-    - If filtering removes all deployments → returns original list (safety net)
+    - If filtering removes all deployments → returns empty list (routing fails with "no healthy deployments")
     """
     if request_kwargs is None:
         return healthy_deployments
@@ -166,18 +168,8 @@ def filter_deployments_by_access_groups(
             filtered.append(deployment)
         # else: deployment is in a different access group — skip
 
-    # Safety net: if filtering removed ALL deployments, return original list
-    # to avoid breaking routing entirely
-    if not filtered:
-        verbose_logger.warning(
-            "filter_deployments_by_access_groups: filtering removed all deployments, "
-            "returning original list. model=%s, key_access_groups=%s",
-            model,
-            key_access_groups,
-        )
-        return healthy_deployments
-
     return filtered
+
 
 def _deployment_supports_web_search(deployment: Dict) -> bool:
     """
@@ -216,7 +208,7 @@ def filter_web_search_deployments(
     is_web_search_request = False
     tools = request_kwargs.get("tools") or []
     for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure. 
+        # These are the two websearch tools for OpenAI / Azure.
         if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
             is_web_search_request = True
             break
@@ -225,7 +217,9 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     # Filter out deployments that don't support web search
-    final_deployments = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
+    final_deployments = [
+        d for d in healthy_deployments if _deployment_supports_web_search(d)
+    ]
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
