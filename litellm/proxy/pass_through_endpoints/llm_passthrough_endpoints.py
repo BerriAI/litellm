@@ -8,7 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 import json
 import os
-from typing import Any, Optional, Tuple, Union, cast
+from typing import Any, AsyncGenerator, Optional, Tuple, Union, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -347,15 +347,24 @@ async def vllm_proxy_route(
         )
 
         if is_streaming_request:
-            return StreamingResponse(
-                content=result.aiter_bytes(),
-                status_code=result.status_code,
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=result.headers,
-                    custom_headers=None,
-                ),
-            )
+            if isinstance(result, httpx.Response):
+                return StreamingResponse(
+                    content=result.aiter_bytes(),
+                    status_code=result.status_code,
+                    headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                        headers=result.headers,
+                        custom_headers=None,
+                    ),
+                )
+            else:
+                # AsyncGenerator from _async_streaming path
+                return StreamingResponse(
+                    content=cast(AsyncGenerator[bytes, None], result),
+                    status_code=200,
+                    headers={"content-type": "text/event-stream"},
+                )
 
+        result = cast(httpx.Response, result)
         content = await result.aread()
         return Response(
             content=content,
@@ -1324,19 +1333,7 @@ async def azure_proxy_route(
                 )
 
                 if is_streaming_request:
-                    # Check if result is an async generator (from _async_streaming)
-                    import inspect
-
-                    if inspect.isasyncgen(result):
-                        # Result is already an async generator, use it directly
-                        return StreamingResponse(
-                            content=result,
-                            status_code=200,
-                            headers={"content-type": "text/event-stream"},
-                        )
-                    else:
-                        # Result is an httpx.Response, use aiter_bytes()
-                        result = cast(httpx.Response, result)
+                    if isinstance(result, httpx.Response):
                         return StreamingResponse(
                             content=result.aiter_bytes(),
                             status_code=result.status_code,
@@ -1344,6 +1341,13 @@ async def azure_proxy_route(
                                 headers=result.headers,
                                 custom_headers=None,
                             ),
+                        )
+                    else:
+                        # AsyncGenerator from _async_streaming path
+                        return StreamingResponse(
+                            content=cast(AsyncGenerator[bytes, None], result),
+                            status_code=200,
+                            headers={"content-type": "text/event-stream"},
                         )
 
                 # Non-streaming response
