@@ -57,6 +57,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         Return list of OpenAI params supported by Black Forest Labs.
 
         Note: BFL uses different parameter names, these are mapped in map_openai_params.
+        """
         return [
             "n",  # Number of images (BFL returns 1 per request, but ultra supports up to 4)
             "size",  # Maps to width/height or aspect_ratio
@@ -95,13 +96,13 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
                 if k == "size" and v:
                     self._map_size_param(v, optional_params)
                 elif k == "n":
-                    # BFL uses num_images for ultra model
                     if "ultra" in model.lower():
                         optional_params["num_images"] = v
-                elif k == "quality" and v == "hd":
-                    # Map 'hd' quality to raw mode for more natural look
-                    if "ultra" in model.lower():
+                    # non-ultra: silently skip (n=1 is BFL default)
+                elif k == "quality":
+                    if v == "hd" and "ultra" in model.lower():
                         optional_params["raw"] = True
+                    # other quality values have no BFL mapping
                 else:
                     optional_params[k] = v
             elif not drop_params:
