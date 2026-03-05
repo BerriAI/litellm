@@ -18,7 +18,7 @@ class TestLoggingWorker:
     @pytest.fixture
     def logging_worker(self):
         """Create a LoggingWorker instance for testing."""
-        return LoggingWorker(timeout=1.0, max_queue_size=10)
+        return LoggingWorker(timeout=1.0, max_queue_size=10, _register_atexit=False)
 
     @pytest.mark.asyncio
     async def test_graceful_shutdown_with_clear_queue(self, logging_worker):

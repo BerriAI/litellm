@@ -275,8 +275,10 @@ class LoggingWorker:
             asyncio.get_running_loop()
             delay = self._calculate_retry_delay()
 
-            # Schedule the retry as a background task
-            asyncio.create_task(self._retry_enqueue_task(task, delay))
+            # Schedule the retry as a background task (tracked for cancellation)
+            retry_task = asyncio.create_task(self._retry_enqueue_task(task, delay))
+            self._running_tasks.add(retry_task)
+            retry_task.add_done_callback(self._running_tasks.discard)
         except RuntimeError:
             # No event loop, drop the task as we can't schedule a retry
             pass
@@ -286,10 +288,11 @@ class LoggingWorker:
         Retry enqueueing the task after delay, preserving original context.
         This is called as a background task from _schedule_delayed_enqueue_retry.
         """
+        my_epoch = self._epoch
         await asyncio.sleep(delay)
 
-        # Try to enqueue the task directly, preserving its original context
-        if self._queue is None:
+        # Abort if the epoch changed (loop was reset/rebound)
+        if self._epoch != my_epoch or self._queue is None:
             return
 
         try:
