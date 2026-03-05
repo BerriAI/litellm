@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -581,6 +580,7 @@ def get_user_id_from_request(request: Request) -> Optional[str]:
 @management_endpoint_wrapper
 async def user_info(
     request: Request,
+    response: fastapi.Response,
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
@@ -616,6 +616,8 @@ async def user_info(
             user_id is None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
+            response.headers["Deprecation"] = "true"
+            response.headers["Link"] = '</v2/user/info>; rel="successor-version"'
             return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
         elif user_id is None:
             user_id = user_api_key_dict.user_id
@@ -706,12 +708,9 @@ async def user_info(
             user_id=user_id, user_info=_user_info, keys=returned_keys, teams=team_list
         )
 
-        response = JSONResponse(content=response_data.model_dump(mode="json"))
         response.headers["Deprecation"] = "true"
-        response.headers[
-            "Link"
-        ] = '</v2/user/info>; rel="successor-version"'
-        return response
+        response.headers["Link"] = '</v2/user/info>; rel="successor-version"'
+        return response_data
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(

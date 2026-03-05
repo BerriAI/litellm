@@ -451,10 +451,14 @@ async def test_user_info_url_encoding_plus_character(mocker):
     )
     expected_user_id = "machine-user+alp-air-admin-b58-b@tempus.com"
     
+    from fastapi import Response
+
+    mock_response = Response()
     response = await user_info(
         user_id=decoded_user_id,
         user_api_key_dict=mock_user_api_key_dict,
         request=mock_request,
+        response=mock_response,
     )
 
     # Verify that the response contains the correct user data
@@ -506,12 +510,16 @@ async def test_user_info_nonexistent_user(mocker):
     # Call user_info function with a non-existent user_id
     nonexistent_user_id = "nonexistent-user@example.com"
     
+    from fastapi import Response
+
+    mock_response = Response()
     # Should raise ProxyException with 404 status code (HTTPException is converted by decorator)
     with pytest.raises(ProxyException) as exc_info:
         await user_info(
             user_id=nonexistent_user_id,
             user_api_key_dict=mock_user_api_key_dict,
             request=mock_request,
+            response=mock_response,
         )
 
     # Verify the exception details
@@ -1451,7 +1459,7 @@ async def test_user_info_v1_has_deprecation_header(mocker):
     """
     Test that the old /user/info endpoint returns Deprecation headers.
     """
-    from fastapi import Request
+    from fastapi import Request, Response
 
     from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
@@ -1484,16 +1492,20 @@ async def test_user_info_v1_has_deprecation_header(mocker):
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
+    mock_response = Response()
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_id="test-user", user_role="proxy_admin"
     )
 
-    response = await user_info(
+    result = await user_info(
         user_id="test-user",
         user_api_key_dict=mock_user_api_key_dict,
         request=mock_request,
+        response=mock_response,
     )
 
-    # The response should now be a JSONResponse with deprecation headers
-    assert response.headers.get("Deprecation") == "true"
-    assert "successor-version" in response.headers.get("Link", "")
+    # The result should be a UserInfoResponse (Pydantic model), not JSONResponse
+    assert result.user_id == "test-user"
+    # Deprecation headers should be set on the response object
+    assert mock_response.headers.get("Deprecation") == "true"
+    assert "successor-version" in mock_response.headers.get("Link", "")
