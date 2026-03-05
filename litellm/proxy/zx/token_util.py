@@ -214,7 +214,7 @@ async def create_or_get_user_key(
         key_alias=key_alias,
         key_type=LiteLLMKeyType.LLM_API,
         models=["all-team-models"],
-        metadata=key_metadata,
+        metadata=(key_metadata or {}) | {"org_email": org_email},
     )
     key_res = await key_management_endpoints.generate_key_fn(
         key_data, user_api_key_dict=user_api_key_dict
