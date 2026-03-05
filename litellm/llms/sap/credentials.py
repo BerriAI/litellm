@@ -33,9 +33,18 @@ def _get_home() -> str:
 def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
     cur: Any = d
     if isinstance(cur, str):
-        cur = json.loads(cur)
+        try:
+            cur = json.loads(cur)
+        except json.JSONDecodeError:
+            verbose_logger.warning(
+                "SAP service key is a string but not valid JSON."
+            )
+            return None
     for k in path:
         if not isinstance(cur, dict) or k not in cur:
+            verbose_logger.warning(
+                f"SAP service key has unexpected type '{type(cur).__name__}' (expected dict or JSON string). "
+            )
             return None
         cur = cur[k]
     return cur
@@ -258,7 +267,7 @@ def validate_credentials(
         )
 
 def get_token_creator(
-    service_key: Optional[str] = None,
+    service_key: Optional[Union[str, dict]] = None,
     profile: Optional[str] = None,
     *,
     expiry_buffer_minutes: int = 60,
