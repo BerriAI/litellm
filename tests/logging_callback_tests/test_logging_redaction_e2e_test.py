@@ -2,7 +2,7 @@ import io
 import os
 import sys
 
-from typing import Optional
+from typing import Optional, Union
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -12,23 +12,26 @@ import json
 import logging
 import time
 from unittest.mock import AsyncMock, patch
+from datetime import datetime
 
 import pytest
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardLoggingPayload, ModelResponse, TextCompletionResponse, ResponsesAPIResponse
 
 
 class TestCustomLogger(CustomLogger):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+        self.response_obj: Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]] = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload = kwargs.get("standard_logging_object", None)
         self.logged_standard_logging_payload = standard_logging_payload
+        self.response_obj = response_obj
 
 
 @pytest.mark.asyncio
@@ -119,6 +122,47 @@ async def test_global_redaction_off_with_dynamic_params(turn_off_message_logging
         )
         assert standard_logging_payload["messages"][0]["content"] == "hi"
 
+
+@pytest.mark.asyncio
+async def test_redaction_with_custom_logger_streaming():
+    """Test redaction of responses for custom logger callbacks"""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    class LoggingWithoutSyncSuccessHandler(Logging):
+        def success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
+            pass
+
+    litellm.turn_off_message_logging = True
+    test_custom_logger = TestCustomLogger()
+
+    litellm_logging_obj = LoggingWithoutSyncSuccessHandler(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+        dynamic_async_success_callbacks=[test_custom_logger],
+    )
+
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hello",
+        stream=True,
+        litellm_logging_obj=litellm_logging_obj,
+    )
+    
+    # Consume the stream to trigger logging
+    chunks = []
+    async for chunk in response:
+        chunks.append(chunk)
+    
+    await asyncio.sleep(1)
+    async_complete_streaming_response = test_custom_logger.response_obj
+    assert async_complete_streaming_response is not None    
+    assert (async_complete_streaming_response.choices[0].message.content == "redacted-by-litellm")
 
 @pytest.mark.asyncio
 async def test_redaction_responses_api():

@@ -99,6 +99,23 @@ def perform_redaction(model_call_details: dict, result):
             if hasattr(_streaming_response, "reasoning") and _streaming_response.reasoning is not None:
                 _streaming_response.reasoning = None
 
+    if (
+        model_call_details.get("stream", False) is True
+        and "async_complete_streaming_response" in model_call_details
+    ):
+        _streaming_response = model_call_details["async_complete_streaming_response"]
+        if hasattr(_streaming_response, "choices"):
+            for choice in _streaming_response.choices:
+                _redact_choice_content(choice)
+        elif hasattr(_streaming_response, "output"):
+            _redact_responses_api_output(_streaming_response.output)
+            # Redact reasoning field in ResponsesAPIResponse
+            if (
+                hasattr(_streaming_response, "reasoning")
+                and _streaming_response.reasoning is not None
+            ):
+                _streaming_response.reasoning = None            
+
     # Redact result
     if result is not None:
         # Check if result is a coroutine, async generator, or other async object - these cannot be deepcopied
