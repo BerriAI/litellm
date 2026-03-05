@@ -186,13 +186,19 @@ def resolve_resource_group(sources: List[Source]) -> Optional[str]:
 
 def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: Optional[str] = None, **kwargs) -> Dict[str, str]:
     """
-    Resolution order per key:
+    Resolution order (first-source-wins):
+
+    Sources are checked in this order:
       kwargs
       > service key
       > env (AICORE_<NAME>)
       > config (AICORE_<NAME> or plain <name>)
       > vcap service key
       > default
+
+    Important:
+      - Credentials are extracted from the FIRST source that provides any credential value.
+      - Values are NOT merged per key across sources. Exepte resource_group, which is merged.
     """
     config = init_conf(profile)
 
@@ -234,7 +240,7 @@ def validate_credentials(
 ):
     if not auth_url or not client_id:
         raise ValueError(
-            "SAP AI Core credentials not found."
+            "SAP AI Core credentials not found. "
             "Please provide credentials by setting appropriate environment variables "
             "(e.g. AICORE_CLIENT_ID, AICORE_CLIENT_SECRET, etc.)"
         )
@@ -300,17 +306,16 @@ def get_token_creator(
             data["client_secret"] = client_secret
 
         client = HTTPHandler(client=httpx.Client(cert=cert_pair)) if cert_pair else _get_httpx_client()
-
+        resp: Optional[httpx.Response] = None
         try:
             resp = client.post(auth_url, data=data) # type: ignore[arg-type]
-            resp.raise_for_status()
             payload = resp.json()
             access_token = payload["access_token"]
             expires_in = int(payload.get("expires_in", 3600))
             expiry_date = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
             return f"Bearer {access_token}", expiry_date
         except Exception as e:
-            msg = getattr(resp, "text", str(e))
+            msg = resp.text if resp is not None else str(e)
             raise RuntimeError(f"Token request failed: {msg}") from e
 
     def _fetch_token() -> tuple[str, datetime]:
