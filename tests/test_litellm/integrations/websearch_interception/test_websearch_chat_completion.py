@@ -110,18 +110,23 @@ async def test_websearch_chat_completion_with_openai():
 
 @pytest.mark.asyncio
 async def test_websearch_chat_completion_hook_detection():
-    """Test that websearch hook correctly detects tool calls in response."""
+    """Test that chat completion agentic loop is disabled (Anthropic-only for now).
+
+    The legacy async_should_run_chat_completion_agentic_loop hook is disabled
+    because async_execute_tool_calls handles Anthropic format only. Chat
+    completion support will be added later via the framework orchestration layer.
+    """
     from litellm.types.utils import (
         ChatCompletionMessageToolCall,
         Choices,
         Function,
         Message,
     )
-    
+
     websearch_logger = WebSearchInterceptionLogger(
         enabled_providers=[LlmProviders.OPENAI]
     )
-    
+
     # Mock response with litellm_web_search tool call
     mock_response = ModelResponse(
         id="test-123",
@@ -149,8 +154,8 @@ async def test_websearch_chat_completion_hook_detection():
         object="chat.completion",
         created=1234567890,
     )
-    
-    # Test should_run_chat_completion_agentic_loop
+
+    # Legacy chat completion hook is intentionally disabled
     should_run, tools_dict = (
         await websearch_logger.async_should_run_chat_completion_agentic_loop(
             response=mock_response,
@@ -167,13 +172,9 @@ async def test_websearch_chat_completion_hook_detection():
             kwargs={},
         )
     )
-    
-    # Verify hook detected the tool call
-    assert should_run is True
-    assert "tool_calls" in tools_dict
-    assert len(tools_dict["tool_calls"]) == 1
-    assert tools_dict["tool_calls"][0]["name"] == "litellm_web_search"
-    assert tools_dict["response_format"] == "openai"
+
+    assert should_run is False
+    assert tools_dict == {}
 
 
 @pytest.mark.asyncio

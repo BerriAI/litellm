@@ -1,11 +1,12 @@
 """
 Unit tests for WebSearch Interception with Extended Thinking
 
-Tests that the websearch interception agentic loop correctly handles
-thinking/redacted_thinking blocks when extended thinking is enabled.
+Tests that the websearch interception correctly handles thinking/redacted_thinking
+blocks, both at the transformation layer and the async_execute_tool_calls layer.
 """
 
-from unittest.mock import Mock
+import asyncio
+from unittest.mock import Mock, AsyncMock, patch
 
 import pytest
 
@@ -72,11 +73,11 @@ class TestTransformResponseWithThinking:
         ]
         search_results = ["Search result text"]
 
-        # No thinking_blocks param (default None)
         assistant_msg, _ = (
             WebSearchTransformation._transform_response_anthropic(
                 tool_calls=tool_calls,
                 search_results=search_results,
+                thinking_blocks=[],
             )
         )
 
@@ -173,12 +174,12 @@ class TestTransformResponseWithThinking:
         assert "content" not in assistant_msg
 
 
-class TestAgenticLoopThinkingExtraction:
-    """Tests for thinking block extraction in async_should_run_agentic_loop."""
+class TestAsyncExecuteToolCallsWithThinking:
+    """Tests for async_execute_tool_calls with thinking blocks in response."""
 
     @pytest.mark.asyncio
-    async def test_extracts_thinking_blocks_from_dict_response(self):
-        """Test extraction of thinking blocks from dict-style response."""
+    async def test_executes_tool_calls_with_thinking_in_response(self):
+        """Test that async_execute_tool_calls works when response has thinking + tool_use blocks."""
         logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
 
         response = {
@@ -198,108 +199,22 @@ class TestAgenticLoopThinkingExtraction:
             ]
         }
 
-        should_run, tools_dict = await logger.async_should_run_agentic_loop(
-            response=response,
-            model="bedrock/claude",
-            messages=[],
-            tools=[{"name": "WebSearch"}],
-            stream=False,
-            custom_llm_provider="bedrock",
-            kwargs={},
-        )
+        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = "Title: News\nURL: https://example.com\nSnippet: Latest"
 
-        assert should_run is True
-        assert len(tools_dict["tool_calls"]) == 1
-        assert len(tools_dict["thinking_blocks"]) == 2
-        assert tools_dict["thinking_blocks"][0]["type"] == "thinking"
-        assert tools_dict["thinking_blocks"][0]["thinking"] == "Let me think..."
-        assert tools_dict["thinking_blocks"][1]["type"] == "redacted_thinking"
-        assert tools_dict["thinking_blocks"][1]["data"] == "redacted_data"
+            results = await logger.async_execute_tool_calls(
+                response=response,
+                kwargs={"custom_llm_provider": "bedrock"},
+            )
+
+        assert len(results) == 1
+        assert results[0].tool_call_id == "toolu_01"
+        assert results[0].is_error is False
+        assert "News" in results[0].content
 
     @pytest.mark.asyncio
-    async def test_extracts_thinking_blocks_from_object_response(self):
-        """Test extraction of thinking blocks from non-dict response objects.
-
-        In practice, the Anthropic pass-through always returns plain dicts
-        (TypedDict(**raw_json) produces a dict). This test covers the safety
-        branch for non-dict response objects.
-        """
-        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-
-        # Simulate object-style response blocks
-        thinking_block = Mock()
-        thinking_block.type = "thinking"
-        thinking_block.thinking = "Reasoning..."
-        thinking_block.signature = "sig"
-
-        redacted_block = Mock()
-        redacted_block.type = "redacted_thinking"
-        redacted_block.data = "abc"
-
-        tool_block = Mock()
-        tool_block.type = "tool_use"
-        tool_block.name = "litellm_web_search"
-        tool_block.id = "toolu_01"
-        tool_block.input = {"query": "test"}
-
-        response = Mock()
-        response.content = [thinking_block, redacted_block, tool_block]
-
-        should_run, tools_dict = await logger.async_should_run_agentic_loop(
-            response=response,
-            model="bedrock/claude",
-            messages=[],
-            tools=[{"name": "WebSearch"}],
-            stream=False,
-            custom_llm_provider="bedrock",
-            kwargs={},
-        )
-
-        assert should_run is True
-        assert len(tools_dict["thinking_blocks"]) == 2
-        # Verify getattr-based conversion produced correct dicts
-        assert tools_dict["thinking_blocks"][0] == {
-            "type": "thinking",
-            "thinking": "Reasoning...",
-            "signature": "sig",
-        }
-        assert tools_dict["thinking_blocks"][1] == {
-            "type": "redacted_thinking",
-            "data": "abc",
-        }
-
-    @pytest.mark.asyncio
-    async def test_no_thinking_blocks_when_thinking_disabled(self):
-        """Test that thinking_blocks is empty when response has no thinking."""
-        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-
-        response = {
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": "toolu_01",
-                    "name": "litellm_web_search",
-                    "input": {"query": "test"},
-                },
-            ]
-        }
-
-        should_run, tools_dict = await logger.async_should_run_agentic_loop(
-            response=response,
-            model="bedrock/claude",
-            messages=[],
-            tools=[{"name": "WebSearch"}],
-            stream=False,
-            custom_llm_provider="bedrock",
-            kwargs={},
-        )
-
-        assert should_run is True
-        assert tools_dict["thinking_blocks"] == []
-
-    @pytest.mark.asyncio
-    async def test_thinking_blocks_not_extracted_when_no_tool_calls(self):
-        """Test that no extraction happens when no websearch tool calls found."""
+    async def test_no_results_when_no_tool_calls(self):
+        """Test that thinking-only responses don't trigger tool execution."""
         logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
 
         response = {
@@ -313,15 +228,60 @@ class TestAgenticLoopThinkingExtraction:
             ]
         }
 
-        should_run, tools_dict = await logger.async_should_run_agentic_loop(
+        results = await logger.async_execute_tool_calls(
             response=response,
-            model="bedrock/claude",
-            messages=[],
-            tools=[{"name": "WebSearch"}],
-            stream=False,
-            custom_llm_provider="bedrock",
-            kwargs={},
+            kwargs={"custom_llm_provider": "bedrock"},
         )
 
-        assert should_run is False
-        assert tools_dict == {}
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_no_results_when_thinking_disabled(self):
+        """Test that tool_use without thinking blocks still works."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        response = {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "litellm_web_search",
+                    "input": {"query": "test"},
+                },
+            ]
+        }
+
+        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = "Search result text"
+
+            results = await logger.async_execute_tool_calls(
+                response=response,
+                kwargs={"custom_llm_provider": "bedrock"},
+            )
+
+        assert len(results) == 1
+        assert results[0].tool_call_id == "toolu_01"
+        assert results[0].is_error is False
+
+    @pytest.mark.asyncio
+    async def test_skips_wrong_provider(self):
+        """Test that async_execute_tool_calls returns empty for wrong provider."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        response = {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "litellm_web_search",
+                    "input": {"query": "test"},
+                },
+            ]
+        }
+
+        results = await logger.async_execute_tool_calls(
+            response=response,
+            kwargs={"custom_llm_provider": "openai"},
+        )
+
+        assert results == []
