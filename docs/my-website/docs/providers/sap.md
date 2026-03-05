@@ -680,6 +680,58 @@ except Exception as e:
 ```
 For more information about all available content filtering configurations, see the [documentation](https://help.sap.com/docs/sap-ai-core/generative-ai/content-filtering?locale=en-US)
 
+#### List of moduls configuration for fallback
+SAP GEN AI Hub supports a fallback mechanism for handling errors. This mechanism allows you to specify a list of fallback modules to use in case of errors. The fallback modules should contain all parameters that are required for configuring the request.
+
+Required parameters:
+- `model` 
+- `messages`
+
+Optional parameters: 
+- `filterings`
+- `groundings`
+- `translations`
+- `masking`
+- `tools`
+
+- and any of model's specific parameters.
+
+
+```python showLineNumbers title="Fallback Example"
+from litellm import completion
+
+from litellm import completion
+
+translation_config = {
+    'input':
+        {'type': 'sap_document_translation',
+         'config':
+             {'source_language': 'en-US',
+              'target_language': 'de-DE'}
+         },
+    'output':
+        {'type': 'sap_document_translation',
+         'config':
+             {'source_language': 'de-DE',
+              'target_language': 'fr-FR'}
+         }
+}
+
+response = completion(model="sap/gpt-4o",
+                      messages=[{"role": "user", "content": "Hello world!"}],
+                      translation=translation_config,
+                      fallback_sap_modules=[{
+                          "model":"sap/gemini-2.5-flash",
+                          "messages":[{"role": "user", "content": "Hello world!"}],
+                          "translation":translation_config
+                      }])
+
+# In case of error with the first configuration (model gpt-4o), the fallback module is used.
+
+print(response.choices[0].message.content)
+
+```
+
 
 ## Reference
 
