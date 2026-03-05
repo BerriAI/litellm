@@ -3203,6 +3203,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
+    BEDROCK_MANTLE = "bedrock_mantle"
 
 
 # Create a set of all provider values for quick lookup
