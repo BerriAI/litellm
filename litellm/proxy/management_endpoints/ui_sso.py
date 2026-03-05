@@ -2673,14 +2673,12 @@ class SSOAuthenticationHandler:
                 bool(token_response.get("id_token")),
             )
 
-            # Reuse the same client for the userinfo request to avoid a second TCP/TLS handshake.
-            userinfo = await SSOAuthenticationHandler._get_pkce_userinfo(
-                access_token=token_response["access_token"],
-                id_token=token_response.get("id_token"),
-                userinfo_endpoint=userinfo_endpoint,
-                additional_headers=additional_headers,
-                http_client=http_client,
-            )
+        userinfo = await SSOAuthenticationHandler._get_pkce_userinfo(
+            access_token=token_response["access_token"],
+            id_token=token_response.get("id_token"),
+            userinfo_endpoint=userinfo_endpoint,
+            additional_headers=additional_headers,
+        )
 
         # Merge with token_response taking precedence so token fields (e.g. access_token)
         # cannot be overridden by non-standard userinfo fields.
@@ -2692,22 +2690,16 @@ class SSOAuthenticationHandler:
         id_token: Optional[str],
         userinfo_endpoint: str,
         additional_headers: Dict[str, str],
-        http_client: Optional[httpx.AsyncClient] = None,
     ) -> dict:
         """
         Fetches user info from the userinfo endpoint.
         Falls back to decoding the id_token if the endpoint is unavailable.
-
-        An existing ``http_client`` may be passed to reuse the connection pool
-        (e.g. from ``_pkce_token_exchange``).
         """
         userinfo: dict = {}
 
         try:
-            _own_client = http_client is None
-            _client = httpx.AsyncClient() if _own_client else http_client
-            try:
-                resp = await _client.get(
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
                     userinfo_endpoint,
                     headers={
                         "Authorization": f"Bearer {access_token}",
@@ -2728,14 +2720,6 @@ class SSOAuthenticationHandler:
                         "Userinfo endpoint returned %s, falling back to id_token",
                         resp.status_code,
                     )
-            finally:
-                if _own_client:
-                    try:
-                        await _client.aclose()
-                    except Exception as close_err:
-                        verbose_proxy_logger.debug(
-                            "Error closing httpx client in _get_pkce_userinfo: %s", close_err
-                        )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Userinfo endpoint error: %s, falling back to id_token", e
