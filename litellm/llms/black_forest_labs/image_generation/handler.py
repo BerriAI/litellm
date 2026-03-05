@@ -163,6 +163,7 @@ class BlackForestLabsImageGeneration:
             initial_response=response,
             headers=headers,
             sync_client=sync_client,
+            timeout=timeout,
         )
 
         # Transform response
@@ -265,6 +266,7 @@ class BlackForestLabsImageGeneration:
             initial_response=response,
             headers=headers,
             async_client=async_client,
+            timeout=timeout,
         )
 
         # Transform response
@@ -282,10 +284,18 @@ class BlackForestLabsImageGeneration:
         sync_client: HTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> httpx.Response:
         """
         Poll BFL API until result is ready (sync version).
         """
+        # Validate initial response status code
+        if initial_response.status_code >= 400:
+            raise BlackForestLabsError(
+                status_code=initial_response.status_code,
+                message=f"BFL initial request failed: {initial_response.text}",
+            )
+
         # Parse initial response to get polling URL
         try:
             response_data = initial_response.json()
@@ -319,6 +329,7 @@ class BlackForestLabsImageGeneration:
             response = sync_client.get(
                 url=polling_url,
                 headers=polling_headers,
+                timeout=timeout,
             )
 
             if response.status_code != 200:
@@ -354,10 +365,18 @@ class BlackForestLabsImageGeneration:
         async_client: AsyncHTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> httpx.Response:
         """
         Poll BFL API until result is ready (async version).
         """
+        # Validate initial response status code
+        if initial_response.status_code >= 400:
+            raise BlackForestLabsError(
+                status_code=initial_response.status_code,
+                message=f"BFL initial request failed: {initial_response.text}",
+            )
+
         # Parse initial response to get polling URL
         try:
             response_data = initial_response.json()
@@ -391,6 +410,7 @@ class BlackForestLabsImageGeneration:
             response = await async_client.get(
                 url=polling_url,
                 headers=polling_headers,
+                timeout=timeout,
             )
 
             if response.status_code != 200:
