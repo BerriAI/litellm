@@ -426,5 +426,5 @@ async def _async_streaming(
                 provider_config=provider_config,
             )
         )
-    except Exception as e:
-        raise e
+    except Exception:
+        raise
