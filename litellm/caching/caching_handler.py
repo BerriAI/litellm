@@ -512,8 +512,10 @@ class LLMCachingHandler:
                     api_item_copy["index"] = len(final_data_list)
                     final_data_list.append(api_item_copy)
                 else:
-                    api_item.index = len(final_data_list)
-                    final_data_list.append(api_item)
+                    import copy
+                    api_item_copy = copy.copy(api_item)
+                    api_item_copy.index = len(final_data_list)
+                    final_data_list.append(api_item_copy)
                 idx += 1
             else:
                 final_data_list.append(item)
