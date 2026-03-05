@@ -197,6 +197,7 @@ class AgentResponse(BaseModel):
     litellm_params: Optional[Dict[str, Any]] = None
     agent_card_params: Dict[str, Any]
     object_permission: Optional[Dict[str, Any]] = None
+    spend: Optional[float] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None
