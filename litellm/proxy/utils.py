@@ -99,6 +99,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.create_views import (
     create_missing_views,
+    fix_daily_tag_spend_view,
     should_create_missing_views,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
@@ -2444,6 +2445,9 @@ class PrismaClient:
                         "LiteLLM_VerificationTokenView Created in DB!"
                     )
                 else:
+                    # Run DailyTagSpend fix unconditionally to ensure existing deployments get the fix
+                    await fix_daily_tag_spend_view(db=self.db)
+                    
                     should_create_views = await should_create_missing_views(db=self.db)
                     if should_create_views:
                         await create_missing_views(db=self.db)

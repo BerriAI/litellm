@@ -5,6 +5,43 @@ from litellm import verbose_logger
 _db = Any
 
 
+async def fix_daily_tag_spend_view(db: _db):
+    """
+    Fix DailyTagSpend view to prevent double-counting with multi-tag requests.
+    
+    This runs unconditionally on every startup to ensure existing deployments
+    get the fix without requiring manual script execution.
+    """
+    try:
+        sql_query = """
+        CREATE OR REPLACE VIEW "DailyTagSpend" AS
+        WITH base AS (
+            SELECT
+                spend,
+                "startTime",
+                request_tags,
+                jsonb_array_length(request_tags) AS tag_count
+            FROM "LiteLLM_SpendLogs"
+            WHERE request_tags IS NOT NULL
+              AND jsonb_typeof(request_tags) = 'array'
+        ),
+        tagged AS (
+            SELECT * FROM base WHERE tag_count > 0
+        )
+        SELECT
+            jsonb_array_elements_text(request_tags) AS individual_request_tag,
+            DATE(t."startTime") AS spend_date,
+            COUNT(*) AS log_count,
+            SUM(spend / tag_count) AS total_spend
+        FROM tagged t
+        GROUP BY individual_request_tag, DATE(t."startTime");
+        """
+        await db.execute_raw(query=sql_query)
+        verbose_logger.debug("DailyTagSpend view created/updated successfully")
+    except Exception as e:
+        verbose_logger.warning(f"Failed to create/update DailyTagSpend view: {e}")
+
+
 async def create_missing_views(db: _db):  # noqa: PLR0915
     """
     --------------------------------------------------
@@ -157,31 +194,34 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
 
         print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
 
-    sql_query = """
-    CREATE OR REPLACE VIEW "DailyTagSpend" AS
-    WITH base AS (
+    try:
+        sql_query = """
+        CREATE OR REPLACE VIEW "DailyTagSpend" AS
+        WITH base AS (
+            SELECT
+                spend,
+                "startTime",
+                request_tags,
+                jsonb_array_length(request_tags) AS tag_count
+            FROM "LiteLLM_SpendLogs"
+            WHERE request_tags IS NOT NULL
+              AND jsonb_typeof(request_tags) = 'array'
+        ),
+        tagged AS (
+            SELECT * FROM base WHERE tag_count > 0
+        )
         SELECT
-            spend,
-            "startTime",
-            request_tags,
-            jsonb_array_length(request_tags) AS tag_count
-        FROM "LiteLLM_SpendLogs"
-        WHERE request_tags IS NOT NULL
-          AND jsonb_typeof(request_tags) = 'array'
-    ),
-    tagged AS (
-        SELECT * FROM base WHERE tag_count > 0
-    )
-    SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        DATE(t."startTime") AS spend_date,
-        COUNT(*) AS log_count,
-        SUM(spend / tag_count) AS total_spend
-    FROM tagged t
-    GROUP BY individual_request_tag, DATE(t."startTime");
-    """
-    await db.execute_raw(query=sql_query)
-    print("DailyTagSpend Created/Updated!")  # noqa
+            jsonb_array_elements_text(request_tags) AS individual_request_tag,
+            DATE(t."startTime") AS spend_date,
+            COUNT(*) AS log_count,
+            SUM(spend / tag_count) AS total_spend
+        FROM tagged t
+        GROUP BY individual_request_tag, DATE(t."startTime");
+        """
+        await db.execute_raw(query=sql_query)
+        print("DailyTagSpend Created/Updated!")  # noqa
+    except Exception as e:
+        verbose_logger.warning(f"Failed to create/update DailyTagSpend view: {e}")
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1""")
