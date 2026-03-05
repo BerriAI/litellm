@@ -708,7 +708,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         "Partial guardrail coverage: %d/%d chunks processed successfully. "
                         "Accumulated assessments: %s",
                         len(responses),
-                        len(list(chunks)),
+                        len(chunks),
                         merged_json.get("assessments", []),
                     )
                 raise
