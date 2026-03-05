@@ -2374,9 +2374,9 @@ if MCP_AVAILABLE:
                 await error_response(scope, receive, send)
             except Exception as response_error:
                 verbose_logger.exception(
-                    f"Failed to send ProxyException error response: {response_error}"
+                    "Error building response: %s", response_error
                 )
-                raise
+                raise e from response_error  # re-raise original ProxyException
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions

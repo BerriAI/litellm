@@ -69,7 +69,7 @@ async def test_streamable_http_preserves_proxy_exception_status_and_payload():
     payload = json.loads(body_msg["body"].decode())
     assert payload["error"]["message"] == "Forbidden by custom auth"
     assert payload["error"]["type"] == "auth_error"
-    assert payload["error"]["code"] == "403"
+    assert int(payload["error"]["code"]) == 403
 
 
 @pytest.mark.asyncio
@@ -112,4 +112,4 @@ async def test_sse_handler_preserves_proxy_exception_status_and_payload():
     payload = json.loads(body_msg["body"].decode())
     assert payload["error"]["message"] == "OAuth token expired"
     assert payload["error"]["type"] == "auth_error"
-    assert payload["error"]["code"] == "401"
+    assert int(payload["error"]["code"]) == 401
