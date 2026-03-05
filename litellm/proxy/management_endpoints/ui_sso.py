@@ -875,7 +875,7 @@ async def get_generic_sso_response(
                 message=detailed_message,
                 type=ProxyErrorTypes.auth_error,
                 param="GENERIC_CLIENT_USE_PKCE",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                code=status.HTTP_401_UNAUTHORIZED,
             )
 
         verbose_proxy_logger.exception(
@@ -2676,7 +2676,9 @@ class SSOAuthenticationHandler:
                 http_client=http_client,
             )
 
-        return {**token_response, **userinfo}
+        # Merge with token_response taking precedence so token fields (e.g. access_token)
+        # cannot be overridden by non-standard userinfo fields.
+        return {**userinfo, **token_response}
 
     @staticmethod
     async def _get_pkce_userinfo(
@@ -2708,7 +2710,13 @@ class SSOAuthenticationHandler:
                     timeout=30.0,
                 )
                 if resp.status_code == 200:
-                    userinfo = resp.json()
+                    try:
+                        userinfo = resp.json()
+                    except Exception as json_err:
+                        verbose_proxy_logger.warning(
+                            "Userinfo endpoint returned non-JSON response (status 200): %s",
+                            json_err,
+                        )
                 else:
                     verbose_proxy_logger.warning(
                         "Userinfo endpoint returned %s, falling back to id_token",
