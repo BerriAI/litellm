@@ -98,32 +98,54 @@ class TestRootLoggerNotTouched:
         assert root not in ALL_LOGGERS
 
 
-class TestExternalLoggersNotConfigured:
-    """Importing litellm must NOT modify external loggers at import time."""
+class TestExternalLoggersSuppressedAtImport:
+    """Importing litellm must suppress noisy third-party loggers (httpx, apscheduler)."""
 
-    def test_httpx_logger_not_modified_at_import(self):
+    def test_httpx_logger_suppressed_at_import(self):
         out = _run_in_subprocess("""
             import logging
-            httpx_level_before = logging.getLogger("httpx").level
             import litellm
-            httpx_level_after = logging.getLogger("httpx").level
-            print(httpx_level_before == httpx_level_after)
+            print(logging.getLogger("httpx").level >= logging.WARNING)
         """)
         assert out == "True"
 
-    def test_apscheduler_logger_not_modified_at_import(self):
+    def test_apscheduler_logger_suppressed_at_import(self):
         out = _run_in_subprocess("""
             import logging
-            lvl_before = logging.getLogger("apscheduler.scheduler").level
             import litellm
-            lvl_after = logging.getLogger("apscheduler.scheduler").level
-            print(lvl_before == lvl_after)
+            print(logging.getLogger("apscheduler.scheduler").level >= logging.WARNING)
         """)
         assert out == "True"
 
 
 class TestSetVerboseStillWorks:
     """_turn_on_debug must add a handler so users can actually see output."""
+
+    def setup_method(self):
+        """Snapshot logger state before each test."""
+        from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
+
+        self._orig_level = verbose_logger.level
+        self._orig_proxy_level = verbose_proxy_logger.level
+        self._orig_router_level = verbose_router_logger.level
+        self._orig_handlers = list(verbose_logger.handlers)
+
+    def teardown_method(self):
+        """Restore logger state after each test."""
+        from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
+
+        # Remove any StreamHandlers added during test (keep NullHandler)
+        verbose_logger.handlers[:] = [
+            h for h in verbose_logger.handlers
+            if isinstance(h, logging.NullHandler)
+        ]
+        # Re-add original handlers that aren't already present
+        for h in self._orig_handlers:
+            if h not in verbose_logger.handlers:
+                verbose_logger.handlers.append(h)
+        verbose_logger.setLevel(self._orig_level)
+        verbose_proxy_logger.setLevel(self._orig_proxy_level)
+        verbose_router_logger.setLevel(self._orig_router_level)
 
     def test_turn_on_debug_adds_stream_handler(self):
         from litellm._logging import _turn_on_debug, verbose_logger

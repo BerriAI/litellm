@@ -195,11 +195,7 @@ for _old_name, _canonical in _LEGACY_LOGGER_MAP.items():
 
 
 def _suppress_loggers():
-    """Suppress noisy loggers at INFO level.
-
-    Not called at import time — call explicitly from application startup
-    (e.g. proxy server via _turn_on_json) if desired.
-    """
+    """Suppress noisy loggers at INFO level."""
     # Suppress httpx request logging at INFO level
     httpx_logger = logging.getLogger("httpx")
     httpx_logger.setLevel(logging.WARNING)
@@ -209,6 +205,9 @@ def _suppress_loggers():
     apscheduler_executors_logger.setLevel(logging.WARNING)
     apscheduler_scheduler_logger = logging.getLogger("apscheduler.scheduler")
     apscheduler_scheduler_logger.setLevel(logging.WARNING)
+
+
+_suppress_loggers()
 
 ALL_LOGGERS = [
     verbose_logger,
