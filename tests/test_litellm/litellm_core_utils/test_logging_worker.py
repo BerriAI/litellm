@@ -22,11 +22,11 @@ class TestLoggingWorker:
 
     @pytest.mark.asyncio
     async def test_graceful_shutdown_with_clear_queue(self, logging_worker):
-        """Test that cancellation triggers clear_queue to prevent 'never awaited' warnings."""
-        # Mock the clear_queue method to verify it's called during cancellation
+        """Test that cancellation triggers _discard_queue to prevent 'never awaited' warnings."""
+        # Mock _discard_queue to verify it's called during cancellation
         with patch.object(
-            logging_worker, "clear_queue", new_callable=AsyncMock
-        ) as mock_clear_queue:
+            LoggingWorker, "_discard_queue"
+        ) as mock_discard:
             # Start the worker
             logging_worker.start()
 
@@ -44,8 +44,8 @@ class TestLoggingWorker:
                     # Expected during cancellation
                     pass
 
-            # Verify that clear_queue was called during cancellation
-            mock_clear_queue.assert_called_once()
+            # Verify that _discard_queue was called during cancellation
+            mock_discard.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_clear_queue_processes_remaining_items(self, logging_worker):
