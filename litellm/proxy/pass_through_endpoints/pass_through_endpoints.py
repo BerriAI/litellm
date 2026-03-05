@@ -76,14 +76,9 @@ _registered_pass_through_routes: Dict[
 ] = {}
 
 # Tracks adapter targets already registered to prevent duplicate entries.
-# Known limitations (TODO):
-# 1. Dedup-by-qualname means two *distinct instances* of the same adapter
-#    class (e.g. two AnthropicAdapter with different configs) will be
-#    collapsed into one.  Supporting multi-instance requires keying on
-#    (qualname + config hash) or a user-supplied unique ID.
-# 2. On config reload, adapter UUIDs are regenerated, so stale routes may
-#    accumulate in _registered_pass_through_routes until the process
-#    restarts.  A full clear-and-rebuild strategy would fix this.
+# Uses object identity (id) for adapter instances so that:
+# - The SAME adapter object registered twice (exact + subpath) is deduped correctly
+# - Different instances of the same class get separate registrations
 _seen_adapter_targets: dict = {}
 
 
@@ -1118,7 +1113,7 @@ def create_pass_through_route(
             adapter = get_instance_fn(value=target)
         # Deduplicate: reuse existing adapter_id when the same target is
         # registered more than once (e.g. exact path + subpath routes).
-        _target_key = target if isinstance(target, str) else type(target).__qualname__
+        _target_key = target if isinstance(target, str) else id(target)
         if _target_key in _seen_adapter_targets:
             adapter_id = _seen_adapter_targets[_target_key]
         else:

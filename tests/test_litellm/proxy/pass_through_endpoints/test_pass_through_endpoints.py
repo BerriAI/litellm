@@ -2474,9 +2474,60 @@ def test_subpath_reuses_adapter_id(monkeypatch):
 
         # Still only one adapter entry (no duplicate)
         assert len(litellm.adapters) == 1
-        # The seen dict should map to the same adapter_id
-        target_key = type(adapter_instance).__qualname__
+        # The seen dict should map to the same adapter_id (keyed by object identity)
+        target_key = id(adapter_instance)
         assert _seen_adapter_targets[target_key] == first_adapter_id
+    finally:
+        _registered_pass_through_routes.clear()
+        _seen_adapter_targets.clear()
+
+
+def test_same_class_different_instances_get_separate_adapters(monkeypatch):
+    """
+    Two distinct instances of the same adapter class targeting different
+    endpoints must each get their own adapter_id (no qualname collision).
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
+        _seen_adapter_targets,
+        create_pass_through_route,
+    )
+
+    import litellm
+
+    class SharedAdapter(CustomLogger):
+        pass
+
+    monkeypatch.setattr(litellm, "adapters", [])
+    _registered_pass_through_routes.clear()
+    _seen_adapter_targets.clear()
+
+    try:
+        instance_a = SharedAdapter()
+        instance_b = SharedAdapter()
+
+        create_pass_through_route(
+            endpoint="/v1/endpoint-a",
+            target=instance_a,
+            custom_headers=None,
+            _forward_headers=False,
+            _merge_query_params=False,
+            dependencies=None,
+        )
+
+        create_pass_through_route(
+            endpoint="/v1/endpoint-b",
+            target=instance_b,
+            custom_headers=None,
+            _forward_headers=False,
+            _merge_query_params=False,
+            dependencies=None,
+        )
+
+        # Two different instances → two separate adapter entries
+        assert len(litellm.adapters) == 2
+        adapter_ids = [entry["id"] for entry in litellm.adapters]
+        assert len(set(adapter_ids)) == 2, "Same-class instances must get distinct IDs"
     finally:
         _registered_pass_through_routes.clear()
         _seen_adapter_targets.clear()
