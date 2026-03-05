@@ -2473,17 +2473,9 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
-            ## CONFIGURE USER API KEY CACHE TO USE REDIS FOR PKCE ##
-            # Only wire Redis when PKCE is explicitly enabled to avoid changing
-            # cache behaviour for deployments that don't use PKCE.
-            global user_api_key_cache
-            use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
-            if use_pkce and user_api_key_cache.redis_cache is None:
-                user_api_key_cache.redis_cache = redis_usage_cache
-                verbose_proxy_logger.info(
-                    "Configured user_api_key_cache to use Redis "
-                    "(PKCE enabled — verifiers shared across instances)."
-                )
+            ## INIT PROXY REDIS USAGE CLIENT ##
+            # Note: PKCE verifier storage uses redis_usage_cache directly (not
+            # user_api_key_cache) to avoid routing all API-key lookups through Redis.
 
     def switch_on_llm_response_caching(self):
         """
@@ -3033,28 +3025,19 @@ class ProxyConfig:
                     default_redis_ttl=None,  # PKCE verifiers set explicit TTL on each store; Redis TTL not configured here
                 )
 
-            ### CONFIGURE USER API KEY CACHE TO USE REDIS FOR PKCE (if enabled) ###
-            # Only wire Redis to user_api_key_cache when PKCE is explicitly enabled.
-            # This avoids silently routing API key lookups through Redis for deployments
-            # that use Redis only for LLM response caching and not for session state.
+            ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
+            # PKCE verifiers are stored in redis_usage_cache when available so they can
+            # be read back by any instance (not just the one that started the auth flow).
+            # user_api_key_cache is intentionally left in-memory-only to avoid routing
+            # all API-key lookups through Redis.
             use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
-            if use_pkce and user_api_key_cache.redis_cache is None:
-                if redis_usage_cache is not None:
-                    # Reuse the existing Redis connection so all advanced connection
-                    # options (SSL, db, timeouts) are inherited rather than re-created
-                    # from a subset of env vars.
-                    user_api_key_cache.redis_cache = redis_usage_cache
-                    verbose_proxy_logger.info(
-                        "Configured user_api_key_cache to use Redis "
-                        "(PKCE enabled — verifiers shared across instances)."
-                    )
-                else:
-                    verbose_proxy_logger.warning(
-                        "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
-                        "PKCE verifiers will not be shared across instances. "
-                        "Configure Redis via the 'cache' section in your proxy config, "
-                        "or enable sticky sessions for multi-instance deployments."
-                    )
+            if use_pkce and redis_usage_cache is None:
+                verbose_proxy_logger.warning(
+                    "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
+                    "PKCE verifiers will not be shared across instances. "
+                    "Configure Redis via the 'cache' section in your proxy config, "
+                    "or enable sticky sessions for multi-instance deployments."
+                )
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
