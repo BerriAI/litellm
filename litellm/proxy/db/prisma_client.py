@@ -365,8 +365,8 @@ class PrismaManager:
     def ensure_client_generated() -> None:
         try:
             prisma_module = importlib.import_module("prisma")
-            getattr(prisma_module, "Client")
-            return  # Client already importable — no need to regenerate
+            getattr(prisma_module, "Prisma")
+            return  # Prisma class already importable — no need to regenerate
         except (ImportError, AttributeError):
             pass  # prisma not installed or not yet generated — continue to generate
 
@@ -397,7 +397,7 @@ class PrismaManager:
                 if mod_name == "prisma" or mod_name.startswith("prisma."):
                     sys.modules.pop(mod_name, None)
             prisma_module = importlib.import_module("prisma")
-            getattr(prisma_module, "Client")
+            getattr(prisma_module, "Prisma")
             verbose_proxy_logger.info("Prisma client generated successfully.")
         except subprocess.TimeoutExpired as e:
             timeout_val = getattr(e, "timeout", 120)
