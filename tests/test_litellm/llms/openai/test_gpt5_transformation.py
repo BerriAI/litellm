@@ -267,9 +267,12 @@ def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-2025-12-11")
+    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.4")
+    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.4-2026-03-05")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.3-chat-latest")
+    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.4-pro")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-pro")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
@@ -301,6 +304,16 @@ def test_gpt5_2_temperature_with_reasoning_effort_none(config: OpenAIConfig):
         )
         assert params["temperature"] == temp
         assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_4_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
 
 
 def test_gpt5_1_temperature_without_reasoning_effort(config: OpenAIConfig):
