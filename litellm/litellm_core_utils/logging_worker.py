@@ -368,7 +368,7 @@ class LoggingWorker:
             )
         finally:
             # Only reset the flag if our epoch is still current. If the loop
-            # changed during clear, _invalidate_loop_state() already reset the
+            # changed during clear, _reset_loop_state() already reset the
             # flag for the new epoch and we must not clobber it.
             if self._epoch == my_epoch:
                 self._aggressive_clear_in_progress = False
