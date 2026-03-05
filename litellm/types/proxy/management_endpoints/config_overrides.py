@@ -34,6 +34,10 @@ class HashicorpVaultConfig(BaseModel):
         default=None,
         description="Path to the client TLS private key for Vault",
     )
+    vault_cert_role: Optional[str] = Field(
+        default=None,
+        description="Certificate role name for TLS cert authentication",
+    )
     vault_namespace: Optional[str] = Field(
         default=None,
         description="Vault namespace (for multi-tenant Vault, sent as X-Vault-Namespace header)",
