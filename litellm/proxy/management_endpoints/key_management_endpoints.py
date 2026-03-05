@@ -126,7 +126,10 @@ def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
 
 
 def _set_key_rotation_fields(
-    data: dict, auto_rotate: bool, rotation_interval: Optional[str], existing_key_alias: Optional[str] = None
+    data: dict,
+    auto_rotate: bool,
+    rotation_interval: Optional[str],
+    existing_key_alias: Optional[str] = None,
 ) -> None:
     """
     Helper function to set rotation fields in key data if auto_rotate is enabled.
@@ -948,7 +951,16 @@ async def _validate_key_models_against_effective_team_models(
         team_member_models=member_models,
     )
 
-    # 3. Fallback: if effective models empty but team has models, use team.models
+    # 3. Cap effective models to team.models (same intersection the runtime
+    #    auth check applies) so the key is never stamped with models the
+    #    runtime would block.
+    if (
+        team_table.models
+        and SpecialModelNames.all_proxy_models.value not in team_table.models
+    ):
+        effective_models = list(set(effective_models) & set(team_table.models))
+
+    # 4. Fallback: if effective models empty but team has models, use team.models
     if not effective_models:
         if team_table.models:
             effective_models = team_table.models
@@ -960,7 +972,7 @@ async def _validate_key_models_against_effective_team_models(
                 },
             )
 
-    # 4. Step 6b: If data.models is empty, default to effective models
+    # 5. If data.models is empty, default to effective models
     if not data.models:
         data.models = effective_models
     else:
@@ -3156,7 +3168,10 @@ async def delete_verification_tokens(
         hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
 
-    return {"deleted_keys": deleted_tokens, "failed_tokens": failed_tokens}, _keys_being_deleted
+    return {
+        "deleted_keys": deleted_tokens,
+        "failed_tokens": failed_tokens,
+    }, _keys_being_deleted
 
 
 def _transform_verification_tokens_to_deleted_records(
@@ -3259,7 +3274,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key( # noqa: PLR0915
+async def _rotate_master_key(  # noqa: PLR0915
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -3474,6 +3489,8 @@ async def _insert_deprecated_key(
             "Failed to insert deprecated key for grace period: %s",
             deprecated_err,
         )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -4037,8 +4054,7 @@ def _get_member_team_ids_from_objects(
         team.team_id
         for team in team_objects
         if any(
-            member.user_id is not None
-            and member.user_id == user_api_key_dict.user_id
+            member.user_id is not None and member.user_id == user_api_key_dict.user_id
             for member in team.members_with_roles
         )
     ]
@@ -4282,9 +4298,7 @@ async def key_aliases(
 
         where_sql = " AND ".join(where_parts)
 
-        count_sql = (
-            f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        )
+        count_sql = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
         count_rows = await prisma_client.db.query_raw(count_sql, *query_params)
         total_count = int(count_rows[0]["count"]) if count_rows else 0
 
@@ -4299,7 +4313,9 @@ async def key_aliases(
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
         alias_rows = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
-        aliases: List[str] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
+        aliases: List[str] = [
+            row["key_alias"] for row in alias_rows if row.get("key_alias")
+        ]
 
         total_pages = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(
