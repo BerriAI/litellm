@@ -107,6 +107,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         # VertexAI doesn't support output_format parameter, remove it if present
         data.pop("output_format", None)
+        
+        # VertexAI doesn't support output_config parameter, remove it if present
+        data.pop("output_config", None)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)

@@ -231,3 +231,47 @@ def test_remove_custom_field_from_tools():
     request4 = {"tools": None}
     remove_custom_field_from_tools(request4)
     assert request4["tools"] is None
+
+def test_remove_scope_from_cache_control():
+    """Ensure scope field is removed from cache_control for Bedrock (not supported)."""
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    # Test case 1: System with cache_control containing scope
+    request = {
+        "system": [
+            {
+                "type": "text",
+                "text": "You are an AI assistant.",
+                "cache_control": {
+                    "type": "ephemeral",
+                    "scope": "global",
+                },
+            }
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {
+                            "type": "ephemeral",
+                            "scope": "global",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    cfg._remove_ttl_from_cache_control(request)
+
+    # Verify scope is removed from system
+    assert "scope" not in request["system"][0]["cache_control"]
+    assert request["system"][0]["cache_control"]["type"] == "ephemeral"
+
+    # Verify scope is removed from messages
+    assert "scope" not in request["messages"][0]["content"][0]["cache_control"]
+    assert request["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
