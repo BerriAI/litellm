@@ -149,6 +149,13 @@ class TestAgentCoreStreamingToolFlow:
         for chunk in chunks[:-1]:
             assert chunk.choices[0].finish_reason is None
 
+        # Verify toolUse event doesn't produce unexpected finish_reason
+        assert not any(
+            getattr(c.choices[0], "finish_reason", None) == "tool_use"
+            for c in chunks
+            if c.choices
+        )
+
         content_parts = [
             chunk.choices[0].delta.content
             for chunk in chunks
@@ -183,9 +190,18 @@ class TestAgentCoreStreamingToolFlow:
         for chunk in chunks[:-1]:
             assert chunk.choices[0].finish_reason is None
 
+        # Verify toolUse event doesn't produce unexpected finish_reason
+        assert not any(
+            getattr(c.choices[0], "finish_reason", None) == "tool_use"
+            for c in chunks
+            if c.choices
+        )
+
         content_parts = [
             chunk.choices[0].delta.content
             for chunk in chunks
             if chunk.choices[0].delta.content
         ]
         assert "".join(content_parts) == "Let me check weather. Here are results."
+
+        assert any(getattr(chunk, "usage", None) is not None for chunk in chunks)
