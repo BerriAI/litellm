@@ -830,10 +830,13 @@ async def get_generic_sso_response(
     except Exception as e:
         error_message = str(e)
 
-        # Only surface "enable PKCE" advice when PKCE was NOT already in use.
-        # If code_verifier is set, the token exchange itself failed — that's a
-        # provider-side error, not a configuration problem.
-        if code_verifier is None and (
+        # Surface a helpful PKCE misconfiguration hint only when:
+        # 1. The error mentions PKCE/code verifier, AND
+        # 2. PKCE is not currently configured (GENERIC_CLIENT_USE_PKCE != true)
+        # If PKCE IS configured but code_verifier was absent (cross-instance cache miss),
+        # the real fix is shared Redis/sticky sessions — not enabling PKCE (it's already on).
+        pkce_configured = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+        if not pkce_configured and (
             "PKCE" in error_message or "code verifier" in error_message.lower()
         ):
             is_okta = (

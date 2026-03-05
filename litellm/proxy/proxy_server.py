@@ -3030,7 +3030,7 @@ class ProxyConfig:
             if user_api_key_cache_ttl is not None:
                 user_api_key_cache.update_cache_ttl(
                     default_in_memory_ttl=float(user_api_key_cache_ttl),
-                    default_redis_ttl=None,  # will be set below if Redis is available
+                    default_redis_ttl=None,  # PKCE verifiers set explicit TTL on each store; Redis TTL not configured here
                 )
 
             ### CONFIGURE USER API KEY CACHE TO USE REDIS FOR PKCE (if enabled) ###
