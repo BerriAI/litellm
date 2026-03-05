@@ -30,6 +30,11 @@ else:
 class BaseSkillsAPIConfig(ABC):
     """Base configuration for Skills API providers"""
 
+    # Operations supported by this provider (override in subclasses)
+    supported_operations: frozenset = frozenset(
+        {"create", "list", "get", "delete"}
+    )
+
     def __init__(self):
         pass
 

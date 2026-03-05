@@ -35,6 +35,14 @@ DEFAULT_OPENAI_API_BASE = "https://api.openai.com"
 class OpenAISkillsConfig(BaseSkillsAPIConfig):
     """OpenAI-specific Skills API configuration"""
 
+    supported_operations: frozenset = frozenset(
+        {
+            "create", "list", "get", "delete",
+            "update", "content", "create_version", "list_versions",
+            "get_version", "delete_version", "get_version_content",
+        }
+    )
+
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI

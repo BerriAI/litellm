@@ -333,36 +333,35 @@ class TestOpenAISkillsAPI:
         print(f"Skill version: {response}")
 
 
-class TestOpenAIOnlyProviderValidation:
-    """Test that OpenAI-only endpoints reject non-OpenAI providers.
+class TestProviderSupportsOperation:
+    """Test that provider-specific endpoints reject unsupported providers.
 
     These tests import from litellm.proxy (FastAPI dependency), so they
     live here rather than in tests/llm_translation/ (mock-only).
     """
 
-    def test_validate_openai_only_provider_accepts_openai(self):
+    def test_validate_provider_supports_operation_accepts_openai(self):
         from litellm.proxy.anthropic_endpoints.skills_endpoints import (
-            _validate_openai_only_provider,
+            _validate_provider_supports_operation,
         )
         # Should not raise
-        _validate_openai_only_provider("update", "openai")
+        _validate_provider_supports_operation("update", "openai")
 
-    def test_validate_openai_only_provider_rejects_anthropic(self):
+    def test_validate_provider_supports_operation_rejects_anthropic(self):
         from fastapi import HTTPException
         from litellm.proxy.anthropic_endpoints.skills_endpoints import (
-            _validate_openai_only_provider,
+            _validate_provider_supports_operation,
         )
         with pytest.raises(HTTPException) as exc_info:
-            _validate_openai_only_provider("update", "anthropic")
+            _validate_provider_supports_operation("update", "anthropic")
         assert exc_info.value.status_code == 400
-        assert "only supported by OpenAI" in str(exc_info.value.detail)
+        assert "not supported" in str(exc_info.value.detail)
 
-    def test_validate_openai_only_provider_rejects_unknown(self):
+    def test_validate_provider_supports_operation_rejects_unknown(self):
         from fastapi import HTTPException
         from litellm.proxy.anthropic_endpoints.skills_endpoints import (
-            _validate_openai_only_provider,
+            _validate_provider_supports_operation,
         )
         with pytest.raises(HTTPException) as exc_info:
-            _validate_openai_only_provider("content", "bedrock")
+            _validate_provider_supports_operation("content", "bedrock")
         assert exc_info.value.status_code == 400
-        assert "content" in str(exc_info.value.detail)
