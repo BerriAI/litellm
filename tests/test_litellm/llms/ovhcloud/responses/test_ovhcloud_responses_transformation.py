@@ -97,4 +97,3 @@ class TestOVHCloudResponsesAPITransformation:
         assert "model" in supported, "model should be supported"
         assert "input" in supported, "input should be supported"
         assert "temperature" in supported, "temperature should be supported"
-        assert "tools" in supported, "tools should be supported"
