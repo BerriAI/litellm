@@ -2945,3 +2945,18 @@ def test_batch_cost_calculator():
 
     cost = completion_cost(**args)
     assert cost > 0
+
+
+def test_cost_calculator_base_model_cross_provider():
+    """
+    When base_model has a different provider prefix than the deployment,
+    custom_llm_provider should be updated so cost_per_token builds the
+    correct model key.  Regression test for #22257.
+    """
+    resp = litellm.completion(
+        model="anthropic/my-custom-deployment",
+        messages=[{"role": "user", "content": "Hello"}],
+        base_model="gemini/gemini-2.0-flash",
+        mock_response="Hi there!",
+    )
+    assert resp._hidden_params["response_cost"] > 0

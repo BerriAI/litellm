@@ -1093,6 +1093,14 @@ def completion_cost(  # noqa: PLR0915
             router_model_id=router_model_id,
         )
 
+        # When base_model overrides model and carries its own provider prefix
+        # (e.g. base_model="gemini/gemini-2.0-flash" on an anthropic deployment),
+        # align custom_llm_provider so cost_per_token builds the correct key.
+        if base_model is not None and selected_model is not None:
+            _parts = selected_model.split("/", 1)
+            if len(_parts) > 1 and _parts[0] in LlmProvidersSet:
+                custom_llm_provider = _parts[0]
+
         potential_model_names = [
             selected_model,
             _get_response_model(completion_response),
