@@ -254,7 +254,9 @@ async def alist_skills(
     
     Args:
         limit: Number of results to return per page (max 100, default 20)
-        page: Pagination token for fetching a specific page of results
+        page: Pagination cursor for the next page.  For Anthropic this is
+              a page cursor; for OpenAI it maps to the ``after`` cursor.
+              Pass the ``next_page`` value from the previous response.
         before: Cursor for reverse pagination (OpenAI only)
         source: Filter skills by source ('custom' or 'anthropic')
         extra_headers: Additional headers for the request
@@ -320,7 +322,9 @@ def list_skills(
     
     Args:
         limit: Number of results to return per page (max 100, default 20)
-        page: Pagination token for fetching a specific page of results
+        page: Pagination cursor for the next page.  For Anthropic this is
+              a page cursor; for OpenAI it maps to the ``after`` cursor.
+              Pass the ``next_page`` value from the previous response.
         before: Cursor for reverse pagination (OpenAI only)
         source: Filter skills by source ('custom' or 'anthropic')
         extra_headers: Additional headers for the request

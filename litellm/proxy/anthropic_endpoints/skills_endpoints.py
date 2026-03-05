@@ -171,31 +171,38 @@ async def list_skills(
     limit: Optional[int] = 10,
     after_id: Optional[str] = None,
     before_id: Optional[str] = None,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
     custom_llm_provider: Optional[str] = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    List skills on Anthropic.
-    
-    Requires `?beta=true` query parameter.
-    
+    List skills.
+
+    Pagination parameters (both naming styles accepted):
+    - Anthropic style: ``after_id`` / ``before_id``
+    - OpenAI style: ``after`` / ``before``
+
+    Use the ``next_page`` value from a previous ``ListSkillsResponse``
+    to fetch the next page (pass as ``after`` or ``after_id``).
+
     Model-based routing (for multi-account support):
     - Pass model via header: `x-litellm-model: claude-account-1`
     - Pass model via query: `?model=claude-account-1`
     - Pass model via body: `{"model": "claude-account-1"}`
-    
+
     Example usage:
     ```bash
     # Basic usage
     curl "http://localhost:4000/v1/skills?beta=true&limit=10" \
       -H "Authorization: Bearer your-key"
-    
+
     # With model-based routing
     curl "http://localhost:4000/v1/skills?beta=true&limit=10" \
       -H "Authorization: Bearer your-key" \
       -H "x-litellm-model: claude-account-1"
     ```
-    
+
     Returns: ListSkillsResponse with list of skills
     """
     from litellm.proxy.proxy_server import (
@@ -222,18 +229,15 @@ async def list_skills(
             detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
         )
     
-    # Use query params if not in body
+    # Use query params if not in body (accept both Anthropic and OpenAI naming)
     if "limit" not in data and limit is not None:
         data["limit"] = limit
-    if "after_id" not in data and after_id is not None:
-        data["after_id"] = after_id
-    if "before_id" not in data and before_id is not None:
-        data["before_id"] = before_id
-    # Map Anthropic-style param names to SDK param names
-    if "after_id" in data:
-        data.setdefault("page", data.pop("after_id"))
-    if "before_id" in data:
-        data.setdefault("before", data.pop("before_id"))
+    resolved_after = after_id or after
+    resolved_before = before_id or before
+    if "page" not in data and resolved_after is not None:
+        data["page"] = resolved_after
+    if "before" not in data and resolved_before is not None:
+        data["before"] = resolved_before
     
     # Extract model for routing (header > query > body)
     model = (
