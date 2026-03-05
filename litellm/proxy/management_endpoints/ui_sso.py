@@ -2492,11 +2492,12 @@ class SSOAuthenticationHandler:
         token_params: Dict[str, Any] = {"include_client_id": generic_include_client_id}
 
         # Retrieve PKCE code_verifier if PKCE was used in authorization.
-        # Use same cache as store: Redis when available (multi-pod), else in-memory.
+        # Gate on GENERIC_CLIENT_USE_PKCE to avoid an unnecessary Redis round-trip
+        # on every non-PKCE SSO callback.
         query_params = dict(request.query_params)
         state = query_params.get("state")
 
-        if state:
+        if state and os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true":
             from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
             cache_key = f"pkce_verifier:{state}"

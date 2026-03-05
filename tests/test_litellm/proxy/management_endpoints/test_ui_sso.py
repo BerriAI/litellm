@@ -4,6 +4,7 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import Request
 
@@ -3147,7 +3148,7 @@ class TestPKCEFunctionality:
         mock_cache.async_get_cache = AsyncMock(return_value=test_code_verifier)
         mock_cache.async_delete_cache = AsyncMock()
 
-        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             # Act
             token_params = (
                 await SSOAuthenticationHandler.prepare_token_exchange_parameters(
@@ -4503,12 +4504,6 @@ def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
 # Tests for SSOAuthenticationHandler PKCE token exchange methods
 # ──────────────────────────────────────────────────────────────────────────────
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import httpx
-import pytest
-
-
 @pytest.mark.asyncio
 async def test_pkce_token_exchange_basic_auth():
     """When include_client_id=False, client credentials go via HTTP Basic Auth."""
@@ -4533,9 +4528,6 @@ async def test_pkce_token_exchange_basic_auth():
         assert "auth" in kwargs
         assert isinstance(kwargs["auth"], httpx.BasicAuth)
         return mock_response
-
-    async def fake_get(*args, **kwargs):
-        return mock_userinfo_response
 
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
