@@ -55,6 +55,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         Note: BFL uses different parameter names, these are mapped in map_openai_params.
         """
         return [
+            "mask",
             "seed",
             "output_format",
             "safety_tolerance",
