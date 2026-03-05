@@ -425,9 +425,9 @@ async def test_get_user_object_upsert_includes_user_email():
             proxy_logging_obj=None,
             user_email="test@example.com",
         )
-    except Exception:
+    except Exception as e:
         # May fail since mock object is not a real LiteLLM_UserTable
-        pass
+        print(e)
 
     # Verify the user was created with user_email included
     mock_prisma_client.db.litellm_usertable.create.assert_called_once()
