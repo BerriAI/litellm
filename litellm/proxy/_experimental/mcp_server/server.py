@@ -2262,7 +2262,7 @@ if MCP_AVAILABLE:
         HTTP 500 responses in MCP handlers.
         """
         try:
-            status_code = int(str(e.code))
+            status_code = int(e.code)
         except (TypeError, ValueError):
             status_code = 500
 
@@ -2376,7 +2376,7 @@ if MCP_AVAILABLE:
                 verbose_logger.exception(
                     f"Failed to send ProxyException error response: {response_error}"
                 )
-                raise e
+                raise
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions
@@ -2394,7 +2394,7 @@ if MCP_AVAILABLE:
                     f"Failed to send error response: {response_error}"
                 )
                 # If we can't send a proper response, re-raise the original error
-                raise e
+                raise
 
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
@@ -2433,6 +2433,8 @@ if MCP_AVAILABLE:
                 await asyncio.sleep(0.1)
 
             await sse_session_manager.handle_request(scope, receive, send)
+        except HTTPException:
+            raise
         except ProxyException as e:
             verbose_logger.warning(
                 "MCP request failed with ProxyException: %s",
@@ -2445,7 +2447,7 @@ if MCP_AVAILABLE:
                 verbose_logger.exception(
                     f"Failed to send ProxyException error response: {response_error}"
                 )
-                raise e
+                raise
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response
@@ -2464,7 +2466,7 @@ if MCP_AVAILABLE:
                     f"Failed to send error response: {response_error}"
                 )
                 # If we can't send a proper response, re-raise the original error
-                raise e
+                raise
 
     app = FastAPI(
         title=LITELLM_MCP_SERVER_NAME,
