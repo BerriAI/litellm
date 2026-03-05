@@ -62,7 +62,7 @@ def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 def _str_or_none(value) -> Optional[str]:
-    return str(value) if value else None
+    return str(value) if value is not None else None
 
 
 def _load_vcap() -> Dict[str, Any]:

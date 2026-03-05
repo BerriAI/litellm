@@ -41,12 +41,14 @@ def test_sap_fetch_creds_from_env_service_key(monkeypatch):
 
 def test_sap_fetch_creds_from_arg_service_key(monkeypatch):
     monkeypatch.setattr(sap_credentials, "sap_service_key", None)
+    monkeypatch.delenv("AICORE_SERVICE_KEY", raising=False)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
     creds = sap_credentials.fetch_credentials(service_key=json.dumps(mock_sap_service_key_dict))
     assert creds == expected_creds
 
 def test_fetch_creds_from_env_vcap_service(monkeypatch):
     monkeypatch.setattr(sap_credentials, "sap_service_key", None)
+    monkeypatch.delenv("AICORE_SERVICE_KEY", raising=False)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
     monkeypatch.setenv("VCAP_SERVICES", json.dumps(mock_sap_vcap_service_key_dict))
     creds = sap_credentials.fetch_credentials()
@@ -55,6 +57,8 @@ def test_fetch_creds_from_env_vcap_service(monkeypatch):
 
 def test_fetch_creds_from_env(monkeypatch):
     monkeypatch.setattr(sap_credentials, "sap_service_key", None)
+    monkeypatch.delenv("AICORE_SERVICE_KEY", raising=False)
+    monkeypatch.delenv("VCAP_SERVICES", raising=False)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
     monkeypatch.setenv("AICORE_CLIENT_ID", "env-client-id")
     monkeypatch.setenv("AICORE_CLIENT_SECRET", "env-client-secret")
@@ -72,6 +76,7 @@ def test_fetch_creds_from_env(monkeypatch):
 
 def test_creds_priority_order(monkeypatch):
     monkeypatch.setattr(sap_credentials, "sap_service_key", None)
+    monkeypatch.delenv("AICORE_SERVICE_KEY", raising=False)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
     monkeypatch.setenv("AICORE_CLIENT_ID", "env-client-id")
     monkeypatch.setenv("AICORE_CLIENT_SECRET", "env-client-secret")
