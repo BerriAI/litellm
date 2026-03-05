@@ -31,7 +31,7 @@ interface ServerConnectionStatus {
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEMO_VIRTUAL_KEY = "sk-3GWHDBM9B37bBIsl3dhuAg";
+const DEMO_VIRTUAL_KEY = "sk-rJGGhNOSHLXi8OwdDAIX8Q";
 const CLIENT_ID = "user-alice-123";
 const PROXY_BASE_URL =
   process.env.NEXT_PUBLIC_LITELLM_PROXY_BASE_URL || "http://localhost:4000";

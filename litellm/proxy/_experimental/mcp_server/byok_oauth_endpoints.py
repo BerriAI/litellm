@@ -175,7 +175,12 @@ def _build_authorize_html(
     display: flex; align-items: center; justify-content: center;
     font-size: 22px; font-weight: 800; color: white;
   }}
-  .logo-l {{ background: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%); }}
+  .logo-img {{
+    width: 52px; height: 52px;
+    border-radius: 14px;
+    object-fit: cover;
+    border: 1.5px solid #e2e8f0;
+  }}
   .logo-s {{ background: linear-gradient(135deg, #818cf8 0%, #4f46e5 100%); }}
   .logo-arrow {{ color: #cbd5e1; font-size: 20px; font-weight: 300; }}
   /* Headings */
@@ -258,8 +263,9 @@ def _build_authorize_html(
     background: #e0f2fe;
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 20px; margin-bottom: 14px;
+    margin-bottom: 14px;
   }}
+  .key-icon-wrap svg {{ width: 22px; height: 22px; color: #0284c7; }}
   /* Form elements */
   .field-label {{
     font-size: 13.5px; font-weight: 600;
@@ -382,16 +388,18 @@ def _build_authorize_html(
     <button class="close-btn" type="button" onclick="doCancel()" title="Close">&times;</button>
 
     <div class="logos">
-      <div class="logo logo-l">L</div>
+      <img src="/ui/assets/logos/litellm_logo.jpg" class="logo-img" alt="LiteLLM">
       <span class="logo-arrow">&#8594;</span>
       <div class="logo logo-s">{server_initial}</div>
     </div>
 
-    <h2 class="step-title">Connect {server_name}</h2>
+    <h2 class="step-title">Connect {server_name} MCP</h2>
     <p class="step-subtitle">LiteLLM needs access to {server_name} to complete your request.</p>
 
     <div class="info-box">
-      <span class="info-icon">&#9432;</span>
+      <span class="info-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      </span>
       <div>
         <h4>How it works</h4>
         <p>LiteLLM acts as a secure bridge. Your requests are routed through our MCP client directly to {server_name}&rsquo;s API.</p>
@@ -417,7 +425,9 @@ def _build_authorize_html(
       <button class="close-btn" style="position:static;" type="button" onclick="doCancel()" title="Close">&times;</button>
     </div>
 
-    <div class="key-icon-wrap">&#128273;</div>
+    <div class="key-icon-wrap">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#0284c7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+    </div>
     <h2 class="step-title" style="text-align:left;">Provide API Key</h2>
     <p class="step-subtitle" style="text-align:left;">Enter your {server_name} API key to authorize this connection.</p>
 
@@ -446,7 +456,6 @@ def _build_authorize_html(
 
       <div class="save-card">
         <div class="save-row">
-          <span class="save-icon">&#128190;</span>
           <span class="save-label">Save key for future use</span>
           <label class="toggle">
             <input type="checkbox" id="saveToggle" onchange="toggleDur()">
@@ -466,12 +475,14 @@ def _build_authorize_html(
       </div>
 
       <div class="sec-note">
-        <span class="sec-icon">&#128274;</span>
+        <span class="sec-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </span>
         <p>Your key is encrypted at rest and transmitted securely. It is never shared with third parties.</p>
       </div>
 
       <button type="submit" class="btn-connect" id="connectBtn">
-        &#128274; Connect &amp; Authorize
+        Connect &amp; Authorize
       </button>
     </form>
   </div>
