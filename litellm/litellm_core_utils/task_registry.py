@@ -149,7 +149,8 @@ class TaskRegistry:
                     )
         finally:
             with self._lock:
-                self._tasks.clear()
+                for t in pending:
+                    self._tasks.discard(t)
 
 
 def tracked_create_task(
