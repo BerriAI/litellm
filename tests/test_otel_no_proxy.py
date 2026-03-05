@@ -10,10 +10,8 @@ Fixes https://github.com/BerriAI/litellm/issues/13081
 import ast
 import enum
 import importlib
-import sys
-import types
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 class TestSpanAttributesLocation(unittest.TestCase):
