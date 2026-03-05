@@ -305,7 +305,6 @@ model LiteLLM_MCPServerTable {
   registration_url   String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
-  spec_path             String?
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
