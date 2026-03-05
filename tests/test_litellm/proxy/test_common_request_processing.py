@@ -1010,13 +1010,6 @@ class TestCommonRequestProcessingHelpers:
             assert mock_tracer.trace.call_count == 4
 
             # Verify that each call was made with the correct operation name
-            expected_calls = [
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-            ]
-
             actual_calls = mock_tracer.trace.call_args_list
             assert len(actual_calls) == 4
 
