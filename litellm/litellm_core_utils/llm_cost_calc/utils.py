@@ -662,7 +662,7 @@ def generic_cost_per_token(  # noqa: PLR0915
 
     accounted_tokens = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
     has_double_counting = cache_hit > 0 and accounted_tokens > usage.prompt_tokens
-
+     # Double-counting fix (xAI etc.): recalculate text_tokens from scratch
     if has_double_counting:
         text_tokens = (
             usage.prompt_tokens
@@ -673,6 +673,9 @@ def generic_cost_per_token(  # noqa: PLR0915
         )
         prompt_tokens_details["text_tokens"] = text_tokens
     elif accounted_tokens < usage.prompt_tokens:
+        # unaccounted tokens fix: inline documents (PDF, DOCX, etc.) are counted
+        # in prompt_tokens by the provider but not broken out at input_cost_per_token.
+        # Add the gap to text_tokens so they are costed at input_cost_per_token.
         unaccounted_tokens = usage.prompt_tokens - accounted_tokens
         prompt_tokens_details["text_tokens"] += unaccounted_tokens
         
