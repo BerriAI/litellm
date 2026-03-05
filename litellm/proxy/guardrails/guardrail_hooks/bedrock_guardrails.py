@@ -555,9 +555,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         verbose_proxy_logger.debug(
-            "Bedrock AI guardrail request URL: %s, headers: %s",
+            "Bedrock guardrail request: url=%s, headers=%s",
             prepared_request.url,
-            prepared_request.headers,
+            {k: v for k, v in prepared_request.headers.items() if k.lower() != "authorization"},
         )
 
         try:
