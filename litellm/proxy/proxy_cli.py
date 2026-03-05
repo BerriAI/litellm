@@ -782,13 +782,15 @@ def run_server(  # noqa: PLR0915
             )
             db_connection_idle_lifetime = general_settings.get(
                 "database_connection_idle_lifetime",
-                int(
+                None,
+            )
+            if db_connection_idle_lifetime is None:
+                db_connection_idle_lifetime = int(
                     os.getenv(
                         "LITELLM_DB_IDLE_LIFETIME",
                         str(LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value),
                     )
-                ),
-            )
+                )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is
