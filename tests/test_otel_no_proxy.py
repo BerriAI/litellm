@@ -10,6 +10,7 @@ Fixes https://github.com/BerriAI/litellm/issues/13081
 import ast
 import enum
 import importlib
+import importlib.util
 import sys
 import unittest
 from unittest.mock import patch
