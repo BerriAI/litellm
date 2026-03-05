@@ -101,7 +101,7 @@ async def test_agents_disabled_team_admin_allowed():
         clear=True,
     ):
         with patch(
-            "litellm.proxy.common_utils.rbac_utils._check_if_team_admin",
+            "litellm.proxy.management_endpoints.common_utils._user_has_admin_privileges",
             new=AsyncMock(return_value=True),
         ):
             await check_feature_access_for_user(user, "agents")
@@ -116,7 +116,7 @@ async def test_agents_disabled_non_team_admin_blocked():
         clear=True,
     ):
         with patch(
-            "litellm.proxy.common_utils.rbac_utils._check_if_team_admin",
+            "litellm.proxy.management_endpoints.common_utils._user_has_admin_privileges",
             new=AsyncMock(return_value=False),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -133,7 +133,7 @@ async def test_vector_stores_disabled_team_admin_allowed():
         clear=True,
     ):
         with patch(
-            "litellm.proxy.common_utils.rbac_utils._check_if_team_admin",
+            "litellm.proxy.management_endpoints.common_utils._user_has_admin_privileges",
             new=AsyncMock(return_value=True),
         ):
             await check_feature_access_for_user(user, "vector_stores")
@@ -148,7 +148,7 @@ async def test_vector_stores_disabled_non_team_admin_blocked():
         clear=True,
     ):
         with patch(
-            "litellm.proxy.common_utils.rbac_utils._check_if_team_admin",
+            "litellm.proxy.management_endpoints.common_utils._user_has_admin_privileges",
             new=AsyncMock(return_value=False),
         ):
             with pytest.raises(HTTPException) as exc_info:
