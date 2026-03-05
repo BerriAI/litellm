@@ -1,5 +1,6 @@
 import json
-from litellm.llms.sap.credentials import fetch_credentials
+import litellm.llms.sap.credentials as sap_credentials
+
 mock_sap_service_key_dict = {
     "serviceurls":
         {
@@ -32,24 +33,28 @@ mock_sap_vcap_service_key_dict = {
 }
 
 def test_sap_fetch_creds_from_env_service_key(monkeypatch):
+    monkeypatch.setattr(sap_credentials, "sap_service_key", None)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
     monkeypatch.setenv("AICORE_SERVICE_KEY", json.dumps(mock_sap_service_key_dict))
-    creds = fetch_credentials()
+    creds = sap_credentials.fetch_credentials()
     assert creds == expected_creds
 
 def test_sap_fetch_creds_from_arg_service_key(monkeypatch):
+    monkeypatch.setattr(sap_credentials, "sap_service_key", None)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
-    creds = fetch_credentials(service_key=json.dumps(mock_sap_service_key_dict))
+    creds = sap_credentials.fetch_credentials(service_key=json.dumps(mock_sap_service_key_dict))
     assert creds == expected_creds
 
 def test_fetch_creds_from_env_vcap_service(monkeypatch):
+    monkeypatch.setattr(sap_credentials, "sap_service_key", None)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
     monkeypatch.setenv("VCAP_SERVICES", json.dumps(mock_sap_vcap_service_key_dict))
-    creds = fetch_credentials()
+    creds = sap_credentials.fetch_credentials()
     assert creds['client_id'] == "vcap-clientid"
     assert creds['client_secret'] == "vcap-clientsecret"
 
 def test_fetch_creds_from_env(monkeypatch):
+    monkeypatch.setattr(sap_credentials, "sap_service_key", None)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
     monkeypatch.setenv("AICORE_CLIENT_ID", "env-client-id")
     monkeypatch.setenv("AICORE_CLIENT_SECRET", "env-client-secret")
@@ -57,7 +62,7 @@ def test_fetch_creds_from_env(monkeypatch):
     monkeypatch.setenv("AICORE_BASE_URL", "env-base-url")
     monkeypatch.setenv("AICORE_RESOURCE_GROUP", "env-resource-group")
 
-    creds = fetch_credentials()
+    creds = sap_credentials.fetch_credentials()
 
     assert creds['client_id'] == "env-client-id"
     assert creds['client_secret'] == "env-client-secret"
@@ -66,12 +71,13 @@ def test_fetch_creds_from_env(monkeypatch):
     assert creds['resource_group'] == "env-resource-group"
 
 def test_creds_priority_order(monkeypatch):
+    monkeypatch.setattr(sap_credentials, "sap_service_key", None)
     monkeypatch.setenv("AICORE_HOME", 'notexist')
     monkeypatch.setenv("AICORE_CLIENT_ID", "env-client-id")
     monkeypatch.setenv("AICORE_CLIENT_SECRET", "env-client-secret")
     monkeypatch.setenv("AICORE_AUTH_URL", "env-auth-url")
     monkeypatch.setenv("AICORE_BASE_URL", "env-base-url")
     monkeypatch.setenv("AICORE_RESOURCE_GROUP", "env-resource-group")
-    creds = fetch_credentials(service_key=json.dumps(mock_sap_service_key_dict))
+    creds = sap_credentials.fetch_credentials(service_key=json.dumps(mock_sap_service_key_dict))
     assert creds['client_id'] == "mockclientid"
     assert creds['resource_group'] == "env-resource-group"
