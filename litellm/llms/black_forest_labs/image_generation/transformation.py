@@ -57,11 +57,19 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         Return list of OpenAI params supported by Black Forest Labs.
 
         Note: BFL uses different parameter names, these are mapped in map_openai_params.
-        """
         return [
             "n",  # Number of images (BFL returns 1 per request, but ultra supports up to 4)
             "size",  # Maps to width/height or aspect_ratio
             "quality",  # Maps to raw mode for ultra
+            "seed",
+            "output_format",
+            "safety_tolerance",
+            "prompt_upsampling",
+            "raw",
+            "num_images",
+            "image_url",
+            "image_prompt_strength",
+            "aspect_ratio",
         ]
 
     def map_openai_params(
