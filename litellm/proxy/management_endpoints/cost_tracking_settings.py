@@ -67,7 +67,7 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                         f"Resolved model '{model}' to base_model '{base_model}' from router"
                     )
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
-                    return base_model, custom_llm_provider
+                    return str(base_model), str(custom_llm_provider) if custom_llm_provider is not None else None
 
                 resolved_model = litellm_params.get("model")
 
@@ -76,7 +76,7 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                         f"Resolved model '{model}' to '{resolved_model}' from router"
                     )
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
-                    return resolved_model, custom_llm_provider
+                    return str(resolved_model), str(custom_llm_provider) if custom_llm_provider is not None else None
         except Exception as e:
             verbose_proxy_logger.debug(
                 f"Could not resolve model '{model}' from router: {e}"
