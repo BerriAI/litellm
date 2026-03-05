@@ -344,9 +344,10 @@ class LoggingWorker:
         Captures the queue as a local to prevent cross-loop access when
         _ensure_queue() replaces self._queue on a new event loop.
         """
-        # Snapshot queue at start — prevents cross-loop access when
+        # Snapshot queue and epoch at start — prevents cross-loop access when
         # _ensure_queue() replaces self._queue on a new event loop.
         my_queue = self._queue
+        my_epoch = self._epoch
         
         try:
             if my_queue is None:
@@ -366,8 +367,11 @@ class LoggingWorker:
                 f"LoggingWorker error during aggressive clear: {e}"
             )
         finally:
-            # Always reset the flag even if an error occurs
-            self._aggressive_clear_in_progress = False
+            # Only reset the flag if our epoch is still current. If the loop
+            # changed during clear, _invalidate_loop_state() already reset the
+            # flag for the new epoch and we must not clobber it.
+            if self._epoch == my_epoch:
+                self._aggressive_clear_in_progress = False
 
     async def _process_single_task(
         self, task: LoggingTask, queue: "asyncio.Queue[LoggingTask]"
