@@ -226,12 +226,16 @@ class AgentRegistry:
                 update_data["agent_card_params"] = safe_dumps(
                     augment_agent.get("agent_card_params")
                 )
-            if agent.get("static_headers") is not None:
+            if "static_headers" in agent:
+                headers_value = agent.get("static_headers")
                 update_data["static_headers"] = safe_dumps(
-                    dict(agent.get("static_headers"))  # type: ignore
+                    dict(headers_value) if headers_value is not None else {}
                 )
-            if agent.get("extra_headers") is not None:
-                update_data["extra_headers"] = agent.get("extra_headers")
+            if "extra_headers" in agent:
+                extra_headers_value = agent.get("extra_headers")
+                update_data["extra_headers"] = (
+                    extra_headers_value if extra_headers_value is not None else []
+                )
             if agent.get("object_permission") is not None:
                 agent_copy = dict(augment_agent)
                 existing_object_permission_id = existing_agent.get(
