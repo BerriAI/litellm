@@ -305,24 +305,22 @@ class AgentRegistry:
 
             # Serialize static_headers for update
             static_headers_obj_u = agent.get("static_headers")
-            static_headers_val_u: Optional[str] = (
+            static_headers_val_u: str = (
                 safe_dumps(dict(static_headers_obj_u))
                 if static_headers_obj_u is not None
-                else None
+                else safe_dumps({})
             )
-            extra_headers_val_u: Optional[List[str]] = agent.get("extra_headers")
+            extra_headers_val_u: List[str] = agent.get("extra_headers") or []
 
             update_data: Dict[str, Any] = {
                 "agent_name": agent_name,
                 "litellm_params": litellm_params,
                 "agent_card_params": agent_card_params,
+                "static_headers": static_headers_val_u,
+                "extra_headers": extra_headers_val_u,
                 "updated_by": updated_by,
                 "updated_at": datetime.now(timezone.utc),
             }
-            if static_headers_val_u is not None:
-                update_data["static_headers"] = static_headers_val_u
-            if extra_headers_val_u is not None:
-                update_data["extra_headers"] = extra_headers_val_u
             if agent.get("object_permission") is not None:
                 existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
                     where={"agent_id": agent_id}
