@@ -2,5 +2,5 @@ litellm[proxy]==1.82.1 # Specify the litellm version you want to use
 prometheus_client
 langfuse
 prisma
-openai>=2.8.0
+openai>=2.8.0,<3.0.0
 ddtrace==2.19.0 # for advanced DD tracing / profiling

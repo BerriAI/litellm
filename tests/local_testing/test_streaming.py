@@ -3114,9 +3114,8 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
         from litellm.exceptions import MidStreamFallbackError
 
-        with pytest.raises(
-            (litellm.InternalServerError, MidStreamFallbackError)
-        ):
+        # MidStreamFallbackError wraps InternalServerError when repeated chunks detected
+        with pytest.raises(MidStreamFallbackError):
             for chunk in response:
                 continue
     else:
