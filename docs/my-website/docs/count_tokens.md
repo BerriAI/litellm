@@ -65,11 +65,13 @@ async def main():
         messages=[{"role": "user", "content": "What's the weather in Paris?"}],
         tools=[{
             "type": "function",
-            "name": "get_weather",
-            "description": "Get weather for a city",
-            "parameters": {
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
             },
         }],
         system="You are a helpful weather assistant.",
