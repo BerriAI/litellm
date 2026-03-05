@@ -239,10 +239,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def _get_initiator(self, input_param: Union[str, ResponseInputParam]) -> str:
         """
-        Determine X-Initiator header value based on input analysis.
+        Determine X-Initiator header value based on the last input item.
 
         Based on copilot-api's hasAgentInitiator logic:
-        - Returns "agent" if input contains assistant role or items without role
+        - Returns "agent" if the last input item has assistant role or no role
         - Returns "user" otherwise
 
         Args:
@@ -255,12 +255,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if isinstance(input_param, str):
             return "user"
 
-        # If input is a list, analyze items
-        if isinstance(input_param, list):
-            for item in input_param:
-                if not isinstance(item, dict):
-                    continue
-
+        # If input is a list, check only the last item
+        if isinstance(input_param, list) and input_param:
+            item = input_param[-1]
+            if isinstance(item, dict):
                 # Check if item has no role (agent-initiated)
                 if "role" not in item or not item.get("role"):
                     return "agent"

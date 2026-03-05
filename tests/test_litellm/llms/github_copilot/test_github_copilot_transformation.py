@@ -509,3 +509,38 @@ def test_copilot_vision_request_header_with_type_image_url():
     
     assert headers["Copilot-Vision-Request"] == "true"
     assert headers["X-Initiator"] == "user"
+
+
+class TestDetermineInitiator:
+    """Tests for _determine_initiator — should check only the last message."""
+
+    def test_single_user_message(self):
+        config = GithubCopilotConfig()
+        assert config._determine_initiator([{"role": "user", "content": "Hi"}]) == "user"
+
+    def test_single_assistant_message(self):
+        config = GithubCopilotConfig()
+        assert config._determine_initiator([{"role": "assistant", "content": "Hi"}]) == "agent"
+
+    def test_multi_turn_ending_with_user(self):
+        """Regression test for #18155: multi-turn ending with user should be 'user'."""
+        config = GithubCopilotConfig()
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "Follow-up"},
+        ]
+        assert config._determine_initiator(messages) == "user"
+
+    def test_multi_turn_ending_with_tool(self):
+        config = GithubCopilotConfig()
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Let me check"},
+            {"role": "tool", "content": "result"},
+        ]
+        assert config._determine_initiator(messages) == "agent"
+
+    def test_empty_messages(self):
+        config = GithubCopilotConfig()
+        assert config._determine_initiator([]) == "user"

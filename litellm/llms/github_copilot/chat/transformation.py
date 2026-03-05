@@ -126,11 +126,11 @@ class GithubCopilotConfig(OpenAIConfig):
 
     def _determine_initiator(self, messages: List[AllMessageValues]) -> str:
         """
-        Determine if request is user or agent initiated based on message roles.
-        Returns 'agent' if any message has role 'tool' or 'assistant', otherwise 'user'.
+        Determine if request is user or agent initiated based on the last message role.
+        Returns 'agent' if the last message has role 'tool' or 'assistant', otherwise 'user'.
         """
-        for message in messages:
-            role = message.get("role")
+        if messages:
+            role = messages[-1].get("role")
             if role in ["tool", "assistant"]:
                 return "agent"
         return "user"

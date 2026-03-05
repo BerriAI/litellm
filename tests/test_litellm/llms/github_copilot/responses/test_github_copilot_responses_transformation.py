@@ -165,6 +165,19 @@ class TestGithubCopilotResponsesAPITransformation:
         initiator = config._get_initiator("Hello, how are you?")
         assert initiator == "user", "Should return 'user' for string input"
 
+    def test_get_initiator_multi_turn_last_message_user(self):
+        """Test _get_initiator checks only last item — multi-turn ending with user should be 'user'.
+        Regression test for #18155: previously iterated all items causing overcounting."""
+        config = GithubCopilotResponsesAPIConfig()
+
+        input_multi_turn = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "Follow-up question"},
+        ]
+        initiator = config._get_initiator(input_multi_turn)
+        assert initiator == "user", "Multi-turn ending with user should return 'user'"
+
     def test_has_vision_input_with_input_image(self):
         """Test _has_vision_input detects input_image type"""
         config = GithubCopilotResponsesAPIConfig()
