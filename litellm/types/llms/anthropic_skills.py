@@ -28,6 +28,9 @@ class ListSkillsParams(TypedDict, total=False):
     page: Optional[str]
     """Pagination token for fetching a specific page of results"""
 
+    before: Optional[str]
+    """Cursor for reverse pagination (OpenAI only)"""
+
     source: Optional[str]
     """Filter skills by source ('custom' or 'anthropic')"""
 
