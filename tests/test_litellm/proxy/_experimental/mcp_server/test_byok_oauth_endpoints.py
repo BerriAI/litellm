@@ -475,8 +475,9 @@ async def test_check_byok_credential_missing_credential():
     mock_prisma = MagicMock()
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.db.has_user_credential",
-        new=AsyncMock(return_value=False),
+        "litellm.proxy._experimental.mcp_server.db.get_user_credential",
+        new=AsyncMock(return_value=None),
+    ), patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
     ), patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with pytest.raises(HTTPException) as exc_info:
             await _check_byok_credential(server, user_auth)
