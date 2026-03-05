@@ -310,6 +310,7 @@ const sidebars = {
             "proxy/master_key_rotations",
             "proxy/model_management",
             "proxy/prod",
+            "proxy/worker_startup_hooks",
             "proxy/release_cycle",
           ],
         },
