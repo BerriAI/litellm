@@ -17,6 +17,8 @@ import secrets
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
+import httpx
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
@@ -794,140 +796,19 @@ async def get_generic_sso_response(
             )
 
         if code_verifier:
-            verbose_proxy_logger.info(
-                f"✔ PKCE: Performing direct token exchange with code_verifier. "
-                f"Length: {len(code_verifier)}"
+            combined_response = await SSOAuthenticationHandler._pkce_token_exchange(
+                authorization_code=authorization_code,
+                code_verifier=code_verifier,
+                client_id=generic_client_id,
+                client_secret=generic_client_secret,
+                token_endpoint=generic_token_endpoint,
+                userinfo_endpoint=generic_userinfo_endpoint,
+                include_client_id=generic_include_client_id,
+                redirect_url=redirect_url,
+                additional_headers=additional_generic_sso_headers_dict,
             )
-
-            # Direct token exchange to include code_verifier (fastapi-sso doesn't support PKCE)
-            import httpx
-
-            token_data = {
-                "grant_type": "authorization_code",
-                "code": authorization_code,
-                "redirect_uri": redirect_url,
-                "code_verifier": code_verifier,
-            }
-
-            # Add client credentials
-            if not generic_include_client_id:
-                # Use HTTP Basic Auth for client credentials
-                auth = httpx.BasicAuth(generic_client_id, generic_client_secret)
-            else:
-                # Include client credentials in body
-                token_data["client_id"] = generic_client_id
-                token_data["client_secret"] = generic_client_secret
-                auth = None
-
-            async with httpx.AsyncClient() as client:
-                post_kwargs: dict = {
-                    "data": token_data,
-                    "headers": {
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        "Accept": "application/json",
-                        **additional_generic_sso_headers_dict,
-                    },
-                    "timeout": 30.0,
-                }
-                if auth is not None:
-                    post_kwargs["auth"] = auth
-                response = await client.post(generic_token_endpoint, **post_kwargs)
-
-                response_text = response.text
-
-                if response.status_code != 200:
-                    verbose_proxy_logger.error(
-                        f"Token exchange failed: Status={response.status_code}"
-                    )
-                    verbose_proxy_logger.error(
-                        f"✘ Token exchange FAILED!\n"
-                        f"   Status: {response.status_code}\n"
-                        f"   Full Response:\n{response_text}"
-                    )
-                    raise ProxyException(
-                        message=f"Token exchange failed: {response.status_code} - {response_text[:500]}",
-                        type=ProxyErrorTypes.auth_error,
-                        param="token_exchange",
-                        code=status.HTTP_401_UNAUTHORIZED,
-                    )
-
-                # Parse token response
-                try:
-                    token_response = response.json()
-                    verbose_proxy_logger.info(
-                        f"✔ Token exchange successful! "
-                        f"access_token={bool(token_response.get('access_token'))}, "
-                        f"id_token={bool(token_response.get('id_token'))}"
-                    )
-                except Exception as json_err:
-                    verbose_proxy_logger.error(
-                        f"✘ Failed to parse token response as JSON!\n"
-                        f"   Error: {json_err}\n"
-                        f"   Response text: {response_text}"
-                    )
-                    raise
-
-            # Get user info - try userinfo endpoint first, fallback to id_token
-            access_token = token_response["access_token"]
-            id_token = token_response.get("id_token")
-            userinfo: dict = {}
-
-            try:
-                async with httpx.AsyncClient() as client:
-                    userinfo_response = await client.get(
-                        generic_userinfo_endpoint,
-                        headers={
-                            "Authorization": f"Bearer {access_token}",
-                            **additional_generic_sso_headers_dict,
-                        },
-                        timeout=30.0,
-                    )
-
-                    if userinfo_response.status_code == 200:
-                        userinfo = userinfo_response.json()
-                        verbose_proxy_logger.debug(
-                            "User info retrieved from userinfo endpoint"
-                        )
-                    else:
-                        verbose_proxy_logger.warning(
-                            f"⚠ Userinfo endpoint failed ({userinfo_response.status_code}), "
-                            f"will extract from id_token instead"
-                        )
-            except Exception as userinfo_err:
-                verbose_proxy_logger.warning(
-                    f"⚠ Userinfo endpoint error: {userinfo_err}, will extract from id_token instead"
-                )
-
-            # If userinfo is empty, extract from id_token
-            if not userinfo and id_token:
-                import jwt
-
-                try:
-                    # Decode id_token without verification (we already trust it from token exchange)
-                    id_token_payload = jwt.decode(
-                        id_token,
-                        options={"verify_signature": False},
-                    )
-                    userinfo = id_token_payload
-                    verbose_proxy_logger.debug("User info extracted from id_token")
-                except Exception as decode_err:
-                    verbose_proxy_logger.error(
-                        f"✘ Failed to decode id_token: {decode_err}"
-                    )
-                    raise ProxyException(
-                        message="Failed to get user info from both userinfo endpoint and id_token",
-                        type=ProxyErrorTypes.auth_error,
-                        param="userinfo",
-                        code=status.HTTP_401_UNAUTHORIZED,
-                    )
-
-            # Build combined response for convertor
-            combined_response = {**token_response, **userinfo}
             result = response_convertor(combined_response, generic_sso)
-
         else:
-            verbose_proxy_logger.info("No PKCE code_verifier - using standard verify_and_process")
-            # No PKCE, use standard flow
             result = await generic_sso.verify_and_process(
                 request,
                 params=token_exchange_params,
@@ -942,37 +823,13 @@ async def get_generic_sso_response(
     except Exception as e:
         error_message = str(e)
 
-        # Log detailed error information for debugging
-        verbose_proxy_logger.error(
-            f"Error verifying and processing generic SSO: {error_message}. "
-            f"Error type: {type(e).__name__}. "
-            f"Passed in headers: {additional_generic_sso_headers_dict}"
-        )
-
-        # Check if this is a JSON decode error (provider returned non-JSON response)
-        if "JSONDecodeError" in str(type(e).__name__) or "Expecting value" in error_message:
-            verbose_proxy_logger.error(
-                f"SSO provider returned invalid JSON response during token exchange. "
-                f"This typically means: (1) Token exchange request was rejected by the provider, "
-                f"(2) code_verifier format is incorrect, or (3) provider configuration issue."
-            )
-
-        # Check if this is a PKCE-related error
+        # Detect PKCE misconfiguration and surface a helpful error
         if "PKCE" in error_message or "code verifier" in error_message.lower():
-            # Detect if this is Okta by checking the endpoints
             is_okta = (
-                generic_authorization_endpoint and "okta" in generic_authorization_endpoint.lower()
-            ) or (
-                generic_token_endpoint and "okta" in generic_token_endpoint.lower()
-            )
-
+                generic_authorization_endpoint
+                and "okta" in generic_authorization_endpoint.lower()
+            ) or (generic_token_endpoint and "okta" in generic_token_endpoint.lower())
             provider_name = "Okta" if is_okta else "Your OAuth provider"
-
-            verbose_proxy_logger.error(
-                f"PKCE error detected: {error_message}. {provider_name} requires PKCE but it's not enabled. "
-                f"Set GENERIC_CLIENT_USE_PKCE=true in your environment variables. "
-                f"See https://docs.litellm.ai/docs/proxy/admin_ui_sso for more details."
-            )
 
             detailed_message = (
                 f"SSO authentication failed: {provider_name} requires PKCE (Proof Key for Code Exchange) "
@@ -980,14 +837,12 @@ async def get_generic_sso_response(
                 f"SOLUTION: Add this environment variable and restart your proxy:\n"
                 f"  GENERIC_CLIENT_USE_PKCE=true\n\n"
             )
-
             if is_okta:
                 detailed_message += (
-                    f"For AWS ECS: Add the environment variable to your task definition.\n"
-                    f"For Docker: Add -e GENERIC_CLIENT_USE_PKCE=true to your docker run command.\n"
-                    f"For .env file: Add GENERIC_CLIENT_USE_PKCE=true to your .env file.\n\n"
+                    "For AWS ECS: Add the environment variable to your task definition.\n"
+                    "For Docker: Add -e GENERIC_CLIENT_USE_PKCE=true to your docker run command.\n"
+                    "For .env file: Add GENERIC_CLIENT_USE_PKCE=true to your .env file.\n\n"
                 )
-
             detailed_message += f"Original error: {error_message}"
 
             raise ProxyException(
@@ -998,7 +853,9 @@ async def get_generic_sso_response(
             )
 
         verbose_proxy_logger.exception(
-            f"Error verifying and processing generic SSO: {e}. Passed in headers: {additional_generic_sso_headers_dict}"
+            "Error verifying and processing generic SSO: %s. Passed in headers: %s",
+            e,
+            additional_generic_sso_headers_dict,
         )
         raise e
     verbose_proxy_logger.debug("generic result: %s", result)
@@ -2684,6 +2541,144 @@ class SSOAuthenticationHandler:
         )
 
         return code_verifier, code_challenge
+
+    @staticmethod
+    async def _pkce_token_exchange(
+        authorization_code: str,
+        code_verifier: str,
+        client_id: str,
+        client_secret: str,
+        token_endpoint: str,
+        userinfo_endpoint: str,
+        include_client_id: bool,
+        redirect_url: str,
+        additional_headers: Dict[str, str],
+    ) -> dict:
+        """
+        Performs a direct OAuth token exchange including the PKCE code_verifier.
+
+        fastapi-sso does not forward code_verifier, so when PKCE is enabled we
+        bypass it and call the token endpoint ourselves, then fetch user info.
+
+        Returns a combined dict of the token response and user info, suitable
+        for passing to a response_convertor.
+        """
+        verbose_proxy_logger.info(
+            "PKCE: performing direct token exchange (code_verifier length=%d)",
+            len(code_verifier),
+        )
+
+        token_data: Dict[str, str] = {
+            "grant_type": "authorization_code",
+            "code": authorization_code,
+            "redirect_uri": redirect_url,
+            "code_verifier": code_verifier,
+        }
+
+        post_kwargs: Dict[str, Any] = {
+            "data": token_data,
+            "headers": {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+                **additional_headers,
+            },
+            "timeout": 30.0,
+        }
+
+        if not include_client_id:
+            post_kwargs["auth"] = httpx.BasicAuth(client_id, client_secret)
+        else:
+            token_data["client_id"] = client_id
+            token_data["client_secret"] = client_secret
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(token_endpoint, **post_kwargs)
+
+        if response.status_code != 200:
+            verbose_proxy_logger.error(
+                "PKCE token exchange failed. status=%s body=%s",
+                response.status_code,
+                response.text[:500],
+            )
+            raise ProxyException(
+                message=f"Token exchange failed: {response.status_code} - {response.text[:500]}",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            token_response: dict = response.json()
+        except Exception as json_err:
+            verbose_proxy_logger.error(
+                "Failed to parse token response as JSON: %s. Body: %s",
+                json_err,
+                response.text[:500],
+            )
+            raise
+
+        verbose_proxy_logger.debug(
+            "PKCE token exchange successful. access_token=%s id_token=%s",
+            bool(token_response.get("access_token")),
+            bool(token_response.get("id_token")),
+        )
+
+        userinfo = await SSOAuthenticationHandler._get_pkce_userinfo(
+            access_token=token_response["access_token"],
+            id_token=token_response.get("id_token"),
+            userinfo_endpoint=userinfo_endpoint,
+            additional_headers=additional_headers,
+        )
+        return {**token_response, **userinfo}
+
+    @staticmethod
+    async def _get_pkce_userinfo(
+        access_token: str,
+        id_token: Optional[str],
+        userinfo_endpoint: str,
+        additional_headers: Dict[str, str],
+    ) -> dict:
+        """
+        Fetches user info from the userinfo endpoint.
+        Falls back to decoding the id_token if the endpoint is unavailable.
+        """
+        userinfo: dict = {}
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    userinfo_endpoint,
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        **additional_headers,
+                    },
+                    timeout=30.0,
+                )
+            if resp.status_code == 200:
+                userinfo = resp.json()
+            else:
+                verbose_proxy_logger.warning(
+                    "Userinfo endpoint returned %s, falling back to id_token",
+                    resp.status_code,
+                )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Userinfo endpoint error: %s, falling back to id_token", e
+            )
+
+        if not userinfo and id_token:
+            try:
+                userinfo = jwt.decode(id_token, options={"verify_signature": False})
+            except Exception as decode_err:
+                verbose_proxy_logger.error("Failed to decode id_token: %s", decode_err)
+                raise ProxyException(
+                    message="Failed to get user info from both userinfo endpoint and id_token",
+                    type=ProxyErrorTypes.auth_error,
+                    param="userinfo",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+
+        return userinfo
 
 
 class MicrosoftSSOHandler:
