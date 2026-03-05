@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -714,6 +714,86 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+@pytest.mark.asyncio
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+    """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20870
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    async def _raise_rate_limit(**kwargs):
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.generated_content == ""
+
+
+def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+    """Ensure __next__ raises MidStreamFallbackError on 429, not RateLimitError.
+
+    This is the sync-streaming equivalent of the async test above.  Before
+    this fix, __next__ would raise RateLimitError directly, bypassing the
+    Router's fallback chain entirely.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    def _raise_rate_limit(**kwargs):
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        next(response)
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.generated_content == ""
+
+
+def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
+    """Ensure __next__ raises BadRequestError (400) directly, not MidStreamFallbackError.
+
+    Non-retriable 4xx errors should surface immediately to the caller.
+    """
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    def _raise_bad_request(**kwargs):
+        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-pro-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_bad_request,
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        next(response)
+
+    assert getattr(excinfo.value, "status_code", None) == 400
+    assert "invalid maxOutputTokens" in str(excinfo.value)
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):
@@ -1185,3 +1265,138 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
         )
         is True
     )
+
+
+def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
+    """
+    Test that provider-reported usage from a post-finish_reason chunk
+    is surfaced in _hidden_params even when stream_options is NOT set.
+
+    Reproduces issue #20760: OpenRouter sends a final chunk with usage data
+    after the finish_reason chunk.  The hidden_params["usage"] on the last
+    user-visible chunk was being calculated before this usage chunk arrived,
+    resulting in zeros.  The fix recalculates it in the StopIteration handler
+    after stream_chunk_builder processes all chunks.
+    """
+    # Simulate OpenRouter's actual streaming pattern:
+    # 1) content chunk
+    # 2) finish_reason chunk  (content="")
+    # 3) usage chunk  (content="", finish_reason=None, usage={...})
+    chunks = [
+        ModelResponseStream(
+            id="gen-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="openrouter/openai/gpt-4o-mini",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", content="Hello"),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="gen-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="openrouter/openai/gpt-4o-mini",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=""),
+                    finish_reason="stop",
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="gen-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="openrouter/openai/gpt-4o-mini",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", content=""),
+                    finish_reason=None,
+                )
+            ],
+            usage=Usage(
+                prompt_tokens=20,
+                completion_tokens=135,
+                total_tokens=155,
+            ),
+        ),
+    ]
+
+    # Create a CustomStreamWrapper with NO stream_options
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="openrouter/openai/gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openrouter",
+        stream_options=None,
+    )
+
+    # Consume the stream
+    collected = []
+    for chunk in wrapper:
+        collected.append(chunk)
+
+    # The last user-visible chunk's _hidden_params["usage"] should
+    # contain the provider-reported values, not zeros.
+    last_chunk = collected[-1]
+    hidden_usage = last_chunk._hidden_params.get("usage")
+    assert hidden_usage is not None, "Expected usage in _hidden_params"
+    assert hidden_usage.prompt_tokens == 20, (
+        f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
+    )
+    assert hidden_usage.completion_tokens == 135, (
+        f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
+    )
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose():
+    """Test that aclose() delegates to the underlying completion_stream's aclose()"""
+    mock_stream = AsyncMock()
+    mock_stream.aclose = AsyncMock()
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=mock_stream,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    await wrapper.aclose()
+    mock_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_no_underlying():
+    """Test that aclose() is safe when completion_stream has no aclose method"""
+    mock_stream = MagicMock(spec=[])  # No aclose attribute
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=mock_stream,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    # Should not raise
+    await wrapper.aclose()
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_none_stream():
+    """Test that aclose() is safe when completion_stream is None"""
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    # Should not raise
+    await wrapper.aclose()

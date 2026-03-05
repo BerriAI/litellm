@@ -200,7 +200,7 @@ describe("columns", () => {
     expect(screen.getByText("my-credential")).toBeInTheDocument();
   });
 
-  it("should display 'No credentials' when credential name is missing", () => {
+  it("should display 'Manual' when credential name is missing", () => {
     const cols = columns(
       defaultProps.userRole,
       defaultProps.userID,
@@ -221,7 +221,132 @@ describe("columns", () => {
     });
     render(<TestTable data={[model]} columns={cols} />);
 
-    expect(screen.getByText("No credentials")).toBeInTheDocument();
+    expect(screen.getByText("Manual")).toBeInTheDocument();
+  });
+
+  describe("credentials column", () => {
+    it("should display Credentials header with info icon", () => {
+      const cols = columns(
+        defaultProps.userRole,
+        defaultProps.userID,
+        defaultProps.premiumUser,
+        defaultProps.setSelectedModelId,
+        defaultProps.setSelectedTeamId,
+        defaultProps.getDisplayModelName,
+        defaultProps.handleEditClick,
+        defaultProps.handleRefreshClick,
+        defaultProps.expandedRows,
+        defaultProps.setExpandedRows,
+      );
+
+      const model = createMockModel();
+      render(<TestTable data={[model]} columns={cols} />);
+
+      expect(screen.getByText("Credentials")).toBeInTheDocument();
+      // Info icon is in a flex container with Credentials - ant icons render as span with role="img"
+      const credentialsHeader = screen.getByText("Credentials").closest("span");
+      expect(credentialsHeader?.parentElement?.querySelector('[role="img"]')).toBeInTheDocument();
+    });
+
+    it("should display reusable credential with SyncOutlined icon and credential name", () => {
+      const cols = columns(
+        defaultProps.userRole,
+        defaultProps.userID,
+        defaultProps.premiumUser,
+        defaultProps.setSelectedModelId,
+        defaultProps.setSelectedTeamId,
+        defaultProps.getDisplayModelName,
+        defaultProps.handleEditClick,
+        defaultProps.handleRefreshClick,
+        defaultProps.expandedRows,
+        defaultProps.setExpandedRows,
+      );
+
+      const model = createMockModel({
+        litellm_params: {
+          model: "gpt-4",
+          litellm_credential_name: "my-reusable-credential",
+        },
+      });
+      render(<TestTable data={[model]} columns={cols} />);
+
+      expect(screen.getByText("my-reusable-credential")).toBeInTheDocument();
+      const credentialCell = screen.getByText("my-reusable-credential").closest("div");
+      expect(credentialCell).toHaveClass("flex");
+      expect(screen.getByText("my-reusable-credential")).toHaveClass("text-blue-600");
+    });
+
+    it("should display Manual with EditOutlined when no credential name", () => {
+      const cols = columns(
+        defaultProps.userRole,
+        defaultProps.userID,
+        defaultProps.premiumUser,
+        defaultProps.setSelectedModelId,
+        defaultProps.setSelectedTeamId,
+        defaultProps.getDisplayModelName,
+        defaultProps.handleEditClick,
+        defaultProps.handleRefreshClick,
+        defaultProps.expandedRows,
+        defaultProps.setExpandedRows,
+      );
+
+      const model = createMockModel({
+        litellm_params: {
+          model: "gpt-4",
+        },
+      });
+      render(<TestTable data={[model]} columns={cols} />);
+
+      expect(screen.getByText("Manual")).toBeInTheDocument();
+      expect(screen.getByText("Manual")).toHaveClass("text-gray-500");
+    });
+
+    it("should display Manual when litellm_params is undefined", () => {
+      const cols = columns(
+        defaultProps.userRole,
+        defaultProps.userID,
+        defaultProps.premiumUser,
+        defaultProps.setSelectedModelId,
+        defaultProps.setSelectedTeamId,
+        defaultProps.getDisplayModelName,
+        defaultProps.handleEditClick,
+        defaultProps.handleRefreshClick,
+        defaultProps.expandedRows,
+        defaultProps.setExpandedRows,
+      );
+
+      const model = createMockModel({
+        litellm_params: undefined as any,
+      });
+      render(<TestTable data={[model]} columns={cols} />);
+
+      expect(screen.getByText("Manual")).toBeInTheDocument();
+    });
+
+    it("should display Manual when litellm_credential_name is empty string", () => {
+      const cols = columns(
+        defaultProps.userRole,
+        defaultProps.userID,
+        defaultProps.premiumUser,
+        defaultProps.setSelectedModelId,
+        defaultProps.setSelectedTeamId,
+        defaultProps.getDisplayModelName,
+        defaultProps.handleEditClick,
+        defaultProps.handleRefreshClick,
+        defaultProps.expandedRows,
+        defaultProps.setExpandedRows,
+      );
+
+      const model = createMockModel({
+        litellm_params: {
+          model: "gpt-4",
+          litellm_credential_name: "",
+        },
+      });
+      render(<TestTable data={[model]} columns={cols} />);
+
+      expect(screen.getByText("Manual")).toBeInTheDocument();
+    });
   });
 
   it("should display created by information for DB models", () => {

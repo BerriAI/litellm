@@ -73,10 +73,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             litellm_params,
             headers,
         )
-        request.pop("max_output_tokens", None)
-        request.pop("max_tokens", None)
-        request.pop("max_completion_tokens", None)
-        request.pop("metadata", None)
         base_instructions = get_chatgpt_default_instructions()
         existing_instructions = request.get("instructions")
         if existing_instructions:
@@ -92,7 +88,22 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if "reasoning.encrypted_content" not in include:
             include.append("reasoning.encrypted_content")
         request["include"] = include
-        return request
+
+        allowed_keys = {
+            "model",
+            "input",
+            "instructions",
+            "stream",
+            "store",
+            "include",
+            "tools",
+            "tool_choice",
+            "reasoning",
+            "previous_response_id",
+            "truncation",
+        }
+
+        return {k: v for k, v in request.items() if k in allowed_keys}
 
     def transform_response_api_response(
         self,

@@ -358,38 +358,40 @@ async def test_async_handler_with_shared_session():
 @pytest.mark.asyncio
 async def test_get_async_httpx_client_with_shared_session():
     """Test get_async_httpx_client with shared session"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Create a mock shared session
     mock_session = MockClientSession()
-    
+
     # Test with shared session
     client = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=mock_session  # type: ignore
     )
-    
+
     # Verify the client was created successfully
     assert client is not None
-    assert isinstance(client, AsyncHTTPHandler)
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client, AsyncHTTPHandlerReload)
 
 
 @pytest.mark.asyncio
 async def test_get_async_httpx_client_without_shared_session():
     """Test get_async_httpx_client without shared session (backward compatibility)"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Test without shared session
     client = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=None
     )
-    
+
     # Verify the client was created successfully
     assert client is not None
-    assert isinstance(client, AsyncHTTPHandler)
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client, AsyncHTTPHandlerReload)
 
 
 @pytest.mark.asyncio
@@ -450,31 +452,32 @@ def test_shared_session_parameter_in_completion():
 @pytest.mark.asyncio
 async def test_session_reuse_integration():
     """Integration test for session reuse functionality"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Create a mock session
     mock_session = MockClientSession()
-    
+
     # Create two clients with the same session
     client1 = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=mock_session  # type: ignore
     )
-    
+
     client2 = get_async_httpx_client(
         llm_provider=LlmProviders.OPENAI,
         shared_session=mock_session  # type: ignore
     )
-    
+
     # Both clients should be created successfully
     assert client1 is not None
     assert client2 is not None
-    
+
     # Both should be AsyncHTTPHandler instances
-    assert isinstance(client1, AsyncHTTPHandler)
-    assert isinstance(client2, AsyncHTTPHandler)
-    
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client1, AsyncHTTPHandlerReload)
+    assert isinstance(client2, AsyncHTTPHandlerReload)
+
     # Clean up
     await client1.close()
     await client2.close()

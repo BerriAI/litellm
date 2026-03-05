@@ -12,9 +12,10 @@ import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
 import { mcpServerColumns } from "./mcp_server_columns";
 import { MCPServerView } from "./mcp_server_view";
-import { MCPServer, MCPServerProps, Team } from "./types";
+import { DiscoverableMCPServer, MCPServer, MCPServerProps, Team } from "./types";
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
+import MCPDiscovery from "./mcp_discovery";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -66,6 +67,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
+  const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
+  const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const isInternalUser = userRole === "Internal User";
 
@@ -291,14 +294,35 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         isModalVisible={isModalVisible}
         setModalVisible={setModalVisible}
         availableAccessGroups={uniqueMcpAccessGroups}
+        prefillData={prefillData}
+        onBackToDiscovery={() => {
+          setModalVisible(false);
+          setPrefillData(null);
+          setDiscoveryVisible(true);
+        }}
       />
       <Title>MCP Servers</Title>
       <Text className="text-tremor-content mt-2">Configure and manage your MCP servers</Text>
       {isAdminRole(userRole) && (
-        <Button className="mt-4 mb-4" onClick={() => setModalVisible(true)}>
+        <Button className="mt-4 mb-4" onClick={() => setDiscoveryVisible(true)}>
           + Add New MCP Server
         </Button>
       )}
+      <MCPDiscovery
+        isVisible={isDiscoveryVisible}
+        onClose={() => setDiscoveryVisible(false)}
+        onSelectServer={(server: DiscoverableMCPServer) => {
+          setPrefillData(server);
+          setDiscoveryVisible(false);
+          setModalVisible(true);
+        }}
+        onCustomServer={() => {
+          setPrefillData(null);
+          setDiscoveryVisible(false);
+          setModalVisible(true);
+        }}
+        accessToken={accessToken}
+      />
       <TabGroup className="w-full h-full">
         <TabList className="flex justify-between mt-2 w-full items-center">
           <div className="flex">

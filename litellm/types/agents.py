@@ -167,16 +167,25 @@ class AugmentedAgentCard(AgentCard):
     is_public: bool
 
 
+# Object permission shape for agent MCP tool access (mirrors LiteLLM_ObjectPermissionBase)
+class AgentObjectPermission(TypedDict, total=False):
+    mcp_servers: Optional[List[str]]
+    mcp_access_groups: Optional[List[str]]
+    mcp_tool_permissions: Optional[Dict[str, List[str]]]
+
+
 class AgentConfig(TypedDict, total=False):
     agent_name: Required[str]
     agent_card_params: Required[AgentCard]
     litellm_params: Dict[str, Any]  # allow for any future litellm params
+    object_permission: AgentObjectPermission
 
 
 class PatchAgentRequest(TypedDict, total=False):
     agent_name: str
     agent_card_params: AgentCard
     litellm_params: Dict[str, Any]
+    object_permission: AgentObjectPermission
 
 
 # Request/Response models for CRUD endpoints
@@ -187,6 +196,7 @@ class AgentResponse(BaseModel):
     agent_name: str
     litellm_params: Optional[Dict[str, Any]] = None
     agent_card_params: Dict[str, Any]
+    object_permission: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None

@@ -318,6 +318,7 @@ class TestAzureResponsesAPIConfig:
     def test_azure_cancel_response_api_response(self):
         """Test Azure cancel response API response transformation"""
         from unittest.mock import Mock
+
         from litellm.types.llms.openai import ResponsesAPIResponse
 
         # Mock response
@@ -492,3 +493,12 @@ class TestAzureResponsesAPIConfig:
         )
 
         assert "tools" not in response_api_params
+
+    def test_azure_responses_api_context_management_unsupported(self):
+        """Test that context_management is not in Azure supported params.
+
+        Azure does not support context_management (compaction). It should be
+        excluded from supported params so it gets dropped.
+        """
+        supported = self.config.get_supported_openai_params(self.model)
+        assert "context_management" not in supported

@@ -343,6 +343,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 headers, response = self.make_sync_azure_openai_chat_completion_request(
                     azure_client=azure_client, data=data, timeout=timeout
                 )
+                if isinstance(response, str):
+                    raise AzureOpenAIError(
+                        status_code=500,
+                        message=f"Unexpected string response from Azure: {response[:500]}",
+                    )
                 stringified_response = response.model_dump()
                 ## LOGGING
                 logging_obj.post_call(
@@ -432,6 +437,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             )
             logging_obj.model_call_details["response_headers"] = headers
 
+            if isinstance(response, str):
+                raise AzureOpenAIError(
+                    status_code=500,
+                    message=f"Unexpected string response from Azure: {response[:500]}",
+                )
             stringified_response = response.model_dump()
             logging_obj.post_call(
                 input=data["messages"],
@@ -690,7 +700,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     status_code=raw_response.status_code or 500,
                     message=f"Failed to parse raw Azure embedding response: {str(json_error)}"
                 ) from json_error
-            
+            if isinstance(response, str):
+                raise AzureOpenAIError(
+                    status_code=raw_response.status_code or 500,
+                    message=f"Unexpected string response from Azure: {response[:500]}",
+                )
             stringified_response = response.model_dump()
 
             ## LOGGING
@@ -792,6 +806,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
             headers = dict(raw_response.headers)
             response = raw_response.parse()
+            if isinstance(response, str):
+                raise AzureOpenAIError(
+                    status_code=raw_response.status_code or 500,
+                    message=f"Unexpected string response from Azure: {response[:500]}",
+                )
             ## LOGGING
             logging_obj.post_call(
                 input=input,
@@ -901,7 +920,20 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             if response.json()["status"] == "failed":
                 error_data = response.json()
-                raise AzureOpenAIError(status_code=400, message=json.dumps(error_data))
+                # Preserve Azure error details (e.g. content_policy_violation,
+                # inner_error, content_filter_results) as structured body so
+                # exception_type() can route them correctly.
+                _error_body = error_data.get("error", error_data)
+                _error_msg = (
+                    _error_body.get("message", "Image generation failed")
+                    if isinstance(_error_body, dict)
+                    else json.dumps(error_data)
+                )
+                raise AzureOpenAIError(
+                    status_code=400,
+                    message=_error_msg,
+                    body=error_data,
+                )
 
             result = response.json()["result"]
             return httpx.Response(
@@ -999,7 +1031,20 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             if response.json()["status"] == "failed":
                 error_data = response.json()
-                raise AzureOpenAIError(status_code=400, message=json.dumps(error_data))
+                # Preserve Azure error details (e.g. content_policy_violation,
+                # inner_error, content_filter_results) as structured body so
+                # exception_type() can route them correctly.
+                _error_body = error_data.get("error", error_data)
+                _error_msg = (
+                    _error_body.get("message", "Image generation failed")
+                    if isinstance(_error_body, dict)
+                    else json.dumps(error_data)
+                )
+                raise AzureOpenAIError(
+                    status_code=400,
+                    message=_error_msg,
+                    body=error_data,
+                )
 
             result = response.json()["result"]
             return httpx.Response(

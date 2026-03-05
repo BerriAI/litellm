@@ -26,6 +26,10 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "scaleway": {
+    "base_url": "https://api.scaleway.ai/v1",
+    "api_key_env": "SCW_SECRET_KEY"
+  },
   "synthetic": {
     "base_url": "https://api.synthetic.new/openai/v1",
     "api_key_env": "SYNTHETIC_API_KEY",
@@ -86,5 +90,9 @@
     "headers": {
       "api-subscription-key": "{api_key}"
     }
+  },
+  "assemblyai": {
+    "base_url": "https://llm-gateway.assemblyai.com/v1",
+    "api_key_env": "ASSEMBLYAI_API_KEY"
   }
 }
