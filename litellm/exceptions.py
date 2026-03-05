@@ -19,18 +19,27 @@ from litellm.types.utils import LiteLLMCommonStrings
 _MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
 
 
-def _rebuild_exception(cls, message, llm_provider, model):
+def _rebuild_exception(cls, message, llm_provider, model, extra_kwargs=None):
     """Reconstruct a litellm exception using keyword args to avoid arg-order issues."""
+    kwargs = {"message": message, "llm_provider": llm_provider, "model": model}
+    if extra_kwargs:
+        kwargs.update(extra_kwargs)
     try:
-        return cls(message=message, llm_provider=llm_provider, model=model)
+        return cls(**kwargs)
     except TypeError:
         # Some subclasses require 'response' as a positional arg
         response = httpx.Response(status_code=500, request=httpx.Request("POST", "https://litellm.ai"))
-        return cls(message=message, llm_provider=llm_provider, model=model, response=response)
+        kwargs["response"] = response
+        return cls(**kwargs)
 
 
 def _exception_reduce(self):
     """Allow pickling across process boundaries (e.g. concurrent.futures)."""
+    extra = {}
+    if hasattr(self, "status_code") and "status_code" in type(self).__init__.__code__.co_varnames:
+        extra["status_code"] = self.status_code
+    if hasattr(self, "request_data"):
+        extra["request_data"] = getattr(self, "request_data", {})
     return (
         _rebuild_exception,
         (
@@ -38,6 +47,7 @@ def _exception_reduce(self):
             getattr(self, "_raw_message", str(self)),
             getattr(self, "llm_provider", ""),
             getattr(self, "model", ""),
+            extra or None,
         ),
     )
 
