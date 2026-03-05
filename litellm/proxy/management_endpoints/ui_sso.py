@@ -2531,6 +2531,7 @@ class SSOAuthenticationHandler:
                     await user_api_key_cache.async_delete_cache(key=cache_key)
             else:
                 # PKCE is enabled (already checked above) but verifier is missing — likely a cross-instance cache miss.
+                active_cache = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
                 verbose_proxy_logger.error(
                     "PKCE is enabled but no code_verifier found in cache for state '%s'. "
                     "This usually means the authorization and callback were handled by different "
@@ -2538,7 +2539,7 @@ class SSOAuthenticationHandler:
                     "Ensure Redis is configured and GENERIC_CLIENT_USE_PKCE=true. "
                     "Cache type: %s. Cache entry present: %s",
                     state,
-                    type(user_api_key_cache).__name__,
+                    type(active_cache).__name__,
                     cached_data is not None,
                 )
         return token_params
@@ -2615,10 +2616,15 @@ class SSOAuthenticationHandler:
         }
 
         if not include_client_id:
-            post_kwargs["auth"] = httpx.BasicAuth(client_id, client_secret)
+            # Use Basic Auth only when a secret is available; public PKCE clients omit it.
+            if client_secret:
+                post_kwargs["auth"] = httpx.BasicAuth(client_id, client_secret)
+            else:
+                token_data["client_id"] = client_id
         else:
             token_data["client_id"] = client_id
-            token_data["client_secret"] = client_secret
+            if client_secret:
+                token_data["client_secret"] = client_secret
 
         async with httpx.AsyncClient() as http_client:
             response = await http_client.post(token_endpoint, **post_kwargs)
