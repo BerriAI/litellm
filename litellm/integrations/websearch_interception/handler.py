@@ -455,7 +455,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             ):
                 if max_tokens <= budget_tokens:
                     adjusted = math.ceil(budget_tokens) + 1024
-                    verbose_logger.info(
+                    verbose_logger.debug(
                         "WebSearchInterception: max_tokens=%s <= thinking.budget_tokens=%s, "
                         "adjusting to %s to satisfy Anthropic API constraint",
                         max_tokens, budget_tokens, adjusted,
@@ -502,7 +502,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
                 search_tasks.append(self._execute_search(query))
             else:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"WebSearchInterception: Tool call {tool_call['id']} has no query"
                 )
                 # Add empty result for tools without query
@@ -529,7 +529,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 final_search_results.append(cast(str, result))
             else:
                 # Should never happen, but handle for type safety
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"WebSearchInterception: Unexpected result type {type(result)} at index {i}"
                 )
                 final_search_results.append(str(result))
@@ -619,7 +619,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             try:
                 from litellm.proxy.proxy_server import llm_router
             except ImportError:
-                verbose_logger.info(
+                verbose_logger.debug(
                     "WebSearchInterception: Could not import llm_router from proxy_server, "
                     "falling back to direct litellm.asearch() with perplexity"
                 )
@@ -642,7 +642,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                             f"with provider '{search_provider}'"
                         )
                     else:
-                        verbose_logger.info(
+                        verbose_logger.debug(
                             f"WebSearchInterception: Search tool '{self.search_tool_name}' not found in router, "
                             "falling back to first available or perplexity"
                         )
@@ -716,7 +716,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
                 search_tasks.append(self._execute_search(query))
             else:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"WebSearchInterception: Tool call {tool_call.get('id')} has no query"
                 )
                 # Add empty result for tools without query
@@ -741,7 +741,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             elif isinstance(result, str):
                 final_search_results.append(cast(str, result))
             else:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"WebSearchInterception: Unexpected result type {type(result)} at index {i}"
                 )
                 final_search_results.append(str(result))
