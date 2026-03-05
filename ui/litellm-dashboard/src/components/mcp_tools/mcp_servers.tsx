@@ -16,6 +16,7 @@ import { DiscoverableMCPServer, MCPServer, MCPServerProps, Team } from "./types"
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
+import { ByokCredentialModal } from "./ByokCredentialModal";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -70,6 +71,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
+  const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
 
   useEffect(() => {
@@ -170,6 +172,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         },
         handleDelete,
         isLoadingHealth,
+        (server: MCPServer) => setByokModalServer(server),
       ),
     [userRole, isLoadingHealth],
   );
@@ -427,6 +430,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      {byokModalServer && (
+        <ByokCredentialModal
+          server={byokModalServer}
+          open={!!byokModalServer}
+          onClose={() => setByokModalServer(null)}
+          onSuccess={(_serverId) => {
+            refetch();
+            setByokModalServer(null);
+          }}
+          accessToken={accessToken || ""}
+        />
+      )}
     </div>
   );
 };

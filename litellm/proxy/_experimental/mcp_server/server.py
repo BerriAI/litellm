@@ -1498,6 +1498,62 @@ if MCP_AVAILABLE:
                     )
         return name
 
+    async def _check_byok_credential(
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> None:
+        """
+        If the MCP server is BYOK-enabled, verify that the requesting user has a
+        stored credential.  When no credential is found, raise an HTTP 401 with a
+        WWW-Authenticate header that points the MCP client to our OAuth metadata
+        endpoint so it can drive the authorization flow.
+        """
+        if not mcp_server.is_byok:
+            return
+
+        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "byok_auth_required",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": "User identity is required for BYOK servers",
+                },
+                headers={
+                    "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                },
+            )
+
+        from litellm.proxy._experimental.mcp_server.db import has_user_credential
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+
+        credential_exists = await has_user_credential(
+            prisma_client=prisma_client,
+            user_id=user_id,
+            server_id=mcp_server.server_id,
+        )
+        if not credential_exists:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "byok_auth_required",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": (
+                        "No stored credential found for this BYOK server. "
+                        "Complete the OAuth authorization flow to provide your API key."
+                    ),
+                },
+                headers={
+                    "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                },
+            )
+
     async def execute_mcp_tool(
         name: str,
         arguments: Dict[str, Any],
@@ -1600,6 +1656,12 @@ if MCP_AVAILABLE:
                     litellm_logging_obj.model_call_details[
                         "mcp_tool_call_metadata"
                     ] = standard_logging_mcp_tool_call
+
+                # BYOK check: if this server requires a per-user key and the
+                # user has not stored one yet, issue a 401 OAuth challenge so
+                # that an MCP client can trigger the authorization flow.
+                await _check_byok_credential(mcp_server, user_api_key_auth)
+
                 response = await _handle_managed_mcp_tool(
                     server_name=server_name,
                     name=original_tool_name,  # Pass the full name (potentially prefixed)

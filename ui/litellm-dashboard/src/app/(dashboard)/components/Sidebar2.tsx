@@ -111,6 +111,8 @@ const routeFor = (slug: string): string => {
       return "tools/mcp-servers";
     case "vector-stores":
       return "tools/vector-stores";
+    case "byok-demo":
+      return "tools/byok-demo";
 
     // experimental
     case "caching":
@@ -225,6 +227,12 @@ const menuItems: MenuItemCfg[] = [
         label: "Vector Stores",
         icon: <DatabaseOutlined style={{ fontSize: 18 }} />,
         roles: all_admin_roles,
+      },
+      {
+        key: "29",
+        page: "byok-demo",
+        label: "BYOK Demo",
+        icon: <KeyOutlined style={{ fontSize: 18 }} />,
       },
     ],
   },

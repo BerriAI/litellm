@@ -1108,6 +1108,9 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1164,6 +1167,9 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1223,10 +1229,24 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
+    has_user_credential: Optional[bool] = None
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
     mcp_server_ids: List[str]
+
+
+class MCPUserCredentialRequest(LiteLLMPydanticObjectBase):
+    credential: str
+    save: bool = True
+
+
+class MCPUserCredentialResponse(LiteLLMPydanticObjectBase):
+    server_id: str
+    has_credential: bool
 
 
 ######## Skills API Types ########

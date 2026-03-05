@@ -1,3 +1,4 @@
+import base64
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -67,6 +68,10 @@ def _prepare_mcp_server_data(
         data_dict["tool_name_to_description"] = safe_dumps(data.tool_name_to_description)
 
     # mcp_access_groups is already List[str], no serialization needed
+
+    # Force include is_byok even when False (exclude_none=True would not drop it,
+    # but be explicit to ensure a False value is always written to the DB).
+    data_dict["is_byok"] = getattr(data, "is_byok", False)
 
     return data_dict
 
@@ -375,3 +380,61 @@ async def rotate_mcp_server_credentials_master_key(
                 "updated_by": touched_by,
             },
         )
+
+
+async def store_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    credential: str,
+) -> None:
+    """Store a B64-encoded user credential for a BYOK MCP server."""
+    credential_b64 = base64.b64encode(credential.encode()).decode()
+    await prisma_client.db.litellm_mcpusercredentials.upsert(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
+        data={
+            "create": {
+                "user_id": user_id,
+                "server_id": server_id,
+                "credential_b64": credential_b64,
+            },
+            "update": {"credential_b64": credential_b64},
+        },
+    )
+
+
+async def get_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> Optional[str]:
+    """Return decoded credential for a user+server pair, or None."""
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if row is None:
+        return None
+    return base64.b64decode(row.credential_b64.encode()).decode()
+
+
+async def has_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> bool:
+    """Return True if the user has a stored credential for this server."""
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    return row is not None
+
+
+async def delete_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> None:
+    """Delete the user's stored credential for a BYOK MCP server."""
+    await prisma_client.db.litellm_mcpusercredentials.delete(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
