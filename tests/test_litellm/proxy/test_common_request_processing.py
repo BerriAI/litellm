@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import datetime
 from typing import AsyncGenerator
@@ -80,7 +81,9 @@ class TestProxyBaseLLMRequestProcessing:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
-    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
+    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(
+        self, monkeypatch
+    ):
         mock_set_active_span_tag = MagicMock(return_value=True)
         import litellm.proxy.dd_span_tagger
 
@@ -1581,11 +1584,11 @@ class TestDDSpanTaggerTagRequest:
 
     def test_tags_key_alias_and_model(self):
         """key_alias and requested_model are set on the span when present."""
-        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", token="hashed123")
+        user_key = self._make_user_api_key_dict(
+            key_alias="my-prod-key", token="hashed123"
+        )
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="gpt-4o",
@@ -1599,9 +1602,7 @@ class TestDDSpanTaggerTagRequest:
         """No key tags are set when key_alias and token are None (e.g. 401 path)."""
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model=None,
@@ -1613,12 +1614,98 @@ class TestDDSpanTaggerTagRequest:
         """requested_model is tagged even when there's no key info."""
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="claude-3-5-sonnet",
             )
 
-        mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
+        mock_set_tag.assert_called_once_with(
+            "litellm.requested_model", "claude-3-5-sonnet"
+        )
+
+
+class TestMonitorRequestDisconnection:
+    """Tests for _monitor_request_disconnection – cancels LLM tasks on client disconnect."""
+
+    @pytest.mark.asyncio
+    async def test_cancels_task_on_disconnect(self):
+        """When the client disconnects, the monitor should cancel the LLM task."""
+        from litellm.proxy.common_request_processing import (
+            _monitor_request_disconnection,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        # Simulate: first poll returns False (connected), second returns True (disconnected)
+        mock_request.is_disconnected = AsyncMock(side_effect=[False, True])
+
+        # Create a long-running task that we expect to be cancelled
+        async def long_running():
+            await asyncio.sleep(100)
+
+        llm_task = asyncio.create_task(long_running())
+
+        # Run the monitor – it should detect disconnect and cancel the task
+        await _monitor_request_disconnection(mock_request, llm_task)
+
+        # Allow the event loop to process the cancellation
+        await asyncio.sleep(0)
+
+        assert llm_task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_does_not_cancel_when_connected(self):
+        """When the client stays connected, the monitor should not cancel the LLM task."""
+        from litellm.proxy.common_request_processing import (
+            _monitor_request_disconnection,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        # Always return False (connected)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+
+        async def quick_task():
+            return "done"
+
+        llm_task = asyncio.create_task(quick_task())
+        # Let the task complete before the monitor checks
+        await llm_task
+
+        # Start the monitor but cancel it after a short time to avoid infinite loop
+        monitor = asyncio.create_task(
+            _monitor_request_disconnection(mock_request, llm_task)
+        )
+        await asyncio.sleep(0.1)
+        monitor.cancel()
+
+        # The LLM task should NOT be cancelled – it completed normally
+        assert not llm_task.cancelled()
+        assert llm_task.result() == "done"
+
+    @pytest.mark.asyncio
+    async def test_gather_raises_cancelled_error_on_disconnect(self):
+        """
+        Integration-style test: when the disconnect monitor cancels the LLM
+        task, asyncio.gather should raise CancelledError.
+        """
+        from litellm.proxy.common_request_processing import (
+            _monitor_request_disconnection,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        # Disconnect on the first poll
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+
+        async def slow_llm_call():
+            await asyncio.sleep(100)
+            return "should not reach"
+
+        llm_task = asyncio.create_task(slow_llm_call())
+        monitor_task = asyncio.create_task(
+            _monitor_request_disconnection(mock_request, llm_task)
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.gather(llm_task)
+
+        monitor_task.cancel()

@@ -147,6 +147,30 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     return default_error
 
 
+async def _monitor_request_disconnection(
+    request: Request, llm_api_call_task: "asyncio.Task[Any]"
+) -> None:
+    """Poll the client connection and cancel *llm_api_call_task* on disconnect.
+
+    This is intentionally a lightweight polling loop (1-second interval) that
+    runs concurrently with the LLM provider call.  When the HTTP client closes
+    the connection (e.g. user presses Ctrl-C on ``curl``), the task driving the
+    upstream LLM request is cancelled so we stop consuming GPU / API resources.
+
+    The loop self-terminates after 10 minutes to avoid leaked coroutines if the
+    caller forgets to cancel it.
+    """
+    start_time = time.time()
+    while time.time() - start_time < 600:
+        await asyncio.sleep(1)
+        if await request.is_disconnected():
+            verbose_proxy_logger.info(
+                "Client disconnected – cancelling in-flight LLM request"
+            )
+            llm_api_call_task.cancel()
+            return
+
+
 async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
@@ -724,9 +748,11 @@ class ProxyBaseLLMRequestProcessing:
                 "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                list(self.data.keys())
-                if isinstance(self.data, dict)
-                else type(self.data).__name__,
+                (
+                    list(self.data.keys())
+                    if isinstance(self.data, dict)
+                    else type(self.data).__name__
+                ),
             )
         else:
             verbose_proxy_logger.debug(
@@ -734,7 +760,7 @@ class ProxyBaseLLMRequestProcessing:
                 json.dumps(self.data, indent=4, default=str),
             )
 
-    async def base_process_llm_request(
+    async def base_process_llm_request(  # noqa: PLR0915
         self,
         request: Request,
         fastapi_response: Response,
@@ -862,14 +888,36 @@ class ProxyBaseLLMRequestProcessing:
             llm_router=llm_router,
             user_model=user_model,
         )
-        tasks.append(llm_call)
 
-        # wait for call to end
-        llm_responses = asyncio.gather(
-            *tasks
-        )  # run the moderation check in parallel to the actual llm api call
+        # Wrap the LLM call coroutine in an explicit Task so we can cancel it
+        # if the client disconnects before the LLM provider responds.
+        llm_call_task = asyncio.ensure_future(llm_call)
+        tasks.append(llm_call_task)
 
-        responses = await llm_responses
+        # Monitor client disconnection in parallel with the LLM call.
+        # When the client closes the connection the monitor cancels
+        # ``llm_call_task``, which prevents wasted compute / API spend.
+        disconnect_monitor_task = asyncio.create_task(
+            _monitor_request_disconnection(request, llm_call_task)
+        )
+
+        try:
+            # wait for call to end
+            llm_responses = asyncio.gather(
+                *tasks
+            )  # run the moderation check in parallel to the actual llm api call
+
+            responses = await llm_responses
+        except asyncio.CancelledError:
+            verbose_proxy_logger.info("LLM request cancelled due to client disconnect")
+            raise HTTPException(
+                status_code=499,
+                detail="Client disconnected the request",
+            )
+        finally:
+            # Ensure the disconnect monitor is cleaned up regardless of
+            # how the gather completes (success, exception, or cancel).
+            disconnect_monitor_task.cancel()
 
         response = responses[1]
 
@@ -929,9 +977,9 @@ class ProxyBaseLLMRequestProcessing:
             # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
             # what the client sent.
             if requested_model_from_client:
-                self.data[
-                    "_litellm_client_requested_model"
-                ] = requested_model_from_client
+                self.data["_litellm_client_requested_model"] = (
+                    requested_model_from_client
+                )
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
@@ -1298,7 +1346,9 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -1526,9 +1576,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs[
-                    "cache_creation_input_tokens"
-                ] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
