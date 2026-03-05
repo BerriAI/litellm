@@ -332,7 +332,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Already handled above
                 continue
 
-            # Filter unsupported string formats
+            # Filter unsupported string formats (format: null means "no
+            # constraint" which is equivalent to omitting the key entirely)
             if (
                 key == "format"
                 and schema.get("type") == "string"
@@ -411,11 +412,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # are also present.
                 result[key] = value
 
-        # Ensure additionalProperties: false on object schemas that don't
-        # already have it set — preserves explicit additionalProperties: true
+        # Ensure additionalProperties: false on object schemas.
+        # When enforce_additional_properties is True (response_format schemas),
+        # force false even if the schema explicitly set true — Anthropic requires
+        # additionalProperties: false for structured outputs.
+        # When enforce_additional_properties is False (regular tool schemas),
+        # leave the schema as-is to respect user intent.
         if enforce_additional_properties and result.get("type") == "object":
-            result["additionalProperties"] = False
-        elif result.get("type") == "object" and "additionalProperties" not in result:
             result["additionalProperties"] = False
 
         return result
