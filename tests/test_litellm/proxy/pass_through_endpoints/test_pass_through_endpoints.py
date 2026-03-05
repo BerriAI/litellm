@@ -2381,37 +2381,45 @@ def test_create_pass_through_route_accumulates_multiple_adapters(monkeypatch):
     """
     import litellm
 
-    class DummyLogger(CustomLogger):
+    class DummyLoggerA(CustomLogger):
+        pass
+
+    class DummyLoggerB(CustomLogger):
         pass
 
     monkeypatch.setattr(litellm, "adapters", [])
 
-    create_pass_through_route(
-        endpoint="/v1/first-endpoint",
-        target=DummyLogger(),
-        custom_headers=None,
-        _forward_headers=False,
-        _merge_query_params=False,
-        dependencies=None,
-    )
-
-    create_pass_through_route(
-        endpoint="/v1/second-endpoint",
-        target=DummyLogger(),
-        custom_headers=None,
-        _forward_headers=False,
-        _merge_query_params=False,
-        dependencies=None,
-    )
-
-    assert isinstance(litellm.adapters, list)
-    assert len(litellm.adapters) == 2
-
-    adapter_ids = [entry["id"] for entry in litellm.adapters]
-    assert len(set(adapter_ids)) == 2
-
-    # Cleanup: clear registered routes to prevent leakage into other tests
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         _registered_pass_through_routes,
+        _seen_adapter_targets,
     )
     _registered_pass_through_routes.clear()
+    _seen_adapter_targets.clear()
+
+    try:
+        create_pass_through_route(
+            endpoint="/v1/first-endpoint",
+            target=DummyLoggerA(),
+            custom_headers=None,
+            _forward_headers=False,
+            _merge_query_params=False,
+            dependencies=None,
+        )
+
+        create_pass_through_route(
+            endpoint="/v1/second-endpoint",
+            target=DummyLoggerB(),
+            custom_headers=None,
+            _forward_headers=False,
+            _merge_query_params=False,
+            dependencies=None,
+        )
+
+        assert isinstance(litellm.adapters, list)
+        assert len(litellm.adapters) == 2
+
+        adapter_ids = [entry["id"] for entry in litellm.adapters]
+        assert len(set(adapter_ids)) == 2
+    finally:
+        _registered_pass_through_routes.clear()
+        _seen_adapter_targets.clear()

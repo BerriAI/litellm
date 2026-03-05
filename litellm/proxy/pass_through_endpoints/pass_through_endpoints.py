@@ -75,6 +75,9 @@ _registered_pass_through_routes: Dict[
     str, Dict[str, Union[str, List[str], Dict[str, Any]]]
 ] = {}
 
+# Tracks adapter targets already registered to prevent duplicate entries
+_seen_adapter_targets: set = set()
+
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
     try:
@@ -1116,13 +1119,13 @@ def create_pass_through_route(
             )
             litellm.adapters = list(litellm.adapters)
 
-        # Deduplicate: skip if an adapter for this endpoint path already exists
+        # Deduplicate: skip if an adapter for this endpoint path already exists.
+        # Track by target key in a module-level set so the adapter dict stays
+        # compliant with the AdapterItem TypedDict (id + adapter only).
         _target_key = target if isinstance(target, str) else type(target).__qualname__
-        if not any(
-            isinstance(a, dict) and a.get("_target") == _target_key
-            for a in litellm.adapters
-        ):
-            litellm.adapters.append({"id": adapter_id, "adapter": adapter, "_target": _target_key})
+        if _target_key not in _seen_adapter_targets:
+            _seen_adapter_targets.add(_target_key)
+            litellm.adapters.append({"id": adapter_id, "adapter": adapter})
 
         async def endpoint_func(  # type: ignore
             request: Request,
