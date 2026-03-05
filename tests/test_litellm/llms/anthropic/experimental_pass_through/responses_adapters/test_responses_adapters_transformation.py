@@ -658,6 +658,38 @@ class TestTranslateThinkingToReasoning:
         result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"})
         assert result == {"effort": "minimal", "summary": "detailed"}
 
+    def test_summary_excluded_when_disable_flag_set(self):
+        """When disable_default_reasoning_summary is True, summary is not included."""
+        import litellm
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = True
+            result = _ADAPTER.translate_thinking_to_reasoning(
+                {"type": "enabled", "budget_tokens": 10000}
+            )
+            assert result == {"effort": "high"}
+            assert "summary" not in result
+        finally:
+            litellm.disable_default_reasoning_summary = original
+
+    def test_summary_excluded_when_env_var_set(self):
+        """When LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY env var is true, summary is not included."""
+        import litellm
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = False
+            os.environ["LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY"] = "true"
+            result = _ADAPTER.translate_thinking_to_reasoning(
+                {"type": "enabled", "budget_tokens": 5000}
+            )
+            assert result == {"effort": "medium"}
+            assert "summary" not in result
+        finally:
+            litellm.disable_default_reasoning_summary = original
+            os.environ.pop("LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY", None)
+
 
 # ---------------------------------------------------------------------------
 # translate_request – broader coverage
