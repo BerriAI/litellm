@@ -280,6 +280,7 @@ def get_token_creator(
     service_key: Optional[Union[str, dict]] = None,
     profile: Optional[str] = None,
     *,
+    timeout: float = 30.0,
     expiry_buffer_minutes: int = 60,
     **overrides,
 ) -> Tuple[Callable[[], str], str, str]:
@@ -294,6 +295,7 @@ def get_token_creator(
 
     Args:
         profile: Optional AICore profile name
+        timeout: Timeout for HTTP requests
         expiry_buffer_minutes: Refresh the token this many minutes before expiry
         overrides: Any explicit credential overrides (client_id, client_secret, etc.)
 
@@ -330,10 +332,10 @@ def get_token_creator(
             if cert_pair:
                 with httpx.Client(cert=cert_pair) as raw_client:
                     handler = HTTPHandler(client=raw_client)
-                    resp = handler.post(auth_url, data=data)  # type: ignore[arg-type]
+                    resp = handler.post(auth_url, data=data, timeout=timeout)  # type: ignore[arg-type]
             else:
                 handler = _get_httpx_client()
-                resp = handler.post(auth_url, data=data)  # type: ignore[arg-type]
+                resp = handler.post(auth_url, data=data, timeout=timeout)  # type: ignore[arg-type]
             payload = resp.json()
             access_token = payload["access_token"]
             expires_in = int(payload.get("expires_in", 3600))

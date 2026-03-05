@@ -70,18 +70,18 @@ pip install litellm
  <Tabs>
  <TabItem value="service-key" label="Service Key JSON (Recommended)">
 
-The simplest approach - paste your entire service key as a single environment variable. The service key must be wrapped in a `credentials` object:
+The simplest approach - paste your entire service key as a single environment variable. 
+
+> **Note:** the service key no more needs to be wrapped in a "credentials" key.
 
 ```bash
 export AICORE_SERVICE_KEY='{
-  "credentials": {
     "clientid": "your-client-id",
     "clientsecret": "your-client-secret",
     "url": "https://<your-instance>.authentication.sap.hana.ondemand.com",
     "serviceurls": {
       "AI_API_URL": "https://api.ai.<your-region>.aws.ml.hana.ondemand.com"
     }
-  }
 }'
 export AICORE_RESOURCE_GROUP="default"
 ```
