@@ -28,13 +28,16 @@ class TestEnsureClientGenerated:
             PrismaManager.ensure_client_generated()
         mock_run.assert_not_called()
 
+    @patch("litellm.proxy.db.prisma_client.sys")
     @patch("litellm.proxy.db.prisma_client.subprocess.run")
     @patch("litellm.proxy.db.prisma_client.importlib.invalidate_caches")
-    def test_runs_generate_when_client_missing(self, mock_invalidate_caches, mock_run):
+    def test_runs_generate_when_client_missing(self, mock_invalidate_caches, mock_run, mock_sys):
         """When the Prisma client cannot be imported, prisma generate is called."""
         mock_run.return_value = subprocess.CompletedProcess(
             args=["prisma", "generate"], returncode=0, stdout="", stderr=""
         )
+        # Prevent real sys.modules mutation during test
+        mock_sys.modules = {}
         prisma_module = MagicMock()
         prisma_module.Prisma = object()
         with patch(
@@ -78,15 +81,17 @@ class TestEnsureClientGenerated:
             with pytest.raises(RuntimeError, match="timed out after"):
                 PrismaManager.ensure_client_generated()
 
+    @patch("litellm.proxy.db.prisma_client.sys")
     @patch("litellm.proxy.db.prisma_client.subprocess.run")
     @patch("litellm.proxy.db.prisma_client.importlib.invalidate_caches")
     def test_raises_when_still_not_importable_after_generate(
-        self, mock_invalidate_caches, mock_run
+        self, mock_invalidate_caches, mock_run, mock_sys
     ):
         """If import still fails after generate, raise a clear RuntimeError."""
         mock_run.return_value = subprocess.CompletedProcess(
             args=["prisma", "generate"], returncode=0, stdout="", stderr=""
         )
+        mock_sys.modules = {}
         with patch(
             "litellm.proxy.db.prisma_client.importlib.import_module",
             side_effect=[ImportError("missing prisma"), ImportError("still missing")],

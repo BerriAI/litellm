@@ -501,7 +501,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         for resp, _json_resp in responses:
             action: str = resp.get("action") or "NONE"
-            if action_priority.get(action, 2) > action_priority.get(worst_action, 0):  # default priority 2 for unknown actions ensures they surface rather than get swallowed
+            if action_priority.get(action, 2) > action_priority.get(worst_action, 2):  # unknown actions default to highest priority so they surface
                 worst_action = action
 
             assessments = resp.get("assessments") or []
