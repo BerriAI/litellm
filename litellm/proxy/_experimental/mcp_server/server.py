@@ -124,6 +124,9 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_auth_header,
+    )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
         global_mcp_tool_registry,
@@ -1681,70 +1684,75 @@ if MCP_AVAILABLE:
                 "mcp_tool_call_metadata"
             ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
+        # Resolve the MCP server early so BYOK checks and credential injection
+        # apply to ALL dispatch paths (local tool registry AND managed MCP server).
+        if mcp_server is None:
+            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+
+        if mcp_server:
+            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                mcp_server.mcp_info or {}
+            ).get("mcp_server_cost_info")
+            if litellm_logging_obj:
+                litellm_logging_obj.model_call_details[
+                    "mcp_tool_call_metadata"
+                ] = standard_logging_mcp_tool_call
+
+            # BYOK check: if this server requires a per-user key and the
+            # user has not stored one yet, issue a 401 OAuth challenge so
+            # that an MCP client can trigger the authorization flow.
+            await _check_byok_credential(mcp_server, user_api_key_auth)
+
+            # For BYOK servers, inject the user's stored credential as the
+            # auth header if no explicit override was provided by the caller.
+            if mcp_server.is_byok and not mcp_auth_header:
+                mcp_auth_header = await _get_byok_credential(
+                    mcp_server, user_api_key_auth
+                )
+
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
         #########################################################
         local_tool = global_mcp_tool_registry.get_tool(name)
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
-            local_content = await _handle_local_mcp_tool(name, arguments)
+            # For BYOK servers the credential must be injected via a ContextVar
+            # because the tool function has headers baked into its closure.
+            _auth_token = _request_auth_header.set(mcp_auth_header)
+            try:
+                local_content = await _handle_local_mcp_tool(name, arguments)
+            finally:
+                _request_auth_header.reset(_auth_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)
         # Primary and recommended way to use external MCP servers
         #########################################################
+        elif mcp_server:
+            response = await _handle_managed_mcp_tool(
+                server_name=server_name,
+                name=original_tool_name,  # Pass the full name (potentially prefixed)
+                arguments=arguments,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                litellm_logging_obj=litellm_logging_obj,
+                host_progress_callback=host_progress_callback,
+            )
+
+        # Fall back to local tool registry with original name (legacy support)
+        #########################################################
+        # Deprecated: Local MCP Server Tool
+        #########################################################
         else:
-            # If we haven't already resolved the server, do it now for dispatch
-            if mcp_server is None:
-                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(
-                    name
-                )
-            if mcp_server:
-                standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
-                    mcp_server.mcp_info or {}
-                ).get("mcp_server_cost_info")
-                # Update model_call_details with the cost info
-                if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details[
-                        "mcp_tool_call_metadata"
-                    ] = standard_logging_mcp_tool_call
-
-                # BYOK check: if this server requires a per-user key and the
-                # user has not stored one yet, issue a 401 OAuth challenge so
-                # that an MCP client can trigger the authorization flow.
-                await _check_byok_credential(mcp_server, user_api_key_auth)
-
-                # For BYOK servers, inject the user's stored credential as the
-                # auth header if no explicit override was provided by the caller.
-                if mcp_server.is_byok and not mcp_auth_header:
-                    mcp_auth_header = await _get_byok_credential(
-                        mcp_server, user_api_key_auth
-                    )
-
-                response = await _handle_managed_mcp_tool(
-                    server_name=server_name,
-                    name=original_tool_name,  # Pass the full name (potentially prefixed)
-                    arguments=arguments,
-                    user_api_key_auth=user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    litellm_logging_obj=litellm_logging_obj,
-                    host_progress_callback=host_progress_callback,
-                )
-
-            # Fall back to local tool registry with original name (legacy support)
-            #########################################################
-            # Deprecated: Local MCP Server Tool
-            #########################################################
-            else:
-                local_content = await _handle_local_mcp_tool(
-                    original_tool_name, arguments
-                )
-                response = CallToolResult(
-                    content=cast(Any, local_content), isError=False
-                )
+            local_content = await _handle_local_mcp_tool(
+                original_tool_name, arguments
+            )
+            response = CallToolResult(
+                content=cast(Any, local_content), isError=False
+            )
 
         return response
 

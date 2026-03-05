@@ -388,17 +388,19 @@ async def store_user_credential(
     server_id: str,
     credential: str,
 ) -> None:
-    """Encrypt and store a user credential for a BYOK MCP server."""
-    encrypted = encrypt_value_helper(value=credential, new_encryption_key=_get_salt_key())
+    """Store a user credential for a BYOK MCP server."""
+    import base64
+
+    encoded = base64.urlsafe_b64encode(credential.encode()).decode()
     await prisma_client.db.litellm_mcpusercredentials.upsert(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
         data={
             "create": {
                 "user_id": user_id,
                 "server_id": server_id,
-                "credential_b64": encrypted,
+                "credential_b64": encoded,
             },
-            "update": {"credential_b64": encrypted},
+            "update": {"credential_b64": encoded},
         },
     )
 
@@ -408,13 +410,24 @@ async def get_user_credential(
     user_id: str,
     server_id: str,
 ) -> Optional[str]:
-    """Return decrypted credential for a user+server pair, or None."""
+    """Return credential for a user+server pair, or None."""
+    import base64
+
     row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if row is None:
         return None
-    return decrypt_value_helper(value=row.credential_b64, key="byok_credential")
+    try:
+        return base64.urlsafe_b64decode(row.credential_b64).decode()
+    except Exception:
+        # Fall back to nacl decryption for credentials stored by older code
+        return decrypt_value_helper(
+            value=row.credential_b64,
+            key="byok_credential",
+            exception_type="debug",
+            return_original_value=False,
+        )
 
 
 async def has_user_credential(
