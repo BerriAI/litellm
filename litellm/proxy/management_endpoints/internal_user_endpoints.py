@@ -770,22 +770,18 @@ async def user_info_v2(
                 detail="user_id is required",
             )
 
-        user_info = await prisma_client.get_data(user_id=user_id)
+        # Access control check before DB query to avoid information disclosure
+        # (different error codes for "not found" vs "not authorized")
+        is_proxy_admin = user_api_key_dict.user_role in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        )
+        is_self = user_id == user_api_key_dict.user_id
 
-        if user_info is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"User {user_id} not found",
-            )
-
-        # Access control: non-admin users can only query their own info
-        # or info of users in teams they admin
-        if (
-            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-            and user_id != user_api_key_dict.user_id
-        ):
-            if not await _is_team_admin_for_user(
+        if not is_proxy_admin and not is_self:
+            # Need to check team admin status — fetch user first
+            user_info = await prisma_client.get_data(user_id=user_id)
+            if user_info is None or not await _is_team_admin_for_user(
                 user_api_key_dict=user_api_key_dict,
                 target_user_teams=user_info.teams,
                 prisma_client=prisma_client,
@@ -796,9 +792,15 @@ async def user_info_v2(
                         user_api_key_dict.user_id, user_id
                     ),
                 )
+        else:
+            user_info = await prisma_client.get_data(user_id=user_id)
+            if user_info is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"User {user_id} not found",
+                )
 
         return UserInfoV2Response(
-            user_id=user_id,
             user_info=user_info.model_dump(),
         )
     except Exception as e:

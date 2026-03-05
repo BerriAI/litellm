@@ -31,7 +31,6 @@ class UserInfoV2Response(BaseModel):
     via /key/list and /v2/team/list respectively.
     """
 
-    user_id: str
     user_info: LiteLLM_UserTable
 
 

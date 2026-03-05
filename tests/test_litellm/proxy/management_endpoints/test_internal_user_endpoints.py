@@ -1336,7 +1336,7 @@ async def test_user_info_v2_returns_user_profile(mocker):
         request=mock_request,
     )
 
-    assert response.user_id == "test-user-123"
+    assert response.user_info.user_id == "test-user-123"
     assert response.user_info.user_email == "test@example.com"
     assert response.user_info.teams == ["team-1", "team-2"]
     # Verify no keys or teams fields on the response
@@ -1383,7 +1383,7 @@ async def test_user_info_v2_falls_back_to_caller_user_id(mocker):
         request=mock_request,
     )
 
-    assert response.user_id == "caller-user-id"
+    assert response.user_info.user_id == "caller-user-id"
     assert response.user_info.user_email == "caller@example.com"
 
 
@@ -1606,7 +1606,7 @@ async def test_user_info_v2_team_admin_can_query_team_member(mocker):
         request=mock_request,
     )
 
-    assert result.user_id == "user-B"
+    assert result.user_info.user_id == "user-B"
 
 
 @pytest.mark.asyncio
