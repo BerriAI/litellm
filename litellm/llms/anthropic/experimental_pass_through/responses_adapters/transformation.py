@@ -8,6 +8,11 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+import litellm
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_default_reasoning_summary_disabled,
+)
+
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
@@ -241,10 +246,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             effort = "low"
         else:
             effort = "minimal"
+        summary_disabled = is_default_reasoning_summary_disabled()
         result: Dict[str, Any] = {"effort": effort}
         summary = thinking.get("summary")
         if summary:
             result["summary"] = summary
+        elif not summary_disabled:
+            result["summary"] = "detailed"
         return result
 
     def translate_request(
