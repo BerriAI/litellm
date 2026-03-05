@@ -758,7 +758,7 @@ async def _initialize_shared_aiohttp_session():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session, health_check_mode
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
     import json
 
     init_verbose_loggers()
@@ -889,7 +889,8 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         await ProxyStartupEvent._update_default_team_member_budget()
 
     # Start background health checks AFTER models are loaded and index is built
-    if use_background_health_checks:
+    # Skip background health checks in simple mode since results are never consumed
+    if use_background_health_checks and health_check_mode != "simple":
         asyncio.create_task(
             _run_background_health_check()
         )  # start the background health check coroutine.
