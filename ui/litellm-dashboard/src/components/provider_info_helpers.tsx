@@ -119,7 +119,7 @@ export const provider_map: Record<string, string> = {
   Azure_AI_Studio: "azure_ai",
   AZURE_TEXT: "azure_text",
   BASETEN: "baseten",
-  Bedrock: "bedrock",\
+  Bedrock: "bedrock",
   BedrockMantle: "bedrock_mantle",
   BYTEZ: "bytez",
   Cerebras: "cerebras",
