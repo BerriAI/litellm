@@ -163,7 +163,7 @@ async def _send_message_via_completion_bridge(
 
 
 @client
-async def asend_message(
+async def asend_message(  # noqa: PLR0915
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendMessageRequest"] = None,
     api_base: Optional[str] = None,
