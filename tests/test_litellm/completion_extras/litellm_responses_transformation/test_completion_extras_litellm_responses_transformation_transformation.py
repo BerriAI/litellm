@@ -1808,18 +1808,20 @@ def test_reasoning_auto_summary_injected_without_reasoning_effort():
         handler._map_optional_params_to_responses_api_request(
             optional_params={"max_completion_tokens": 4096},
             responses_api_request=req1,
+            model="o3-mini",
         )
         assert "reasoning" not in req1, (
             "reasoning should NOT be injected when auto_summary is off"
         )
         print("✓ No reasoning injected when auto_summary is off and no reasoning_effort passed")
 
-        # --- Case 2: auto_summary ON, no reasoning_effort → reasoning injected ---
+        # --- Case 2: auto_summary ON, reasoning model, no reasoning_effort → reasoning injected ---
         litellm.reasoning_auto_summary = True
         req2 = ResponsesAPIOptionalRequestParams()
         handler._map_optional_params_to_responses_api_request(
             optional_params={"max_completion_tokens": 4096},
             responses_api_request=req2,
+            model="o3-mini",
         )
         assert "reasoning" in req2, (
             "reasoning should be injected when auto_summary is on"
@@ -1840,6 +1842,7 @@ def test_reasoning_auto_summary_injected_without_reasoning_effort():
         handler._map_optional_params_to_responses_api_request(
             optional_params={"reasoning_effort": "high"},
             responses_api_request=req3,
+            model="o3-mini",
         )
         reasoning3 = req3["reasoning"]
         assert reasoning3.get("effort") == "high", (
@@ -1849,6 +1852,19 @@ def test_reasoning_auto_summary_injected_without_reasoning_effort():
             f"Expected summary='detailed', got {reasoning3.get('summary')}"
         )
         print("✓ Explicit reasoning_effort preserved with auto_summary, no double injection")
+
+        # --- Case 4: auto_summary ON, non-reasoning model → no reasoning injected ---
+        litellm.reasoning_auto_summary = True
+        req4 = ResponsesAPIOptionalRequestParams()
+        handler._map_optional_params_to_responses_api_request(
+            optional_params={"max_completion_tokens": 4096},
+            responses_api_request=req4,
+            model="gpt-4o-mini",
+        )
+        assert "reasoning" not in req4, (
+            "reasoning should NOT be injected for non-reasoning models like gpt-4o-mini"
+        )
+        print("✓ No reasoning injected for non-reasoning model even with auto_summary on")
 
         print("✓ All reasoning_auto_summary injection tests passed")
     finally:

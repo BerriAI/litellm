@@ -38,6 +38,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
 )
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+from litellm.utils import supports_reasoning
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -224,6 +225,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self,
         optional_params: dict,
         responses_api_request: "ResponsesAPIOptionalRequestParams",
+        model: Optional[str] = None,
+        custom_llm_provider: Optional[str] = None,
     ) -> None:
         """Map optional_params into responses_api_request (mutates in place)."""
         for key, value in optional_params.items():
@@ -258,7 +261,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 litellm.reasoning_auto_summary
                 or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
             )
-            if auto_summary_enabled:
+            if auto_summary_enabled and model and supports_reasoning(
+                model=model, custom_llm_provider=custom_llm_provider
+            ):
                 responses_api_request["reasoning"] = Reasoning(summary="detailed")  # type: ignore
 
     def _build_sanitized_litellm_params(
@@ -333,8 +338,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if instructions:
             responses_api_request["instructions"] = instructions
 
+        custom_llm_provider = litellm_params.get("custom_llm_provider")
         self._map_optional_params_to_responses_api_request(
-            optional_params, responses_api_request
+            optional_params, responses_api_request,
+            model=model, custom_llm_provider=custom_llm_provider,
         )
 
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
