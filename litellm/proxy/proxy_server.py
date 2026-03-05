@@ -8772,6 +8772,12 @@ def get_direct_access_models(
     Get all models that user has direct access to
     """
 
+    # If user has "all-proxy-models" access, return all non-team model IDs
+    # This mirrors the proxy admin behavior and ensures these users see all
+    # models on the Models and Endpoints page (fixes #22791)
+    if SpecialModelNames.all_proxy_models.value in user_db_object.models:
+        return llm_router.get_model_ids(exclude_team_models=True)
+
     direct_access_models: List[str] = []
     for model in user_db_object.models:
         deployments = llm_router.get_model_list(model_name=model)
