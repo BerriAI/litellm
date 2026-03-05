@@ -169,6 +169,8 @@ export interface MCPServer {
   teams?: Team[];
   mcp_access_groups?: string[];
   allowed_tools?: string[];
+  tool_name_to_display_name?: Record<string, string>;
+  tool_name_to_description?: Record<string, string>;
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
 
