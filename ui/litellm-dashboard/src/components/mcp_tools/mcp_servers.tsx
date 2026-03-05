@@ -410,6 +410,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     isLoading={isLoadingServers}
                     noDataMessage="No MCP servers configured"
                     loadingMessage="🚅 Loading MCP servers..."
+                    enableSorting={true}
                   />
                 </div>
               </div>
