@@ -2764,7 +2764,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             if user_email is not None and table_name == "key":
                 existing_user = (
                     await prisma_client.db.litellm_usertable.find_first(
-                        where={"user_email": user_email}
+                        where={"user_email": {"equals": user_email, "mode": "insensitive"}}
                     )
                 )
                 if existing_user is not None:

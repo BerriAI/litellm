@@ -6550,7 +6550,7 @@ async def test_generate_key_with_user_email_reuses_existing_user(monkeypatch):
     assert captured_key_data.get("user_id") == "existing-user-id-123"
     # find_first was called with the email
     mock_prisma_client.db.litellm_usertable.find_first.assert_called_once_with(
-        where={"user_email": "test@example.com"}
+        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}}
     )
 
 
