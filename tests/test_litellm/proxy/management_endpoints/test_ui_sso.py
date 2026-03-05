@@ -4553,6 +4553,10 @@ async def test_pkce_token_exchange_basic_auth():
 
     assert result["access_token"] == "tok_abc"
     assert result["email"] == "user@example.com"
+    # Verify userinfo GET used the correct Bearer token header
+    get_call = mock_client.get.call_args
+    assert get_call is not None
+    assert get_call.kwargs["headers"]["Authorization"] == "Bearer tok_abc"
 
 
 @pytest.mark.asyncio

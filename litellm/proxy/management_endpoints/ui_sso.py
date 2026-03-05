@@ -822,7 +822,7 @@ async def get_generic_sso_response(
             # Strip bearer credentials from received_response after conversion.
             # received_response may appear in restricted-group error messages —
             # do not expose tokens to callers.
-            if received_response:
+            if received_response is not None:
                 received_response = {
                     k: v for k, v in received_response.items() if k not in _OAUTH_TOKEN_FIELDS
                 }
@@ -2687,6 +2687,8 @@ class SSOAuthenticationHandler:
                 bool(token_response.get("id_token")),
             )
 
+        # token_response is set inside the async with block above and remains accessible here;
+        # Python's scoping rules guarantee it is defined if no exception was raised.
         userinfo = await SSOAuthenticationHandler._get_pkce_userinfo(
             access_token=token_response["access_token"],
             id_token=token_response.get("id_token"),
