@@ -3,6 +3,12 @@ import { Card, Title, Text } from "@tremor/react";
 import { ToolOutlined, CheckCircleOutlined, SearchOutlined } from "@ant-design/icons";
 import { Badge, Spin, Checkbox, Input } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
+import {
+  categorizeTools,
+  groupToolsByCategory,
+  CRUD_CATEGORY_ORDER,
+  CRUD_CATEGORY_COLORS,
+} from "./tool_crud_categorization";
 
 interface MCPToolConfigurationProps {
   accessToken: string | null;
@@ -32,14 +38,18 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     enabled: true,
   });
 
-  // Filter tools based on search term
-  const filteredTools = tools.filter((tool) => {
+  // Categorize and filter tools based on search term
+  const categorizedTools = categorizeTools(tools);
+  const filteredTools = categorizedTools.filter((tool) => {
     const searchLower = toolSearchTerm.toLowerCase();
     return (
       tool.name.toLowerCase().includes(searchLower) ||
       (tool.description && tool.description.toLowerCase().includes(searchLower))
     );
   });
+
+  // Group filtered tools by category (always grouped)
+  const groupedTools = groupToolsByCategory(filteredTools);
 
   // Auto-select tools when tools are first loaded or when tools list changes
   useEffect(() => {
@@ -205,7 +215,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               size="large"
             />
 
-            {/* Tool list with checkboxes */}
+            {/* Tool list grouped by CRUD category */}
             <div className="space-y-2">
               {filteredTools.length === 0 ? (
                 <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
@@ -213,39 +223,73 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                   <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
                 </div>
               ) : (
-                filteredTools.map((tool, index) => (
-                <div
-                  key={index}
-                  className={`p-4 rounded-lg border transition-colors cursor-pointer ${
-                    allowedTools.includes(tool.name)
-                      ? "bg-blue-50 border-blue-300 hover:border-blue-400"
-                      : "bg-gray-50 border-gray-200 hover:border-gray-300"
-                  }`}
-                  onClick={() => handleToolToggle(tool.name)}
-                >
-                  <div className="flex items-start gap-3">
-                    <Checkbox checked={allowedTools.includes(tool.name)} onChange={() => handleToolToggle(tool.name)} />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <Text className="font-medium text-gray-900">{tool.name}</Text>
-                        <span
-                          className={`px-2 py-0.5 text-xs rounded-full font-medium ${
-                            allowedTools.includes(tool.name) ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
-                          }`}
-                        >
-                          {allowedTools.includes(tool.name) ? "Enabled" : "Disabled"}
-                        </span>
+                CRUD_CATEGORY_ORDER.map((category) => {
+                  const categoryTools = groupedTools[category];
+                  if (categoryTools.length === 0) return null;
+
+                  const categoryColors = CRUD_CATEGORY_COLORS[category];
+                  const enabledCount = categoryTools.filter((tool) => allowedTools.includes(tool.name)).length;
+
+                  return (
+                    <div key={category} className="space-y-2">
+                      <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${categoryColors.bg} ${categoryColors.border}`}>
+                        <Text className={`font-semibold ${categoryColors.text}`}>{category}</Text>
+                        <Badge
+                          count={categoryTools.length}
+                          style={{ backgroundColor: category === "Create" ? "#52c41a" : category === "Read" ? "#1890ff" : category === "Update" ? "#faad14" : category === "Delete" ? "#ff4d4f" : "#8c8c8c" }}
+                        />
+                        <Text className={`text-xs ${categoryColors.text} ml-auto`}>
+                          {enabledCount}/{categoryTools.length} enabled
+                        </Text>
                       </div>
-                      {tool.description && <Text className="text-gray-500 text-sm block mt-1">{tool.description}</Text>}
-                      <Text className="text-gray-400 text-xs block mt-1">
-                        {allowedTools.includes(tool.name)
-                          ? "✓ Users can call this tool"
-                          : "✗ Users cannot call this tool"}
-                      </Text>
+                      <div className="space-y-2 pl-4">
+                        {categoryTools.map((tool, index) => (
+                          <div
+                            key={index}
+                            className={`p-4 rounded-lg border transition-colors cursor-pointer ${
+                              allowedTools.includes(tool.name)
+                                ? "bg-blue-50 border-blue-300 hover:border-blue-400"
+                                : "bg-gray-50 border-gray-200 hover:border-gray-300"
+                            }`}
+                            onClick={() => handleToolToggle(tool.name)}
+                          >
+                            <div className="flex items-start gap-3">
+                              <Checkbox
+                                checked={allowedTools.includes(tool.name)}
+                                onChange={() => handleToolToggle(tool.name)}
+                              />
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <Text className="font-medium text-gray-900">{tool.name}</Text>
+                                  <span
+                                    className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                                      allowedTools.includes(tool.name)
+                                        ? "bg-green-100 text-green-800"
+                                        : "bg-red-100 text-red-800"
+                                    }`}
+                                  >
+                                    {allowedTools.includes(tool.name) ? "Enabled" : "Disabled"}
+                                  </span>
+                                  <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${categoryColors.badge}`}>
+                                    {category}
+                                  </span>
+                                </div>
+                                {tool.description && (
+                                  <Text className="text-gray-500 text-sm block mt-1">{tool.description}</Text>
+                                )}
+                                <Text className="text-gray-400 text-xs block mt-1">
+                                  {allowedTools.includes(tool.name)
+                                    ? "✓ Users can call this tool"
+                                    : "✗ Users cannot call this tool"}
+                                </Text>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
