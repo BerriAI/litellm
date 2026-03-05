@@ -1504,6 +1504,27 @@ if MCP_AVAILABLE:
                     )
         return name
 
+    async def _get_byok_credential(
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[str]:
+        """Retrieve the stored BYOK credential for a user+server pair."""
+        if not mcp_server.is_byok:
+            return None
+        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
+        if not user_id:
+            return None
+        from litellm.proxy._experimental.mcp_server.db import get_user_credential
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return None
+        return await get_user_credential(
+            prisma_client=prisma_client,
+            user_id=user_id,
+            server_id=mcp_server.server_id,
+        )
+
     async def _check_byok_credential(
         mcp_server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -1692,6 +1713,13 @@ if MCP_AVAILABLE:
                 # user has not stored one yet, issue a 401 OAuth challenge so
                 # that an MCP client can trigger the authorization flow.
                 await _check_byok_credential(mcp_server, user_api_key_auth)
+
+                # For BYOK servers, inject the user's stored credential as the
+                # auth header if no explicit override was provided by the caller.
+                if mcp_server.is_byok and not mcp_auth_header:
+                    mcp_auth_header = await _get_byok_credential(
+                        mcp_server, user_api_key_auth
+                    )
 
                 response = await _handle_managed_mcp_tool(
                     server_name=server_name,
