@@ -1117,11 +1117,12 @@ def create_pass_through_route(
             litellm.adapters = list(litellm.adapters)
 
         # Deduplicate: skip if an adapter for this endpoint path already exists
+        _target_key = target if isinstance(target, str) else type(target).__qualname__
         if not any(
-            isinstance(a, dict) and a.get("id") == adapter_id
+            isinstance(a, dict) and a.get("_target") == _target_key
             for a in litellm.adapters
         ):
-            litellm.adapters.append({"id": adapter_id, "adapter": adapter})
+            litellm.adapters.append({"id": adapter_id, "adapter": adapter, "_target": _target_key})
 
         async def endpoint_func(  # type: ignore
             request: Request,
