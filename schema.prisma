@@ -67,6 +67,10 @@ model LiteLLM_AgentsTable {
   object_permission_id String?
   object_permission LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
   spend      Float    @default(0.0)
+  tpm_limit  Int?
+  rpm_limit  Int?
+  session_tpm_limit Int?
+  session_rpm_limit Int?
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
