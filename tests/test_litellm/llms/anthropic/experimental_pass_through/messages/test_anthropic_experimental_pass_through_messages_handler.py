@@ -221,8 +221,40 @@ class TestThinkingParameterTransformation:
             model="openai/gpt-5.2",
         )
 
-        assert result == {"reasoning_effort": "minimal"}
+        assert result == {"reasoning_effort": {"effort": "minimal", "summary": "detailed"}}
         assert "thinking" not in result
+
+    def test_translate_thinking_for_model_no_summary_when_disabled(self):
+        """When disable_default_reasoning_summary is True, no summary is injected."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = True
+            thinking = {"type": "enabled", "budget_tokens": 5000}
+            result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+                thinking=thinking,
+                model="openai/gpt-5.2",
+            )
+            assert result == {"reasoning_effort": "medium"}
+        finally:
+            litellm.disable_default_reasoning_summary = original
+
+    def test_translate_thinking_for_model_preserves_user_summary(self):
+        """User-provided summary is always preserved regardless of flag."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 10000, "summary": "concise"}
+        result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+            thinking=thinking,
+            model="openai/gpt-5.2",
+        )
+        assert result == {"reasoning_effort": {"effort": "high", "summary": "concise"}}
 
 
 class TestThinkingSummaryPreservation:
