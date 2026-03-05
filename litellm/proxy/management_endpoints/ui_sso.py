@@ -776,6 +776,9 @@ async def get_generic_sso_response(
                 key, value = header.split("=")
                 additional_generic_sso_headers_dict[key] = value
 
+    # Initialized here so it's visible in the except block for error-hint logic
+    code_verifier: Optional[str] = None
+
     try:
         token_exchange_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
             request=request,
@@ -808,14 +811,18 @@ async def get_generic_sso_response(
                 additional_headers=additional_generic_sso_headers_dict,
             )
             result = response_convertor(combined_response, generic_sso)
+            # In the PKCE path verify_and_process is skipped, so generic_sso.access_token
+            # is never set. Read the token directly from the exchange response instead so
+            # process_sso_jwt_access_token can extract JWT-embedded roles/teams.
+            access_token_str: Optional[str] = combined_response.get("access_token")
         else:
             result = await generic_sso.verify_and_process(
                 request,
                 params=token_exchange_params,
                 headers=additional_generic_sso_headers_dict,
             )
+            access_token_str = generic_sso.access_token
 
-        access_token_str: Optional[str] = generic_sso.access_token
         process_sso_jwt_access_token(
             access_token_str, sso_jwt_handler, result, role_mappings=role_mappings
         )
@@ -823,8 +830,12 @@ async def get_generic_sso_response(
     except Exception as e:
         error_message = str(e)
 
-        # Detect PKCE misconfiguration and surface a helpful error
-        if "PKCE" in error_message or "code verifier" in error_message.lower():
+        # Only surface "enable PKCE" advice when PKCE was NOT already in use.
+        # If code_verifier is set, the token exchange itself failed — that's a
+        # provider-side error, not a configuration problem.
+        if code_verifier is None and (
+            "PKCE" in error_message or "code verifier" in error_message.lower()
+        ):
             is_okta = (
                 generic_authorization_endpoint
                 and "okta" in generic_authorization_endpoint.lower()
@@ -2617,6 +2628,22 @@ class SSOAuthenticationHandler:
             )
             raise
 
+        # Some providers return HTTP 200 with an error body (e.g. expired code, replay attack).
+        if "access_token" not in token_response:
+            error = token_response.get("error", "unknown_error")
+            error_desc = token_response.get("error_description", "")
+            verbose_proxy_logger.error(
+                "Token response missing access_token. error=%s description=%s",
+                error,
+                error_desc,
+            )
+            raise ProxyException(
+                message=f"Token exchange error: {error} - {error_desc}",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
         verbose_proxy_logger.debug(
             "PKCE token exchange successful. access_token=%s id_token=%s",
             bool(token_response.get("access_token")),
@@ -2677,6 +2704,17 @@ class SSOAuthenticationHandler:
                     param="userinfo",
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
+
+        if not userinfo:
+            raise ProxyException(
+                message=(
+                    "SSO user info unavailable: userinfo endpoint failed and no id_token "
+                    "was present in the token response."
+                ),
+                type=ProxyErrorTypes.auth_error,
+                param="userinfo",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
 
         return userinfo
 
