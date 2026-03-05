@@ -15,9 +15,11 @@ Endpoints implemented here:
 
 import base64
 import hashlib
+import html as _html_module
 import time
 import uuid
 from typing import Dict, Optional, cast
+from urllib.parse import urlencode, urlparse
 
 import jwt
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -79,9 +81,20 @@ def _build_authorize_html(
 ) -> str:
     """Build the 2-step BYOK OAuth authorization page HTML."""
 
+    # Escape all user-supplied / externally-derived values before interpolation
+    e = _html_module.escape
+    server_name = e(server_name)
+    server_initial = e(server_initial)
+    client_id = e(client_id)
+    redirect_uri = e(redirect_uri)
+    code_challenge = e(code_challenge)
+    code_challenge_method = e(code_challenge_method)
+    state = e(state)
+    server_id = e(server_id)
+
     # Build access checklist rows
     access_rows = "".join(
-        f'<div class="access-item"><span class="check">&#10003;</span>{item}</div>'
+        f'<div class="access-item"><span class="check">&#10003;</span>{e(item)}</div>'
         for item in access_items
     )
     access_section = ""
@@ -98,7 +111,7 @@ def _build_authorize_html(
     # Help link for step 2
     help_link_html = ""
     if help_url:
-        help_link_html = f'<a class="help-link" href="{help_url}" target="_blank">Where do I find my API key? &#8599;</a>'
+        help_link_html = f'<a class="help-link" href="{e(help_url)}" target="_blank">Where do I find my API key? &#8599;</a>'
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -619,6 +632,11 @@ async def byok_authorize_post(
     """
     _purge_expired_codes()
 
+    # Validate redirect_uri scheme to prevent open redirect
+    parsed_uri = urlparse(redirect_uri)
+    if parsed_uri.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Invalid redirect_uri scheme")
+
     if code_challenge_method != "S256":
         raise HTTPException(
             status_code=400, detail="Only S256 code_challenge_method is supported"
@@ -634,8 +652,9 @@ async def byok_authorize_post(
         "expires_at": time.time() + _AUTH_CODE_TTL_SECONDS,
     }
 
+    params = urlencode({"code": auth_code, "state": state})
     separator = "&" if "?" in redirect_uri else "?"
-    location = f"{redirect_uri}{separator}code={auth_code}&state={state}"
+    location = f"{redirect_uri}{separator}{params}"
     return RedirectResponse(url=location, status_code=302)
 
 

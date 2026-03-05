@@ -82,7 +82,6 @@ if MCP_AVAILABLE:
         get_all_mcp_servers_for_user,
         get_mcp_server,
         get_user_credential,
-        has_user_credential,
         store_user_credential,
         update_mcp_server,
     )
@@ -605,16 +604,24 @@ if MCP_AVAILABLE:
                         server.mcp_info = {}
                     server.mcp_info["is_public"] = True
 
-        # Annotate has_user_credential for BYOK servers
+        # Annotate has_user_credential for BYOK servers (single batched query)
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
 
         user_id = user_api_key_dict.user_id or ""
         if user_id and _byok_prisma_client is not None:
-            for server in redacted_mcp_servers:
-                if getattr(server, "is_byok", False):
-                    server.has_user_credential = await has_user_credential(
-                        _byok_prisma_client, user_id, server.server_id
-                    )
+            byok_server_ids = [
+                s.server_id
+                for s in redacted_mcp_servers
+                if getattr(s, "is_byok", False)
+            ]
+            if byok_server_ids:
+                cred_rows = await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
+                    where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
+                )
+                cred_set = {r.server_id for r in cred_rows}
+                for server in redacted_mcp_servers:
+                    if getattr(server, "is_byok", False):
+                        server.has_user_credential = server.server_id in cred_set
 
         # Virtual keys only get a sanitized discovery view.
         if is_restricted_virtual_key:

@@ -5,6 +5,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import time
 import traceback
 import uuid
 from datetime import datetime
@@ -53,6 +54,11 @@ from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
+
+# Short-lived in-memory cache for BYOK credential existence checks.
+# Keyed by (user_id, server_id); value is (credential_exists, monotonic_timestamp).
+_byok_cred_cache: Dict[Tuple[str, str], Tuple[bool, float]] = {}
+_BYOK_CRED_CACHE_TTL = 60  # seconds
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -1526,6 +1532,30 @@ if MCP_AVAILABLE:
                 },
             )
 
+        # Check short-lived in-memory cache before hitting the DB on every tool call
+        cache_key = (user_id, mcp_server.server_id)
+        cached = _byok_cred_cache.get(cache_key)
+        if cached is not None:
+            credential_exists, ts = cached
+            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
+                if not credential_exists:
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error": "byok_auth_required",
+                            "server_id": mcp_server.server_id,
+                            "server_name": mcp_server.server_name or mcp_server.name,
+                            "message": (
+                                "No stored credential found for this BYOK server. "
+                                "Complete the OAuth authorization flow to provide your API key."
+                            ),
+                        },
+                        headers={
+                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                        },
+                    )
+                return
+
         from litellm.proxy._experimental.mcp_server.db import has_user_credential
         from litellm.proxy.proxy_server import prisma_client
 
@@ -1537,6 +1567,7 @@ if MCP_AVAILABLE:
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
+        _byok_cred_cache[cache_key] = (credential_exists, time.monotonic())
         if not credential_exists:
             raise HTTPException(
                 status_code=401,

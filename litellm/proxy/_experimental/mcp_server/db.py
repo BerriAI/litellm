@@ -1,4 +1,3 @@
-import base64
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -14,6 +13,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _get_salt_key,
+    decrypt_value_helper,
     encrypt_value_helper,
 )
 from litellm.proxy.utils import PrismaClient
@@ -388,17 +388,17 @@ async def store_user_credential(
     server_id: str,
     credential: str,
 ) -> None:
-    """Store a B64-encoded user credential for a BYOK MCP server."""
-    credential_b64 = base64.b64encode(credential.encode()).decode()
+    """Encrypt and store a user credential for a BYOK MCP server."""
+    encrypted = encrypt_value_helper(value=credential, new_encryption_key=_get_salt_key())
     await prisma_client.db.litellm_mcpusercredentials.upsert(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
         data={
             "create": {
                 "user_id": user_id,
                 "server_id": server_id,
-                "credential_b64": credential_b64,
+                "credential_b64": encrypted,
             },
-            "update": {"credential_b64": credential_b64},
+            "update": {"credential_b64": encrypted},
         },
     )
 
@@ -408,13 +408,13 @@ async def get_user_credential(
     user_id: str,
     server_id: str,
 ) -> Optional[str]:
-    """Return decoded credential for a user+server pair, or None."""
+    """Return decrypted credential for a user+server pair, or None."""
     row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if row is None:
         return None
-    return base64.b64decode(row.credential_b64.encode()).decode()
+    return decrypt_value_helper(value=row.credential_b64, key="byok_credential")
 
 
 async def has_user_credential(
