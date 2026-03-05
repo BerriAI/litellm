@@ -509,6 +509,28 @@ def test_build_endpoints_empty_providers_returns_empty():
     assert result == []
 
 
+def test_anthropic_provider_has_api_base_field():
+    """Test that Anthropic provider has an api_base credential field so users can set a custom base URL."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/providers/fields")
+    providers = response.json()
+
+    anthropic = next((p for p in providers if p["provider"] == "Anthropic"), None)
+    assert anthropic is not None
+
+    field_keys = [f["key"] for f in anthropic["credential_fields"]]
+    assert "api_base" in field_keys, "Anthropic provider should have an api_base field"
+    assert "api_key" in field_keys, "Anthropic provider should have an api_key field"
+
+    # Verify api_base field properties
+    api_base_field = next(f for f in anthropic["credential_fields"] if f["key"] == "api_base")
+    assert api_base_field["required"] is False
+    assert api_base_field["field_type"] == "text"
+
+
 def test_clean_display_name_strips_suffix():
     assert _clean_display_name("OpenAI (`openai`)") == "OpenAI"
     assert _clean_display_name("AI/ML API (`aiml`)") == "AI/ML API"
