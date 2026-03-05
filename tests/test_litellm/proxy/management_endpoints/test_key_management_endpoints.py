@@ -6464,9 +6464,8 @@ async def test_generate_key_with_user_email_creates_user(monkeypatch):
     mock_prisma_client = AsyncMock()
     mock_prisma_client.jsonify_object = lambda data: data
 
-    mock_prisma_client.db = MagicMock()
-    mock_prisma_client.db.litellm_usertable = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    # get_data returns empty list (no existing user)
+    mock_prisma_client.get_data = AsyncMock(return_value=[])
 
     captured_user_data = {}
     captured_key_data = {}
@@ -6502,6 +6501,12 @@ async def test_generate_key_with_user_email_creates_user(monkeypatch):
     assert captured_user_data.get("user_id") is not None
     # Key links to the same user_id
     assert captured_key_data.get("user_id") == captured_user_data.get("user_id")
+    # get_data was called with correct params
+    mock_prisma_client.get_data.assert_called_once_with(
+        table_name="user",
+        query_type="find_all",
+        key_val={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
+    )
 
 
 @pytest.mark.asyncio
@@ -6514,11 +6519,8 @@ async def test_generate_key_with_user_email_reuses_existing_user(monkeypatch):
     existing_user = MagicMock()
     existing_user.user_id = "existing-user-id-123"
 
-    mock_prisma_client.db = MagicMock()
-    mock_prisma_client.db.litellm_usertable = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
-        return_value=existing_user
-    )
+    # get_data returns the existing user
+    mock_prisma_client.get_data = AsyncMock(return_value=[existing_user])
 
     captured_key_data = {}
 
@@ -6548,9 +6550,11 @@ async def test_generate_key_with_user_email_reuses_existing_user(monkeypatch):
 
     # Key links to the existing user's ID
     assert captured_key_data.get("user_id") == "existing-user-id-123"
-    # find_first was called with the email
-    mock_prisma_client.db.litellm_usertable.find_first.assert_called_once_with(
-        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}}
+    # get_data was called with the email
+    mock_prisma_client.get_data.assert_called_once_with(
+        table_name="user",
+        query_type="find_all",
+        key_val={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
     )
 
 
@@ -6589,6 +6593,8 @@ async def test_generate_key_without_user_email_skips_user_creation(monkeypatch):
 
     # Key was created successfully
     assert result is not None
+    # get_data should NOT have been called (no email lookup needed)
+    mock_prisma_client.get_data.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -6601,11 +6607,8 @@ async def test_generate_key_with_user_email_overrides_conflicting_user_id(monkey
     existing_user = MagicMock()
     existing_user.user_id = "existing-user-id-123"
 
-    mock_prisma_client.db = MagicMock()
-    mock_prisma_client.db.litellm_usertable = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
-        return_value=existing_user
-    )
+    # get_data returns the existing user
+    mock_prisma_client.get_data = AsyncMock(return_value=[existing_user])
 
     captured_key_data = {}
 
@@ -6640,52 +6643,31 @@ async def test_generate_key_with_user_email_overrides_conflicting_user_id(monkey
 
 
 @pytest.mark.asyncio
-async def test_generate_key_with_user_email_handles_race_condition(monkeypatch):
-    """When a concurrent request creates the same user between find_first and
-    insert, the retry lookup should find and reuse the concurrently created user."""
+async def test_generate_key_with_user_email_propagates_insert_errors(monkeypatch):
+    """When user insert fails, the error propagates as HTTP 500
+    (via generate_key_helper_fn's outer exception handler)."""
     mock_prisma_client = AsyncMock()
     mock_prisma_client.jsonify_object = lambda data: data
 
-    concurrent_user = MagicMock()
-    concurrent_user.user_id = "concurrent-user-id-456"
-
-    # First find_first returns None (user doesn't exist yet),
-    # second find_first (after insert fails) returns the concurrently created user
-    mock_prisma_client.db = MagicMock()
-    mock_prisma_client.db.litellm_usertable = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
-        side_effect=[None, concurrent_user]
-    )
-
-    captured_key_data = {}
+    # get_data returns empty list (no existing user)
+    mock_prisma_client.get_data = AsyncMock(return_value=[])
 
     async def _insert_data_side_effect(*args, **kwargs):
         table_name = kwargs.get("table_name")
         if table_name == "user":
-            # Simulate race: another request created the user first
-            raise Exception("Unique constraint violation")
-        elif table_name == "key":
-            captured_key_data.update(kwargs.get("data", {}))
-            return MagicMock(
-                token="hashed_token",
-                litellm_budget_table=None,
-                object_permission=None,
-                created_at=None,
-                updated_at=None,
-            )
+            raise RuntimeError("Database connection lost")
         return MagicMock()
 
     mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    result = await generate_key_helper_fn(
-        request_type="key",
-        table_name="key",
-        user_email="test@example.com",
-    )
-
-    # Key links to the concurrently created user
-    assert captured_key_data.get("user_id") == "concurrent-user-id-456"
+    with pytest.raises(HTTPException) as exc_info:
+        await generate_key_helper_fn(
+            request_type="key",
+            table_name="key",
+            user_email="test@example.com",
+        )
+    assert exc_info.value.status_code == 500
 
 
 def test_generate_key_request_accepts_user_email():
