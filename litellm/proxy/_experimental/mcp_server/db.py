@@ -27,6 +27,10 @@ def _prepare_mcp_server_data(
     Helper function to prepare MCP server data for database operations.
     Handles JSON field serialization for mcp_info and env fields.
 
+    For UpdateMCPServerRequest, only fields explicitly provided by the caller
+    are included (via exclude_none=True). This enables true partial updates
+    so that omitted fields preserve their existing database values.
+
     Args:
         data: NewMCPServerRequest or UpdateMCPServerRequest object
 
@@ -35,11 +39,18 @@ def _prepare_mcp_server_data(
     """
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-    # Convert model to dict
+    is_update = isinstance(data, UpdateMCPServerRequest)
+
+    # Convert model to dict, excluding None fields.
+    # For updates this means only user-supplied fields are included.
     data_dict = data.model_dump(exclude_none=True)
-    # Ensure alias is always present in the dict (even if None)
-    if "alias" not in data_dict:
-        data_dict["alias"] = getattr(data, "alias", None)
+
+    # For create operations, ensure alias is always present in the dict
+    # (even if None) so the DB column is explicitly set.
+    # For updates, only include alias if it was explicitly provided.
+    if not is_update:
+        if "alias" not in data_dict:
+            data_dict["alias"] = getattr(data, "alias", None)
 
     # Handle credentials serialization
     credentials = data_dict.get("credentials")
@@ -63,15 +74,21 @@ def _prepare_mcp_server_data(
 
     # Handle tool name override serialization
     if data.tool_name_to_display_name is not None:
-        data_dict["tool_name_to_display_name"] = safe_dumps(data.tool_name_to_display_name)
+        data_dict["tool_name_to_display_name"] = safe_dumps(
+            data.tool_name_to_display_name
+        )
     if data.tool_name_to_description is not None:
-        data_dict["tool_name_to_description"] = safe_dumps(data.tool_name_to_description)
+        data_dict["tool_name_to_description"] = safe_dumps(
+            data.tool_name_to_description
+        )
 
     # mcp_access_groups is already List[str], no serialization needed
 
-    # Force include is_byok even when False (exclude_none=True would not drop it,
-    # but be explicit to ensure a False value is always written to the DB).
-    data_dict["is_byok"] = getattr(data, "is_byok", False)
+    # For create operations, force include is_byok even when False to ensure
+    # the value is always written to the DB.
+    # For update operations, only include is_byok if explicitly provided.
+    if not is_update:
+        data_dict["is_byok"] = getattr(data, "is_byok", False)
 
     return data_dict
 
@@ -128,12 +145,12 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server: Optional[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_unique(
-        where={
-            "server_id": server_id,
-        }
+    mcp_server: Optional[LiteLLM_MCPServerTable] = (
+        await prisma_client.db.litellm_mcpservertable.find_unique(
+            where={
+                "server_id": server_id,
+            }
+        )
     )
     return mcp_server
 
@@ -144,12 +161,12 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    _mcp_servers: List[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_many(
-        where={
-            "server_id": {"in": server_ids},
-        }
+    _mcp_servers: List[LiteLLM_MCPServerTable] = (
+        await prisma_client.db.litellm_mcpservertable.find_many(
+            where={
+                "server_id": {"in": server_ids},
+            }
+        )
     )
     final_mcp_servers: List[LiteLLM_MCPServerTable] = []
     for _mcp_server in _mcp_servers:
@@ -338,10 +355,17 @@ async def update_mcp_server(
     prisma_client: PrismaClient, data: UpdateMCPServerRequest, touched_by: str
 ) -> LiteLLM_MCPServerTable:
     """
-    Update a new mcp server record in the db
+    Update an existing mcp server record in the db.
+
+    Only fields explicitly provided in the request are updated;
+    omitted fields retain their current database values.
     """
     # Use helper to prepare data with proper JSON serialization
     data_dict = _prepare_mcp_server_data(data)
+
+    # Remove server_id from the data dict — it is used in the WHERE clause,
+    # not as a value to update.
+    data_dict.pop("server_id", None)
 
     # Add audit fields
     data_dict["updated_by"] = touched_by

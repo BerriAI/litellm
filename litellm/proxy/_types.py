@@ -873,9 +873,9 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
-    model_max_budget: Optional[
-        dict
-    ] = {}  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    model_max_budget: Optional[dict] = (
+        {}
+    )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
@@ -1016,9 +1016,9 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     new_master_key: Optional[str] = None
-    grace_period: Optional[
-        str
-    ] = None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
+    grace_period: Optional[str] = (
+        None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
+    )
 
 
 class ResetSpendRequest(LiteLLMPydanticObjectBase):
@@ -1142,17 +1142,26 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
+    """
+    Request model for updating an MCP server.
+
+    All fields except server_id are optional so that callers can perform
+    partial updates (i.e. only supply the fields they want to change).
+    Fields that are not provided (None) will be excluded from the database
+    update and the existing values will be preserved.
+    """
+
     server_id: str
     server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
-    transport: MCPTransportType = MCPTransport.sse
+    transport: Optional[MCPTransportType] = None
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
     url: Optional[str] = None
     spec_path: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
-    mcp_access_groups: List[str] = Field(default_factory=list)
+    mcp_access_groups: Optional[List[str]] = None
     allowed_tools: Optional[List[str]] = None
     tool_name_to_display_name: Optional[Dict[str, str]] = None
     tool_name_to_description: Optional[Dict[str, str]] = None
@@ -1160,20 +1169,21 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     static_headers: Optional[Dict[str, str]] = None
     # Stdio-specific fields
     command: Optional[str] = None
-    args: List[str] = Field(default_factory=list)
-    env: Dict[str, str] = Field(default_factory=dict)
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
-    allow_all_keys: bool = False
-    available_on_public_internet: bool = True
-    is_byok: bool = False
-    byok_description: List[str] = Field(default_factory=list)
+    allow_all_keys: Optional[bool] = None
+    available_on_public_internet: Optional[bool] = None
+    is_byok: Optional[bool] = None
+    byok_description: Optional[List[str]] = None
     byok_api_key_help_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
+        """Only validate transport-specific requirements when transport is explicitly provided."""
         if isinstance(values, dict):
             transport = values.get("transport")
             if transport == MCPTransport.stdio:
@@ -1452,12 +1462,12 @@ class NewCustomerRequest(BudgetNewRequest):
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     spend: Optional[float] = None
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
     @model_validator(mode="before")
@@ -1480,12 +1490,12 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
@@ -1575,15 +1585,15 @@ class NewTeamRequest(TeamBase):
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
 
     model_tpm_limit: Optional[Dict[str, int]] = None
-    team_member_budget: Optional[
-        float
-    ] = None  # allow user to set a budget for all team members
-    team_member_rpm_limit: Optional[
-        int
-    ] = None  # allow user to set RPM limit for all team members
-    team_member_tpm_limit: Optional[
-        int
-    ] = None  # allow user to set TPM limit for all team members
+    team_member_budget: Optional[float] = (
+        None  # allow user to set a budget for all team members
+    )
+    team_member_rpm_limit: Optional[int] = (
+        None  # allow user to set RPM limit for all team members
+    )
+    team_member_tpm_limit: Optional[int] = (
+        None  # allow user to set TPM limit for all team members
+    )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
@@ -1679,9 +1689,9 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
 
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
-    callback_type: Optional[
-        Literal["success", "failure", "success_and_failure"]
-    ] = "success_and_failure"
+    callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
+        "success_and_failure"
+    )
     callback_vars: Dict[str, str]
 
     @model_validator(mode="before")
@@ -2021,9 +2031,9 @@ class ConfigList(LiteLLMPydanticObjectBase):
     stored_in_db: Optional[bool]
     field_default_value: Any
     premium_field: bool = False
-    nested_fields: Optional[
-        List[FieldDetail]
-    ] = None  # For nested dictionary or Pydantic fields
+    nested_fields: Optional[List[FieldDetail]] = (
+        None  # For nested dictionary or Pydantic fields
+    )
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2487,9 +2497,9 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     budget_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    user: Optional[
-        Any
-    ] = None  # You might want to replace 'Any' with a more specific type if available
+    user: Optional[Any] = (
+        None  # You might want to replace 'Any' with a more specific type if available
+    )
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     user_email: Optional[str] = None
 
@@ -3637,9 +3647,9 @@ class TeamModelDeleteRequest(BaseModel):
 # Organization Member Requests
 class OrganizationMemberAddRequest(OrgMemberAddRequest):
     organization_id: str
-    max_budget_in_organization: Optional[
-        float
-    ] = None  # Users max budget within the organization
+    max_budget_in_organization: Optional[float] = (
+        None  # Users max budget within the organization
+    )
 
 
 class OrganizationMemberDeleteRequest(MemberDeleteRequest):
@@ -3890,9 +3900,9 @@ class ProviderBudgetResponse(LiteLLMPydanticObjectBase):
     Maps provider names to their budget configs.
     """
 
-    providers: Dict[
-        str, ProviderBudgetResponseObject
-    ] = {}  # Dictionary mapping provider names to their budget configurations
+    providers: Dict[str, ProviderBudgetResponseObject] = (
+        {}
+    )  # Dictionary mapping provider names to their budget configurations
 
 
 class ProxyStateVariables(TypedDict):
@@ -4036,9 +4046,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     enforce_rbac: bool = False
     roles_jwt_field: Optional[str] = None  # v2 on role mappings
     role_mappings: Optional[List[RoleMapping]] = None
-    object_id_jwt_field: Optional[
-        str
-    ] = None  # can be either user / team, inferred from the role mapping
+    object_id_jwt_field: Optional[str] = (
+        None  # can be either user / team, inferred from the role mapping
+    )
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False

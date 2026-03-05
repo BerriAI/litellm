@@ -670,12 +670,15 @@ class TestListMCPServers:
             return_value=[server_1, server_2]
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-            AsyncMock(return_value=[mock_user_auth]),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
         ):
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
                 fetch_all_mcp_servers,
@@ -1220,6 +1223,257 @@ class TestUpdateMCPServer:
             # Verify the result includes extra_headers
             assert result.extra_headers == ["X-Custom-Header", "X-Another-Header"]
             assert result.alias == "Updated Test Server"
+
+
+class TestUpdateMCPServerPartialUpdate:
+    """
+    Test suite for partial update behavior of MCP servers.
+
+    Verifies that PUT /v1/mcp/server only modifies fields explicitly
+    provided in the request, preserving existing values for omitted fields.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/22854
+    """
+
+    def test_update_request_only_includes_provided_fields(self):
+        """
+        UpdateMCPServerRequest with only server_id and description should
+        serialize to a dict containing only those two fields (plus no defaults).
+        """
+        request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            description="Your new description here",
+        )
+        data = request.model_dump(exclude_none=True)
+        # Only server_id and description should be in the dict
+        assert data == {
+            "server_id": "test-server-1",
+            "description": "Your new description here",
+        }
+
+    def test_update_request_does_not_include_default_transport(self):
+        """
+        When transport is not provided, it should not appear in the
+        serialized dict so existing transport value is preserved.
+        """
+        request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            alias="New Alias",
+        )
+        data = request.model_dump(exclude_none=True)
+        assert "transport" not in data
+        assert "allow_all_keys" not in data
+        assert "is_byok" not in data
+        assert "available_on_public_internet" not in data
+        assert "mcp_access_groups" not in data
+        assert "args" not in data
+        assert "env" not in data
+
+    def test_update_request_includes_fields_when_explicitly_set(self):
+        """
+        When fields are explicitly provided, they should appear in the dict.
+        """
+        request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            description="Updated desc",
+            transport=MCPTransport.http,
+            url="https://new-url.example.com/mcp",
+            allow_all_keys=True,
+            is_byok=False,
+        )
+        data = request.model_dump(exclude_none=True)
+        assert data["transport"] == MCPTransport.http
+        assert data["url"] == "https://new-url.example.com/mcp"
+        assert data["allow_all_keys"] is True
+        assert data["is_byok"] is False
+
+    def test_prepare_mcp_server_data_partial_update(self):
+        """
+        _prepare_mcp_server_data for an UpdateMCPServerRequest should only
+        include user-provided fields, not force defaults like is_byok=False.
+        """
+        from litellm.proxy._experimental.mcp_server.db import _prepare_mcp_server_data
+
+        request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            description="New description",
+        )
+        data_dict = _prepare_mcp_server_data(request)
+
+        # Should contain only server_id and description
+        assert data_dict["server_id"] == "test-server-1"
+        assert data_dict["description"] == "New description"
+        # Should NOT contain default values that were not provided
+        assert "transport" not in data_dict
+        assert "is_byok" not in data_dict
+        assert "allow_all_keys" not in data_dict
+        assert "mcp_access_groups" not in data_dict
+        assert "alias" not in data_dict
+
+    def test_prepare_mcp_server_data_create_includes_defaults(self):
+        """
+        _prepare_mcp_server_data for a NewMCPServerRequest should still
+        include default values like is_byok=False and alias=None.
+        """
+        from litellm.proxy._experimental.mcp_server.db import _prepare_mcp_server_data
+
+        request = NewMCPServerRequest(
+            server_id="test-server-1",
+            url="https://example.com/mcp",
+        )
+        data_dict = _prepare_mcp_server_data(request)
+
+        # Create should include defaults
+        assert "is_byok" in data_dict
+        assert data_dict["is_byok"] is False
+        assert "alias" in data_dict
+
+    @pytest.mark.asyncio
+    async def test_edit_mcp_server_partial_update_preserves_existing(self):
+        """
+        End-to-end test: calling edit_mcp_server with only server_id and
+        description should update only the description, not overwrite
+        transport, url, or other fields with defaults.
+        """
+        existing_server = generate_mock_mcp_server_db_record(
+            server_id="test-server-1",
+            alias="Original Server",
+            url="https://original.example.com/mcp",
+            transport="http",
+        )
+        existing_server.allow_all_keys = True
+        existing_server.is_byok = True
+
+        # User only wants to update the description
+        update_request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            description="Your new description here",
+        )
+
+        # Updated server returned from DB (simulating the result after update)
+        updated_server = generate_mock_mcp_server_db_record(
+            server_id="test-server-1",
+            alias="Original Server",
+            url="https://original.example.com/mcp",
+            transport="http",
+        )
+        updated_server.description = "Your new description here"
+        updated_server.allow_all_keys = True
+        updated_server.is_byok = True
+
+        mock_prisma_client = MagicMock()
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+                AsyncMock(return_value=updated_server),
+            ) as mock_update,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                MagicMock(
+                    update_server=AsyncMock(),
+                    reload_servers_from_database=AsyncMock(),
+                ),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                edit_mcp_server,
+            )
+
+            result = await edit_mcp_server(
+                payload=update_request, user_api_key_dict=mock_user_auth
+            )
+
+            # Verify update_mcp_server was called
+            mock_update.assert_awaited_once()
+            called_payload = mock_update.call_args[0][1]
+
+            # The payload should only contain the fields the user provided
+            payload_dict = called_payload.model_dump(exclude_none=True)
+            assert "server_id" in payload_dict
+            assert "description" in payload_dict
+            # These fields should NOT be in the payload (not provided by user)
+            assert "transport" not in payload_dict
+            assert "url" not in payload_dict
+            assert "allow_all_keys" not in payload_dict
+            assert "is_byok" not in payload_dict
+
+            # Verify the result preserves original values
+            assert result.alias == "Original Server"
+            assert result.url == "https://original.example.com/mcp"
+            assert result.allow_all_keys is True
+            assert result.is_byok is True
+            assert result.description == "Your new description here"
+
+    @pytest.mark.asyncio
+    async def test_update_mcp_server_db_only_updates_provided_fields(self):
+        """
+        Test that update_mcp_server in db.py passes only user-provided fields
+        to prisma update, excluding server_id from the data dict.
+        """
+        from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+
+        request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            description="Updated description only",
+        )
+
+        mock_prisma_client = MagicMock()
+        mock_updated_record = generate_mock_mcp_server_db_record(
+            server_id="test-server-1",
+            alias="Original Server",
+            url="https://original.example.com/mcp",
+            transport="http",
+        )
+        mock_updated_record.description = "Updated description only"
+        mock_prisma_client.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=mock_updated_record
+        )
+
+        result = await update_mcp_server(
+            mock_prisma_client, request, touched_by="test-admin"
+        )
+
+        # Verify the data passed to prisma update
+        update_call = mock_prisma_client.db.litellm_mcpservertable.update
+        update_call.assert_awaited_once()
+        call_kwargs = update_call.call_args
+        data_arg = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
+        if data_arg is None:
+            # Try positional/keyword hybrid
+            data_arg = call_kwargs.kwargs.get(
+                "data",
+                call_kwargs[1].get("data") if len(call_kwargs) > 1 else None,
+            )
+
+        where_arg = call_kwargs.kwargs.get("where") or call_kwargs[1].get("where")
+        if where_arg is None:
+            where_arg = call_kwargs.kwargs.get(
+                "where",
+                call_kwargs[1].get("where") if len(call_kwargs) > 1 else None,
+            )
+
+        # server_id should only be in the WHERE clause, not in the data
+        assert where_arg == {"server_id": "test-server-1"}
+        assert "server_id" not in data_arg
+        # Only description and updated_by should be in the data
+        assert data_arg["description"] == "Updated description only"
+        assert data_arg["updated_by"] == "test-admin"
+        # Default fields should NOT be present
+        assert "transport" not in data_arg
+        assert "is_byok" not in data_arg
+        assert "allow_all_keys" not in data_arg
 
 
 class TestHealthCheckServers:
