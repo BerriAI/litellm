@@ -1126,12 +1126,24 @@ def completion_cost(  # noqa: PLR0915
                         "input_cost_per_token": _input_cost if _input_cost is not None else 0.0,
                         "output_cost_per_token": _output_cost if _output_cost is not None else 0.0,
                     }
-                # Also extract custom_cost_per_second if available
+
+        # Extract custom_cost_per_second from litellm_logging_obj when custom_pricing=True
+        # This is independent of the per-token extraction above
+        if (
+            custom_pricing is True
+            and custom_cost_per_second is None
+            and litellm_logging_obj is not None
+        ):
+            _litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
+            if _litellm_params is not None:
+                _metadata = _litellm_params.get("metadata", {}) or {}
+                _model_info = _metadata.get("model_info", {}) or {}
                 # Prefer input_cost_per_second; fall back to output_cost_per_second
-                if custom_cost_per_second is None:
-                    _cost_per_second = _model_info.get("input_cost_per_second") or _model_info.get("output_cost_per_second")
-                    if _cost_per_second is not None:
-                        custom_cost_per_second = _cost_per_second
+                _cost_per_second = _model_info.get(
+                    "input_cost_per_second"
+                ) or _model_info.get("output_cost_per_second")
+                if _cost_per_second is not None:
+                    custom_cost_per_second = _cost_per_second
 
         selected_model = _select_model_name_for_cost_calc(
             model=model,

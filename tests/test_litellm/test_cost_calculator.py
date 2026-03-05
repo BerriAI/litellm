@@ -2096,3 +2096,85 @@ def test_custom_pricing_partial_costs_in_model_info():
     # Expected: (100 * 0.001) + (50 * 0.0) = 0.1
     expected_cost = 100 * 0.001
     assert cost == expected_cost, f"Expected cost {expected_cost}, got {cost}"
+
+
+def test_custom_pricing_per_second_from_model_info():
+    """
+    Test that custom_cost_per_second is correctly extracted from
+    litellm_logging_obj.litellm_params.metadata.model_info when
+    custom_pricing=True and input_cost_per_second is configured.
+
+    The per-second extraction should be independent of per-token extraction.
+    """
+    from unittest.mock import MagicMock
+
+    response = ModelResponse(
+        id="test-id",
+        model="custom/time-based-model",
+        choices=[],
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+    )
+
+    # Configure per-second pricing (no per-token pricing)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_params = {
+        "metadata": {
+            "model_info": {
+                "input_cost_per_second": 0.01,  # $0.01 per second
+            }
+        }
+    }
+
+    # Set _response_ms on the response to simulate a 5-second request
+    response._response_ms = 5000.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="custom/time-based-model",
+        custom_llm_provider="custom",
+        custom_pricing=True,
+        litellm_logging_obj=mock_logging_obj,
+    )
+
+    # Expected: 0.01 * 5000 / 1000 = 0.05
+    expected_cost = 0.01 * 5000.0 / 1000.0
+    assert cost == expected_cost, f"Expected cost {expected_cost}, got {cost}"
+
+
+def test_custom_pricing_per_second_output_fallback():
+    """
+    Test that custom_cost_per_second falls back to output_cost_per_second
+    when input_cost_per_second is not available.
+    """
+    from unittest.mock import MagicMock
+
+    response = ModelResponse(
+        id="test-id",
+        model="custom/output-time-model",
+        choices=[],
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+    )
+
+    # Only output_cost_per_second provided
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_params = {
+        "metadata": {
+            "model_info": {
+                "output_cost_per_second": 0.02,  # $0.02 per second
+            }
+        }
+    }
+
+    response._response_ms = 3000.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="custom/output-time-model",
+        custom_llm_provider="custom",
+        custom_pricing=True,
+        litellm_logging_obj=mock_logging_obj,
+    )
+
+    # Expected: 0.02 * 3000 / 1000 = 0.06
+    expected_cost = 0.02 * 3000.0 / 1000.0
+    assert cost == expected_cost, f"Expected cost {expected_cost}, got {cost}"
