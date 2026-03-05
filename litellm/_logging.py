@@ -171,6 +171,21 @@ verbose_router_logger = logging.getLogger("litellm.router")
 # Library best practice: only a NullHandler by default (Python logging HOWTO)
 verbose_logger.addHandler(logging.NullHandler())
 
+# Backward-compatible aliases for the old logger names.
+# Users who configured logging for "LiteLLM", "LiteLLM Proxy", or
+# "LiteLLM Router" will keep working because these aliases share the
+# same handlers and level as the canonical loggers above.
+# Deprecated: use "litellm", "litellm.proxy", "litellm.router" instead.
+_LEGACY_LOGGER_MAP = {
+    "LiteLLM": verbose_logger,
+    "LiteLLM Proxy": verbose_proxy_logger,
+    "LiteLLM Router": verbose_router_logger,
+}
+for _old_name, _canonical in _LEGACY_LOGGER_MAP.items():
+    _alias = logging.getLogger(_old_name)
+    _alias.parent = _canonical
+    _alias.setLevel(logging.NOTSET)  # inherit from canonical logger
+
 
 def _suppress_loggers():
     """Suppress noisy loggers at INFO level.
