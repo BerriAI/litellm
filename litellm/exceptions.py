@@ -44,6 +44,7 @@ class AuthenticationError(openai.AuthenticationError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 401
+        self._raw_message = message
         self.message = "litellm.AuthenticationError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
@@ -59,6 +60,14 @@ class AuthenticationError(openai.AuthenticationError):  # type: ignore
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -90,6 +99,7 @@ class NotFoundError(openai.NotFoundError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 404
+        self._raw_message = message
         self.message = "litellm.NotFoundError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
@@ -105,6 +115,14 @@ class NotFoundError(openai.NotFoundError):  # type: ignore
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.model, self.llm_provider), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -136,6 +154,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         body: Optional[dict] = None,
     ):
         self.status_code = 400
+        self._raw_message = message
         self.message = "litellm.BadRequestError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
@@ -156,6 +175,14 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         super().__init__(
             self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.model, self.llm_provider), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -204,21 +231,34 @@ class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
         message,
         model,
         llm_provider,
-        response: httpx.Response,
+        response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
     ):
         self.status_code = 422
+        self._raw_message = message
         self.message = "litellm.UnprocessableEntityError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        response = response or httpx.Response(
+            status_code=self.status_code,
+            request=httpx.Request(method="GET", url="https://litellm.ai"),
+        )
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.model, self.llm_provider), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -256,6 +296,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         super().__init__(
             request=request
         )  # Call the base class constructor with the parameters it needs
+        self._raw_message = message
         self.status_code = exception_status_code or 408
         self.message = "litellm.Timeout: {}".format(message)
         self.model = model
@@ -266,6 +307,17 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         self.headers = headers
 
     # custom function to convert to str
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.model, self.llm_provider), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries, "headers": self.headers, "exception_status_code": self.status_code})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
+        self.headers = state.get("headers")
+        if state.get("exception_status_code") is not None:
+            self.status_code = state["exception_status_code"]
+
     def __str__(self):
         _message = self.message
         if self.num_retries:
@@ -289,21 +341,34 @@ class PermissionDeniedError(openai.PermissionDeniedError):  # type:ignore
         message,
         llm_provider,
         model,
-        response: httpx.Response,
+        response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
     ):
         self.status_code = 403
+        self._raw_message = message
         self.message = "litellm.PermissionDeniedError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        response = response or httpx.Response(
+            status_code=self.status_code,
+            request=httpx.Request(method="GET", url="https://litellm.ai"),
+        )
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -334,6 +399,7 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 429
+        self._raw_message = message
         self.message = "litellm.RateLimitError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
@@ -356,6 +422,14 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
         self.code = "429"
         self.type = "throttling_error"
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -385,6 +459,7 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = 400
+        self._raw_message = message
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -398,6 +473,9 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
 
         # set after, to make it clear the raised error is a context window exceeded error
         self.message = "litellm.ContextWindowExceededError: {}".format(self.message)
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.model, self.llm_provider))
 
     def __str__(self):
         _message = self.message
@@ -423,15 +501,16 @@ class RejectedRequestError(BadRequestError):  # type: ignore
         message,
         model,
         llm_provider,
-        request_data: dict,
+        request_data: Optional[dict] = None,
         litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = 400
+        self._raw_message = message
         self.message = "litellm.RejectedRequestError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        self.request_data = request_data
+        self.request_data = request_data if request_data is not None else {}
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         response = httpx.Response(status_code=400, request=request)
         super().__init__(
@@ -441,6 +520,12 @@ class RejectedRequestError(BadRequestError):  # type: ignore
             response=response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.model, self.llm_provider, self.request_data), {"litellm_debug_info": self.litellm_debug_info})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
 
     def __str__(self):
         _message = self.message
@@ -472,6 +557,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         body: Optional[dict] = None,
     ):
         self.status_code = 400
+        self._cpv_raw_message = message
         self.message = "litellm.ContentPolicyViolationError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
@@ -485,6 +571,13 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
             litellm_debug_info=self.litellm_debug_info,
             body=body,
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._cpv_raw_message, self.model, self.llm_provider), {"litellm_debug_info": self.litellm_debug_info, "provider_specific_fields": self.provider_specific_fields})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.provider_specific_fields = state.get("provider_specific_fields")
 
     def __str__(self):
         return self._transform_error_to_string()
@@ -516,6 +609,7 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 503
+        self._raw_message = message
         self.message = "litellm.ServiceUnavailableError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
@@ -536,6 +630,14 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -566,6 +668,7 @@ class BadGatewayError(openai.APIStatusError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 502
+        self._raw_message = message
         self.message = "litellm.BadGatewayError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
@@ -586,6 +689,14 @@ class BadGatewayError(openai.APIStatusError):  # type: ignore
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -616,6 +727,7 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 500
+        self._raw_message = message
         self.message = "litellm.InternalServerError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
@@ -636,6 +748,14 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -668,6 +788,7 @@ class APIError(openai.APIError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = status_code
+        self._raw_message = message
         self.message = "litellm.APIError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
@@ -677,6 +798,14 @@ class APIError(openai.APIError):  # type: ignore
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(self.message, request=request, body=None)  # type: ignore
+
+    def __reduce__(self):
+        return (self.__class__, (self.status_code, self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -707,6 +836,7 @@ class APIConnectionError(openai.APIConnectionError):  # type: ignore
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
     ):
+        self._raw_message = message
         self.message = "litellm.APIConnectionError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
@@ -716,6 +846,14 @@ class APIConnectionError(openai.APIConnectionError):  # type: ignore
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(message=self.message, request=self.request)
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -745,6 +883,7 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
     ):
+        self._raw_message = message
         self.message = "litellm.APIResponseValidationError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
@@ -754,6 +893,14 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(response=response, body=None, message=message)
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
     def __str__(self):
         _message = self.message
@@ -786,11 +933,19 @@ class JSONSchemaValidationError(APIResponseValidationError):
         super().__init__(model=model, message=message, llm_provider=llm_provider)
 
 
+
+    def __reduce__(self):
+        return (self.__class__, (self.model, self.llm_provider, self.raw_response, self.schema))
+
 class OpenAIError(openai.OpenAIError):  # type: ignore
     def __init__(self, original_exception=None):
         super().__init__()
         self.llm_provider = "openai"
 
+
+
+    def __reduce__(self):
+        return (self.__class__, ())
 
 class UnsupportedParamsError(BadRequestError):
     def __init__(
@@ -805,6 +960,7 @@ class UnsupportedParamsError(BadRequestError):
         num_retries: Optional[int] = None,
     ):
         self.status_code = 400
+        self._raw_message = message
         self.message = "litellm.UnsupportedParamsError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
@@ -818,6 +974,17 @@ class UnsupportedParamsError(BadRequestError):
         self.max_retries = max_retries
         self.num_retries = num_retries
 
+
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message,), {"llm_provider": self.llm_provider, "model": self.model, "litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.llm_provider = state.get("llm_provider")
+        self.model = state.get("model")
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
 
 LITELLM_EXCEPTION_TYPES = [
     AuthenticationError,
@@ -857,10 +1024,15 @@ class BudgetExceededError(Exception):
         super().__init__(message)
 
 
+
+    def __reduce__(self):
+        return (self.__class__, (self.current_cost, self.max_budget))
+
 ## DEPRECATED ##
 class InvalidRequestError(openai.BadRequestError):  # type: ignore
     def __init__(self, message, model, llm_provider):
         self.status_code = 400
+        self._raw_message = message
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
@@ -874,6 +1046,10 @@ class InvalidRequestError(openai.BadRequestError):  # type: ignore
             message=self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
 
+
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_message, self.model, self.llm_provider))
 
 class MockException(openai.APIError):
     # used for testing
@@ -889,6 +1065,7 @@ class MockException(openai.APIError):
         num_retries: Optional[int] = None,
     ):
         self.status_code = status_code
+        self._raw_message = message
         self.message = "litellm.MockException: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
@@ -900,14 +1077,28 @@ class MockException(openai.APIError):
         super().__init__(self.message, request=request, body=None)  # type: ignore
 
 
+
+    def __reduce__(self):
+        return (self.__class__, (self.status_code, self._raw_message, self.llm_provider, self.model), {"litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries})
+
+    def __setstate__(self, state):
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
+
 class LiteLLMUnknownProvider(BadRequestError):
     def __init__(self, model: str, custom_llm_provider: Optional[str] = None):
+        self._raw_model = model
+        self._raw_custom_llm_provider = custom_llm_provider
         self.message = LiteLLMCommonStrings.llm_provider_not_provided.value.format(
             model=model, custom_llm_provider=custom_llm_provider
         )
         super().__init__(
             self.message, model=model, llm_provider=custom_llm_provider, response=None
         )
+
+    def __reduce__(self):
+        return (self.__class__, (self._raw_model, self._raw_custom_llm_provider))
 
     def __str__(self):
         return self.message
@@ -956,6 +1147,7 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         is_pre_first_chunk: bool = False,
     ):
         original_status = getattr(original_exception, "status_code", None)
+        self._msf_raw_message = message
         self.status_code = int(original_status) if original_status is not None else 503
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
@@ -1003,6 +1195,17 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         self.request = _saved_request
         self.message = _saved_message
         self.args = (_saved_message,)
+
+    def __reduce__(self):
+        return (self.__class__, (self._msf_raw_message, self.model, self.llm_provider), {"original_exception": self.original_exception, "litellm_debug_info": self.litellm_debug_info, "max_retries": self.max_retries, "num_retries": self.num_retries, "generated_content": self.generated_content, "is_pre_first_chunk": self.is_pre_first_chunk})
+
+    def __setstate__(self, state):
+        self.original_exception = state.get("original_exception")
+        self.litellm_debug_info = state.get("litellm_debug_info")
+        self.max_retries = state.get("max_retries")
+        self.num_retries = state.get("num_retries")
+        self.generated_content = state.get("generated_content", "")
+        self.is_pre_first_chunk = state.get("is_pre_first_chunk", False)
 
     def __str__(self):
         _message = self.message
