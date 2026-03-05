@@ -1,6 +1,6 @@
 ---
 slug: gpt_5_4
-title: "GPT-5.4 Model Support"
+title: "Day 0 Support: GPT-5.4"
 date: 2026-03-05T10:00:00
 authors:
   - name: Sameer Kankute
@@ -92,5 +92,6 @@ print(response.choices[0].message.content)
 
 ## Notes
 
+- Restart your container to get the cost tracking for this model.
 - Use `/responses` for better model performance.
 - GPT-5.4 supports reasoning, function calling, vision, and tool-use — see the [OpenAI provider docs](../../docs/providers/openai) for advanced usage.
