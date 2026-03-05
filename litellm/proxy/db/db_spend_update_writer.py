@@ -663,17 +663,22 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient] = None,
         spend_logs_url: Optional[str] = os.getenv("SPEND_LOGS_URL"),
     ) -> Optional[PrismaClient]:
+        payload_dict = (
+            payload
+            if isinstance(payload, dict)
+            else payload.model_dump(exclude_none=True)
+        )
         verbose_proxy_logger.debug(
             "Writing spend log to db - request_id: {}, spend: {}".format(
-                payload.get("request_id"), payload.get("spend")
+                payload_dict.get("request_id"), payload_dict.get("spend")
             )
         )
         if prisma_client is not None and spend_logs_url is not None:
             async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload)
+                prisma_client.spend_log_transactions.append(payload_dict)
         elif prisma_client is not None:
             async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload)
+                prisma_client.spend_log_transactions.append(payload_dict)
         else:
             verbose_proxy_logger.debug(
                 "prisma_client is None. Skipping writing spend logs to db."

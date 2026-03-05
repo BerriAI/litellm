@@ -2232,8 +2232,6 @@ async def _lookup_deprecated_key(
 
 
 class PrismaClient:
-    spend_log_transactions: List = []
-    _spend_log_transactions_lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -2241,6 +2239,17 @@ class PrismaClient:
         proxy_logging_obj: ProxyLogging,
         http_client: Optional[Any] = None,
     ):
+        from litellm.constants import SPEND_LOG_TRANSACTIONS_MAX_SIZE
+        from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
+
+        # Instance-level lock: litellm uses a single PrismaClient instance, so
+        # an instance attribute is equivalent to a class attribute here.  If
+        # multiple instances were ever created, each would get its own lock
+        # protecting its own queue — which is the correct behaviour.
+        self._spend_log_transactions_lock = asyncio.Lock()
+        self.spend_log_transactions: SpendLogQueue = SpendLogQueue(
+            maxlen=SPEND_LOG_TRANSACTIONS_MAX_SIZE
+        )
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
@@ -4497,15 +4506,15 @@ class ProxyUpdateSpend:
         )
         popped_batch = False
         if logs_to_process is None:
-            # Atomically read and remove logs to process (protected by lock)
+            # Atomically drain logs to process (protected by lock)
             async with prisma_client._spend_log_transactions_lock:
-                logs_to_process = prisma_client.spend_log_transactions[
-                    :MAX_LOGS_PER_INTERVAL
-                ]
-                # Remove the logs we're about to process
-                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-                    len(logs_to_process) :
-                ]
+                txns = prisma_client.spend_log_transactions
+                if hasattr(txns, "drain"):
+                    logs_to_process = txns.drain(MAX_LOGS_PER_INTERVAL)
+                else:
+                    # Backward compat: plain list (legacy or mocked)
+                    logs_to_process = txns[:MAX_LOGS_PER_INTERVAL]
+                    del txns[:len(logs_to_process)]
             popped_batch = True
         if len(logs_to_process) > 0:
             verbose_proxy_logger.info(
@@ -4652,19 +4661,20 @@ async def update_spend_logs_job(
     n_retry_times = 3
     MAX_LOGS_PER_INTERVAL = 10000
 
-    # Atomically pop batch from queue
+    # Atomically check size and pop batch in a single lock context to
+    # prevent a TOCTOU race where another coroutine drains the queue
+    # between the len() check and the drain() call.
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-    if queue_size == 0:
-        return
-
-    async with prisma_client._spend_log_transactions_lock:
-        logs_to_process = prisma_client.spend_log_transactions[
-            :MAX_LOGS_PER_INTERVAL
-        ]
-        prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-            len(logs_to_process) :
-        ]
+        if queue_size == 0:
+            return
+        txns = prisma_client.spend_log_transactions
+        if hasattr(txns, "drain"):
+            logs_to_process = txns.drain(MAX_LOGS_PER_INTERVAL)
+        else:
+            # Backward compat: plain list (legacy or mocked)
+            logs_to_process = txns[:MAX_LOGS_PER_INTERVAL]
+            del txns[:len(logs_to_process)]
 
     await ProxyUpdateSpend.update_spend_logs(
         n_retry_times=n_retry_times,
