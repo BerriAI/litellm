@@ -21,13 +21,29 @@ class MyCustomHandler(
 
     #### CALL HOOKS - proxy only ####
 
-    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral): 
-        if user_api_key_dict.key_alias is not None and '@' in user_api_key_dict.key_alias:
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ):
+        is_llm = "completion" in call_type or "responses" in call_type
+        if (
+            is_llm
+            and user_api_key_dict.key_alias is not None
+            and "@" in user_api_key_dict.key_alias
+        ):
             text = None
-            system_msg = data.get('system', [])
+            system_msg = data.get("system", [])
             if system_msg and len(system_msg) > 0:
-                text = system_msg[0].get('text')
-            if text and 'running inside OpenClaw' in text:
+                text = system_msg[0].get("text")
+            if text is None:
+                input_msg = data.get("input", [])
+                if input_msg and len(input_msg) > 0:
+                    if input_msg[0].get("role") == "developer":
+                        text = input_msg[0].get("content")
+            if text and "running inside OpenClaw" in text:
                 return HTTPException(
                     status_code=403,
                     detail="当前Key无法在 OpenClaw 中使用，请在配置程序中添加 --assistant-openclaw 参数生成新的 Key。",
