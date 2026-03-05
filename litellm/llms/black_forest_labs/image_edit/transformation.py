@@ -200,6 +200,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             if image.startswith(("http://", "https://")):
                 # Download image from URL
                 response = httpx.get(image, timeout=60.0)
+                response.raise_for_status()
                 return response.content
             else:
                 # Assume it's a file path
