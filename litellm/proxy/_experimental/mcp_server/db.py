@@ -60,6 +60,12 @@ def _prepare_mcp_server_data(
     if data.env is not None:
         data_dict["env"] = safe_dumps(data.env)
 
+    # Handle tool name override serialization
+    if data.tool_name_to_display_name is not None:
+        data_dict["tool_name_to_display_name"] = safe_dumps(data.tool_name_to_display_name)
+    if data.tool_name_to_description is not None:
+        data_dict["tool_name_to_description"] = safe_dumps(data.tool_name_to_description)
+
     # mcp_access_groups is already List[str], no serialization needed
 
     return data_dict

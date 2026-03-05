@@ -33,6 +33,8 @@ class MCPServer(BaseModel):
     ] = None  # allow admin to specify which headers to forward from client to the MCP server
     allowed_tools: Optional[List[str]] = None
     disallowed_tools: Optional[List[str]] = None
+    tool_name_to_display_name: Optional[Dict[str, str]] = None
+    tool_name_to_description: Optional[Dict[str, str]] = None
     allowed_params: Optional[
         Dict[str, List[str]]
     ] = None  # map of tool names to allowed parameter lists

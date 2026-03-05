@@ -40,6 +40,8 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    add_server_prefix_to_name,
+    get_server_prefix,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -737,6 +739,29 @@ if MCP_AVAILABLE:
 
         return tools_to_return
 
+    def apply_tool_overrides(
+        tools: List[MCPTool],
+        mcp_server: MCPServer,
+    ) -> List[MCPTool]:
+        """Apply admin-configured display name/description overrides to tools.
+
+        Overrides are keyed by the unprefixed tool name, same convention as
+        allowed_tools configuration.
+        """
+        display_name_map = mcp_server.tool_name_to_display_name or {}
+        description_map = mcp_server.tool_name_to_description or {}
+        if not display_name_map and not description_map:
+            return tools
+
+        for tool in tools:
+            unprefixed, _ = split_server_prefix_from_name(tool.name)
+            lookup_key = unprefixed or tool.name
+            if lookup_key in display_name_map:
+                tool.name = display_name_map[lookup_key]
+            if lookup_key in description_map:
+                tool.description = description_map[lookup_key]
+        return tools
+
     def _get_client_ip_from_context() -> Optional[str]:
         """
         Extract client_ip from auth context.
@@ -990,6 +1015,10 @@ if MCP_AVAILABLE:
                         server_id=server.server_id,
                         user_api_key_auth=user_api_key_auth,
                     )
+
+                    # Apply display-name/description overrides last so that
+                    # permission filtering always works against original names.
+                    filtered_tools = apply_tool_overrides(filtered_tools, server)
 
                     verbose_logger.debug(
                         f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
@@ -1449,6 +1478,26 @@ if MCP_AVAILABLE:
 
         return managed_resource_templates
 
+    def _resolve_display_name_to_original(
+        name: str,
+        allowed_mcp_servers: List[MCPServer],
+    ) -> str:
+        """Translate a display-name override back to the original prefixed tool name.
+
+        When a client received a customised display name from tools/list (e.g.
+        "Get Pet") it will call tools/call with that same string.  We need to
+        reverse-map it to the original prefixed name (e.g.
+        "petstore_mcp-getPetById") before any routing or permission logic runs.
+        """
+        for server in allowed_mcp_servers:
+            display_map = server.tool_name_to_display_name or {}
+            for unprefixed_name, display_name in display_map.items():
+                if display_name == name:
+                    return add_server_prefix_to_name(
+                        unprefixed_name, get_server_prefix(server)
+                    )
+        return name
+
     async def execute_mcp_tool(
         name: str,
         arguments: Dict[str, Any],
@@ -1484,6 +1533,10 @@ if MCP_AVAILABLE:
         """
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None
+
+        # If the client called with a display-name override (e.g. "Get Pet"),
+        # translate it back to the original prefixed name before any routing.
+        name = _resolve_display_name_to_original(name, allowed_mcp_servers)
 
         # Remove prefix from tool name for logging and processing
         original_tool_name, server_name = split_server_prefix_from_name(name)

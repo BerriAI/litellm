@@ -288,6 +288,8 @@ model LiteLLM_MCPServerTable {
   mcp_info     Json?          @default("{}")
   mcp_access_groups String[]
   allowed_tools String[]      @default([])
+  tool_name_to_display_name Json? @default("{}")
+  tool_name_to_description   Json? @default("{}")
   extra_headers String[]    @default([])
   static_headers Json?        @default("{}")
   // Health check status
