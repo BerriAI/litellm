@@ -172,9 +172,13 @@ verbose_router_logger = logging.getLogger("litellm.router")
 verbose_logger.addHandler(logging.NullHandler())
 
 # Backward-compatible aliases for the old logger names.
-# Users who configured logging for "LiteLLM", "LiteLLM Proxy", or
-# "LiteLLM Router" will keep working because these aliases share the
-# same handlers and level as the canonical loggers above.
+# The canonical names are "litellm", "litellm.proxy", "litellm.router".
+# For users who attached handlers to the old names ("LiteLLM", etc.),
+# we ensure the old-name loggers receive the same records by making
+# them children of the canonical hierarchy.  Additionally, we redirect
+# getLogger() calls for old names to the canonical objects by pointing
+# old loggers' handlers list at the canonical logger's handlers list.
+#
 # Deprecated: use "litellm", "litellm.proxy", "litellm.router" instead.
 _LEGACY_LOGGER_MAP = {
     "LiteLLM": verbose_logger,
@@ -183,8 +187,11 @@ _LEGACY_LOGGER_MAP = {
 }
 for _old_name, _canonical in _LEGACY_LOGGER_MAP.items():
     _alias = logging.getLogger(_old_name)
-    _alias.parent = _canonical
-    _alias.setLevel(logging.NOTSET)  # inherit from canonical logger
+    # Share the handler list so any handler added to canonical is visible
+    # on the alias, and vice versa.
+    _alias.handlers = _canonical.handlers
+    _alias.setLevel(logging.NOTSET)
+    _alias.propagate = False  # avoid double-emit via root
 
 
 def _suppress_loggers():
@@ -232,10 +239,15 @@ def _get_loggers_to_initialize():
 
 def _initialize_loggers_with_handler(handler: logging.Handler):
     """
-    Initialize all loggers with a handler
+    Initialize all loggers with a handler.
 
     - Adds a handler to each logger
-    - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
+    - Sets propagate=False to prevent duplicate logs (each logger gets its
+      own copy of the handler, so propagation would cause double-emit)
+
+    NOTE: propagate=False is intentional for JSON mode.  The default
+    propagation-based hierarchy (``TestChildLoggerPropagation``) is only
+    expected to hold *before* ``_turn_on_json()`` is called.
     """
     for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers

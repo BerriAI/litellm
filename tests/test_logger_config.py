@@ -172,3 +172,40 @@ class TestChildLoggerPropagation:
         from litellm._logging import verbose_router_logger
 
         assert verbose_router_logger.propagate is True
+
+
+class TestLegacyLoggerBackwardCompat:
+    """Handlers attached to the old logger names receive records from the new canonical loggers."""
+
+    def test_handler_on_old_name_receives_canonical_records(self):
+        """A handler on 'LiteLLM' should receive records emitted to 'litellm'."""
+        import logging
+
+        from litellm._logging import verbose_logger
+
+        old = logging.getLogger("LiteLLM")
+        captured = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                captured.append(record)
+
+        handler = _Capture()
+        old.addHandler(handler)
+        old.setLevel(logging.DEBUG)
+        try:
+            verbose_logger.warning("backward-compat-test")
+            assert any("backward-compat-test" in r.getMessage() for r in captured), (
+                "Handler on old 'LiteLLM' logger did not receive record from canonical 'litellm'"
+            )
+        finally:
+            old.removeHandler(handler)
+
+    def test_old_and_canonical_share_handlers(self):
+        """Old and canonical loggers must share the same handlers list object."""
+        import logging
+
+        from litellm._logging import verbose_logger
+
+        old = logging.getLogger("LiteLLM")
+        assert old.handlers is verbose_logger.handlers
