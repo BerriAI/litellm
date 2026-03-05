@@ -21,13 +21,11 @@ Fixes:
 
 import asyncio
 import json
-from typing import Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
 
 
 def _make_mock_http_response(response_dict: dict):
@@ -75,20 +73,6 @@ MOCK_RESPONSE_DICT = {
         "total_tokens": 15,
     },
 }
-
-class MetadataCaptureCallback(CustomLogger):
-    """Custom callback that captures kwargs passed to async_log_success_event."""
-
-    def __init__(self):
-        self.captured_kwargs: Optional[dict] = None
-        self.event = asyncio.Event()
-
-    async def async_log_success_event(
-        self, kwargs, response_obj, start_time, end_time
-    ):
-        self.captured_kwargs = kwargs
-        self.event.set()
-
 
 async def _consume_stream(response_stream):
     async for _ in response_stream:
@@ -329,8 +313,7 @@ async def test_native_path_proxy_keys_not_leaked():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_completion_path_metadata_forwarded():
+def test_completion_path_metadata_forwarded():
     """
     Completion transformation path: user metadata must reach callbacks
     even though responses() consumes it as a named parameter.
@@ -432,8 +415,7 @@ async def test_completion_path_metadata_forwarded_async():
     assert completion_metadata.get("user_id") == "u-42"
 
 
-@pytest.mark.asyncio
-async def test_completion_path_none_metadata_not_injected():
+def test_completion_path_none_metadata_not_injected():
     """
     Completion transformation path: when metadata is None, we must NOT
     inject None into kwargs — let litellm_metadata flow through instead.
