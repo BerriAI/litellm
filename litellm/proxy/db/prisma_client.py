@@ -65,7 +65,7 @@ class PrismaWrapper:
                 # Now decode just the password/token
                 return urllib.parse.unquote(parsed.password)
             return None
-        except ImportError:
+        except Exception:
 
             return None
 
