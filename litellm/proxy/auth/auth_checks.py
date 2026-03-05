@@ -11,8 +11,7 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union,
-                    cast)
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -21,29 +20,42 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.constants import (CLI_JWT_EXPIRATION_HOURS, CLI_JWT_TOKEN_NAME,
-                               DEFAULT_ACCESS_GROUP_CACHE_TTL,
-                               DEFAULT_IN_MEMORY_TTL,
-                               DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-                               DEFAULT_MAX_RECURSE_DEPTH,
-                               EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE)
+from litellm.constants import (
+    CLI_JWT_EXPIRATION_HOURS,
+    CLI_JWT_TOKEN_NAME,
+    DEFAULT_ACCESS_GROUP_CACHE_TTL,
+    DEFAULT_IN_MEMORY_TTL,
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    DEFAULT_MAX_RECURSE_DEPTH,
+    EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.proxy._types import (RBAC_ROLES, CallInfo,
-                                  LiteLLM_AccessGroupTable,
-                                  LiteLLM_BudgetTable, LiteLLM_EndUserTable,
-                                  Litellm_EntityType, LiteLLM_JWTAuth,
-                                  LiteLLM_ObjectPermissionTable,
-                                  LiteLLM_OrganizationMembershipTable,
-                                  LiteLLM_OrganizationTable,
-                                  LiteLLM_ProjectTableCachedObj,
-                                  LiteLLM_TagTable, LiteLLM_TeamMembership,
-                                  LiteLLM_TeamTable,
-                                  LiteLLM_TeamTableCachedObj,
-                                  LiteLLM_UserTable, LiteLLMRoutes,
-                                  LitellmUserRoles, NewTeamRequest,
-                                  ProxyErrorTypes, ProxyException,
-                                  RoleBasedPermissions, SpecialModelNames,
-                                  UserAPIKeyAuth)
+from litellm.proxy._types import (
+    RBAC_ROLES,
+    CallInfo,
+    LiteLLM_AccessGroupTable,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
+    Litellm_EntityType,
+    LiteLLM_JWTAuth,
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_OrganizationMembershipTable,
+    LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TagTable,
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
+    LitellmUserRoles,
+    NewTeamRequest,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
+    SpecialModelNames,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -253,6 +265,88 @@ async def check_tools_allowlist(
         )
 
 
+def _enforce_user_param_check(
+    general_settings: dict, request: Request, request_body: dict, route: str
+) -> None:
+    if not general_settings.get("enforce_user_param", False):
+        return
+
+    http_method = request.method if hasattr(request, "method") else None
+    is_post_method = http_method and http_method.upper() == "POST"
+    is_openai_route = RouteChecks.is_llm_api_route(route=route)
+    is_mcp_route = (
+        route in LiteLLMRoutes.mcp_routes.value
+        or RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
+        )
+    )
+
+    if (
+        is_post_method
+        and is_openai_route
+        and not is_mcp_route
+        and "user" not in request_body
+    ):
+        raise Exception(
+            f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
+        )
+
+
+def _reject_clientside_metadata_tags_check(
+    general_settings: dict, request_body: dict, route: str
+) -> None:
+    if not general_settings.get("reject_clientside_metadata_tags", False):
+        return
+
+    if (
+        RouteChecks.is_llm_api_route(route=route)
+        and "metadata" in request_body
+        and isinstance(request_body["metadata"], dict)
+        and "tags" in request_body["metadata"]
+    ):
+        raise ProxyException(
+            message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via API key metadata.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="metadata.tags",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+def _global_proxy_budget_check(
+    global_proxy_spend: Optional[float], skip_budget_checks: bool, route: str
+) -> None:
+    if (
+        litellm.max_budget > 0
+        and not skip_budget_checks
+        and global_proxy_spend is not None
+        and RouteChecks.is_llm_api_route(route=route)
+        and route != "/v1/models"
+        and route != "/models"
+    ):
+        if global_proxy_spend > litellm.max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=global_proxy_spend, max_budget=litellm.max_budget
+            )
+
+
+def _guardrail_modification_check(
+    request_body: dict, team_object: Optional[LiteLLM_TeamTable]
+) -> None:
+    _request_metadata: dict = request_body.get("metadata", {}) or {}
+    if not _request_metadata.get("guardrails"):
+        return
+
+    from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+
+    if not can_modify_guardrails(team_object):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Your team does not have permission to modify guardrails."
+            },
+        )
+
+
 async def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -316,10 +410,8 @@ async def common_checks(  # noqa: PLR0915
 
     # Require trace id for agent keys when agent has require_trace_id_on_calls_by_agent
     if valid_token is not None and valid_token.agent_id:
-        from litellm.proxy.agent_endpoints.agent_registry import \
-            global_agent_registry
-        from litellm.proxy.litellm_pre_call_utils import \
-            get_chain_id_from_headers
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+        from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 
         agent = global_agent_registry.get_agent_by_id(agent_id=valid_token.agent_id)
         if agent is not None:
@@ -426,84 +518,10 @@ async def common_checks(  # noqa: PLR0915
                     message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
                 )
 
-    # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
-    if (
-        general_settings.get("enforce_user_param", None) is not None
-        and general_settings["enforce_user_param"] is True
-    ):
-        # Get HTTP method from request
-        http_method = request.method if hasattr(request, "method") else None
-
-        # Check if it's a POST request and if it's an OpenAI route but not MCP
-        is_post_method = http_method and http_method.upper() == "POST"
-        is_openai_route = RouteChecks.is_llm_api_route(route=route)
-        is_mcp_route = (
-            route in LiteLLMRoutes.mcp_routes.value
-            or RouteChecks.check_route_access(
-                route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
-            )
-        )
-
-        # Enforce user param only for POST requests on OpenAI routes (excluding MCP routes)
-        if (
-            is_post_method
-            and is_openai_route
-            and not is_mcp_route
-            and "user" not in request_body
-        ):
-            raise Exception(
-                f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
-            )
-
-    # 6.1 [OPTIONAL] If 'reject_clientside_metadata_tags' enabled - reject request if it has client-side 'metadata.tags'
-    if (
-        general_settings.get("reject_clientside_metadata_tags", None) is not None
-        and general_settings["reject_clientside_metadata_tags"] is True
-    ):
-        if (
-            RouteChecks.is_llm_api_route(route=route)
-            and "metadata" in request_body
-            and isinstance(request_body["metadata"], dict)
-            and "tags" in request_body["metadata"]
-        ):
-            raise ProxyException(
-                message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via API key metadata.",
-                type=ProxyErrorTypes.bad_request_error,
-                param="metadata.tags",
-                code=status.HTTP_400_BAD_REQUEST,
-            )
-    # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
-    if (
-        litellm.max_budget > 0
-        and not skip_budget_checks
-        and global_proxy_spend is not None
-        # only run global budget checks for OpenAI routes
-        # Reason - the Admin UI should continue working if the proxy crosses it's global budget
-        and RouteChecks.is_llm_api_route(route=route)
-        and route != "/v1/models"
-        and route != "/models"
-    ):
-        if global_proxy_spend > litellm.max_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=global_proxy_spend, max_budget=litellm.max_budget
-            )
-
-    _request_metadata: dict = request_body.get("metadata", {}) or {}
-    if _request_metadata.get("guardrails"):
-        # check if team allowed to modify guardrails
-        from litellm.proxy.guardrails.guardrail_helpers import \
-            can_modify_guardrails
-
-        can_modify: bool = can_modify_guardrails(team_object)
-        if can_modify is False:
-            from fastapi import HTTPException
-
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "Your team does not have permission to modify guardrails."
-                },
-            )
+    _enforce_user_param_check(general_settings, request, request_body, route)
+    _reject_clientside_metadata_tags_check(general_settings, request_body, route)
+    _global_proxy_budget_check(global_proxy_spend, skip_budget_checks, route)
+    _guardrail_modification_check(request_body, team_object)
 
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(
@@ -1942,8 +1960,9 @@ class ExperimentalUIJWTToken:
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
         from datetime import timedelta
 
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
-            encrypt_value_helper
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
 
         if user_info.user_role is None:
             raise Exception("User role is required for experimental UI login")
@@ -1989,8 +2008,9 @@ class ExperimentalUIJWTToken:
         """
         from datetime import timedelta
 
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
-            encrypt_value_helper
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
 
         if user_info.user_role is None:
             raise Exception("User role is required for CLI JWT login")
@@ -2029,8 +2049,9 @@ class ExperimentalUIJWTToken:
         import json
 
         from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
-            decrypt_value_helper
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            decrypt_value_helper,
+        )
 
         decrypted_token = decrypt_value_helper(
             hashed_token, key="ui_hash_key", exception_type="debug"
@@ -2346,10 +2367,8 @@ async def _get_resources_from_access_groups(
     # Lazy import to avoid circular imports
     if prisma_client is None or user_api_key_cache is None:
         from litellm.proxy.proxy_server import prisma_client as _prisma_client
-        from litellm.proxy.proxy_server import \
-            proxy_logging_obj as _proxy_logging_obj
-        from litellm.proxy.proxy_server import \
-            user_api_key_cache as _user_api_key_cache
+        from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
+        from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
 
         prisma_client = prisma_client or _prisma_client
         user_api_key_cache = user_api_key_cache or _user_api_key_cache
@@ -3305,8 +3324,7 @@ async def _tag_max_budget_check(
         BudgetExceededError if any tag is over its max budget.
         Triggers a budget alert if any tag is over its max budget.
     """
-    from litellm.proxy.common_utils.http_parsing_utils import \
-        get_tags_from_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
     if prisma_client is None:
         return
