@@ -42,6 +42,8 @@ interface SidebarProps {
   collapsed?: boolean;
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
+  disableAgentsForInternalUsers?: boolean;
+  disableVectorStoresForInternalUsers?: boolean;
 }
 
 // Menu item configuration
@@ -354,7 +356,7 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI }) => {
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI, disableAgentsForInternalUsers, disableVectorStoresForInternalUsers }) => {
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
 
@@ -449,6 +451,10 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
         // Hide Projects page if enableProjectsUI is not enabled
         if (item.key === "projects" && !enableProjectsUI) return false;
+
+        // Hide agents and vector-stores pages for non-admin users when disabled
+        if (!isAdmin && item.key === "agents" && disableAgentsForInternalUsers) return false;
+        if (!isAdmin && item.key === "vector-stores" && disableVectorStoresForInternalUsers) return false;
 
         // Existing role check
         if (item.roles && !item.roles.includes(userRole)) return false;
