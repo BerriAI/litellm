@@ -2447,7 +2447,7 @@ if MCP_AVAILABLE:
                 verbose_logger.exception(
                     f"Failed to send ProxyException error response: {response_error}"
                 )
-                raise
+                raise e from response_error
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response
@@ -2466,7 +2466,7 @@ if MCP_AVAILABLE:
                     f"Failed to send error response: {response_error}"
                 )
                 # If we can't send a proper response, re-raise the original error
-                raise
+                raise e from response_error
 
     app = FastAPI(
         title=LITELLM_MCP_SERVER_NAME,
