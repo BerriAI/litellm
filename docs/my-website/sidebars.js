@@ -624,6 +624,7 @@ const sidebars = {
           items: [
             "anthropic_unified/index",
             "anthropic_unified/structured_output",
+            "anthropic_unified/messages_to_responses_mapping",
           ]
         },
         "anthropic_count_tokens",
@@ -795,6 +796,7 @@ const sidebars = {
             "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
             "providers/bedrock_vector_store",
+            "providers/bedrock_mantle",
           ]
         },
         "providers/litellm_proxy",
