@@ -8,7 +8,6 @@ Related issue: https://github.com/BerriAI/litellm/issues/22821
 """
 
 import inspect
-import pytest
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 
 
@@ -40,6 +39,8 @@ def test_all_handler_implementations_accept_request_data():
         "litellm.llms.openai.chat.guardrail_translation.handler",
         "litellm.llms.anthropic.chat.guardrail_translation.handler",
         "litellm.llms.openai.completion.guardrail_translation.handler",
+        "litellm.llms.pass_through.guardrail_translation.handler",
+        "litellm.llms.mistral.ocr.guardrail_translation.handler",
     ]
 
     validated_count = 0
