@@ -911,7 +911,13 @@ class AsyncHTTPHandler:
         - [Default] If force_ipv4 is False, it will return None
         """
         if litellm.force_ipv4:
-            return AsyncHTTPTransport(local_address="0.0.0.0")
+            return AsyncHTTPTransport(
+                local_address="0.0.0.0",
+                limits=httpx.Limits(
+                    max_connections=HTTPX_MAX_CONNECTIONS,
+                    max_keepalive_connections=HTTPX_MAX_KEEPALIVE_CONNECTIONS,
+                ),
+            )
         else:
             return None
 
@@ -1204,7 +1210,13 @@ class HTTPHandler:
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         if litellm.force_ipv4:
-            return HTTPTransport(local_address="0.0.0.0")
+            return HTTPTransport(
+                local_address="0.0.0.0",
+                limits=httpx.Limits(
+                    max_connections=HTTPX_MAX_CONNECTIONS,
+                    max_keepalive_connections=HTTPX_MAX_KEEPALIVE_CONNECTIONS,
+                ),
+            )
         else:
             return getattr(litellm, "sync_transport", None)
 

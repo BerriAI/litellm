@@ -200,24 +200,12 @@ _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client fo
 # HTTPX connection pooling - prevents file descriptor exhaustion from unbounded connection growth
 # See: https://github.com/BerriAI/litellm/issues/13220
 
-
-def _safe_int_env(name: str, default: int) -> int:
-    """Parse an integer environment variable with a safe fallback."""
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except (ValueError, TypeError):
-        return default
-
-
 # NOTE: These values are read once at import time. Changing the env vars after
 # process start (e.g. via os.environ at runtime) will NOT affect existing or new
 # httpx.Client instances. This is intentional — connection pool limits must remain
 # stable for the lifetime of the process to avoid resource leaks.
-HTTPX_MAX_CONNECTIONS = _safe_int_env("LITELLM_HTTP_MAX_CONNECTIONS", 100)
-HTTPX_MAX_KEEPALIVE_CONNECTIONS = _safe_int_env("LITELLM_HTTP_MAX_KEEPALIVE", 20)
+HTTPX_MAX_CONNECTIONS = get_env_int("LITELLM_HTTP_MAX_CONNECTIONS", 100)
+HTTPX_MAX_KEEPALIVE_CONNECTIONS = get_env_int("LITELLM_HTTP_MAX_KEEPALIVE", 20)
 
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)

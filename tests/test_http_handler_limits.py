@@ -178,3 +178,20 @@ def test_invalid_env_values_fallback_to_defaults_non_numeric():
     os.environ.pop("LITELLM_HTTP_MAX_CONNECTIONS", None)
     os.environ.pop("LITELLM_HTTP_MAX_KEEPALIVE", None)
     importlib.reload(litellm.constants)
+
+
+def test_force_ipv4_transport_has_pool_limits():
+    """When force_ipv4=True, custom transport must carry the same pool limits."""
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    original = getattr(litellm, "force_ipv4", False)
+    try:
+        litellm.force_ipv4 = True
+        handler = HTTPHandler(timeout=httpx.Timeout(timeout=10.0))
+        max_conn, max_keepalive = _get_pool_limits(handler.client)
+        assert max_conn == 100
+        assert max_keepalive == 20
+        handler.close()
+    finally:
+        litellm.force_ipv4 = original
