@@ -92,6 +92,31 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
+    def _clamp_max_tokens(
+        *, max_tokens: int, model: Optional[str], drop_params: Optional[bool] = None
+    ) -> int:
+        should_drop = drop_params if drop_params is not None else (litellm.drop_params is True)
+        if not should_drop:
+            return max_tokens
+
+        try:
+            model_info = get_model_info(model=model)
+            model_max_output = model_info.get("max_output_tokens")
+            if model_max_output is not None and max_tokens > model_max_output:
+                litellm._logging.verbose_logger.warning(
+                    "Anthropic adapter: clamping max_tokens from %d to %d "
+                    "for model %s (drop_params=True)",
+                    max_tokens,
+                    model_max_output,
+                    model,
+                )
+                return model_max_output
+        except Exception:
+            pass
+
+        return max_tokens
+
+    @staticmethod
     def _prepare_completion_kwargs(
         *,
         max_tokens: int,
@@ -121,10 +146,22 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             Logging as LiteLLMLoggingObject,
         )
 
+        # Clamp max_tokens to the backend model's max_output_tokens to prevent
+        # Anthropic client values (e.g. 32000 for Claude Opus 4) from being
+        # forwarded to providers with lower limits (e.g. 8192 for DeepSeek).
+        # This also respects litellm.drop_params / per-request drop_params.
+        clamped_max_tokens = (
+            LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
+                max_tokens=max_tokens,
+                model=model,
+                drop_params=extra_kwargs.get("drop_params") if extra_kwargs else None,
+            )
+        )
+
         request_data = {
             "model": model,
             "messages": messages,
-            "max_tokens": max_tokens,
+            "max_tokens": clamped_max_tokens,
         }
 
         if metadata:
