@@ -98,7 +98,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
                 "text:shieldPrompt", cast(dict, request_body)
             )
 
-            last_response = AzurePromptShieldGuardrailResponse(**response_json)
+            last_response = AzurePromptShieldGuardrailResponse(**response_json)  # type: ignore[typeddict-item]
 
             if last_response["userPromptAnalysis"].get("attackDetected"):
                 verbose_proxy_logger.warning(

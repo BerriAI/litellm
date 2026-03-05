@@ -219,7 +219,7 @@ def create_batch(  # noqa: PLR0915
             extra_body=extra_body,
         )
         if output_expires_after is not None:
-            _create_batch_request["output_expires_after"] = output_expires_after
+            _create_batch_request["output_expires_after"] = output_expires_after  # type: ignore[typeddict-item]
         if model is not None:
             provider_config = ProviderConfigManager.get_provider_batches_config(
                 model=model,

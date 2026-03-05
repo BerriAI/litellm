@@ -87,6 +87,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "aget_run": "/evals/{eval_id}/runs/{run_id}",
     "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
     "adelete_run": "/evals/{eval_id}/runs/{run_id}",
+    "anthropic_messages": "/v1/messages",
 }
 
 
@@ -422,12 +423,12 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                 "avideo_status",
                 "avideo_content",
                 "avideo_remix",
+                "anthropic_messages",
             ]:
-                # Video endpoints: If model is provided (e.g., from decoded video_id), try router first
+                # These endpoints try router first, then fall back to litellm directly
                 try:
                     return getattr(llm_router, f"{route_type}")(**data)
                 except Exception:
-                    # If router fails (e.g., model not found in router), fall back to direct call
                     return getattr(litellm, f"{route_type}")(**data)
             elif _is_a2a_agent_model(data.get("model", "")):
                 from litellm.proxy.agent_endpoints.a2a_routing import (
