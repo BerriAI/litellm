@@ -554,6 +554,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             api_key=api_key,
         )
 
+        verbose_proxy_logger.debug(
+            "Bedrock AI guardrail request URL: %s, headers: %s",
+            prepared_request.url,
+            prepared_request.headers,
+        )
+
         try:
             httpx_response = await self.async_handler.post(
                 url=prepared_request.url,
