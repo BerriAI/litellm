@@ -2001,10 +2001,9 @@ class ExperimentalUIJWTToken:
 
         _budget = litellm.max_cli_session_budget
         if _budget is None:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 "CLI JWT session created with no budget cap. "
-                "Set LITELLM_CLI_JWT_MAX_BUDGET env var to enforce a cap "
-                "(previously the default was $0.25 via max_ui_session_budget)."
+                "Set LITELLM_CLI_JWT_MAX_BUDGET env var to enforce a cap."
             )
 
         valid_token = UserAPIKeyAuth(

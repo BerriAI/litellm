@@ -374,8 +374,8 @@ max_internal_user_budget: Optional[float] = None
 max_ui_session_budget: Optional[float] = 0.25  # $0.25 USD budgets for UI Chat sessions
 # CLI JWT session budget: controlled via LITELLM_CLI_JWT_MAX_BUDGET env var.
 # Defaults to None (no cap).  Set the env var to a float value to enforce a cap.
-_cli_budget_env = os.environ.get("LITELLM_CLI_JWT_MAX_BUDGET")
-max_cli_session_budget: Optional[float] = float(_cli_budget_env) if _cli_budget_env is not None else None
+_cli_budget_env = os.environ.get("LITELLM_CLI_JWT_MAX_BUDGET", "").strip()
+max_cli_session_budget: Optional[float] = float(_cli_budget_env) if _cli_budget_env else None
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
