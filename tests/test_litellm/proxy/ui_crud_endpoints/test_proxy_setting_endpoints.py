@@ -776,6 +776,22 @@ class TestProxySettingEndpoints:
             == "https://example.com/favicon.ico"
         )
 
+    def test_get_ui_theme_settings_local_path_is_nulled(self, mock_proxy_config):
+        """
+        Local file paths stored in logo_url cannot be loaded by the browser as an image URL.
+        The endpoint should null them out so the UI falls back to /get_image, which reads
+        UI_LOGO_PATH from the environment and serves the file directly.
+        """
+        mock_proxy_config["config"]["litellm_settings"]["ui_theme_config"] = {
+            "logo_url": "/app/company_logo.png",
+        }
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["values"]["logo_url"] is None
+
     def test_get_ui_settings(self, mock_auth, monkeypatch):
         """Test retrieving UI settings with allowlist sanitization"""
         from unittest.mock import AsyncMock, MagicMock

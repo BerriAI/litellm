@@ -3,6 +3,7 @@ import copy
 import enum
 import inspect
 import io
+import mimetypes
 import os
 import random
 import secrets
@@ -11061,10 +11062,16 @@ async def get_image():
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
+    def _get_image_media_type(path: str) -> str:
+        media_type, _ = mimetypes.guess_type(path)
+        if media_type and media_type.startswith("image/"):
+            return media_type
+        return "image/jpeg"
+
     # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
     if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
         if os.path.exists(logo_path):
-            return FileResponse(logo_path, media_type="image/jpeg")
+            return FileResponse(logo_path, media_type=_get_image_media_type(logo_path))
         # Custom path doesn't exist — fall back to default
         verbose_proxy_logger.warning(
             f"UI_LOGO_PATH '{logo_path}' does not exist, falling back to default logo"
@@ -11103,7 +11110,7 @@ async def get_image():
             return FileResponse(default_logo, media_type="image/jpeg")
     else:
         # Return the local image file if the logo path is not an HTTP/HTTPS URL
-        return FileResponse(logo_path, media_type="image/jpeg")
+        return FileResponse(logo_path, media_type=_get_image_media_type(logo_path))
 
 
 @app.get("/get_favicon", include_in_schema=False)
