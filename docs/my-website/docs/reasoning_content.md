@@ -675,3 +675,19 @@ response = litellm.completion(
     reasoning_effort={"effort": "low", "summary": "detailed"},  # Explicit control
 )
 ```
+
+### Summary Preservation via `/v1/messages` Adapter
+
+When using the Anthropic `/v1/messages` adapter to route non-Claude models (e.g., `openai/gpt-5.1`), the `thinking.summary` value is preserved and forwarded to the downstream provider. For example:
+
+```python
+import litellm
+
+response = await litellm.anthropic.messages.acreate(
+    model="openai/gpt-5.1",
+    messages=[{"role": "user", "content": "Hello"}],
+    max_tokens=8096,
+    thinking={"type": "enabled", "budget_tokens": 5000, "summary": "concise"},
+)
+# The summary="concise" is preserved when routing to OpenAI's Responses API
+```
