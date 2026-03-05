@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -66,13 +67,6 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                 messages=messages, model=model, is_async=False
             )
 
-    @staticmethod
-    def _is_reasoning_model(model: str) -> bool:
-        """Check if a Moonshot model has thinking/reasoning enabled by default."""
-        reasoning_indicators = ["k2.5", "k2-5", "reasoning", "thinking"]
-        model_lower = model.lower()
-        return any(indicator in model_lower for indicator in reasoning_indicators)
-
     def _validate_reasoning_content_in_messages(
         self, messages: List[AllMessageValues], model: str
     ) -> None:
@@ -87,7 +81,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         Raises:
             litellm.BadRequestError when reasoning_content is missing.
         """
-        if not self._is_reasoning_model(model):
+        if not supports_reasoning(model=model, custom_llm_provider="moonshot"):
             return
 
         for i, message in enumerate(messages):
@@ -97,7 +91,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                 and message.get("tool_calls")
                 and (
                     reasoning_content is None
-                    or (isinstance(reasoning_content, str) and not reasoning_content.strip())
+                    or (isinstance(reasoning_content, str) and not reasoning_content.strip())  # Moonshot rejects empty/whitespace-only reasoning_content
                 )
             ):
                 raise BadRequestError(

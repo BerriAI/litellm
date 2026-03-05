@@ -17,6 +17,7 @@ import pytest
 import litellm
 import litellm.utils
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
+from litellm.utils import supports_reasoning
 
 
 class TestMoonshotConfig:
@@ -418,15 +419,14 @@ class TestMoonshotConfig:
                 headers={},
             )
 
-    def test_is_reasoning_model_detection(self):
-        """Test _is_reasoning_model detects reasoning models correctly."""
-        assert MoonshotChatConfig._is_reasoning_model("kimi-k2.5") is True
-        assert MoonshotChatConfig._is_reasoning_model("kimi-k2.5-0514") is True
-        assert MoonshotChatConfig._is_reasoning_model("moonshot-v1-auto-8k-reasoning-v4") is True
-        assert MoonshotChatConfig._is_reasoning_model("kimi-thinking-preview") is True
-        assert MoonshotChatConfig._is_reasoning_model("kimi-k2-5") is True
-        assert MoonshotChatConfig._is_reasoning_model("moonshot-v1-8k") is False
-        assert MoonshotChatConfig._is_reasoning_model("moonshot-v1-32k") is False
+    def test_supports_reasoning_model_detection(self):
+        """Test supports_reasoning detects moonshot reasoning models correctly via JSON config."""
+        assert supports_reasoning(model="moonshot/kimi-k2.5", custom_llm_provider="moonshot") is True
+        assert supports_reasoning(model="moonshot/kimi-thinking-preview", custom_llm_provider="moonshot") is True
+        assert supports_reasoning(model="moonshot/kimi-k2-thinking", custom_llm_provider="moonshot") is True
+        assert supports_reasoning(model="moonshot/kimi-k2-thinking-turbo", custom_llm_provider="moonshot") is True
+        assert supports_reasoning(model="moonshot/moonshot-v1-8k", custom_llm_provider="moonshot") is False
+        assert supports_reasoning(model="moonshot/moonshot-v1-32k", custom_llm_provider="moonshot") is False
 
     def test_tool_choice_non_required_preserved(self):
         """Test that non-'required' tool_choice values are preserved"""
