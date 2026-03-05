@@ -15,14 +15,21 @@ from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 class AgentRegistry:
     def __init__(self):
         self.agent_list: List[AgentResponse] = []
+        self._agent_by_id: Dict[str, AgentResponse] = {}
 
     def reset_agent_list(self):
         self.agent_list = []
+        self._agent_by_id = {}
 
     def register_agent(self, agent_config: AgentResponse):
         self.agent_list.append(agent_config)
+        if agent_config.agent_id:
+            self._agent_by_id[agent_config.agent_id] = agent_config
 
     def deregister_agent(self, agent_name: str):
+        for agent in self.agent_list:
+            if agent.agent_name == agent_name and agent.agent_id:
+                self._agent_by_id.pop(agent.agent_id, None)
         self.agent_list = [
             agent for agent in self.agent_list if agent.agent_name != agent_name
         ]
@@ -358,16 +365,9 @@ class AgentRegistry:
         agent_id: str,
     ) -> Optional[AgentResponse]:
         """
-        Get an agent by its ID from the database
+        Get an agent by its ID using O(1) dict lookup
         """
-        try:
-            for agent in self.agent_list:
-                if agent.agent_id == agent_id:
-                    return agent
-
-            return None
-        except Exception as e:
-            raise Exception(f"Error getting agent from DB: {str(e)}")
+        return self._agent_by_id.get(agent_id)
 
     def get_agent_by_name(self, agent_name: str) -> Optional[AgentResponse]:
         """
