@@ -3,7 +3,7 @@ Calls SearchAPI.io's Google Search API endpoint.
 
 SearchAPI.io API Reference: https://www.searchapi.io/docs/google
 """
-from typing import Dict, List, Literal, Optional, TypedDict, Union
+from typing import Dict, List, Literal, Optional, TypedDict, Union, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -164,7 +164,7 @@ class SearchAPIConfig(BaseSearchConfig):
 
         if "country" in optional_params:
             # Map to gl parameter
-            result_data["gl"] = optional_params["country"].lower()
+            result_data["gl"] = cast(str, optional_params["country"]).lower()
 
         # Pass through all other SearchAPI.io-specific parameters
         for param, value in optional_params.items():

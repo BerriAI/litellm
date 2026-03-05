@@ -10,7 +10,7 @@ PATCH /config/cost_margin_config - Update cost margin configuration
 POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -66,8 +66,8 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                     verbose_proxy_logger.debug(
                         f"Resolved model '{model}' to base_model '{base_model}' from router"
                     )
-                    custom_llm_provider = litellm_params.get("custom_llm_provider")
-                    return base_model, custom_llm_provider
+                    custom_llm_provider = cast(Optional[str], litellm_params.get("custom_llm_provider"))
+                    return cast(str, base_model), custom_llm_provider
 
                 resolved_model = litellm_params.get("model")
 
@@ -75,8 +75,8 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                     verbose_proxy_logger.debug(
                         f"Resolved model '{model}' to '{resolved_model}' from router"
                     )
-                    custom_llm_provider = litellm_params.get("custom_llm_provider")
-                    return resolved_model, custom_llm_provider
+                    custom_llm_provider = cast(Optional[str], litellm_params.get("custom_llm_provider"))
+                    return cast(str, resolved_model), custom_llm_provider
         except Exception as e:
             verbose_proxy_logger.debug(
                 f"Could not resolve model '{model}' from router: {e}"
