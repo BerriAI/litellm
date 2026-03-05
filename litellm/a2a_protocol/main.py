@@ -198,7 +198,10 @@ async def _execute_a2a_send_with_retry(
                 continue
             except Exception:
                 raise
-    assert a2a_response is not None
+    if a2a_response is None:
+        raise RuntimeError(
+            "A2A send_message failed: no response received after retry attempts."
+        )
     return a2a_response
 
 

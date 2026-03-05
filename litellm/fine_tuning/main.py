@@ -129,13 +129,13 @@ async def acreate_fine_tuning_job(
 def _resolve_fine_tuning_timeout(
     timeout: Any,
     custom_llm_provider: str,
-) -> float:
+) -> Union[float, httpx.Timeout]:
     """Normalise a raw timeout value to a float (seconds) for fine-tuning calls."""
     timeout = timeout or 600.0
     if isinstance(timeout, httpx.Timeout):
         if not supports_httpx_timeout(custom_llm_provider):
             return float(timeout.read or 600)
-        return timeout  # type: ignore[return-value]
+        return timeout
     return float(timeout)
 
 
