@@ -276,6 +276,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Dict:
         """Return skill content response. Content may be binary (zip) or JSON."""
+        raw_response.raise_for_status()
         content_type = raw_response.headers.get("content-type", "")
         if "json" in content_type:
             return raw_response.json()
