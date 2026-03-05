@@ -28,8 +28,8 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     def get_supported_openai_params(self, model: str) -> List[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
 
-        Azure OpenAI GPT-5.2 models support logprobs, unlike OpenAI's GPT-5.
-        This overrides the parent class to add logprobs support back for gpt-5.2.
+        Azure OpenAI GPT-5.2/5.4 models support logprobs, unlike OpenAI's GPT-5.
+        This overrides the parent class to add logprobs support back for gpt-5.2+.
 
         Reference:
         - Tested with Azure OpenAI GPT-5.2 (api-version: 2025-01-01-preview)
@@ -43,9 +43,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         if "tool_choice" not in params:
             params.append("tool_choice")
 
-        # Only gpt-5.2 has been verified to support logprobs on Azure.
+        # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
-        # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2.
+        # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
         if self.is_model_gpt_5_1_model(model) and not self.is_model_gpt_5_2_model(model):
             params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
         elif self.is_model_gpt_5_2_model(model):
@@ -67,7 +67,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             or optional_params.get("reasoning_effort")
         )
 
-        # gpt-5.1 supports reasoning_effort='none', but other gpt-5 models don't
+        # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
         # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
         is_gpt_5_1 = self.is_model_gpt_5_1_model(model)
 
@@ -101,7 +101,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             drop_params=drop_params,
         )
 
-        # Only drop reasoning_effort='none' for non-gpt-5.1 models
+        # Only drop reasoning_effort='none' for non-gpt-5.1/5.2/5.4 models
         if result.get("reasoning_effort") == "none" and not is_gpt_5_1:
             result.pop("reasoning_effort")
 
