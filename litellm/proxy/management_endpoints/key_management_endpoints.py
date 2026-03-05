@@ -4457,49 +4457,48 @@ async def _list_key_helper(
     # Determine which table to query based on status
     use_deleted_table = status == "deleted"
 
-    # Fetch keys with pagination
+    # Fetch keys with pagination (concurrent with count for performance)
     if use_deleted_table:
-        keys = await prisma_client.db.litellm_deletedverificationtoken.find_many(
-            where=where,  # type: ignore
-            skip=skip,  # type: ignore
-            take=size,  # type: ignore
-            order=(
-                order_by
-                if order_by
-                else [
-                    {"created_at": "desc"},
-                    {"token": "desc"},  # fallback sort
-                ]
+        keys, total_count = await asyncio.gather(
+            prisma_client.db.litellm_deletedverificationtoken.find_many(
+                where=where,  # type: ignore
+                skip=skip,  # type: ignore
+                take=size,  # type: ignore
+                order=(
+                    order_by
+                    if order_by
+                    else [
+                        {"created_at": "desc"},
+                        {"token": "desc"},  # fallback sort
+                    ]
+                ),
+            ),
+            prisma_client.db.litellm_deletedverificationtoken.count(
+                where=where  # type: ignore
             ),
         )
     else:
-        keys = await prisma_client.db.litellm_verificationtoken.find_many(
-            where=where,  # type: ignore
-            skip=skip,  # type: ignore
-            take=size,  # type: ignore
-            order=(
-                order_by
-                if order_by
-                else [
-                    {"created_at": "desc"},
-                    {"token": "desc"},  # fallback sort
-                ]
+        keys, total_count = await asyncio.gather(
+            prisma_client.db.litellm_verificationtoken.find_many(
+                where=where,  # type: ignore
+                skip=skip,  # type: ignore
+                take=size,  # type: ignore
+                order=(
+                    order_by
+                    if order_by
+                    else [
+                        {"created_at": "desc"},
+                        {"token": "desc"},  # fallback sort
+                    ]
+                ),
+                include={"object_permission": True},
             ),
-            include={"object_permission": True},
+            prisma_client.db.litellm_verificationtoken.count(
+                where=where  # type: ignore
+            ),
         )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
-
-    # Get total count of keys
-    if use_deleted_table:
-        total_count = await prisma_client.db.litellm_deletedverificationtoken.count(
-            where=where  # type: ignore
-        )
-    else:
-        total_count = await prisma_client.db.litellm_verificationtoken.count(
-            where=where  # type: ignore
-        )
-
     verbose_proxy_logger.debug(f"Total count of keys: {total_count}")
 
     # Calculate total pages
@@ -4525,7 +4524,7 @@ async def _list_key_helper(
             # Fallback for Pydantic v1 compatibility
             key_dict = key.dict()
         # Attach object_permission if object_permission_id is set (only for non-deleted keys)
-        if not use_deleted_table:
+        if not use_deleted_table and "object_permission" not in key_dict:
             key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
 
         # Include user information if expand includes "user"
