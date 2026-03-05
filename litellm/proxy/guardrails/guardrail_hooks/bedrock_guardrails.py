@@ -437,7 +437,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         for item in content:
             text = BedrockGuardrail._extract_content_text(item)
             if text == "":
-                current_chunk.append(item)
+                # Non-text items (images, etc.) go into their own chunk to
+                # prevent unbounded growth that can exceed the API size limit.
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = []
+                    current_chars = 0
+                chunks.append([item])
                 continue
             text_len = len(text)
 
@@ -686,9 +692,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     event_type=event_type,
                 )
                 responses.append((resp, json_resp))
-                # Short-circuit: if any chunk is blocked, stop processing
-                if self._should_raise_guardrail_blocked_exception(resp):
-                    break
 
             bedrock_guardrail_response, merged_json = (
                 self._merge_guardrail_responses(responses)
