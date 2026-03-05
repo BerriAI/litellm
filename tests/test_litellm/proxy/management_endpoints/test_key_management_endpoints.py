@@ -6591,6 +6591,103 @@ async def test_generate_key_without_user_email_skips_user_creation(monkeypatch):
     assert result is not None
 
 
+@pytest.mark.asyncio
+async def test_generate_key_with_user_email_overrides_conflicting_user_id(monkeypatch):
+    """When user_email matches an existing user whose user_id differs from the
+    caller-supplied user_id, the existing user's ID takes precedence."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    existing_user = MagicMock()
+    existing_user.user_id = "existing-user-id-123"
+
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_usertable = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        return_value=existing_user
+    )
+
+    captured_key_data = {}
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            raise AssertionError("Should NOT create a new user record")
+        elif table_name == "key":
+            captured_key_data.update(kwargs.get("data", {}))
+            return MagicMock(
+                token="hashed_token",
+                litellm_budget_table=None,
+                object_permission=None,
+                created_at=None,
+                updated_at=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Caller passes a different user_id than the existing user
+    result = await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",
+        user_email="test@example.com",
+        user_id="caller-supplied-id-999",
+    )
+
+    # Key links to the EXISTING user's ID, not the caller-supplied one
+    assert captured_key_data.get("user_id") == "existing-user-id-123"
+
+
+@pytest.mark.asyncio
+async def test_generate_key_with_user_email_handles_race_condition(monkeypatch):
+    """When a concurrent request creates the same user between find_first and
+    insert, the retry lookup should find and reuse the concurrently created user."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    concurrent_user = MagicMock()
+    concurrent_user.user_id = "concurrent-user-id-456"
+
+    # First find_first returns None (user doesn't exist yet),
+    # second find_first (after insert fails) returns the concurrently created user
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_usertable = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        side_effect=[None, concurrent_user]
+    )
+
+    captured_key_data = {}
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            # Simulate race: another request created the user first
+            raise Exception("Unique constraint violation")
+        elif table_name == "key":
+            captured_key_data.update(kwargs.get("data", {}))
+            return MagicMock(
+                token="hashed_token",
+                litellm_budget_table=None,
+                object_permission=None,
+                created_at=None,
+                updated_at=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    result = await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",
+        user_email="test@example.com",
+    )
+
+    # Key links to the concurrently created user
+    assert captured_key_data.get("user_id") == "concurrent-user-id-456"
+
+
 def test_generate_key_request_accepts_user_email():
     """GenerateKeyRequest should accept user_email as a valid field."""
     req = GenerateKeyRequest(user_email="test@example.com")

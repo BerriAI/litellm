@@ -2768,6 +2768,14 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                     )
                 )
                 if existing_user is not None:
+                    if user_data.get("user_id") and user_data["user_id"] != existing_user.user_id:
+                        verbose_proxy_logger.debug(
+                            "user_email=%s matched existing user_id=%s, "
+                            "overriding caller-supplied user_id=%s",
+                            user_email,
+                            existing_user.user_id,
+                            user_data["user_id"],
+                        )
                     # Reuse existing user's ID — don't update their record
                     user_data["user_id"] = existing_user.user_id
                     key_data["user_id"] = existing_user.user_id
@@ -2777,9 +2785,24 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                         generated_user_id = str(uuid.uuid4())
                         user_data["user_id"] = generated_user_id
                         key_data["user_id"] = generated_user_id
-                    await prisma_client.insert_data(
-                        data=user_data, table_name="user"
-                    )
+                    try:
+                        await prisma_client.insert_data(
+                            data=user_data, table_name="user"
+                        )
+                    except Exception:
+                        # Handle race condition: concurrent request may have
+                        # created the user between our find_first and insert.
+                        # Re-lookup and link to the existing record.
+                        existing_user = (
+                            await prisma_client.db.litellm_usertable.find_first(
+                                where={"user_email": {"equals": user_email, "mode": "insensitive"}}
+                            )
+                        )
+                        if existing_user is not None:
+                            user_data["user_id"] = existing_user.user_id
+                            key_data["user_id"] = existing_user.user_id
+                        else:
+                            raise
 
             if (
                 table_name is None or table_name == "user"
