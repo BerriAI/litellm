@@ -314,8 +314,11 @@ async def asend_message(
 
     verbose_logger.info(f"A2A send_message completed, request_id={request.id}")
 
-    # a2a_response is guaranteed to be set if we reach here (loop breaks on success or raises)
-    assert a2a_response is not None
+    if a2a_response is None:
+        raise RuntimeError(
+            "A2A send_message failed: no response received after retry attempts. "
+            f"request_id={request.id}"
+        )
 
     # Wrap in LiteLLM response type for _hidden_params support
     response = LiteLLMSendMessageResponse.from_a2a_response(a2a_response)
