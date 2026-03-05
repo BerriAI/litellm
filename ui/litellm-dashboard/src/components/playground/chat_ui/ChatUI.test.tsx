@@ -13,7 +13,6 @@ vi.mock("../networking", () => ({
   tagListCall: vi.fn().mockResolvedValue({ data: [] }),
   vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
   getGuardrailsList: vi.fn().mockResolvedValue({ data: [] }),
-  mcpToolsCall: vi.fn().mockResolvedValue({ data: [] }),
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
