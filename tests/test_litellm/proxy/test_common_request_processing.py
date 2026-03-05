@@ -897,6 +897,46 @@ class TestCommonRequestProcessingHelpers:
         assert content[0] == f"data: {json.dumps(expected_error_data)}\n\n"
         assert content[1] == "data: [DONE]\n\n"
 
+    @pytest.mark.parametrize(
+        "error_code",
+        [
+            None,
+            "invalid_code",
+            99,
+            600,
+        ],
+    )
+    async def test_create_streaming_response_first_chunk_error_code_unparseable_or_invalid(
+        self,
+        error_code,
+    ):
+        """When the first SSE chunk is an OpenAI-style error but has no valid HTTP status,
+        return a standard JSON error response with a safe default status (500).
+        """
+
+        async def mock_generator():
+            payload = {
+                "error": {
+                    "message": "bad request",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": error_code,
+                }
+            }
+            import json
+
+            yield f"data: {json.dumps(payload)}\n\n"
+
+        response = await create_response(
+            generator=mock_generator(),
+            media_type="text/event-stream",
+            headers={},
+            default_status_code=200,
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+
     async def test_create_streaming_response_first_chunk_error_string_code(self):
         """
         Test that when the first chunk contains a string error code, a JSON error response is returned
