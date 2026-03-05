@@ -10,6 +10,7 @@ Provider defaults:
 All endpoints accept a custom_llm_provider query param to override the default.
 """
 
+import base64
 from typing import Optional
 
 import orjson
@@ -225,6 +226,11 @@ async def list_skills(
         data["after_id"] = after_id
     if "before_id" not in data and before_id is not None:
         data["before_id"] = before_id
+    # Map Anthropic-style param names to SDK param names
+    if "after_id" in data:
+        data.setdefault("page", data.pop("after_id"))
+    if "before_id" in data:
+        data.setdefault("before", data.pop("before_id"))
     
     # Extract model for routing (header > query > body)
     model = (
@@ -636,7 +642,6 @@ async def get_skill_content_endpoint(
         )
         # Binary content: return raw bytes with proper media type
         if isinstance(result, dict) and "content_type" in result and "json" not in result.get("content_type", ""):
-            import base64
             return Response(
                 content=base64.b64decode(result["content"]),
                 media_type=result["content_type"],
@@ -1048,7 +1053,6 @@ async def get_skill_version_content_endpoint(
         )
         # Binary content: return raw bytes with proper media type
         if isinstance(result, dict) and "content_type" in result and "json" not in result.get("content_type", ""):
-            import base64
             return Response(
                 content=base64.b64decode(result["content"]),
                 media_type=result["content_type"],

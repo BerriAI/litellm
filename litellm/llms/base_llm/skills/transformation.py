@@ -14,6 +14,7 @@ from litellm.types.llms.anthropic_skills import (
     ListSkillsParams,
     ListSkillsResponse,
     Skill,
+    SkillVersion,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -332,7 +333,7 @@ class BaseSkillsAPIConfig(ABC):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Dict:
+    ) -> SkillVersion:
         """Transform create skill version response."""
         raise NotImplementedError(
             f"create_skill_version is not supported for {self.custom_llm_provider}"
