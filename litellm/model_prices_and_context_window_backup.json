@@ -20342,12 +20342,12 @@
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_priority": 5e-06,
         "litellm_provider": "openai",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 1.5e-05,
-        "output_cost_per_token_priority": 3e-05,
+        "output_cost_per_token_priority": 2.25e-05,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -20358,8 +20358,43 @@
             "image"
         ],
         "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_service_tier": true,
+        "supports_vision": true
+    },
+    "gpt-5.4-2026-03-05": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "cache_read_input_token_cost_priority": 5e-07,
+        "input_cost_per_token": 2.5e-06,
+        "input_cost_per_token_priority": 5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_priority": 2.25e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
             "text",
             "image"
+        ],
+        "supported_output_modalities": [
+            "text"
         ],
         "supports_function_calling": true,
         "supports_native_streaming": true,
