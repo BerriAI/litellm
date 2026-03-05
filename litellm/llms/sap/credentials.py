@@ -209,7 +209,7 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
 
     Important:
       - Credentials are extracted from the FIRST source that provides any credential value.
-      - Values are NOT merged per key across sources. Exepte resource_group, which is merged.
+      - Values are NOT merged per key across sources. Except resource_group, which is merged.
     """
     config = init_conf(profile)
 
@@ -244,6 +244,7 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
 
 def validate_credentials(
         auth_url: Optional[str] = None,
+        base_url: Optional[str] = None,
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
         cert_str: Optional[str] = None,
@@ -251,7 +252,7 @@ def validate_credentials(
         cert_file_path: Optional[str] = None,
         key_file_path: Optional[str] = None
 ):
-    if not auth_url or not client_id:
+    if not auth_url or not client_id or not base_url:
         raise ValueError(
             "SAP AI Core credentials not found. "
             "Please provide credentials by setting appropriate environment variables "
@@ -299,6 +300,7 @@ def get_token_creator(
     credentials: Dict[str, str] = fetch_credentials(service_key=service_key, profile=profile, **overrides)
 
     auth_url = credentials.get("auth_url")
+    base_url = credentials.get("base_url")
     client_id = credentials.get("client_id")
     client_secret = credentials.get("client_secret")
     cert_str = credentials.get("cert_str")
@@ -307,7 +309,7 @@ def get_token_creator(
     key_file_path = credentials.get("key_file_path")
 
     # Sanity check
-    validate_credentials(auth_url, client_id, client_secret, cert_str, key_str, cert_file_path, key_file_path)
+    validate_credentials(auth_url, base_url, client_id, client_secret, cert_str, key_str, cert_file_path, key_file_path)
 
     lock = Lock()
     token: Optional[str] = None
@@ -318,10 +320,15 @@ def get_token_creator(
         if client_secret:
             data["client_secret"] = client_secret
 
-        client = HTTPHandler(client=httpx.Client(cert=cert_pair)) if cert_pair else _get_httpx_client()
         resp: Optional[httpx.Response] = None
         try:
-            resp = client.post(auth_url, data=data) # type: ignore[arg-type]
+            if cert_pair:
+                with httpx.Client(cert=cert_pair) as raw_client:
+                    handler = HTTPHandler(client=raw_client)
+                    resp = handler.post(auth_url, data=data)  # type: ignore[arg-type]
+            else:
+                handler = _get_httpx_client()
+                resp = handler.post(auth_url, data=data)  # type: ignore[arg-type]
             payload = resp.json()
             access_token = payload["access_token"]
             expires_in = int(payload.get("expires_in", 3600))
