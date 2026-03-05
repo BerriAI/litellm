@@ -125,8 +125,8 @@ async def test_native_path_user_metadata_preserved():
         "headers": {"Authorization": "Bearer sk-1234"},
     }
 
-    callback = MetadataCaptureCallback()
-    litellm.callbacks = [callback]
+    # MetadataCaptureCallback not needed here — assertions use
+    # response_stream.logging_obj.model_call_details directly.
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -170,8 +170,8 @@ async def test_native_path_empty_metadata_no_fallthrough():
         "headers": {"Authorization": "Bearer sk-secret"},
     }
 
-    callback = MetadataCaptureCallback()
-    litellm.callbacks = [callback]
+    # MetadataCaptureCallback not needed here — assertions use
+    # response_stream.logging_obj.model_call_details directly.
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -211,8 +211,8 @@ async def test_native_path_none_metadata_uses_litellm_metadata():
     mock_response = ResponsesAPIResponse.model_construct(**MOCK_RESPONSE_DICT)
     bridge_litellm_metadata = {"request_id": "req-789", "trace_id": "trace-abc"}
 
-    callback = MetadataCaptureCallback()
-    litellm.callbacks = [callback]
+    # MetadataCaptureCallback not needed here — assertions use
+    # response_stream.logging_obj.model_call_details directly.
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -248,8 +248,8 @@ async def test_native_path_no_metadata_defaults_to_empty():
 
     mock_response = ResponsesAPIResponse.model_construct(**MOCK_RESPONSE_DICT)
 
-    callback = MetadataCaptureCallback()
-    litellm.callbacks = [callback]
+    # MetadataCaptureCallback not needed here — assertions use
+    # response_stream.logging_obj.model_call_details directly.
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -291,8 +291,8 @@ async def test_native_path_proxy_keys_not_leaked():
         "requester_ip_address": "127.0.0.1",
     }
 
-    callback = MetadataCaptureCallback()
-    litellm.callbacks = [callback]
+    # MetadataCaptureCallback not needed here — assertions use
+    # response_stream.logging_obj.model_call_details directly.
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -341,8 +341,8 @@ async def test_completion_path_metadata_forwarded():
     """
     user_metadata = {"caller": "langfuse-test", "environment": "staging"}
 
-    callback = MetadataCaptureCallback()
-    litellm.callbacks = [callback]
+    # MetadataCaptureCallback not needed — assertions verify metadata via
+    # mock_completion.call_args, not callback.captured_kwargs.
 
     with patch(
         "litellm.completion",
@@ -392,8 +392,8 @@ async def test_completion_path_metadata_forwarded_async():
     """
     user_metadata = {"trace_id": "abc-123", "user_id": "u-42"}
 
-    callback = MetadataCaptureCallback()
-    litellm.callbacks = [callback]
+    # MetadataCaptureCallback not needed — assertions verify metadata via
+    # mock_acompletion.call_args, not callback.captured_kwargs.
 
     with patch(
         "litellm.acompletion",
