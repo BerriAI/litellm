@@ -5,14 +5,18 @@ These helpers are used by agent and vector store endpoints to enforce
 proxy-admin-configurable toggles that restrict access for internal users.
 """
 
+from typing import Literal
+
 from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
+FeatureName = Literal["agents", "vector_stores"]
+
 
 async def check_feature_access_for_user(
     user_api_key_dict: UserAPIKeyAuth,
-    feature_name: str,
+    feature_name: FeatureName,
 ) -> None:
     """
     Raise HTTP 403 if the user's role is blocked from accessing the given feature

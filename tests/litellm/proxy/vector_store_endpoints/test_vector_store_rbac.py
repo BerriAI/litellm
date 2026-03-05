@@ -53,7 +53,6 @@ async def test_list_vector_stores_allowed_when_not_disabled():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
 
-    raised_403 = False
     with patch.dict("litellm.proxy.proxy_server.general_settings", _ENABLED_GS, clear=True):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             with patch.object(litellm, "vector_store_registry", None):
@@ -61,12 +60,9 @@ async def test_list_vector_stores_allowed_when_not_disabled():
                     "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry._get_vector_stores_from_db",
                     new=AsyncMock(return_value=[]),
                 ):
-                    try:
-                        await list_vector_stores(user_api_key_dict=user)
-                    except HTTPException as e:
-                        if e.status_code == 403:
-                            raised_403 = True
-    assert not raised_403, "Should not raise 403 when vector stores are not disabled"
+                    # Must not raise any HTTPException — if mocking is incomplete the
+                    # test should fail loudly rather than silently swallowing errors.
+                    await list_vector_stores(user_api_key_dict=user)
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +101,6 @@ async def test_list_vector_stores_admin_not_blocked():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
 
-    raised_403 = False
     with patch.dict("litellm.proxy.proxy_server.general_settings", _DISABLED_GS, clear=True):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             with patch.object(litellm, "vector_store_registry", None):
@@ -113,9 +108,5 @@ async def test_list_vector_stores_admin_not_blocked():
                     "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry._get_vector_stores_from_db",
                     new=AsyncMock(return_value=[]),
                 ):
-                    try:
-                        await list_vector_stores(user_api_key_dict=admin)
-                    except HTTPException as e:
-                        if e.status_code == 403:
-                            raised_403 = True
-    assert not raised_403, "Admin should not be blocked even when vector stores are disabled"
+                    # Must not raise any HTTPException — admin is always allowed.
+                    await list_vector_stores(user_api_key_dict=admin)

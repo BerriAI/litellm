@@ -145,6 +145,16 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "allow_vector_stores_for_team_admins",
 }
 
+# Flags that must be synced from the persisted UISettings into
+# general_settings at runtime (on both read and write).
+_RUNTIME_GENERAL_SETTINGS_FLAGS = [
+    "forward_client_headers_to_llm_api",
+    "disable_agents_for_internal_users",
+    "allow_agents_for_team_admins",
+    "disable_vector_stores_for_internal_users",
+    "allow_vector_stores_for_team_admins",
+]
+
 
 class MCPSemanticFilterSettings(BaseModel):
     """Configuration for MCP Semantic Tool Filter"""
@@ -1002,14 +1012,7 @@ async def get_ui_settings():
 
     # Sync runtime flags into general_settings so the proxy picks them up
     # at runtime (covers server restart scenarios).
-    _runtime_flags = [
-        "forward_client_headers_to_llm_api",
-        "disable_agents_for_internal_users",
-        "allow_agents_for_team_admins",
-        "disable_vector_stores_for_internal_users",
-        "allow_vector_stores_for_team_admins",
-    ]
-    _flags_to_sync = {k: ui_settings[k] for k in _runtime_flags if k in ui_settings}
+    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
     if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
@@ -1080,14 +1083,7 @@ async def update_ui_settings(
 
     # Sync runtime flags to general_settings so the proxy picks them up
     # at runtime (general_settings is checked in pre-call utils).
-    _runtime_flags = [
-        "forward_client_headers_to_llm_api",
-        "disable_agents_for_internal_users",
-        "allow_agents_for_team_admins",
-        "disable_vector_stores_for_internal_users",
-        "allow_vector_stores_for_team_admins",
-    ]
-    _flags_to_sync = {k: ui_settings[k] for k in _runtime_flags if k in ui_settings}
+    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
     if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
