@@ -4529,7 +4529,7 @@ async def test_pkce_token_exchange_basic_auth():
         assert isinstance(kwargs["auth"], httpx.BasicAuth)
         return mock_response
 
-    with patch("httpx.AsyncClient") as mock_client_cls:
+    with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -4574,7 +4574,7 @@ async def test_pkce_token_exchange_credentials_in_body():
         mock.json.return_value = token_resp
         return mock
 
-    with patch("httpx.AsyncClient") as mock_client_cls:
+    with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -4608,7 +4608,7 @@ async def test_pkce_token_exchange_http200_with_error_body():
 
     error_body = {"error": "invalid_grant", "error_description": "Code already used"}
 
-    with patch("httpx.AsyncClient") as mock_client_cls:
+    with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -4647,7 +4647,7 @@ async def test_pkce_userinfo_falls_back_to_id_token():
     ).rstrip(b"=").decode()
     fake_id_token = f"eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig"
 
-    with patch("httpx.AsyncClient") as mock_client_cls:
+    with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)

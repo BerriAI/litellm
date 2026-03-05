@@ -2529,8 +2529,8 @@ class SSOAuthenticationHandler:
                     await redis_usage_cache.async_delete_cache(key=cache_key)
                 else:
                     await user_api_key_cache.async_delete_cache(key=cache_key)
-            elif os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true":
-                # PKCE is enabled but verifier is missing — likely a cross-instance cache miss.
+            else:
+                # PKCE is enabled (already checked above) but verifier is missing — likely a cross-instance cache miss.
                 verbose_proxy_logger.error(
                     "PKCE is enabled but no code_verifier found in cache for state '%s'. "
                     "This usually means the authorization and callback were handled by different "
@@ -2644,7 +2644,12 @@ class SSOAuthenticationHandler:
                     json_err,
                     response.text[:500],
                 )
-                raise
+                raise ProxyException(
+                    message=f"Token endpoint returned invalid JSON: {json_err}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="token_exchange",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
 
             # Some providers return HTTP 200 with an error body (e.g. expired code, replay attack).
             if "access_token" not in token_response:
@@ -2725,7 +2730,12 @@ class SSOAuthenticationHandler:
                     )
             finally:
                 if _own_client:
-                    await _client.aclose()
+                    try:
+                        await _client.aclose()
+                    except Exception as close_err:
+                        verbose_proxy_logger.debug(
+                            "Error closing httpx client in _get_pkce_userinfo: %s", close_err
+                        )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Userinfo endpoint error: %s, falling back to id_token", e
