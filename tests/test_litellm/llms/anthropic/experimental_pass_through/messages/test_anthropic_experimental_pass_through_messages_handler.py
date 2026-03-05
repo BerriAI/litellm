@@ -190,6 +190,152 @@ def test_openai_model_with_thinking_converts_to_reasoning():
         assert "thinking" not in call_kwargs, "thinking should NOT be passed directly to litellm.responses"
 
 
+class TestSanitizeAnthropicMessages:
+    """Tests for _sanitize_anthropic_messages which strips empty text blocks."""
+
+    def test_strips_empty_text_block_alongside_tool_use(self):
+        """The most common case: model returns empty text + tool_use."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _sanitize_anthropic_messages,
+        )
+
+        messages = [
+            {"role": "user", "content": "Use the bash tool to list files"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "tool_use", "id": "toolu_123", "name": "Bash", "input": {"cmd": "ls"}},
+                ],
+            },
+        ]
+        result = _sanitize_anthropic_messages(messages)
+        assistant = result[1]
+        assert len(assistant["content"]) == 1
+        assert assistant["content"][0]["type"] == "tool_use"
+
+    def test_strips_whitespace_only_text_block(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _sanitize_anthropic_messages,
+        )
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "  \n  "},
+                    {"type": "tool_use", "id": "toolu_123", "name": "Bash", "input": {}},
+                ],
+            },
+        ]
+        result = _sanitize_anthropic_messages(messages)
+        assert len(result[0]["content"]) == 1
+        assert result[0]["content"][0]["type"] == "tool_use"
+
+    def test_preserves_non_empty_text_blocks(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _sanitize_anthropic_messages,
+        )
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I'll run that for you."},
+                    {"type": "tool_use", "id": "toolu_123", "name": "Bash", "input": {}},
+                ],
+            },
+        ]
+        result = _sanitize_anthropic_messages(messages)
+        assert len(result[0]["content"]) == 2
+
+    def test_replaces_all_empty_blocks_with_continuation(self):
+        """If ALL blocks are empty text, replace with a continuation message."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _sanitize_anthropic_messages,
+        )
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            DEFAULT_ASSISTANT_CONTINUE_MESSAGE,
+        )
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": ""}],
+            },
+        ]
+        result = _sanitize_anthropic_messages(messages)
+        assert len(result[0]["content"]) == 1
+        assert result[0]["content"][0]["type"] == "text"
+        assert result[0]["content"][0]["text"] == DEFAULT_ASSISTANT_CONTINUE_MESSAGE.get("content", "Please continue.")
+
+    def test_handles_string_content(self):
+        """String content (not list) should pass through unchanged."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _sanitize_anthropic_messages,
+        )
+
+        messages = [{"role": "user", "content": "Hello"}]
+        result = _sanitize_anthropic_messages(messages)
+        assert result[0]["content"] == "Hello"
+
+    def test_handles_user_messages_too(self):
+        """User messages can also have content lists with empty text blocks."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _sanitize_anthropic_messages,
+        )
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "tool_result", "tool_use_id": "toolu_123", "content": "file1.txt"},
+                ],
+            },
+        ]
+        result = _sanitize_anthropic_messages(messages)
+        assert len(result[0]["content"]) == 1
+        assert result[0]["content"][0]["type"] == "tool_result"
+
+
+    def test_handles_none_text_value(self):
+        """Text blocks with None text value should be treated as empty, not crash."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _sanitize_anthropic_messages,
+        )
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": None},
+                    {"type": "tool_use", "id": "toolu_123", "name": "Bash", "input": {}},
+                ],
+            },
+        ]
+        result = _sanitize_anthropic_messages(messages)
+        assert len(result[0]["content"]) == 1
+        assert result[0]["content"][0]["type"] == "tool_use"
+
+    def test_does_not_mutate_original_message(self):
+        """Sanitized messages should be shallow copies, not mutated originals."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _sanitize_anthropic_messages,
+        )
+
+        original_content = [
+            {"type": "text", "text": ""},
+            {"type": "tool_use", "id": "toolu_123", "name": "Bash", "input": {}},
+        ]
+        messages = [{"role": "assistant", "content": original_content}]
+        result = _sanitize_anthropic_messages(messages)
+        # Original content list should be unchanged
+        assert len(original_content) == 2
+        # Result message should be a different dict
+        assert len(result[0]["content"]) == 1
+
+
 class TestThinkingParameterTransformation:
     """Core tests for thinking parameter transformation logic."""
 
