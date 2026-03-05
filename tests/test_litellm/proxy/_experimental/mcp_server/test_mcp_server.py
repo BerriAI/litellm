@@ -901,13 +901,18 @@ def test_get_mcp_servers_in_path_supports_server_scoped_mount_form():
         "custom_solutions/user_123"
     ]
 
+    # Negative cases: these must NOT match the server-scoped mount regex
+    assert _get_mcp_servers_in_path("/mcp") is None or _get_mcp_servers_in_path("/mcp") != ["mcp"]
+    assert _get_mcp_servers_in_path("/github_onprem/not_mcp") is None
+
 
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
 async def test_extract_mcp_auth_context_reconstructs_mounted_mcp_path():
     """
     Regression: when mounted under /mcp, ASGI path can be stripped (e.g. /github_onprem).
-    Ensure auth context reconstructs full path via root_path to extract mcp_servers.
+    Ensure auth context reconstructs full path via root_path (/mcp/github_onprem) so
+    that the /mcp/<server> regex pattern extracts the server correctly.
     """
     try:
         from litellm.proxy._experimental.mcp_server.server import extract_mcp_auth_context

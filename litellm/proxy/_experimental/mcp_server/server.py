@@ -2135,7 +2135,7 @@ if MCP_AVAILABLE:
         # Supports server names containing one slash (e.g. custom_solutions/user_123)
         if mcp_servers_from_path is None:
             scoped_mount_match = re.match(
-                r"^/([^/]+(?:/[^/]+)?)/mcp(?:/.*)?(?:\?.*)?(?:#.*)?$", path
+                r"^/(?!mcp(?:/|$))([^/]+(?:/[^/]+)?)/mcp(?:/.*)?(?:\?.*)?(?:#.*)?$", path
             )
             if scoped_mount_match:
                 mcp_servers_from_path = [scoped_mount_match.group(1)]
