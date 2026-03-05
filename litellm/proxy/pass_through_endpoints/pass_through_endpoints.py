@@ -1107,10 +1107,21 @@ def create_pass_through_route(
             adapter = get_instance_fn(value=target)
         adapter_id = str(uuid.uuid4())
 
+        # Thread safety note: this runs at startup during config loading,
+        # so concurrent access is not a concern here.
         if not isinstance(litellm.adapters, list):
-            litellm.adapters = []
+            verbose_proxy_logger.warning(
+                "litellm.adapters was %s, coercing to list",
+                type(litellm.adapters).__name__,
+            )
+            litellm.adapters = list(litellm.adapters)
 
-        litellm.adapters.append({"id": adapter_id, "adapter": adapter})
+        # Deduplicate: skip if an adapter for this endpoint path already exists
+        if not any(
+            isinstance(a, dict) and a.get("id") == adapter_id
+            for a in litellm.adapters
+        ):
+            litellm.adapters.append({"id": adapter_id, "adapter": adapter})
 
         async def endpoint_func(  # type: ignore
             request: Request,

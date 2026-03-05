@@ -2298,27 +2298,27 @@ def test_is_registered_pass_through_route_with_custom_root():
         "headers": {},
     }
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
-        # Test with custom root path /proxy
-        mock_get_root.return_value = "/proxy"
+    try:
+        with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+            # Test with custom root path /proxy
+            mock_get_root.return_value = "/proxy"
 
-        # Should match when request route includes the root path
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is True
+            # Should match when request route includes the root path
+            assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is True
 
-        # Should not match when request route doesn't include root path
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is False
+            # Should not match when request route doesn't include root path
+            assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is False
 
-        # Test with default root path
-        mock_get_root.return_value = "/"
+            # Test with default root path
+            mock_get_root.return_value = "/"
 
-        # Should match with default root
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is True
+            # Should match with default root
+            assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is True
 
-        # Should not match with root prepended when root is /
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is False
-
-    # Clean up
-    _registered_pass_through_routes.clear()
+            # Should not match with root prepended when root is /
+            assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is False
+    finally:
+        _registered_pass_through_routes.clear()
 
 
 def test_get_registered_pass_through_route_with_custom_root():
@@ -2347,30 +2347,30 @@ def test_get_registered_pass_through_route_with_custom_root():
     route_key = f"{endpoint_id}:exact:{path}"
     _registered_pass_through_routes[route_key] = target_config
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
-        # Test with custom root path /litellm
-        mock_get_root.return_value = "/litellm"
+    try:
+        with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+            # Test with custom root path /litellm
+            mock_get_root.return_value = "/litellm"
 
-        # Should return config when request route includes root path
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/litellm/chat/completions")
-        assert result is not None
-        assert result["target"] == "http://api.example.com/v1/chat/completions"
-        assert result["headers"]["Authorization"] == "Bearer token123"
+            # Should return config when request route includes root path
+            result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/litellm/chat/completions")
+            assert result is not None
+            assert result["target"] == "http://api.example.com/v1/chat/completions"
+            assert result["headers"]["Authorization"] == "Bearer token123"
 
-        # Should return None when route doesn't match
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
-        assert result is None
+            # Should return None when route doesn't match
+            result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+            assert result is None
 
-        # Test with default root path
-        mock_get_root.return_value = "/"
+            # Test with default root path
+            mock_get_root.return_value = "/"
 
-        # Should return config with default root
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
-        assert result is not None
-        assert result["target"] == "http://api.example.com/v1/chat/completions"
-
-    # Clean up
-    _registered_pass_through_routes.clear()
+            # Should return config with default root
+            result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+            assert result is not None
+            assert result["target"] == "http://api.example.com/v1/chat/completions"
+    finally:
+        _registered_pass_through_routes.clear()
 
 
 def test_create_pass_through_route_accumulates_multiple_adapters(monkeypatch):
