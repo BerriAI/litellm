@@ -2409,3 +2409,9 @@ def test_create_pass_through_route_accumulates_multiple_adapters(monkeypatch):
 
     adapter_ids = [entry["id"] for entry in litellm.adapters]
     assert len(set(adapter_ids)) == 2
+
+    # Cleanup: clear registered routes to prevent leakage into other tests
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
+    )
+    _registered_pass_through_routes.clear()
