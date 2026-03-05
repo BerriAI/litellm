@@ -39,8 +39,9 @@ class SpendLogQueue:
         will_drop = len(self._buf) == self._buf.maxlen
         self._buf.append(item)
         if will_drop:
+            prev_dropped = self._dropped
             self._dropped += 1
-            if self._dropped % 100 == 1:
+            if prev_dropped // 100 < self._dropped // 100 or self._dropped == 1:
                 verbose_proxy_logger.warning(
                     "SpendLogQueue full (maxlen=%d) — dropping oldest entry "
                     "(%d total dropped since last drain)",
@@ -55,8 +56,10 @@ class SpendLogQueue:
         self._buf.extend(items)
         overflow = max(0, (before + len(items)) - maxlen)
         if overflow > 0:
+            prev_dropped = self._dropped
             self._dropped += overflow
-            if self._dropped % 100 < overflow or self._dropped <= overflow:
+            # Fire when crossing a 100-drop boundary (consistent with append)
+            if prev_dropped // 100 < self._dropped // 100 or prev_dropped == 0:
                 verbose_proxy_logger.warning(
                     "SpendLogQueue full (maxlen=%d) — dropped %d entries "
                     "(%d total dropped since last drain)",
