@@ -1096,10 +1096,13 @@ def completion_cost(  # noqa: PLR0915
         # When base_model overrides model and carries its own provider prefix
         # (e.g. base_model="gemini/gemini-2.0-flash" on an anthropic deployment),
         # align custom_llm_provider so cost_per_token builds the correct key.
-        if base_model is not None and selected_model is not None:
+        # Skip when custom_pricing is True (base_model is ignored in that path).
+        if base_model is not None and selected_model is not None and not custom_pricing:
             _parts = selected_model.split("/", 1)
             if len(_parts) > 1 and _parts[0] in LlmProvidersSet:
-                custom_llm_provider = _parts[0]
+                extracted = _parts[0]
+                if extracted != custom_llm_provider:
+                    custom_llm_provider = extracted
 
         potential_model_names = [
             selected_model,
