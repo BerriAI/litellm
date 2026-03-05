@@ -64,7 +64,15 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
 
         # Use AzureAnthropicConfig for both azure_anthropic and azure_ai Claude models
         config = AzureAnthropicConfig()
-        
+
+        # Map OpenAI params to Anthropic format (including tools transformation)
+        optional_params = config.map_openai_params(
+            non_default_params=optional_params,
+            optional_params={},
+            model=model,
+            drop_params=litellm_params.get("drop_params", False),
+        )
+
         headers = config.validate_environment(
             api_key=api_key,
             headers=headers,

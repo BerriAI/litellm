@@ -49,7 +49,7 @@ class AzureAnthropicConfig(AnthropicConfig):
             # Set api_key if provided and not already set
             if api_key and not litellm_params_obj.api_key:
                 litellm_params_obj.api_key = api_key
-        
+
         # Use Azure authentication logic
         headers = BaseAzureLLM._base_validate_azure_environment(
             headers=headers, litellm_params=litellm_params_obj
@@ -101,6 +101,9 @@ class AzureAnthropicConfig(AnthropicConfig):
         Transform request using parent AnthropicConfig, then remove unsupported params.
         Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
         """
+        # Remove max_retries - Azure Anthropic API doesn't accept this parameter
+        optional_params.pop("max_retries", None)
+
         # Call parent transform_request
         data = super().transform_request(
             model=model,
@@ -117,3 +120,11 @@ class AzureAnthropicConfig(AnthropicConfig):
 
         return data
 
+        # Azure AI Anthropic requires explicit "type": "custom" for user-defined tools
+        # Regular Anthropic API allows tools without a type field
+        if "tools" in data:
+            for tool in data["tools"]:
+                if "type" not in tool and "name" in tool and "input_schema" in tool:
+                    tool["type"] = "custom"
+
+        return data
