@@ -706,6 +706,12 @@ def responses(
         )
 
         if responses_api_provider_config is None:
+            # Forward user metadata into kwargs so the completion transformation
+            # path can propagate it to litellm.completion()'s logging callbacks.
+            # The `metadata` parameter is consumed by responses() and not
+            # included in **kwargs, so without this the value is lost. (#15466)
+            if metadata is not None and "metadata" not in kwargs:
+                kwargs["metadata"] = metadata
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,
@@ -730,7 +736,13 @@ def responses(
 
         # Pre Call logging - preserve metadata for custom callbacks
         # When called from completion bridge (codex models), metadata is in litellm_metadata
-        metadata_for_callbacks = metadata or kwargs.get("litellm_metadata") or {}
+        # Use explicit `is not None` check instead of truthiness to avoid treating
+        # an empty dict {} as falsy and falling through to litellm_metadata (#15466)
+        metadata_for_callbacks = (
+            metadata
+            if metadata is not None
+            else kwargs.get("litellm_metadata") or {}
+        )
 
         litellm_logging_obj.update_environment_variables(
             model=model,

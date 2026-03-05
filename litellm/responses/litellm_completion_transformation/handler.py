@@ -66,8 +66,7 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
-            **litellm_completion_request,
-            **kwargs,
+            **completion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
