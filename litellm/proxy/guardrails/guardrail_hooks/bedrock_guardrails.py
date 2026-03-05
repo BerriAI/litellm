@@ -48,6 +48,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
     BedrockGuardrailOutput,
     BedrockGuardrailResponse,
+    BedrockGuardrailUsage,
     BedrockRequest,
     BedrockTextContent,
 )
@@ -122,6 +123,16 @@ def _redact_pii_matches(response_json: dict) -> dict:
 
 
 class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
+    BEDROCK_GUARDRAIL_MAX_CHARS = 25_000
+
+    @staticmethod
+    def _extract_content_text(item: BedrockContentItem) -> str:
+        text_obj = item.get("text")
+        if not isinstance(text_obj, dict):
+            return ""
+        text = text_obj.get("text") or ""
+        return text if isinstance(text, str) else ""
+
     def __init__(
         self,
         guardrailIdentifier: Optional[str] = None,
@@ -406,34 +417,134 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return prepped_request
 
-    async def make_bedrock_api_request(
+    @staticmethod
+    def _chunk_content_items(
+        content: List[BedrockContentItem],
+        max_chars: int = BEDROCK_GUARDRAIL_MAX_CHARS,
+    ) -> List[List[BedrockContentItem]]:
+        """Split content items into chunks that stay within the character limit.
+
+        Each chunk contains one or more content items whose combined text length
+        does not exceed *max_chars*. If a single text item exceeds the limit it
+        is split across chunks at the character boundary.
+        """
+
+        chunks: List[List[BedrockContentItem]] = []
+        current_chunk: List[BedrockContentItem] = []
+        current_chars = 0
+
+        for item in content:
+            text = BedrockGuardrail._extract_content_text(item)
+            if text == "":
+                current_chunk.append(item)
+                continue
+            text_len = len(text)
+
+            # If the single item fits in the current chunk, add it
+            if current_chars + text_len <= max_chars:
+                current_chunk.append(item)
+                current_chars += text_len
+                continue
+
+            # Item doesn't fit — slice it across chunk boundaries
+            offset = 0
+            while offset < text_len:
+                remaining_space = max_chars - current_chars
+                if remaining_space <= 0:
+                    chunks.append(current_chunk)
+                    current_chunk = []
+                    current_chars = 0
+                    remaining_space = max_chars
+
+                slice_end = min(offset + remaining_space, text_len)
+                chunk_text = text[offset:slice_end]
+                current_chunk.append(
+                    BedrockContentItem(text=BedrockTextContent(text=chunk_text))
+                )
+                current_chars += len(chunk_text)
+                offset = slice_end
+
+                if current_chars >= max_chars:
+                    chunks.append(current_chunk)
+                    current_chunk = []
+                    current_chars = 0
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        return chunks if chunks else [content]
+
+    @staticmethod
+    def _merge_guardrail_responses(
+        responses: List[Tuple[BedrockGuardrailResponse, dict]],
+    ) -> Tuple[BedrockGuardrailResponse, dict]:
+        """Merge multiple guardrail responses — worst action wins."""
+        if len(responses) == 1:
+            return responses[0]
+
+        merged_response = BedrockGuardrailResponse()
+        all_assessments: list = []
+        all_outputs: list = []
+        merged_usage: dict = {}
+
+        worst_action = "NONE"
+        action_priority = {"NONE": 0, "GUARDRAIL_INTERVENED": 1}
+
+        for resp, _json_resp in responses:
+            action = resp.get("action", "NONE")
+            if action_priority.get(action, 0) > action_priority.get(worst_action, 0):
+                worst_action = action
+
+            assessments = resp.get("assessments") or []
+            all_assessments.extend(assessments)
+
+            outputs = resp.get("outputs")
+            if outputs is None:
+                outputs = resp.get("output")
+            if isinstance(outputs, list):
+                all_outputs.extend(outputs)
+            elif isinstance(outputs, dict):
+                all_outputs.append(outputs)
+            elif isinstance(outputs, str):
+                all_outputs.append({"text": outputs})
+
+            usage = resp.get("usage") or {}
+            for key, val in usage.items():
+                if isinstance(val, (int, float)):
+                    merged_usage[key] = merged_usage.get(key, 0) + val
+
+        merged_response["action"] = worst_action
+        if all_assessments:
+            merged_response["assessments"] = all_assessments
+        if all_outputs:
+            merged_response["outputs"] = all_outputs
+        if merged_usage:
+            # Ensure values are int for BedrockGuardrailUsage
+            merged_response["usage"] = BedrockGuardrailUsage(
+                **{k: int(v) for k, v in merged_usage.items()}
+            )
+
+        merged_json = dict(merged_response)
+        return merged_response, merged_json
+
+    async def _make_single_bedrock_api_request(
         self,
+        bedrock_request_data: dict,
+        credentials: Any,
+        aws_region_name: str,
+        api_key: Optional[str],
         source: Literal["INPUT", "OUTPUT"],
-        messages: Optional[List[AllMessageValues]] = None,
-        response: Optional[Union[Any, litellm.ModelResponse]] = None,
-        request_data: Optional[dict] = None,
-    ) -> BedrockGuardrailResponse:
+        request_data: Optional[dict],
+        start_time: Any,
+    ) -> Tuple[BedrockGuardrailResponse, dict]:
+        """Execute a single ApplyGuardrail API call and return parsed response + raw JSON."""
         from datetime import datetime
 
-        start_time = datetime.now()
-        credentials, aws_region_name = self._load_credentials()
-        bedrock_request_data: dict = dict(
-            self.convert_to_bedrock_format(
-                source=source, messages=messages, response=response
-            )
+        event_type = (
+            GuardrailEventHooks.pre_call
+            if source == "INPUT"
+            else GuardrailEventHooks.post_call
         )
-        bedrock_guardrail_response: BedrockGuardrailResponse = (
-            BedrockGuardrailResponse()
-        )
-        api_key: Optional[str] = None
-        if request_data:
-            bedrock_request_data.update(
-                self.get_guardrail_dynamic_request_body_params(
-                    request_data=request_data
-                )
-            )
-            if request_data.get("api_key") is not None:
-                api_key = request_data["api_key"]
 
         prepared_request = self._prepare_request(
             credentials=credentials,
@@ -441,18 +552,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             optional_params=self.optional_params,
             aws_region_name=aws_region_name,
             api_key=api_key,
-        )
-        verbose_proxy_logger.debug(
-            "Bedrock AI request body: %s, url %s, headers: %s",
-            bedrock_request_data,
-            prepared_request.url,
-            prepared_request.headers,
-        )
-
-        event_type = (
-            GuardrailEventHooks.pre_call
-            if source == "INPUT"
-            else GuardrailEventHooks.post_call
         )
 
         try:
@@ -462,11 +561,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 headers=prepared_request.headers,  # type: ignore
             )
         except HTTPException:
-            # Propagate HTTPException (e.g. from non-200 path) as-is
             raise
         except Exception as e:
-            # If this is an HTTP error with a response body (e.g. httpx.HTTPStatusError),
-            # extract the AWS error message and propagate it
             response = getattr(e, "response", None)
             if isinstance(response, httpx.Response):
                 try:
@@ -488,7 +584,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     ) from e
                 except HTTPException:
                     raise
-            # Endpoint down, timeout, or other HTTP/network errors
             verbose_proxy_logger.error(
                 "Bedrock AI: failed to make guardrail request: %s", str(e)
             )
@@ -504,46 +599,156 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             raise
 
-        #########################################################
-        # Add guardrail information to request trace
-        #########################################################
-        self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=httpx_response.json(),
-            request_data=request_data or {},
-            guardrail_status=self._get_bedrock_guardrail_response_status(
-                response=httpx_response
-            ),
-            start_time=start_time.timestamp(),
-            end_time=datetime.now().timestamp(),
-            duration=(datetime.now() - start_time).total_seconds(),
-            event_type=event_type,
-        )
-        #########################################################
         if httpx_response.status_code == 200:
-            # check if the response was flagged
-            _json_response = httpx_response.json()
-            redacted_response = _redact_pii_matches(_json_response)
-            verbose_proxy_logger.debug("Bedrock AI response : %s", redacted_response)
-            bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
-            if self._should_raise_guardrail_blocked_exception(
-                bedrock_guardrail_response
-            ):
-                raise self._get_http_exception_for_blocked_guardrail(
-                    bedrock_guardrail_response
-                )
+            json_response = httpx_response.json()
+            guardrail_response = BedrockGuardrailResponse(**json_response)
+            return guardrail_response, json_response
         else:
-            status_code, detail_message = self._parse_bedrock_guardrail_error_response(
-                httpx_response
+            status_code, detail_message = (
+                self._parse_bedrock_guardrail_error_response(httpx_response)
             )
             verbose_proxy_logger.error(
                 "Bedrock AI: error in response. Status code: %s, response: %s",
                 httpx_response.status_code,
                 httpx_response.text,
             )
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
+                guardrail_json_response={"error": detail_message},
+                request_data=request_data or {},
+                guardrail_status="guardrail_failed_to_respond",
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
+            )
             raise HTTPException(status_code=status_code, detail=detail_message)
 
-        return bedrock_guardrail_response
+    async def make_bedrock_api_request(
+        self,
+        source: Literal["INPUT", "OUTPUT"],
+        messages: Optional[List[AllMessageValues]] = None,
+        response: Optional[Union[Any, litellm.ModelResponse]] = None,
+        request_data: Optional[dict] = None,
+    ) -> BedrockGuardrailResponse:
+        from datetime import datetime
+
+        start_time = datetime.now()
+        credentials, aws_region_name = self._load_credentials()
+        bedrock_request_data: dict = dict(
+            self.convert_to_bedrock_format(
+                source=source, messages=messages, response=response
+            )
+        )
+        api_key: Optional[str] = None
+        if request_data:
+            bedrock_request_data.update(
+                self.get_guardrail_dynamic_request_body_params(
+                    request_data=request_data
+                )
+            )
+            if request_data.get("api_key") is not None:
+                api_key = request_data["api_key"]
+
+        verbose_proxy_logger.debug(
+            "Bedrock AI request body: %s",
+            bedrock_request_data,
+        )
+
+        event_type = (
+            GuardrailEventHooks.pre_call
+            if source == "INPUT"
+            else GuardrailEventHooks.post_call
+        )
+
+        # --- chunking logic ---
+        content = bedrock_request_data.get("content", [])
+        total_chars = sum(len(self._extract_content_text(item)) for item in content)
+
+        if total_chars > self.BEDROCK_GUARDRAIL_MAX_CHARS:
+            chunks = self._chunk_content_items(
+                content, max_chars=self.BEDROCK_GUARDRAIL_MAX_CHARS
+            )
+            responses: List[Tuple[BedrockGuardrailResponse, dict]] = []
+            for chunk in chunks:
+                chunk_request = dict(bedrock_request_data)
+                chunk_request["content"] = chunk
+                resp, json_resp = await self._make_single_bedrock_api_request(
+                    bedrock_request_data=chunk_request,
+                    credentials=credentials,
+                    aws_region_name=aws_region_name,
+                    api_key=api_key,
+                    source=source,
+                    request_data=request_data,
+                    start_time=start_time,
+                )
+                responses.append((resp, json_resp))
+                # Short-circuit: if any chunk is blocked, stop processing
+                if self._should_raise_guardrail_blocked_exception(resp):
+                    break
+
+            bedrock_guardrail_response, merged_json = (
+                self._merge_guardrail_responses(responses)
+            )
+
+            redacted_response = _redact_pii_matches(merged_json)
+            verbose_proxy_logger.debug("Bedrock AI response : %s", redacted_response)
+
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
+                guardrail_json_response=merged_json,
+                request_data=request_data or {},
+                guardrail_status=self._determine_guardrail_status_from_json(
+                    json_response=merged_json,
+                    guardrail_response=bedrock_guardrail_response,
+                ),
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
+            )
+
+            if self._should_raise_guardrail_blocked_exception(
+                bedrock_guardrail_response
+            ):
+                raise self._get_http_exception_for_blocked_guardrail(
+                    bedrock_guardrail_response
+                )
+
+            return bedrock_guardrail_response
+
+        # --- single request path (content within limit) ---
+        resp, _json_response = await self._make_single_bedrock_api_request(
+            bedrock_request_data=bedrock_request_data,
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+            api_key=api_key,
+            source=source,
+            request_data=request_data,
+            start_time=start_time,
+        )
+
+        redacted_response = _redact_pii_matches(_json_response)
+        verbose_proxy_logger.debug("Bedrock AI response : %s", redacted_response)
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_provider=self.guardrail_provider,
+            guardrail_json_response=_json_response,
+            request_data=request_data or {},
+            guardrail_status=self._determine_guardrail_status_from_json(
+                json_response=_json_response,
+                guardrail_response=resp,
+            ),
+            start_time=start_time.timestamp(),
+            end_time=datetime.now().timestamp(),
+            duration=(datetime.now() - start_time).total_seconds(),
+            event_type=event_type,
+        )
+
+        if self._should_raise_guardrail_blocked_exception(resp):
+            raise self._get_http_exception_for_blocked_guardrail(resp)
+
+        return resp
 
     def _check_bedrock_response_for_exception(self, response) -> bool:
         """
@@ -577,6 +782,27 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return False
 
         return "Exception" in payload.get("Output", {}).get("__type", "")
+
+    def _determine_guardrail_status_from_json(
+        self,
+        json_response: dict,
+        guardrail_response: BedrockGuardrailResponse,
+    ) -> GuardrailStatus:
+        """Determine guardrail status from already-parsed response data.
+
+        Checks for the AWS exception marker in the JSON body before falling
+        back to action-based classification.
+        """
+        output_payload = json_response.get("Output")
+        if output_payload is None:
+            output_payload = json_response.get("output")
+        if isinstance(output_payload, dict):
+            output_type = output_payload.get("__type", "")
+            if isinstance(output_type, str) and "Exception" in output_type:
+                return "guardrail_failed_to_respond"
+        if self._should_raise_guardrail_blocked_exception(guardrail_response):
+            return "guardrail_intervened"
+        return "success"
 
     def _get_bedrock_guardrail_response_status(
         self, response: httpx.Response
@@ -1459,4 +1685,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.error(
                 "Bedrock Guardrail: Failed to apply guardrail: %s", str(e)
             )
-            raise Exception(f"Bedrock guardrail failed: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Bedrock guardrail failed: {str(e)}"
+            )
