@@ -266,7 +266,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform get skill content request → GET /v1/skills/{id}/content."""
-        url = f"{api_base}/v1/skills/{skill_id}/content"
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/content"
         verbose_logger.debug("OpenAI get skill content request - URL: %s", url)
         return url, headers
 
@@ -299,7 +299,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict, Dict]:
         """Transform create skill version request → POST /v1/skills/{id}/versions."""
-        url = f"{api_base}/v1/skills/{skill_id}/versions"
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions"
         body = {k: v for k, v in create_request.items() if v is not None}
         verbose_logger.debug("OpenAI create skill version request - URL: %s", url)
         return url, headers, body
@@ -326,7 +326,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict, Dict]:
         """Transform list skill versions request → GET /v1/skills/{id}/versions."""
-        url = f"{api_base}/v1/skills/{skill_id}/versions"
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions"
         query_params: Dict[str, Any] = {}
         if list_params.get("limit") is not None:
             query_params["limit"] = list_params["limit"]
@@ -367,7 +367,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform get skill version request → GET /v1/skills/{id}/versions/{v}."""
-        url = f"{api_base}/v1/skills/{skill_id}/versions/{version}"
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions/{version}"
         verbose_logger.debug("OpenAI get skill version request - URL: %s", url)
         return url, headers
 
@@ -393,7 +393,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform delete skill version request → DELETE /v1/skills/{id}/versions/{v}."""
-        url = f"{api_base}/v1/skills/{skill_id}/versions/{version}"
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions/{version}"
         verbose_logger.debug("OpenAI delete skill version request - URL: %s", url)
         return url, headers
 
@@ -421,7 +421,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform get version content request → GET /v1/skills/{id}/versions/{v}/content."""
-        url = f"{api_base}/v1/skills/{skill_id}/versions/{version}/content"
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions/{version}/content"
         verbose_logger.debug("OpenAI get skill version content - URL: %s", url)
         return url, headers
 
