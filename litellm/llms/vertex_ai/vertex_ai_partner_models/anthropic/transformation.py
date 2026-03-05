@@ -108,9 +108,6 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         # VertexAI doesn't support output_format parameter, remove if present
         data.pop("output_format", None)
         
-        # VertexAI doesn't support output_config parameter, remove it if present
-        data.pop("output_config", None)
-
         # VertexAI doesn't support output_config.format (structured output schema),
         # but does support output_config.effort (reasoning effort for Claude 4.6).
         # Selectively strip only the unsupported "format" key.
