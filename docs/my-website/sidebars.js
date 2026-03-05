@@ -624,6 +624,7 @@ const sidebars = {
           items: [
             "anthropic_unified/index",
             "anthropic_unified/structured_output",
+            "anthropic_unified/messages_to_responses_mapping",
           ]
         },
         "anthropic_count_tokens",
