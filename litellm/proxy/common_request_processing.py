@@ -106,14 +106,10 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
 
                 # At this point, the chunk contains an error object but we couldn't parse a valid HTTP status code.
                 # Returning 500 ensures callers can still treat the first chunk as an error and return JSON.
-                if error_code_raw is None:
-                    return status.HTTP_500_INTERNAL_SERVER_ERROR
-                elif (
-                    error_code_raw is not None
-                ):  # Log if original code was present but not valid
-                    verbose_proxy_logger.warning(
-                        f"Error has invalid or non-convertible code: {error_code_raw}"
-                    )
+                verbose_proxy_logger.warning(
+                    f"Error has missing/invalid/unparseable HTTP status code: {error_code_raw}"
+                )
+                return status.HTTP_500_INTERNAL_SERVER_ERROR
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
