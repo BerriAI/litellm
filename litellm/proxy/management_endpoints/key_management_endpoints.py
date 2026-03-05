@@ -4498,8 +4498,14 @@ async def _list_key_helper(
             ),
         )
 
-    verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
-    verbose_proxy_logger.debug(f"Total count of keys: {total_count}")
+    verbose_proxy_logger.debug(f"Fetched {len(keys)} keys, total_count={total_count}")
+
+    # Warn when results are truncated so callers know to paginate
+    if len(keys) == size and total_count > size:
+        verbose_proxy_logger.warning(
+            f"Key listing truncated: returning {size} of {total_count} keys. "
+            f"Use pagination (page/size) to retrieve all results."
+        )
 
     # Calculate total pages
     total_pages = -(-total_count // size)  # Ceiling division
