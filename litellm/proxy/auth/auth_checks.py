@@ -2592,7 +2592,20 @@ async def can_team_access_model(
             )
 
             if effective_models:
-                models_to_check = effective_models
+                # Defense-in-depth: intersect with team.models so that
+                # misconfigured default_models can never grant access
+                # beyond the team's allowed model list.
+                if (
+                    team_object
+                    and team_object.models
+                    and SpecialModelNames.all_proxy_models.value
+                    not in team_object.models
+                ):
+                    models_to_check = list(
+                        set(effective_models) & set(team_object.models)
+                    )
+                else:
+                    models_to_check = effective_models
             elif team_object and team_object.models:
                 # Fallback: effective models empty but team has models configured.
                 # Graceful degradation prevents misconfiguration cliff when feature
