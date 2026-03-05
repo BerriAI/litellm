@@ -157,7 +157,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         # Apply guardrails in batch
         if texts_to_check:
             # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"response": response}
+            request_data: dict = {**(request_data or {}), "response": response}
 
             # Add user API key metadata with prefixed keys
             user_metadata = self.transform_user_api_key_dict_to_metadata(
