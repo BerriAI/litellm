@@ -24,6 +24,7 @@ const FIELD_LABELS: Record<string, string> = {
   approle_mount_path: "Mount Path",
   client_cert: "Client Certificate",
   client_key: "Client Key",
+  vault_cert_role: "Certificate Role",
 };
 
 interface FieldGroup {
@@ -50,7 +51,7 @@ const FIELD_GROUPS: FieldGroup[] = [
   {
     title: "TLS",
     subtitle: "Optional client certificate for mTLS.",
-    fields: ["client_cert", "client_key"],
+    fields: ["client_cert", "client_key", "vault_cert_role"],
   },
 ];
 
@@ -66,11 +67,10 @@ export default function HashicorpVault() {
   const properties = schema?.properties ?? {};
   const rawValues = data?.values ?? {};
 
-  // Strip masked sensitive values so form inputs start empty — users enter new values or leave blank to keep existing
+  // Never populate sensitive fields in the form — backend returns masked values that would be saved literally
   const values: Record<string, any> = {};
   for (const [key, value] of Object.entries(rawValues)) {
-    if (SENSITIVE_FIELDS.has(key) && typeof value === "string" && value.includes("*")) {
-      // Don't populate form with masked value — it would be saved literally
+    if (SENSITIVE_FIELDS.has(key)) {
       continue;
     }
     values[key] = value;
@@ -101,14 +101,14 @@ export default function HashicorpVault() {
 
     const rules =
       fieldName === "vault_addr"
-        ? [{ type: "url" as const, message: "Please enter a valid URL" }]
+        ? [{ pattern: /^https?:\/\/.+/, message: "Must start with http:// or https://" }]
         : undefined;
 
     const isSensitive = SENSITIVE_FIELDS.has(fieldName);
-    const maskedValue = rawValues[fieldName];
-    const hasExistingValue = isSensitive && typeof maskedValue === "string" && maskedValue.includes("*");
+    const existingValue = rawValues[fieldName];
+    const hasExistingValue = isSensitive && existingValue != null && existingValue !== "";
     const placeholder = hasExistingValue
-      ? `Current: ${maskedValue}`
+      ? "Leave blank to keep existing"
       : fieldSchema?.description;
 
     return (
@@ -144,6 +144,25 @@ export default function HashicorpVault() {
               {schema.description}
             </Typography.Paragraph>
           )}
+          <Alert
+            type="info"
+            showIcon
+            message="Secrets must be stored with the field name &quot;key&quot;"
+            description={
+              <>
+                <Typography.Text code>
+                  vault kv put secret/SECRET_NAME key=secret_value
+                </Typography.Text>
+                <br />
+                <Typography.Link
+                  href="https://docs.litellm.ai/docs/secret_managers/hashicorp_vault"
+                  target="_blank"
+                >
+                  View documentation
+                </Typography.Link>
+              </>
+            }
+          />
 
           <Form key={JSON.stringify(values)} layout="vertical" initialValues={values} onFinish={handleSave}>
             {FIELD_GROUPS.map((group, index) => (
