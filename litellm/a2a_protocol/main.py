@@ -162,6 +162,49 @@ async def _send_message_via_completion_bridge(
     return LiteLLMSendMessageResponse.from_dict(response_dict)
 
 
+async def _execute_a2a_send_with_retry(
+    a2a_client: Any,
+    request: Any,
+    agent_card: Any,
+    card_url: Optional[str],
+    api_base: Optional[str],
+    agent_name: Optional[str],
+) -> Any:
+    """Send an A2A message with retry logic for localhost URL errors."""
+    a2a_response = None
+    for _ in range(2):  # max 2 attempts: original + 1 retry
+        try:
+            a2a_response = await a2a_client.send_message(request)
+            break  # success, exit retry loop
+        except A2ALocalhostURLError as e:
+            a2a_client = handle_a2a_localhost_retry(
+                error=e,
+                agent_card=agent_card,
+                a2a_client=a2a_client,
+                is_streaming=False,
+            )
+            card_url = agent_card.url if agent_card else None
+        except Exception as e:
+            try:
+                map_a2a_exception(e, card_url, api_base, model=agent_name)
+            except A2ALocalhostURLError as localhost_err:
+                a2a_client = handle_a2a_localhost_retry(
+                    error=localhost_err,
+                    agent_card=agent_card,
+                    a2a_client=a2a_client,
+                    is_streaming=False,
+                )
+                card_url = agent_card.url if agent_card else None
+                continue
+            except Exception:
+                raise
+    if a2a_response is None:
+        raise RuntimeError(
+            "A2A send_message failed: no response received after retry attempts."
+        )
+    return a2a_response
+
+
 @client
 async def asend_message(
     a2a_client: Optional["A2AClientType"] = None,
@@ -279,43 +322,16 @@ async def asend_message(
         if getattr(message, "context_id", None) is None:
             message.context_id = context_id
 
-    # Retry loop: if connection fails due to localhost URL in agent card, retry with fixed URL
-    a2a_response = None
-    for _ in range(2):  # max 2 attempts: original + 1 retry
-        try:
-            a2a_response = await a2a_client.send_message(request)
-            break  # success, exit retry loop
-        except A2ALocalhostURLError as e:
-            # Localhost URL error - fix and retry
-            a2a_client = handle_a2a_localhost_retry(
-                error=e,
-                agent_card=agent_card,
-                a2a_client=a2a_client,
-                is_streaming=False,
-            )
-            card_url = agent_card.url if agent_card else None
-        except Exception as e:
-            # Map exception - will raise A2ALocalhostURLError if applicable
-            try:
-                map_a2a_exception(e, card_url, api_base, model=agent_name)
-            except A2ALocalhostURLError as localhost_err:
-                # Localhost URL error - fix and retry
-                a2a_client = handle_a2a_localhost_retry(
-                    error=localhost_err,
-                    agent_card=agent_card,
-                    a2a_client=a2a_client,
-                    is_streaming=False,
-                )
-                card_url = agent_card.url if agent_card else None
-                continue
-            except Exception:
-                # Re-raise the mapped exception
-                raise
+    a2a_response = await _execute_a2a_send_with_retry(
+        a2a_client=a2a_client,
+        request=request,
+        agent_card=agent_card,
+        card_url=card_url,
+        api_base=api_base,
+        agent_name=agent_name,
+    )
 
     verbose_logger.info(f"A2A send_message completed, request_id={request.id}")
-
-    # a2a_response is guaranteed to be set if we reach here (loop breaks on success or raises)
-    assert a2a_response is not None
 
     # Wrap in LiteLLM response type for _hidden_params support
     response = LiteLLMSendMessageResponse.from_a2a_response(a2a_response)
