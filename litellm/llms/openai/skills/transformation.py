@@ -142,6 +142,8 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         # Map Anthropic-style 'page' to OpenAI-style 'after' if present
         if "page" in list_params and list_params["page"] is not None:
             query_params["after"] = list_params["page"]
+        if "before" in list_params and list_params["before"] is not None:
+            query_params["before"] = list_params["before"]
 
         verbose_logger.debug(
             "OpenAI list skills request with params: %s", query_params
