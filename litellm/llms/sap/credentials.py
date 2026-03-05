@@ -62,7 +62,10 @@ def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 def _str_or_none(value) -> Optional[str]:
-    return str(value) if value is not None else None
+    try:
+        return str(value) if value is not None else None
+    except Exception:
+        return None
 
 
 def _load_vcap() -> Dict[str, Any]:
@@ -220,14 +223,16 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
         Source("kwargs",
                lambda cv: _str_or_none(kwargs.get(cv.name))),
         Source("service key",
-               lambda cv: _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))
+               lambda cv: _str_or_none(_get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,)))
                if service_key else None), # type: ignore[arg-type]
         Source("environment variables",
                lambda cv: _str_or_none(os.environ.get(f'AICORE_{cv.name.upper()}'))),
         Source("config file",
                lambda cv: _str_or_none(config.get(f'AICORE_{cv.name.upper()}') or config.get(cv.name))),
         Source("VCAP service",
-               lambda cv: _get_nested(vcap_service, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,))
+               lambda cv: _str_or_none(
+                   _get_nested(vcap_service, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,))
+               )
                if vcap_service else None), # type: ignore[arg-type]
     ]
 
