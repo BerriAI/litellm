@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 from fastapi import Request
+from starlette.datastructures import State
 
 from litellm.proxy.utils import _get_docs_url, _get_redoc_url
 
@@ -24,12 +25,15 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
 )
 
+pytestmark = pytest.mark.xdist_group("proxy_heavy")
+
 
 @pytest.fixture
 def mock_request(monkeypatch):
     mock_request = Mock(spec=Request)
     mock_request.query_params = {}  # Set mock query_params to an empty dictionary
     mock_request.headers = {"traceparent": "test_traceparent"}
+    mock_request.state = State()  # Real State so _safe_get_request_headers caching works
     monkeypatch.setattr(
         "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request", mock_request
     )
@@ -808,6 +812,7 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     mock_request.url.path = "/chat/completions"
     mock_request.query_params = {}
     mock_request.headers = {}
+    mock_request.state = State()
 
     # Setup key with tags in metadata
     user_api_key_dict = UserAPIKeyAuth(

@@ -347,3 +347,36 @@ If `order=1` deployment is unavailable (e.g., rate-limited), the router falls ba
 - **Higher throughput**: More requests handled simultaneously across deployments
 - **Improved reliability**: If one deployment fails, traffic automatically routes to healthy ones
 - **Better resource utilization**: Load spread evenly across all available deployments
+
+## Special Considerations for Responses API
+
+When load balancing OpenAI's Responses API across deployments with **different API keys** (e.g., different Azure regions or organizations), encrypted content items (like `rs_...` reasoning items) can only be decrypted by the originating API key.
+
+**Solution:** Use the `encrypted_content_affinity` pre-call check to automatically route follow-up requests containing encrypted items to the correct deployment:
+
+```yaml
+model_list:
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://eastus.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_EASTUS
+    model_info:
+      id: "deployment-eastus"
+  
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://westeurope.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_WESTEUROPE
+    model_info:
+      id: "deployment-westeurope"
+
+router_settings:
+  optional_pre_call_checks:
+    - encrypted_content_affinity  # 👈 Prevents invalid_encrypted_content errors
+```
+
+This ensures requests containing encrypted content are routed to the deployment that created them, while other requests continue to load balance normally.
+
+**[Learn more about Encrypted Content Affinity →](../response_api.md#encrypted-content-affinity-multi-region-load-balancing)**

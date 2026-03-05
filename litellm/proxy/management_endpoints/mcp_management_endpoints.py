@@ -78,8 +78,11 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
         delete_mcp_server,
+        delete_user_credential,
         get_all_mcp_servers_for_user,
         get_mcp_server,
+        get_user_credential,
+        store_user_credential,
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
@@ -98,6 +101,8 @@ if MCP_AVAILABLE:
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
+        MCPUserCredentialRequest,
+        MCPUserCredentialResponse,
         NewMCPServerRequest,
         SpecialMCPServerName,
         UpdateMCPServerRequest,
@@ -599,6 +604,25 @@ if MCP_AVAILABLE:
                         server.mcp_info = {}
                     server.mcp_info["is_public"] = True
 
+        # Annotate has_user_credential for BYOK servers (single batched query)
+        from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
+
+        user_id = user_api_key_dict.user_id or ""
+        if user_id and _byok_prisma_client is not None:
+            byok_server_ids = [
+                s.server_id
+                for s in redacted_mcp_servers
+                if getattr(s, "is_byok", False)
+            ]
+            if byok_server_ids:
+                cred_rows = await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
+                    where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
+                )
+                cred_set = {r.server_id for r in cred_rows}
+                for server in redacted_mcp_servers:
+                    if getattr(server, "is_byok", False):
+                        server.has_user_credential = server.server_id in cred_set
+
         # Virtual keys only get a sanitized discovery view.
         if is_restricted_virtual_key:
             return _sanitize_mcp_server_list_for_virtual_key(redacted_mcp_servers)
@@ -1035,6 +1059,80 @@ if MCP_AVAILABLE:
         # Update from global mcp store
 
         return Response(status_code=status.HTTP_202_ACCEPTED)
+
+    @router.post(
+        "/server/{server_id}/user-credential",
+        description="Store or update the calling user's API key for a BYOK MCP server",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserCredentialResponse,
+    )
+    @management_endpoint_wrapper
+    async def store_mcp_user_credential(
+        server_id: str,
+        payload: MCPUserCredentialRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Store a BYOK credential for the calling user."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        mcp_server = await get_mcp_server(prisma_client, server_id)
+        if mcp_server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+        if not getattr(mcp_server, "is_byok", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "This MCP server does not support BYOK credentials"},
+            )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        if payload.save:
+            await store_user_credential(prisma_client, user_id, server_id, payload.credential)
+            from litellm.proxy._experimental.mcp_server.server import (
+                _invalidate_byok_cred_cache,
+            )
+            _invalidate_byok_cred_cache(user_id, server_id)
+            return MCPUserCredentialResponse(server_id=server_id, has_credential=True)
+        # save=False: credential not persisted
+        return MCPUserCredentialResponse(server_id=server_id, has_credential=False)
+
+    @router.delete(
+        "/server/{server_id}/user-credential",
+        description="Delete the calling user's stored API key for a BYOK MCP server",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserCredentialResponse,
+    )
+    @management_endpoint_wrapper
+    async def delete_mcp_user_credential(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Remove the calling user's BYOK credential."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        try:
+            await delete_user_credential(prisma_client, user_id, server_id)
+        except Exception:
+            pass  # Already deleted or didn't exist
+        from litellm.proxy._experimental.mcp_server.server import (
+            _invalidate_byok_cred_cache,
+        )
+        _invalidate_byok_cred_cache(user_id, server_id)
+        return MCPUserCredentialResponse(server_id=server_id, has_credential=False)
 
     @router.put(
         "/server",
