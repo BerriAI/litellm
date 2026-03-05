@@ -1657,6 +1657,15 @@ if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes",
     # This ensures encoding is initialized before VCR starts recording
     from .main import encoding
 
+# SDK-only JSON_LOGS initialization.
+# The proxy code paths (proxy_cli.py, proxy_server.py) call _turn_on_json()
+# themselves.  For SDK users who set JSON_LOGS=true without running the proxy,
+# we must call _turn_on_json() here — after all module attributes (e.g.,
+# success_callback) are defined — so JSON-formatted handlers are attached and
+# output is not silently swallowed by the default NullHandler.
+if json_logs:
+    _turn_on_json()
+
 
 def __getattr__(name: str) -> Any:
     """Lazy import handler with cached registry for improved performance."""

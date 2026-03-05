@@ -174,10 +174,13 @@ verbose_logger.addHandler(logging.NullHandler())
 # Backward-compatible aliases for the old logger names.
 # The canonical names are "litellm", "litellm.proxy", "litellm.router".
 # For users who attached handlers to the old names ("LiteLLM", etc.),
-# we ensure the old-name loggers receive the same records by making
-# them children of the canonical hierarchy.  Additionally, we redirect
-# getLogger() calls for old names to the canonical objects by pointing
-# old loggers' handlers list at the canonical logger's handlers list.
+# we share the handler list and proxy setLevel so both names stay in sync.
+#
+# Limitation: ``_alias.handlers = _canonical.handlers`` shares the list
+# *object*.  If any code *replaces* the list (e.g., ``logging.config.fileConfig``
+# with ``disable_existing_loggers=True``) instead of mutating it in-place, the
+# shared reference is severed.  Prefer the canonical names ("litellm",
+# "litellm.proxy", "litellm.router") in new code.
 #
 # Deprecated: use "litellm", "litellm.proxy", "litellm.router" instead.
 _LEGACY_LOGGER_MAP = {
@@ -218,6 +221,11 @@ def _suppress_loggers():
 
 
 _suppress_loggers()
+
+# SDK-only path: when JSON_LOGS=true is set but no proxy is running,
+# _turn_on_json() must still be called so handlers are attached at
+# import time (the proxy code paths call _turn_on_json() themselves).
+# Deferred until after _turn_on_json is defined — see bottom of module.
 
 ALL_LOGGERS = [
     verbose_logger,
@@ -354,7 +362,7 @@ def _create_stream_handler():
 def _ensure_stream_handler():
     """Add a StreamHandler to the litellm parent logger if one is not already present."""
     for h in verbose_logger.handlers:
-        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.NullHandler):
+        if isinstance(h, logging.StreamHandler):
             return
     verbose_logger.addHandler(_create_stream_handler())
 
@@ -391,3 +399,9 @@ def _is_debugging_on() -> bool:
     Returns True if debugging is on
     """
     return verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True
+
+
+# SDK-only JSON_LOGS initialization is done in litellm/__init__.py
+# (after all module attributes like success_callback are defined)
+# to avoid circular-import errors.  See the comment near the bottom
+# of __init__.py for details.

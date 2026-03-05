@@ -247,3 +247,34 @@ class TestLegacyLoggerBackwardCompat:
             )
         finally:
             verbose_logger.setLevel(original_level)
+
+
+class TestSdkJsonLogsInit:
+    """Verify SDK users with JSON_LOGS=true get JSON handlers at import time."""
+
+    def test_json_logs_attaches_handler_at_import(self):
+        """When JSON_LOGS=true, importing litellm must attach a StreamHandler."""
+        import subprocess
+        import sys
+
+        # Must test in a subprocess because module-level code only runs once.
+        result = subprocess.run(
+            [sys.executable, "-c", """
+import os
+os.environ["JSON_LOGS"] = "true"
+import logging
+from litellm._logging import verbose_logger
+stream_handlers = [
+    h for h in verbose_logger.handlers
+    if isinstance(h, logging.StreamHandler)
+    and not isinstance(h, logging.NullHandler)
+]
+assert len(stream_handlers) >= 1, "No StreamHandler found for JSON_LOGS=true SDK path"
+print("OK")
+"""],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"SDK JSON_LOGS=true test failed: {result.stderr}"
+        )
