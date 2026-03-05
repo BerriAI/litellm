@@ -374,6 +374,19 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
+        _agent_id_for_spend = payload_copy.get("agent_id")
+        try:
+            await self._update_agent_db(
+                response_cost=response_cost,
+                agent_id=_agent_id_for_spend,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_agent_db failed: %s",
+                traceback.format_exc(),
+            )
+
         try:
             await self.add_spend_log_transaction_to_daily_user_transaction(
                 payload=payload_copy,
@@ -604,6 +617,34 @@ class DBSpendUpdateWriter:
             )
             raise e
 
+    async def _update_agent_db(
+        self,
+        response_cost: Optional[float],
+        agent_id: Optional[str],
+        prisma_client: Optional[PrismaClient],
+    ):
+        try:
+            if agent_id is None or prisma_client is None:
+                return
+
+            await self.spend_update_queue.add_update(
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.AGENT,
+                    entity_id=agent_id,
+                    response_cost=response_cost,
+                )
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to enqueue agent spend update. "
+                "agent_id=%s, response_cost=%s - %s\n%s",
+                agent_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
+            )
+            raise e
+
     async def _update_tag_db(
         self,
         response_cost: Optional[float],
@@ -765,7 +806,7 @@ class DBSpendUpdateWriter:
                 if db_spend_update_transactions is not None:
                     verbose_proxy_logger.info(
                         "Spend tracking - committing spend updates from Redis to DB: "
-                        "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, tags=%d",
+                        "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, tags=%d, agents=%d",
                         len(
                             db_spend_update_transactions.get("key_list_transactions")
                             or {}
@@ -796,6 +837,12 @@ class DBSpendUpdateWriter:
                         ),
                         len(
                             db_spend_update_transactions.get("tag_list_transactions")
+                            or {}
+                        ),
+                        len(
+                            db_spend_update_transactions.get(
+                                "agent_list_transactions"
+                            )
                             or {}
                         ),
                     )
@@ -1274,6 +1321,18 @@ class DBSpendUpdateWriter:
             transactions=tag_list_transactions,
             table_accessor="litellm_tagtable",
             where_field="tag_name",
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        ### UPDATE AGENT TABLE ###
+        agent_list_transactions = db_spend_update_transactions["agent_list_transactions"]
+        await DBSpendUpdateWriter._update_entity_spend_in_db(
+            entity_name="Agent",
+            transactions=agent_list_transactions,
+            table_accessor="litellm_agentstable",
+            where_field="agent_id",
             n_retry_times=n_retry_times,
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
@@ -2031,9 +2090,6 @@ class DBSpendUpdateWriter:
             )
             return
         if payload["agent_id"] is None:
-            verbose_proxy_logger.debug(
-                "agent_id is None for request. Skipping incrementing agent spend."
-            )
             return
         payload_with_agent_id = cast(
             SpendLogsPayload,

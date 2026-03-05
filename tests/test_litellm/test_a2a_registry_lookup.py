@@ -56,8 +56,9 @@ def test_a2a_registry_integration():
         
         # Register and test
         original_agents = global_agent_registry.agent_list.copy()
+        original_agent_by_id = global_agent_registry._agent_by_id.copy()
         global_agent_registry.register_agent(test_agent)
-        
+
         try:
             litellm.completion(
                 model="a2a/test-agent",
@@ -68,6 +69,7 @@ def test_a2a_registry_integration():
             assert "registry-url.example.com" in str(e) or "APIConnectionError" in str(type(e).__name__)
         finally:
             global_agent_registry.agent_list = original_agents
+            global_agent_registry._agent_by_id = original_agent_by_id
             
     except ImportError:
         pytest.skip("Registry not available (not in proxy context)")

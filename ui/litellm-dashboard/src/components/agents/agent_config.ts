@@ -29,6 +29,7 @@ export const AGENT_FORM_CONFIG: {
   optional: SectionConfig;
   litellm: SectionConfig;
   cost: SectionConfig;
+  tracing: SectionConfig;
 } = {
   basic: {
     key: "basic",
@@ -174,6 +175,19 @@ export const AGENT_FORM_CONFIG: {
       },
     ],
   },
+  tracing: {
+    key: "tracing",
+    title: "Tracing",
+    fields: [
+      {
+        name: "enable_tracing",
+        label: "Enable Tracing",
+        type: "switch",
+        defaultValue: false,
+        tooltip: "Enable request tracing for this agent",
+      },
+    ],
+  },
 };
 
 export const SKILL_FIELD_CONFIG = {
@@ -264,6 +278,7 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
   if (values.cost_per_query) params.cost_per_query = parseFloat(values.cost_per_query);
   if (values.input_cost_per_token) params.input_cost_per_token = parseFloat(values.input_cost_per_token);
   if (values.output_cost_per_token) params.output_cost_per_token = parseFloat(values.output_cost_per_token);
+  if (values.enable_tracing !== undefined) params.require_trace_id_on_calls_by_agent = values.enable_tracing;
 
   if (Object.keys(params).length > 0) {
     agentData.litellm_params = params;
@@ -302,5 +317,6 @@ export const parseAgentForForm = (agent: any) => {
     cost_per_query: agent.litellm_params?.cost_per_query,
     input_cost_per_token: agent.litellm_params?.input_cost_per_token,
     output_cost_per_token: agent.litellm_params?.output_cost_per_token,
+    enable_tracing: agent.litellm_params?.require_trace_id_on_calls_by_agent,
   };
 };

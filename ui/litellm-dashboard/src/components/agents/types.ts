@@ -23,6 +23,7 @@ export interface Agent {
     [key: string]: any;
   };
   object_permission?: AgentObjectPermission;
+  spend?: number;
   created_at?: string;
   updated_at?: string;
   created_by?: string;

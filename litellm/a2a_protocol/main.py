@@ -7,7 +7,8 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 import asyncio
 import datetime
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
+from typing import (TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict,
+                    Optional, Union)
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -15,16 +16,15 @@ from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
+from litellm.llms.custom_httpx.http_handler import (get_async_httpx_client,
+                                                    httpxSpecialProvider)
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.utils import client
 
 if TYPE_CHECKING:
     from a2a.client import A2AClient as A2AClientType
-    from a2a.types import AgentCard, SendMessageRequest, SendStreamingMessageRequest
+    from a2a.types import (AgentCard, SendMessageRequest,
+                           SendStreamingMessageRequest)
 
 # Runtime imports with availability check
 A2A_SDK_AVAILABLE = False
@@ -41,9 +41,7 @@ except ImportError:
 # Import our custom card resolver that supports multiple well-known paths
 from litellm.a2a_protocol.card_resolver import LiteLLMA2ACardResolver
 from litellm.a2a_protocol.exception_mapping_utils import (
-    handle_a2a_localhost_retry,
-    map_a2a_exception,
-)
+    handle_a2a_localhost_retry, map_a2a_exception)
 from litellm.a2a_protocol.exceptions import A2ALocalhostURLError
 
 # Use our custom resolver instead of the default A2A SDK resolver
@@ -142,9 +140,8 @@ async def _send_message_via_completion_bridge(
         f"A2A using completion bridge: provider={custom_llm_provider}, api_base={api_base}"
     )
 
-    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
-        A2ACompletionBridgeHandler,
-    )
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import \
+        A2ACompletionBridgeHandler
 
     params = (
         request.params.model_dump(mode="json")
@@ -160,6 +157,44 @@ async def _send_message_via_completion_bridge(
     )
 
     return LiteLLMSendMessageResponse.from_dict(response_dict)
+
+
+async def _send_message_with_retry(
+    a2a_client: "A2AClientType",
+    request: "SendMessageRequest",
+    agent_card: Any,
+    card_url: Optional[str],
+    agent_name: str,
+    api_base: Optional[str],
+) -> tuple:
+    a2a_response = None
+    for _ in range(2):
+        try:
+            a2a_response = await a2a_client.send_message(request)
+            break
+        except A2ALocalhostURLError as e:
+            a2a_client = handle_a2a_localhost_retry(
+                error=e,
+                agent_card=agent_card,
+                a2a_client=a2a_client,
+                is_streaming=False,
+            )
+            card_url = agent_card.url if agent_card else None
+        except Exception as e:
+            try:
+                map_a2a_exception(e, card_url, api_base, model=agent_name)
+            except A2ALocalhostURLError as localhost_err:
+                a2a_client = handle_a2a_localhost_retry(
+                    error=localhost_err,
+                    agent_card=agent_card,
+                    a2a_client=a2a_client,
+                    is_streaming=False,
+                )
+                card_url = agent_card.url if agent_card else None
+                continue
+            except Exception:
+                raise
+    return a2a_response, a2a_client
 
 
 @client
@@ -279,38 +314,14 @@ async def asend_message(
         if getattr(message, "context_id", None) is None:
             message.context_id = context_id
 
-    # Retry loop: if connection fails due to localhost URL in agent card, retry with fixed URL
-    a2a_response = None
-    for _ in range(2):  # max 2 attempts: original + 1 retry
-        try:
-            a2a_response = await a2a_client.send_message(request)
-            break  # success, exit retry loop
-        except A2ALocalhostURLError as e:
-            # Localhost URL error - fix and retry
-            a2a_client = handle_a2a_localhost_retry(
-                error=e,
-                agent_card=agent_card,
-                a2a_client=a2a_client,
-                is_streaming=False,
-            )
-            card_url = agent_card.url if agent_card else None
-        except Exception as e:
-            # Map exception - will raise A2ALocalhostURLError if applicable
-            try:
-                map_a2a_exception(e, card_url, api_base, model=agent_name)
-            except A2ALocalhostURLError as localhost_err:
-                # Localhost URL error - fix and retry
-                a2a_client = handle_a2a_localhost_retry(
-                    error=localhost_err,
-                    agent_card=agent_card,
-                    a2a_client=a2a_client,
-                    is_streaming=False,
-                )
-                card_url = agent_card.url if agent_card else None
-                continue
-            except Exception:
-                # Re-raise the mapped exception
-                raise
+    a2a_response, a2a_client = await _send_message_with_retry(
+        a2a_client=a2a_client,
+        request=request,
+        agent_card=agent_card,
+        card_url=card_url,
+        agent_name=agent_name,
+        api_base=api_base,
+    )
 
     verbose_logger.info(f"A2A send_message completed, request_id={request.id}")
 
@@ -477,9 +488,8 @@ async def asend_message_streaming(
             f"A2A streaming using completion bridge: provider={custom_llm_provider}"
         )
 
-        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
-            A2ACompletionBridgeHandler,
-        )
+        from litellm.a2a_protocol.litellm_completion_bridge.handler import \
+            A2ACompletionBridgeHandler
 
         # Extract params from request
         params = (
