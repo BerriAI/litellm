@@ -781,16 +781,16 @@ class TestCommonRequestProcessingHelpers:
             ),  # Valid string-integer code
             (
                 'data: {"error": {"code": "invalid_code", "message": "error"}}',
-                None,
-            ),  # Invalid string code
+                500,
+            ),  # Invalid string code -> default to 500
             (
                 'data: {"error": {"code": 99, "message": "too low"}}',
-                None,
-            ),  # Integer code too low
+                500,
+            ),  # Integer code too low -> default to 500
             (
                 'data: {"error": {"code": 600, "message": "too high"}}',
-                None,
-            ),  # Integer code too high
+                500,
+            ),  # Integer code too high -> default to 500
             (
                 'data: {"id": "123", "content": "hello"}',
                 None,
