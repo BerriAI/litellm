@@ -670,7 +670,7 @@ class BedrockEmbedding(BaseAWSLLM):
         client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
         response = await client.get(
             url=prepped.url,
-            headers=cast(Dict[Any, Any], prepped.headers),
+            headers=cast(dict, prepped.headers),
         )
 
         # LOGGING
