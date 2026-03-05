@@ -14740,13 +14740,12 @@
         "max_tokens": 65535,
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
-        "mode": "chat",
+        "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions"
+            "/vertex_ai/live"
         ],
         "supported_modalities": [
             "text",
@@ -14785,14 +14784,13 @@
         "max_tokens": 65535,
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
-        "mode": "chat",
+        "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
         "rpm": 100000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions"
+            "/v1/realtime"
         ],
         "supported_modalities": [
             "text",
@@ -23210,6 +23208,19 @@
         "supports_system_messages": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192
+    },
+    "mistral.devstral-2-123b": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "mistral.magistral-small-2509": {
         "input_cost_per_token": 5e-07,
@@ -34633,6 +34644,20 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.2e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "zai.glm-4.7-flash": {
+        "input_cost_per_token": 7e-08,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,

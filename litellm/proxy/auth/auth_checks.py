@@ -279,7 +279,6 @@ async def common_checks(  # noqa: PLR0915
     request: Request,
     skip_budget_checks: bool = False,
     project_object: Optional[LiteLLM_ProjectTableCachedObj] = None,
-    skip_route_check: bool = False,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -499,21 +498,18 @@ async def common_checks(  # noqa: PLR0915
         user_object=user_object, route=route, request_body=request_body
     )
 
-    if not skip_route_check:
-        token_team = getattr(valid_token, "team_id", None)
-        token_type: Literal["ui", "api"] = (
-            "ui"
-            if token_team is not None and token_team == "litellm-dashboard"
-            else "api"
-        )
-        _is_route_allowed = _is_allowed_route(
-            route=route,
-            token_type=token_type,
-            user_obj=user_object,
-            request=request,
-            request_data=request_body,
-            valid_token=valid_token,
-        )
+    token_team = getattr(valid_token, "team_id", None)
+    token_type: Literal["ui", "api"] = (
+        "ui" if token_team is not None and token_team == "litellm-dashboard" else "api"
+    )
+    _is_route_allowed = _is_allowed_route(
+        route=route,
+        token_type=token_type,
+        user_obj=user_object,
+        request=request,
+        request_data=request_body,
+        valid_token=valid_token,
+    )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     await vector_store_access_check(
@@ -2083,6 +2079,29 @@ async def _fetch_key_object_from_db_with_reconnect(
                     proxy_logging_obj=proxy_logging_obj,
                 )
         raise
+
+
+@log_db_metrics
+async def get_jwt_key_mapping_object(
+    jwt_claim_name: str,
+    jwt_claim_value: str,
+    prisma_client: PrismaClient,
+) -> Optional[str]:
+    """
+    Lookup a JWT-to-virtual-key mapping from the database.
+
+    Returns the hashed token (str) if a matching active mapping is found, else None.
+    """
+    mapping = await prisma_client.db.litellm_jwtkeymapping.find_first(
+        where={
+            "jwt_claim_name": jwt_claim_name,
+            "jwt_claim_value": jwt_claim_value,
+            "is_active": True,
+        }
+    )
+    if mapping is not None:
+        return mapping.token
+    return None
 
 
 @log_db_metrics

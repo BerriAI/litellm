@@ -3,6 +3,7 @@ This module is used to generate MCP tools from OpenAPI specs.
 """
 
 import asyncio
+import contextvars
 import json
 import os
 from pathlib import PurePosixPath
@@ -21,6 +22,13 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 # Store the base URL and headers globally
 BASE_URL = ""
 HEADERS: Dict[str, str] = {}
+
+# Per-request auth header override for BYOK servers.
+# Set this ContextVar before calling a local tool handler to inject the user's
+# stored credential into the HTTP request made by the tool function closure.
+_request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_request_auth_header", default=None
+)
 
 
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
@@ -63,6 +71,7 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
             raise
     return asyncio.run(load_openapi_spec_async(filepath))
 
+
 async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -90,7 +99,7 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
         scheme = spec.get("schemes", ["https"])[0]
         base_path = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
-    
+
     # Fallback: derive base URL from spec_path if it's a URL
     if spec_path and (spec_path.startswith("http://") or spec_path.startswith("https://")):
         for suffix in ["/openapi.json", "/openapi.yaml", "/swagger.json", "/swagger.yaml"]:
@@ -98,12 +107,12 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
                 base_url = spec_path[:-len(suffix)]
                 verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
                 return base_url
-        
+
         if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
             base_url = "/".join(spec_path.split("/")[:-1])
             verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
             return base_url
-    
+
     return ""
 
 
@@ -214,10 +223,13 @@ def create_tool_function(
         # Pop extra_headers before processing API parameters.
         extra_headers: Optional[Dict[str, str]] = kwargs.pop("_extra_headers", None)
 
-        # Build merged headers: copy baked-in headers, overlay extra ones.
+        # Build merged headers: baked-in → extra_headers → BYOK auth override.
         merged_headers: Dict[str, str] = dict(headers)
         if extra_headers:
             merged_headers.update(extra_headers)
+        override_auth = _request_auth_header.get()
+        if override_auth:
+            merged_headers["Authorization"] = override_auth
 
         # Build URL from base_url and path
         url = base_url + path
