@@ -493,7 +493,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         for resp, _json_resp in responses:
             action: str = resp.get("action") or "NONE"
-            if action_priority.get(action, 2) > action_priority.get(worst_action, 0):
+            if action_priority.get(action, 2) > action_priority.get(worst_action, 0):  # default priority 2 for unknown actions ensures they surface rather than get swallowed
                 worst_action = action
 
             assessments = resp.get("assessments") or []
@@ -535,7 +535,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         credentials: Any,
         aws_region_name: str,
         api_key: Optional[str],
-        source: Literal["INPUT", "OUTPUT"],
         request_data: Optional[dict],
         start_time: Any,
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
@@ -682,7 +681,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     credentials=credentials,
                     aws_region_name=aws_region_name,
                     api_key=api_key,
-                    source=source,
                     request_data=request_data,
                     start_time=start_time,
                     event_type=event_type,
@@ -728,7 +726,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             credentials=credentials,
             aws_region_name=aws_region_name,
             api_key=api_key,
-            source=source,
             request_data=request_data,
             start_time=start_time,
             event_type=event_type,
