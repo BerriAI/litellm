@@ -241,7 +241,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             effort = "low"
         else:
             effort = "minimal"
-        return {"effort": effort, "summary": "detailed"}
+        result: Dict[str, Any] = {"effort": effort}
+        summary = thinking.get("summary")
+        if summary:
+            result["summary"] = summary
+        return result
 
     def translate_request(
         self,
