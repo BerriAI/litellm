@@ -17,7 +17,12 @@ def add_team_member_key_duration(
         team_table.metadata is not None
         and team_table.metadata.get("team_member_key_duration") is not None
     ):
-        data.duration = team_table.metadata["team_member_key_duration"]
+        team_max = team_table.metadata["team_member_key_duration"]
+        # Act as a ceiling: only apply team max when the user didn't provide a
+        # duration. If the user explicitly supplied a shorter duration (already
+        # validated against team max upstream), respect their value.
+        if "duration" not in data.model_fields_set:
+            data.duration = team_max
 
     return data
 
