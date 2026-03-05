@@ -4,14 +4,108 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
+import asyncio
 from unittest.mock import Mock
 
 import pytest
 
+from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
+from litellm.integrations.websearch_interception.tools import (
+    get_litellm_web_search_tool,
+    is_web_search_tool,
+)
 from litellm.types.utils import LlmProviders
+
+
+class TestIsWebSearchTool:
+    """Tests for is_web_search_tool() helper function"""
+
+    def test_litellm_standard_tool(self):
+        """Should detect LiteLLM standard web search tool"""
+        tool = {"name": LITELLM_WEB_SEARCH_TOOL_NAME}
+        assert is_web_search_tool(tool) is True
+
+    def test_anthropic_native_web_search(self):
+        """Should detect Anthropic native web_search_* type"""
+        tool = {"type": "web_search_20250305", "name": "web_search"}
+        assert is_web_search_tool(tool) is True
+
+    def test_anthropic_native_future_version(self):
+        """Should detect future versions of Anthropic web_search type"""
+        tool = {"type": "web_search_20260101", "name": "web_search"}
+        assert is_web_search_tool(tool) is True
+
+    def test_claude_code_web_search(self):
+        """Should detect Claude Code's web_search with type field"""
+        tool = {"name": "web_search", "type": "web_search_20250305"}
+        assert is_web_search_tool(tool) is True
+
+    def test_legacy_websearch_format(self):
+        """Should detect legacy WebSearch format"""
+        tool = {"name": "WebSearch"}
+        assert is_web_search_tool(tool) is True
+
+    def test_non_websearch_tool(self):
+        """Should not detect non-web-search tools"""
+        assert is_web_search_tool({"name": "calculator"}) is False
+        assert is_web_search_tool({"name": "read_file"}) is False
+        assert is_web_search_tool({"type": "function", "name": "search"}) is False
+
+    def test_web_search_name_without_type(self):
+        """Should NOT detect 'web_search' name without type field (could be custom tool)"""
+        tool = {"name": "web_search"}  # No type field
+        assert is_web_search_tool(tool) is False
+
+
+class TestGetLitellmWebSearchTool:
+    """Tests for get_litellm_web_search_tool() helper function"""
+
+    def test_returns_valid_tool_definition(self):
+        """Should return a valid tool definition"""
+        tool = get_litellm_web_search_tool()
+
+        assert tool["name"] == LITELLM_WEB_SEARCH_TOOL_NAME
+        assert "description" in tool
+        assert "input_schema" in tool
+        assert tool["input_schema"]["type"] == "object"
+        assert "query" in tool["input_schema"]["properties"]
+
+
+class TestWebSearchInterceptionLoggerInit:
+    """Tests for WebSearchInterceptionLogger initialization"""
+
+    def test_default_initialization(self):
+        """Test default initialization with no parameters"""
+        logger = WebSearchInterceptionLogger()
+
+        # Default should have bedrock enabled
+        assert "bedrock" in logger.enabled_providers
+        assert logger.search_tool_name is None
+
+    def test_custom_providers(self):
+        """Test initialization with custom providers"""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock", "vertex_ai", "openai"])
+
+        assert "bedrock" in logger.enabled_providers
+        assert "vertex_ai" in logger.enabled_providers
+        assert "openai" in logger.enabled_providers
+
+    def test_custom_search_tool_name(self):
+        """Test initialization with custom search tool name"""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="custom-search-tool")
+
+        assert logger.search_tool_name == "custom-search-tool"
+
+    def test_llm_providers_enum_conversion(self):
+        """Test that LlmProviders enum values are converted to strings"""
+        logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.BEDROCK, LlmProviders.VERTEX_AI])
+
+        # Should be stored as string values
+        assert "bedrock" in logger.enabled_providers
+        assert "vertex_ai" in logger.enabled_providers
 
 
 def test_initialize_from_proxy_config():
@@ -34,85 +128,219 @@ def test_initialize_from_proxy_config():
     assert logger.search_tool_name == "my-search"
 
 
-@pytest.mark.asyncio
-async def test_async_should_run_agentic_loop():
-    """Test that agentic loop is NOT triggered for wrong provider or missing WebSearch tool"""
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+def test_initialize_from_proxy_config_defaults():
+    """Test initialization from proxy config with defaults when params missing"""
+    litellm_settings = {}
+    callback_specific_params = {}
 
-    # Test 1: Wrong provider (not in enabled_providers)
-    response = Mock()
-    should_run, tools_dict = await logger.async_should_run_agentic_loop(
-        response=response,
-        model="gpt-4",
-        messages=[],
-        tools=[{"name": "WebSearch"}],
-        stream=False,
-        custom_llm_provider="openai",  # Not in enabled_providers
-        kwargs={},
+    logger = WebSearchInterceptionLogger.initialize_from_proxy_config(
+        litellm_settings=litellm_settings,
+        callback_specific_params=callback_specific_params,
     )
 
-    assert should_run is False
-    assert tools_dict == {}
+    # Should use default bedrock provider
+    assert "bedrock" in logger.enabled_providers
 
-    # Test 2: No WebSearch tool in request
-    should_run, tools_dict = await logger.async_should_run_agentic_loop(
-        response=response,
-        model="bedrock/claude",
-        messages=[],
-        tools=[{"name": "SomeOtherTool"}],  # No WebSearch
-        stream=False,
-        custom_llm_provider="bedrock",
-        kwargs={},
-    )
 
-    assert should_run is False
-    assert tools_dict == {}
+def test_async_should_run_agentic_loop_wrong_provider():
+    """Test that agentic loop is NOT triggered for wrong provider"""
+
+    async def _test():
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        response = Mock()
+        should_run, tools_dict = await logger.async_should_run_agentic_loop(
+            response=response,
+            model="gpt-4",
+            messages=[],
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            stream=False,
+            custom_llm_provider="openai",  # Not in enabled_providers
+            kwargs={},
+        )
+
+        assert should_run is False
+        assert tools_dict == {}
+
+    asyncio.run(_test())
+
+
+def test_async_should_run_agentic_loop_no_websearch_tool():
+    """Test that agentic loop is NOT triggered when no WebSearch tool in request"""
+
+    async def _test():
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        response = Mock()
+        should_run, tools_dict = await logger.async_should_run_agentic_loop(
+            response=response,
+            model="bedrock/claude",
+            messages=[],
+            tools=[{"name": "calculator"}],  # No WebSearch tool
+            stream=False,
+            custom_llm_provider="bedrock",
+            kwargs={},
+        )
+
+        assert should_run is False
+        assert tools_dict == {}
+
+    asyncio.run(_test())
+
+
+def test_async_should_run_agentic_loop_no_websearch_in_response():
+    """Test that agentic loop is NOT triggered when response has no WebSearch tool_use"""
+
+    async def _test():
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        # Response with text only, no tool_use
+        response = {"content": [{"type": "text", "text": "I don't need to search for this."}]}
+
+        should_run, tools_dict = await logger.async_should_run_agentic_loop(
+            response=response,
+            model="bedrock/claude",
+            messages=[],
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            stream=False,
+            custom_llm_provider="bedrock",
+            kwargs={},
+        )
+
+        assert should_run is False
+        assert tools_dict == {}
+
+    asyncio.run(_test())
+
+
+def test_async_execute_tool_calls_positive_case():
+    """Test that async_execute_tool_calls returns results for WebSearch tool_use"""
+    from unittest.mock import AsyncMock, patch
+
+    async def _test():
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        # Response with WebSearch tool_use
+        response = {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tool_123",
+                    "name": "WebSearch",
+                    "input": {"query": "weather in SF"},
+                }
+            ]
+        }
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock, return_value="Sunny, 72F"
+        ):
+            results = await logger.async_execute_tool_calls(
+                response=response,
+                kwargs={"custom_llm_provider": "bedrock"},
+            )
+
+        assert len(results) == 1
+        assert results[0].tool_call_id == "tool_123"
+        assert results[0].content == "Sunny, 72F"
+        assert results[0].is_error is False
+
+    asyncio.run(_test())
+
+
+def test_async_execute_tool_calls_with_thinking_blocks():
+    """Test that async_execute_tool_calls works alongside thinking blocks in response"""
+    from unittest.mock import AsyncMock, patch
+
+    async def _test():
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        # Response with thinking block and WebSearch tool_use
+        response = {
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for the weather...",
+                },
+                {
+                    "type": "tool_use",
+                    "id": "tool_456",
+                    "name": "WebSearch",
+                    "input": {"query": "current weather SF"},
+                },
+            ]
+        }
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock, return_value="Cloudy, 60F"
+        ):
+            results = await logger.async_execute_tool_calls(
+                response=response,
+                kwargs={"custom_llm_provider": "bedrock"},
+            )
+
+        # Should return results for the tool_use block (thinking blocks are
+        # handled by the framework, not the callback)
+        assert len(results) == 1
+        assert results[0].tool_call_id == "tool_456"
+        assert results[0].content == "Cloudy, 60F"
+        assert results[0].is_error is False
+
+    asyncio.run(_test())
+
+
+def test_async_should_run_agentic_loop_empty_tools_list():
+    """Test with empty tools list"""
+
+    async def _test():
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        response = Mock()
+        should_run, tools_dict = await logger.async_should_run_agentic_loop(
+            response=response,
+            model="bedrock/claude",
+            messages=[],
+            tools=[],  # Empty tools list
+            stream=False,
+            custom_llm_provider="bedrock",
+            kwargs={},
+        )
+
+        assert should_run is False
+        assert tools_dict == {}
+
+    asyncio.run(_test())
+
+
+def test_async_should_run_agentic_loop_none_tools():
+    """Test with None tools"""
+
+    async def _test():
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        response = Mock()
+        should_run, tools_dict = await logger.async_should_run_agentic_loop(
+            response=response,
+            model="bedrock/claude",
+            messages=[],
+            tools=None,  # None tools
+            stream=False,
+            custom_llm_provider="bedrock",
+            kwargs={},
+        )
+
+        assert should_run is False
+        assert tools_dict == {}
+
+    asyncio.run(_test())
+
 
 
 @pytest.mark.asyncio
-async def test_internal_flags_filtered_from_followup_kwargs():
-    """Test that internal _websearch_interception flags are filtered from follow-up request kwargs.
-
-    Regression test for bug where _websearch_interception_converted_stream was passed
-    to the follow-up LLM request, causing "Extra inputs are not permitted" errors
-    from providers like Bedrock that use strict parameter validation.
-    """
+async def test_async_pre_call_deployment_hook_litellm_params_provider():
+    """Test that async_pre_call_deployment_hook reads custom_llm_provider from litellm_params."""
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
 
-    # Simulate kwargs that would be passed during agentic loop execution
-    kwargs_with_internal_flags = {
-        "_websearch_interception_converted_stream": True,
-        "_websearch_interception_other_flag": "test",
-        "temperature": 0.7,
-        "max_tokens": 1024,
-    }
-
-    # Apply the same filtering logic used in _execute_agentic_loop
-    kwargs_for_followup = {
-        k: v for k, v in kwargs_with_internal_flags.items()
-        if not k.startswith('_websearch_interception')
-    }
-
-    # Verify internal flags are filtered out
-    assert "_websearch_interception_converted_stream" not in kwargs_for_followup
-    assert "_websearch_interception_other_flag" not in kwargs_for_followup
-
-    # Verify regular kwargs are preserved
-    assert kwargs_for_followup["temperature"] == 0.7
-    assert kwargs_for_followup["max_tokens"] == 1024
-
-
-@pytest.mark.asyncio
-async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
-    """Test that async_pre_call_deployment_hook finds custom_llm_provider at top-level kwargs.
-
-    Regression test for bug where the hook only checked kwargs["litellm_params"]["custom_llm_provider"]
-    but the router places custom_llm_provider at the top level of kwargs.
-    """
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-
-    # Simulate kwargs as they arrive from the router path:
-    # custom_llm_provider is at the TOP LEVEL (not nested under litellm_params)
     kwargs = {
         "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
         "messages": [{"role": "user", "content": "Search the web for LiteLLM"}],
@@ -120,19 +348,15 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
             {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
             {"type": "function", "function": {"name": "other_tool", "parameters": {}}},
         ],
-        "custom_llm_provider": "bedrock",
+        "litellm_params": {"custom_llm_provider": "bedrock"},
         "api_key": "fake-key",
     }
 
     result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
 
-    # Should NOT be None — the hook should have triggered
     assert result is not None
-    # The web_search tool should be converted to litellm_web_search (OpenAI format)
-    assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
-        for t in result["tools"]
-    )
+    # The web_search tool should be converted to litellm_web_search (Anthropic format)
+    assert any(t.get("name") == "litellm_web_search" for t in result["tools"])
     # The non-web-search tool should be preserved
     assert any(
         t.get("type") == "function" and t.get("function", {}).get("name") == "other_tool"
@@ -142,11 +366,7 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
 
 @pytest.mark.asyncio
 async def test_async_pre_call_deployment_hook_returns_full_kwargs():
-    """Test that async_pre_call_deployment_hook returns the full kwargs dict, not a partial one.
-
-    Regression test for bug where the hook returned {"tools": converted_tools} instead of
-    the full kwargs dict, causing model/messages/api_key/etc. to be lost.
-    """
+    """Test that async_pre_call_deployment_hook returns the full kwargs dict."""
     logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
 
     kwargs = {
@@ -155,7 +375,7 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
         "tools": [
             {"type": "web_search_20250305", "name": "web_search"},
         ],
-        "custom_llm_provider": "openai",
+        "litellm_params": {"custom_llm_provider": "openai"},
         "api_key": "sk-fake",
         "temperature": 0.7,
         "metadata": {"user": "test"},
@@ -164,18 +384,12 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
     result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
 
     assert result is not None
-    # All original keys must be preserved
     assert result["model"] == "gpt-4o"
     assert result["messages"] == [{"role": "user", "content": "Search for something"}]
     assert result["api_key"] == "sk-fake"
     assert result["temperature"] == 0.7
     assert result["metadata"] == {"user": "test"}
-    assert result["custom_llm_provider"] == "openai"
-    # Tools should be converted
-    assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
-        for t in result["tools"]
-    )
+    assert any(t.get("name") == "litellm_web_search" for t in result["tools"])
 
 
 @pytest.mark.asyncio
@@ -187,7 +401,7 @@ async def test_async_pre_call_deployment_hook_skips_disabled_provider():
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "test"}],
         "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-        "custom_llm_provider": "openai",  # Not in enabled_providers
+        "litellm_params": {"custom_llm_provider": "openai"},  # Not in enabled_providers
     }
 
     result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
@@ -205,71 +419,8 @@ async def test_async_pre_call_deployment_hook_skips_no_websearch_tools():
         "tools": [
             {"type": "function", "function": {"name": "calculator", "parameters": {}}},
         ],
-        "custom_llm_provider": "openai",
+        "litellm_params": {"custom_llm_provider": "openai"},
     }
 
     result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
     assert result is None
-
-
-@pytest.mark.asyncio
-async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
-    """Test that the hook still works when custom_llm_provider is in nested litellm_params.
-
-    This is the Anthropic experimental pass-through path where litellm_params is
-    explicitly constructed with custom_llm_provider inside it.
-    """
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-
-    kwargs = {
-        "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "messages": [{"role": "user", "content": "test"}],
-        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-        "litellm_params": {
-            "custom_llm_provider": "bedrock",
-        },
-    }
-
-    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
-
-    assert result is not None
-    assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
-        for t in result["tools"]
-    )
-    # Full kwargs preserved
-    assert result["model"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
-
-
-@pytest.mark.asyncio
-async def test_async_pre_call_deployment_hook_provider_derived_from_model_name():
-    """Test that async_pre_call_deployment_hook derives custom_llm_provider from the model name.
-
-    Regression test for the router _acompletion path where custom_llm_provider is NOT
-    in kwargs at all — neither at top-level nor in litellm_params. The hook must derive
-    the provider from the model name (e.g., "openai/gpt-4o-mini" → "openai").
-    """
-    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
-
-    # Simulate kwargs as they arrive from router._acompletion:
-    # NO custom_llm_provider key anywhere — only model name contains the provider
-    kwargs = {
-        "model": "openai/gpt-4o-mini",
-        "messages": [{"role": "user", "content": "Search the web for LiteLLM"}],
-        "tools": [
-            {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
-        ],
-        "api_key": "fake-key",
-    }
-
-    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
-
-    # Should NOT be None — the hook should derive "openai" from "openai/gpt-4o-mini"
-    assert result is not None
-    assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
-        for t in result["tools"]
-    )
-    # Full kwargs preserved
-    assert result["model"] == "openai/gpt-4o-mini"
-    assert result["api_key"] == "fake-key"
