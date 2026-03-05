@@ -9,9 +9,9 @@ import os
 import tempfile
 import httpx
 
-from litellm import sap_service_key
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client, HTTPHandler
 from litellm._logging import verbose_logger
+import litellm
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 
@@ -175,7 +175,7 @@ def extract_credentials(source: Source, exclude: Optional[List[str]] = None) -> 
         if cv.name in exclude:
             continue
         value = source.get(cv)
-        if value:
+        if value is not None:
             credentials[cv.name] = cv.transform_fn(value) if cv.transform_fn else value
     return credentials
 
@@ -216,7 +216,7 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
     """
     config = init_conf(profile)
 
-    service_key = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
+    service_key = service_key or litellm.sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
     vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
     sources = [
@@ -271,7 +271,7 @@ def validate_credentials(
     ]
     if sum(bool(m) for m in modes) != 1:
         raise ValueError(
-            "SAP AI Core credentials are incomplete."
+            "SAP AI Core credentials are incomplete. "
             "Invalid credentials: provide exactly one of client_secret, "
             "(cert_str & key_str), or (cert_file_path & key_file_path)."
         )
