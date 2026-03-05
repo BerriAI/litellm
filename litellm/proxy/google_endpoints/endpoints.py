@@ -295,10 +295,12 @@ async def create_interaction(
             select_data_generator=select_data_generator,
             # IMPORTANT: Do not map `agent` into `model`.
             #
-            # Google Interactions API requires these as distinct mutually-exclusive
-            # fields. If we pass an agent id via `model`, downstream transformation
+            # Google Interactions API treats these as distinct fields.
+            # If we pass an agent id via `model`, downstream transformation
             # sends `{"model": "deep-research-..."}` instead of
             # `{"agent": "deep-research-..."}`, which Google rejects.
+            # When both are present, `model` is used for routing; `agent`
+            # remains in `data` and is forwarded as-is to the provider.
             model=data.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,

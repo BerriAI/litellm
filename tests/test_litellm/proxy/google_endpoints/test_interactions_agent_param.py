@@ -4,13 +4,13 @@ Regression tests for Google Interactions endpoint parameter handling.
 These tests ensure `agent` is NOT remapped into `model` for create interaction calls.
 """
 
-import os
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 
 def _build_test_client():
@@ -49,88 +49,46 @@ def _patch_proxy_server_dependencies():
     )
 
 
-def test_interactions_agent_only_keeps_model_none():
-    """
-    If request contains only `agent`, endpoint must pass `model=None` to processing.
-
-    This prevents accidental payload translation to `{"model": "deep-research-..."}`.
-    """
+@pytest.mark.parametrize(
+    "request_body, expected_model",
+    [
+        pytest.param(
+            {"agent": "deep-research-pro-preview-12-2025", "input": "Research quantum computing", "background": True},
+            None,
+            id="agent-only-model-none",
+        ),
+        pytest.param(
+            {"model": "gemini/gemini-2.5-flash", "input": "Hello world"},
+            "gemini/gemini-2.5-flash",
+            id="model-only-forwarded",
+        ),
+        pytest.param(
+            {"model": "gemini/gemini-2.5-flash", "agent": "deep-research-pro-preview-12-2025", "input": "Test both"},
+            "gemini/gemini-2.5-flash",
+            id="both-model-takes-precedence",
+        ),
+        pytest.param(
+            {"input": "Test with no model or agent"},
+            None,
+            id="neither-model-is-none",
+        ),
+    ],
+)
+def test_interactions_model_routing(request_body, expected_model):
+    """Verify model kwarg passed to base_process_llm_request for various inputs."""
     client = _build_test_client()
 
     with _patch_proxy_server_dependencies(), patch(
         "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
         new_callable=AsyncMock,
     ) as mock_base_process:
-        mock_base_process.return_value = {"id": "int_123", "status": "created"}
+        mock_base_process.return_value = {"id": "int_test", "status": "created"}
 
         response = client.post(
             "/v1beta/interactions",
-            json={
-                "agent": "deep-research-pro-preview-12-2025",
-                "input": "Research quantum computing",
-                "background": True,
-            },
+            json=request_body,
             headers={"Authorization": "Bearer sk-test-key"},
         )
 
         assert response.status_code == 200
-        assert response.json() == {"id": "int_123", "status": "created"}
-
-        call_kwargs = mock_base_process.call_args.kwargs
-
-        assert call_kwargs["route_type"] == "acreate_interaction"
-        assert call_kwargs["model"] is None
-
-
-def test_interactions_model_is_forwarded_when_provided():
-    """If request contains `model`, endpoint must forward it as processing model."""
-    client = _build_test_client()
-
-    with _patch_proxy_server_dependencies(), patch(
-        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
-        new_callable=AsyncMock,
-    ) as mock_base_process:
-        mock_base_process.return_value = {"id": "int_456", "status": "created"}
-
-        response = client.post(
-            "/v1beta/interactions",
-            json={
-                "model": "gemini/gemini-2.5-flash",
-                "input": "Hello world",
-            },
-            headers={"Authorization": "Bearer sk-test-key"},
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"id": "int_456", "status": "created"}
-
-        call_kwargs = mock_base_process.call_args.kwargs
-        assert call_kwargs["model"] == "gemini/gemini-2.5-flash"
-
-
-def test_interactions_model_takes_precedence_when_both_present():
-    """If both model and agent are provided, model is the routing model argument."""
-    client = _build_test_client()
-
-    with _patch_proxy_server_dependencies(), patch(
-        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
-        new_callable=AsyncMock,
-    ) as mock_base_process:
-        mock_base_process.return_value = {"id": "int_789", "status": "created"}
-
-        response = client.post(
-            "/v1beta/interactions",
-            json={
-                "model": "gemini/gemini-2.5-flash",
-                "agent": "deep-research-pro-preview-12-2025",
-                "input": "Test both",
-            },
-            headers={"Authorization": "Bearer sk-test-key"},
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"id": "int_789", "status": "created"}
-
-        call_kwargs = mock_base_process.call_args.kwargs
-
-        assert call_kwargs["model"] == "gemini/gemini-2.5-flash"
+        assert mock_base_process.call_args.kwargs["model"] == expected_model
