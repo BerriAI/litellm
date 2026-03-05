@@ -644,6 +644,12 @@ class MCPServerManager:
             ),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
+            tool_name_to_display_name=_deserialize_json_dict(
+                getattr(mcp_server, "tool_name_to_display_name", None)
+            ),
+            tool_name_to_description=_deserialize_json_dict(
+                getattr(mcp_server, "tool_name_to_description", None)
+            ),
         )
         return new_server
 

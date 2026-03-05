@@ -737,6 +737,29 @@ if MCP_AVAILABLE:
 
         return tools_to_return
 
+    def apply_tool_overrides(
+        tools: List[MCPTool],
+        mcp_server: MCPServer,
+    ) -> List[MCPTool]:
+        """Apply admin-configured display name/description overrides to tools.
+
+        Overrides are keyed by the unprefixed tool name, same convention as
+        allowed_tools configuration.
+        """
+        display_name_map = mcp_server.tool_name_to_display_name or {}
+        description_map = mcp_server.tool_name_to_description or {}
+        if not display_name_map and not description_map:
+            return tools
+
+        for tool in tools:
+            unprefixed, _ = split_server_prefix_from_name(tool.name)
+            lookup_key = unprefixed or tool.name
+            if lookup_key in display_name_map:
+                tool.name = display_name_map[lookup_key]
+            if lookup_key in description_map:
+                tool.description = description_map[lookup_key]
+        return tools
+
     def _get_client_ip_from_context() -> Optional[str]:
         """
         Extract client_ip from auth context.
@@ -984,6 +1007,7 @@ if MCP_AVAILABLE:
                         raw_headers=raw_headers,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
+                    filtered_tools = apply_tool_overrides(filtered_tools, server)
 
                     filtered_tools = await filter_tools_by_key_team_permissions(
                         tools=filtered_tools,

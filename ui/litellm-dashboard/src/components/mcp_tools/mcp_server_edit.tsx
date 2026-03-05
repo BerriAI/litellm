@@ -38,6 +38,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
+  const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [pendingRestoredValues, setPendingRestoredValues] = useState<Record<string, any> | null>(null);
   const authType = Form.useWatch("auth_type", form) as string | undefined;
   const transportType = Form.useWatch("transport", form) as string | undefined;
@@ -195,11 +197,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
-  // Initialize allowed tools from existing server data
+  // Initialize allowed tools and tool overrides from existing server data
   useEffect(() => {
     if (mcpServer.allowed_tools) {
       setAllowedTools(mcpServer.allowed_tools);
     }
+    setToolNameToDisplayName(mcpServer.tool_name_to_display_name ?? {});
+    setToolNameToDescription(mcpServer.tool_name_to_description ?? {});
   }, [mcpServer]);
 
   useEffect(() => {
@@ -541,6 +545,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         // Include permission management fields
         extra_headers: restValues.extra_headers || [],
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
+        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
         disallowed_tools: restValues.disallowed_tools || [],
         static_headers: staticHeaders,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
@@ -906,6 +912,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 allowedTools={allowedTools}
                 existingAllowedTools={mcpServer.allowed_tools || null}
                 onAllowedToolsChange={setAllowedTools}
+                toolNameToDisplayName={toolNameToDisplayName}
+                toolNameToDescription={toolNameToDescription}
+                onToolNameToDisplayNameChange={setToolNameToDisplayName}
+                onToolNameToDescriptionChange={setToolNameToDescription}
               />
             </div>
 
