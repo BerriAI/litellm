@@ -231,3 +231,19 @@ class TestLegacyLoggerBackwardCompat:
 
         old = logging.getLogger("LiteLLM")
         assert old.handlers is verbose_logger.handlers
+
+    def test_set_level_on_alias_propagates_to_canonical(self):
+        """setLevel on the legacy alias must also set the canonical logger's level."""
+        import logging
+
+        from litellm._logging import verbose_logger
+
+        old = logging.getLogger("LiteLLM")
+        original_level = verbose_logger.level
+        try:
+            old.setLevel(logging.DEBUG)
+            assert verbose_logger.level == logging.DEBUG, (
+                "setLevel on alias 'LiteLLM' did not propagate to canonical 'litellm'"
+            )
+        finally:
+            verbose_logger.setLevel(original_level)

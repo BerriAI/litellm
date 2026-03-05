@@ -192,6 +192,16 @@ for _old_name, _canonical in _LEGACY_LOGGER_MAP.items():
     _alias.handlers = _canonical.handlers
     _alias.setLevel(logging.NOTSET)
     _alias.propagate = False  # avoid double-emit via root
+    # Proxy setLevel so users doing getLogger("LiteLLM").setLevel(DEBUG)
+    # also affect the canonical logger.
+    _orig_setLevel = _alias.setLevel
+    _target = _canonical
+
+    def _sync_set_level(level, _orig=_orig_setLevel, _tgt=_target):
+        _orig(level)
+        _tgt.setLevel(level)
+
+    _alias.setLevel = _sync_set_level  # type: ignore[method-assign]
 
 
 def _suppress_loggers():
@@ -325,8 +335,6 @@ def _turn_on_json():
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
-    # Suppress noisy third-party loggers when running as proxy
-    _suppress_loggers()
 
 
 def _create_stream_handler():
