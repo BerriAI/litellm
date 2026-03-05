@@ -130,8 +130,8 @@ async def test_list_key_helper_runs_find_many_and_count_concurrently():
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_list_key_helper_skips_redundant_object_permission_lookup():
-    """When include=object_permission is used, attach_object_permission_to_dict
-    should NOT make additional DB queries."""
+    """attach_object_permission_to_dict should never be called because
+    object_permission is already eager-loaded via include in the Prisma query."""
     key = _make_mock_key(object_permission={"object_permission_id": "op1", "mcp_servers": []})
 
     prisma = AsyncMock()
@@ -153,46 +153,11 @@ async def test_list_key_helper_skips_redundant_object_permission_lookup():
             return_full_object=True,
         )
 
-        # Should NOT be called because object_permission is already in the dict
+        # Never called — eager-loading via include makes the fallback unnecessary
         mock_attach.assert_not_called()
 
     assert result["total_count"] == 1
     assert len(result["keys"]) == 1
-
-
-# ---------------------------------------------------------------------------
-# Test: object_permission NOT in dict → fallback lookup IS called
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_list_key_helper_calls_attach_when_object_permission_missing():
-    """When the key dict does NOT have object_permission, fallback to DB lookup."""
-    key_data = _make_mock_key()
-    # Remove object_permission from the dict to simulate it not being loaded
-    dump = key_data.model_dump.return_value
-    dump.pop("object_permission", None)
-
-    prisma = AsyncMock()
-    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key_data])
-    prisma.db.litellm_verificationtoken.count = AsyncMock(return_value=1)
-
-    with patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints.attach_object_permission_to_dict",
-        new_callable=AsyncMock,
-        return_value=dump,
-    ) as mock_attach:
-        await _list_key_helper(
-            prisma_client=prisma,
-            page=1,
-            size=10,
-            user_id="u1",
-            team_id=None,
-            organization_id=None,
-            key_alias=None,
-            key_hash=None,
-            return_full_object=True,
-        )
-
-        mock_attach.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

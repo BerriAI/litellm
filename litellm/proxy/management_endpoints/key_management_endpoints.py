@@ -4529,9 +4529,8 @@ async def _list_key_helper(
         except Exception:
             # Fallback for Pydantic v1 compatibility
             key_dict = key.dict()
-        # Attach object_permission if object_permission_id is set (only for non-deleted keys)
-        if not use_deleted_table and "object_permission" not in key_dict:
-            key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
+        # object_permission is already eager-loaded via include={"object_permission": True}
+        # in the Prisma query above, so no extra DB round-trip is needed here.
 
         # Include user information if expand includes "user"
         if expand and "user" in expand and key.user_id and key.user_id in user_map:
