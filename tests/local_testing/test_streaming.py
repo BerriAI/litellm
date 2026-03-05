@@ -3075,7 +3075,7 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     """
     litellm.set_verbose = False
     chunks = [
-        litellm.ModelResponse(
+        litellm.ModelResponseStream(
             **{
                 "id": "chatcmpl-123",
                 "object": "chat.completion.chunk",
@@ -3090,7 +3090,6 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
                     }
                 ],
             },
-            stream=True,
         )
     ] * loop_amount
     completion_stream = ModelResponseListIterator(model_responses=chunks)
@@ -3113,7 +3112,11 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
-        with pytest.raises(litellm.InternalServerError):
+        from litellm.exceptions import MidStreamFallbackError
+
+        with pytest.raises(
+            (litellm.InternalServerError, MidStreamFallbackError)
+        ):
             for chunk in response:
                 continue
     else:

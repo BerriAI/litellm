@@ -1453,6 +1453,11 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.authorization_url = None
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
+    # Additional fields - set explicitly to avoid MagicMock objects
+    mock_mcp_server.allow_all_keys = False
+    mock_mcp_server.available_on_public_internet = True
+    mock_mcp_server.created_at = None
+    mock_mcp_server.updated_at = None
 
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)
@@ -1494,6 +1499,11 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.authorization_url = None
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
+    # Additional fields - set explicitly to avoid MagicMock objects
+    mock_mcp_server.allow_all_keys = False
+    mock_mcp_server.available_on_public_internet = True
+    mock_mcp_server.created_at = None
+    mock_mcp_server.updated_at = None
 
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)
@@ -1535,6 +1545,11 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.authorization_url = None
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
+    # Additional fields - set explicitly to avoid MagicMock objects
+    mock_mcp_server.allow_all_keys = False
+    mock_mcp_server.available_on_public_internet = True
+    mock_mcp_server.created_at = None
+    mock_mcp_server.updated_at = None
 
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)
