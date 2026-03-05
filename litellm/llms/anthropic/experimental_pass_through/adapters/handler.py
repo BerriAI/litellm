@@ -1,4 +1,3 @@
-import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -13,6 +12,9 @@ from typing import (
 )
 
 import litellm
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_default_reasoning_summary_disabled,
+)
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -78,10 +80,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             # Prefix model with "responses/" to route to OpenAI Responses API
             completion_kwargs["model"] = f"responses/{model}"
             
-        summary_disabled = (
-            litellm.disable_default_reasoning_summary
-            or os.getenv("LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY", "false").lower() == "true"
-        )
+        summary_disabled = is_default_reasoning_summary_disabled()
 
         reasoning_effort = completion_kwargs.get("reasoning_effort")
         summary = thinking.get("summary")

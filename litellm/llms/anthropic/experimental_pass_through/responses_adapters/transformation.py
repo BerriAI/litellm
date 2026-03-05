@@ -6,10 +6,12 @@ path used for OpenAI and Azure models.
 """
 
 import json
-import os
 from typing import Any, Dict, List, Optional, Union, cast
 
 import litellm
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_default_reasoning_summary_disabled,
+)
 
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
@@ -244,10 +246,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             effort = "low"
         else:
             effort = "minimal"
-        summary_disabled = (
-            litellm.disable_default_reasoning_summary
-            or os.getenv("LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY", "false").lower() == "true"
-        )
+        summary_disabled = is_default_reasoning_summary_disabled()
         result: Dict[str, Any] = {"effort": effort}
         summary = thinking.get("summary")
         if summary:
