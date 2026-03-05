@@ -676,6 +676,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_generation",
                         "video_generation",
                         "moderation",
+                        "realtime",
                         "rerank",
                         "responses",
                         "ocr",

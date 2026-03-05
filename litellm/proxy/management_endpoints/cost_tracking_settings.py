@@ -59,7 +59,7 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                 model_info = first_deployment.get("model_info", {})
 
                 # Check base_model first (needed for Azure custom deployment names)
-                base_model: Optional[str] = model_info.get("base_model") or litellm_params.get(
+                base_model = model_info.get("base_model") or litellm_params.get(  # type: ignore[assignment]
                     "base_model"
                 )
                 if base_model:

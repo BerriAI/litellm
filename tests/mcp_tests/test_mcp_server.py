@@ -1465,6 +1465,8 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.args = []
     mock_mcp_server.env = None
     mock_mcp_server.spec_path = None
+    mock_mcp_server.tool_name_to_display_name = {}
+    mock_mcp_server.tool_name_to_description = {}
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
@@ -1547,6 +1549,8 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.args = []
     mock_mcp_server.env = None
     mock_mcp_server.spec_path = None
+    mock_mcp_server.tool_name_to_display_name = {}
+    mock_mcp_server.tool_name_to_description = {}
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
