@@ -30,6 +30,7 @@ HASHICORP_ENV_VAR_MAPPING: Dict[str, str] = {
     "approle_mount_path": "HCP_VAULT_APPROLE_MOUNT_PATH",
     "client_cert": "HCP_VAULT_CLIENT_CERT",
     "client_key": "HCP_VAULT_CLIENT_KEY",
+    "vault_cert_role": "HCP_VAULT_CERT_ROLE",
     "vault_namespace": "HCP_VAULT_NAMESPACE",
     "vault_mount_name": "HCP_VAULT_MOUNT_NAME",
     "vault_path_prefix": "HCP_VAULT_PATH_PREFIX",
@@ -200,7 +201,7 @@ async def update_hashicorp_vault_config(
     if not has_vault_addr:
         raise HTTPException(
             status_code=400,
-            detail={"error": "vault_addr is required"},
+            detail={"error": "Vault Address is required"},
         )
 
     if not has_token_auth and not has_approle_auth:
@@ -208,7 +209,7 @@ async def update_hashicorp_vault_config(
             status_code=400,
             detail={
                 "error": "At least one authentication method is required: "
-                "provide vault_token, or both approle_role_id and approle_secret_id"
+                "provide a Token, or both AppRole Role ID and Secret ID"
             },
         )
 
