@@ -1061,12 +1061,25 @@ async def update_ui_settings(
             },
         )
 
-    settings_dict = settings.model_dump(exclude_none=True)
+    # Only include fields the caller actually sent (not Pydantic defaults).
+    settings_dict = settings.model_dump(exclude_unset=True)
 
     # Enforce allowlist and drop anything unexpected
-    ui_settings = {
+    incoming = {
         k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS
     }
+
+    # Merge with existing persisted settings so a partial PATCH doesn't
+    # overwrite fields the caller didn't send.
+    existing: dict = {}
+    db_existing = await prisma_client.db.litellm_uisettings.find_unique(
+        where={"id": "ui_settings"}
+    )
+    if db_existing and db_existing.ui_settings:
+        raw = db_existing.ui_settings
+        existing = json.loads(raw) if isinstance(raw, str) else dict(raw)
+
+    ui_settings = {**existing, **incoming}
 
     await prisma_client.db.litellm_uisettings.upsert(
         where={"id": "ui_settings"},
