@@ -15,6 +15,8 @@ interface DataTableProps<TData, TValue> {
   isLoading?: boolean;
   loadingMessage?: string;
   noDataMessage?: string;
+  /** Enable client-side column sorting (defaults to false to avoid conflicts with server-side sorting) */
+  enableSorting?: boolean;
 }
 
 export function DataTable<TData, TValue>({
@@ -27,6 +29,7 @@ export function DataTable<TData, TValue>({
   isLoading = false,
   loadingMessage = "🚅 Loading logs...",
   noDataMessage = "No logs found",
+  enableSorting = false,
 }: DataTableProps<TData, TValue>) {
   const supportsExpansion = !!(renderSubComponent || renderChildRows) && !!getRowCanExpand;
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -34,17 +37,20 @@ export function DataTable<TData, TValue>({
   const table = useReactTable<TData>({
     data,
     columns,
-    state: {
-      sorting,
-    },
-    onSortingChange: setSorting,
+    ...(enableSorting && {
+      state: {
+        sorting,
+      },
+      onSortingChange: setSorting,
+      enableSortingRemoval: false,
+    }),
     ...(supportsExpansion && { getRowCanExpand }),
     getRowId: (row: TData, index: number) => {
       const _row: any = row as any;
       return _row?.request_id ?? String(index);
     },
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
+    ...(enableSorting && { getSortedRowModel: getSortedRowModel() }),
     ...(supportsExpansion && { getExpandedRowModel: getExpandedRowModel() }),
   });
 
@@ -55,7 +61,7 @@ export function DataTable<TData, TValue>({
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map((header) => {
-                const canSort = header.column.getCanSort();
+                const canSort = enableSorting && header.column.getCanSort();
                 const isSorted = header.column.getIsSorted();
                 
                 return (
