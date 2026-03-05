@@ -15,6 +15,7 @@ In each method it will call the appropriate method from caching.py
 """
 
 import asyncio
+import copy
 import datetime
 import inspect
 import time
@@ -514,7 +515,6 @@ class LLMCachingHandler:
                     api_item_copy["index"] = len(final_data_list)
                     final_data_list.append(api_item_copy)
                 else:
-                    import copy
                     api_item_copy = copy.copy(api_item)
                     api_item_copy.index = len(final_data_list)
                     final_data_list.append(api_item_copy)
