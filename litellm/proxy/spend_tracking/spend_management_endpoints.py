@@ -3041,8 +3041,17 @@ async def provider_budgets() -> ProviderBudgetResponse:
 async def get_spend_by_tags(
     prisma_client: PrismaClient, start_date=None, end_date=None
 ):
+    date_filter = ""
+    query_params = []
+    if start_date is not None:
+        query_params.append(start_date)
+        date_filter += f' AND "startTime" >= ${len(query_params)}::date'
+    if end_date is not None:
+        query_params.append(end_date)
+        date_filter += f' AND "startTime" <= ${len(query_params)}::date'
+
     response = await prisma_client.db.query_raw(
-        """
+        f"""
         WITH base AS (
             SELECT
                 spend,
@@ -3051,6 +3060,7 @@ async def get_spend_by_tags(
             FROM "LiteLLM_SpendLogs"
             WHERE request_tags IS NOT NULL
               AND jsonb_typeof(request_tags) = 'array'
+              {date_filter}
         ),
         tagged AS (
             SELECT * FROM base WHERE tag_count > 0
@@ -3061,7 +3071,8 @@ async def get_spend_by_tags(
             SUM(spend / tag_count) AS total_spend
         FROM tagged
         GROUP BY individual_request_tag;
-        """
+        """,
+        *query_params,
     )
 
     return response
