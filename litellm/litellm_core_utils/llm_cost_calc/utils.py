@@ -663,7 +663,7 @@ def generic_cost_per_token(  # noqa: PLR0915
     accounted_tokens = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
     has_double_counting = cache_hit > 0 and accounted_tokens > usage.prompt_tokens
      # Double-counting fix (xAI etc.): recalculate text_tokens from scratch
-    if has_double_counting:
+    if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
         text_tokens = (
             usage.prompt_tokens
             - cache_hit
