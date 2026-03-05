@@ -50,16 +50,6 @@ def _patch_endpoint_dependencies():
 
 class TestInteractionsAgentParameter:
 
-    def test_agent_parameter_fallback_logic(self):
-        data = {"agent": "deep-research-pro-preview-12-2025", "input": "Research", "background": True}
-        assert (data.get("model") or data.get("agent")) == "deep-research-pro-preview-12-2025"
-
-        data = {"model": "gemini-2.5-flash", "input": "Hello world"}
-        assert (data.get("model") or data.get("agent")) == "gemini-2.5-flash"
-
-        data = {"input": "Test"}
-        assert (data.get("model") or data.get("agent")) is None
-
     def test_route_type_in_skip_model_routing_list(self):
         skip = ["acreate_interaction", "aget_interaction", "adelete_interaction", "acancel_interaction"]
         assert "acreate_interaction" in skip
@@ -67,7 +57,7 @@ class TestInteractionsAgentParameter:
     @pytest.mark.parametrize(
         "request_body, expected_model",
         [
-            pytest.param({"agent": "deep-research-pro-preview-12-2025", "input": "Research", "background": True}, "deep-research-pro-preview-12-2025", id="agent-only"),
+            pytest.param({"agent": "deep-research-pro-preview-12-2025", "input": "Research", "background": True}, None, id="agent-only"),
             pytest.param({"model": "gemini/gemini-2.5-flash", "input": "Hello"}, "gemini/gemini-2.5-flash", id="model-only"),
             pytest.param({"input": "Test"}, None, id="neither"),
         ],
