@@ -271,13 +271,14 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
                 if (parsed && Array.isArray(parsed.blocked_words)) {
                   const newWords: BlockedWord[] = parsed.blocked_words.map(
                     (w: any, index: number) => ({
-                      id: `uploaded-${Date.now()}-${index}`,
+                      id: `uploaded-${typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2)}-${index}`,
                       keyword: w.keyword || "",
                       action: w.action || "BLOCK",
                       description: w.description || undefined,
                     })
                   );
-                  setBlockedWords((prev) => [...prev, ...newWords]);
+                  const validWords = newWords.filter((w) => w.keyword?.trim());
+                  setBlockedWords((prev) => [...prev, ...validWords]);
                 }
               } catch (e) {
                 console.error("Failed to parse YAML:", e);
