@@ -762,11 +762,12 @@ def _invoke_callback_setup_proxy(app: FastAPI) -> None:
 
     This gives callbacks an opportunity to interact with the FastAPI app
     during startup, e.g., to add middleware or mount additional routes.
-    """
-    from litellm.integrations.custom_logger import CustomLogger
 
+    Note: Called after config load but before DB initialization, so callbacks
+    should not depend on prisma_client being available.
+    """
     for callback in litellm.callbacks:
-        if isinstance(callback, CustomLogger) and hasattr(callback, "setup_proxy"):
+        if isinstance(callback, CustomLogger):
             try:
                 callback.setup_proxy(app)
             except Exception as e:
