@@ -104,6 +104,10 @@ class SpendLogQueue:
             return self._buf[index]
         # For slices, use islice to avoid copying the entire deque
         start, stop, step = index.indices(len(self._buf))
+        if step < 0:
+            # islice does not support negative step; fall back to list conversion
+            result = list(self._buf)[index]
+            return result
         result = list(itertools.islice(self._buf, start, stop, step))
         return result
 

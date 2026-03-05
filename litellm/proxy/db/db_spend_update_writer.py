@@ -673,10 +673,7 @@ class DBSpendUpdateWriter:
                 payload_dict.get("request_id"), payload_dict.get("spend")
             )
         )
-        if prisma_client is not None and spend_logs_url is not None:
-            async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload_dict)
-        elif prisma_client is not None:
+        if prisma_client is not None:
             async with prisma_client._spend_log_transactions_lock:
                 prisma_client.spend_log_transactions.append(payload_dict)
         else:
