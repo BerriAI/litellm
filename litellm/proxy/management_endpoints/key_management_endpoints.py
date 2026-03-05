@@ -534,6 +534,13 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                         upperbound_duration = duration_in_seconds(
                             duration=upperbound_value
                         )
+                        if value == "-1":
+                            raise HTTPException(
+                                status_code=400,
+                                detail={
+                                    "error": "'-1' is no longer a valid duration value. Pass duration: null to set a key to never expire."
+                                },
+                            )
                         user_duration = duration_in_seconds(duration=value)
                         if user_duration > upperbound_duration:
                             raise HTTPException(

@@ -69,6 +69,13 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
       } else if (form && typeof form.setFieldsValue === "function") {
         form.setFieldsValue({ duration: null });
       }
+    } else {
+      // Clear the null so duration is omitted from the request (not sent as never-expires)
+      if (form && typeof form.setFieldValue === "function") {
+        form.setFieldValue("duration", undefined);
+      } else if (form && typeof form.setFieldsValue === "function") {
+        form.setFieldsValue({ duration: undefined });
+      }
     }
   };
 
