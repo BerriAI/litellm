@@ -188,6 +188,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
           ))}
         </Panel>
         )}
+
       </Collapse>
     </>
   );

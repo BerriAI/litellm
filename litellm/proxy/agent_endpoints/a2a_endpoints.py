@@ -38,12 +38,33 @@ def _jsonrpc_error(
 
 def _get_agent(agent_id: str):
     """Look up an agent by ID or name. Returns None if not found."""
-    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.agent_endpoints.agent_registry import \
+        global_agent_registry
 
     agent = global_agent_registry.get_agent_by_id(agent_id=agent_id)
     if agent is None:
         agent = global_agent_registry.get_agent_by_name(agent_name=agent_id)
     return agent
+
+
+def _enforce_inbound_trace_id(agent: Any, request: Request) -> None:
+    """Raise 400 if agent requires x-litellm-trace-id on inbound calls and it is missing."""
+    agent_litellm_params = agent.litellm_params or {}
+    if not agent_litellm_params.get("require_trace_id_on_calls_to_agent"):
+        return
+
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers_dict = dict(request.headers)
+    trace_id = get_chain_id_from_headers(headers_dict)
+    if not trace_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Agent '{agent.agent_id}' requires x-litellm-trace-id header "
+                "on all inbound requests."
+            ),
+        )
 
 
 async def _handle_stream_message(
@@ -113,9 +134,8 @@ async def _handle_stream_message(
                 and request_data is not None
                 and proxy_logging_obj is not None
             ):
-                from litellm.proxy.common_request_processing import (
-                    ProxyBaseLLMRequestProcessing,
-                )
+                from litellm.proxy.common_request_processing import \
+                    ProxyBaseLLMRequestProcessing
 
                 def _ndjson_chunk(chunk: Any) -> str:
                     if hasattr(chunk, "model_dump"):
@@ -215,9 +235,8 @@ async def get_agent_card(
     The URL in the agent card is rewritten to point to the LiteLLM proxy,
     so all subsequent A2A calls go through LiteLLM for logging and cost tracking.
     """
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-        AgentRequestHandler,
-    )
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import \
+        AgentRequestHandler
 
     try:
         agent = _get_agent(agent_id)
@@ -281,15 +300,10 @@ async def invoke_agent_a2a(
     """
     from litellm.a2a_protocol import asend_message
     from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-        AgentRequestHandler,
-    )
-    from litellm.proxy.proxy_server import (
-        general_settings,
-        proxy_config,
-        proxy_logging_obj,
-        version,
-    )
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import \
+        AgentRequestHandler
+    from litellm.proxy.proxy_server import (general_settings, proxy_config,
+                                            proxy_logging_obj, version)
 
     body = {}
     try:
@@ -342,6 +356,8 @@ async def invoke_agent_a2a(
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+        _enforce_inbound_trace_id(agent, request)
+
         # Get backend URL and agent name
         agent_url = agent.agent_card_params.get("url")
         agent_name = agent.agent_card_params.get("name", agent_id)
@@ -370,9 +386,8 @@ async def invoke_agent_a2a(
         )
 
         # Add litellm data (user_api_key, user_id, team_id, etc.)
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
+        from litellm.proxy.common_request_processing import \
+            ProxyBaseLLMRequestProcessing
 
         processor = ProxyBaseLLMRequestProcessing(data=body)
         data, logging_obj = await processor.common_processing_pre_call_logic(

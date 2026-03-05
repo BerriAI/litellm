@@ -201,6 +201,7 @@ class Litellm_EntityType(enum.Enum):
     ORGANIZATION = "organization"
     PROJECT = "project"
     TAG = "tag"
+    AGENT = "agent"
 
     # global proxy level entity
     PROXY = "proxy"
@@ -4225,6 +4226,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_member_list_transactions: Optional[Dict[str, float]]
     org_list_transactions: Optional[Dict[str, float]]
     tag_list_transactions: Optional[Dict[str, float]]
+    agent_list_transactions: Optional[Dict[str, float]]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):
