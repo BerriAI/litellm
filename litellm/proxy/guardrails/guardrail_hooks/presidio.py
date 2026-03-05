@@ -1201,6 +1201,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
             new_texts.append(modified_text)
         inputs["texts"] = new_texts
+        # Strip keys that were added by process_input_messages() during OpenAI-format
+        # conversion (tools, structured_messages, model, images).  Returning them would
+        # let Anthropic-native callers overwrite native tool definitions (e.g.
+        # bash_20250124) with the converted OpenAI type:"function" format, causing a 400
+        # on the Anthropic native API path.  Presidio's apply_guardrail() only processes
+        # texts, so these keys carry no useful return value.
+        for _k in ("tools", "structured_messages", "model", "images"):
+            inputs.pop(_k, None)  # type: ignore[misc]
         return inputs
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
