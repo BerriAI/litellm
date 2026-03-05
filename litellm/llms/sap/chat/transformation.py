@@ -268,7 +268,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         placeholder_values = optional_params.pop("placeholder_values", {})
         placeholder_values = {"placeholder_values": placeholder_values} if placeholder_values else {}
 
-        fallback_modules = optional_params.pop("fallback_modules", [])
+        fallback_modules = optional_params.pop("fallback_sap_modules", [])
 
         modules = [
             _build_prompt_module(
