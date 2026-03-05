@@ -50,7 +50,6 @@ jobs:
           sed -i "s/litellm-enterprise==${OLD}/litellm-enterprise==${NEW}/" ../requirements.txt
 
       - name: Update poetry.lock
-        working-directory: .
         run: poetry lock
 
       - name: Build
