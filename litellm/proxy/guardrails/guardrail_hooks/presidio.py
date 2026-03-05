@@ -1133,10 +1133,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if remaining_bytes_chunks and remaining_chunks:
                 verbose_proxy_logger.warning(
                     "PII streaming unmask: mixed bytes (%d) and model (%d) chunks; "
-                    "bytes chunks will be discarded",
+                    "bytes chunks passed through unmodified",
                     len(remaining_bytes_chunks),
                     len(remaining_chunks),
                 )
+                for chunk in remaining_bytes_chunks:
+                    yield chunk  # type: ignore[misc]
 
             if remaining_bytes_chunks and not remaining_chunks:
                 combined = b"".join(remaining_bytes_chunks)
