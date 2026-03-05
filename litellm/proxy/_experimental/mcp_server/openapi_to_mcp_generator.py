@@ -31,6 +31,20 @@ _request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.Contex
 )
 
 
+def _build_request_headers(
+    headers: Dict[str, str],
+    extra_headers: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    """Merge baked-in headers, extra_headers, and BYOK auth override."""
+    merged: Dict[str, str] = dict(headers)
+    if extra_headers:
+        merged.update(extra_headers)
+    override_auth = _request_auth_header.get()
+    if override_auth:
+        merged["Authorization"] = override_auth
+    return merged
+
+
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
     if param_value is None:
@@ -222,14 +236,7 @@ def create_tool_function(
         """
         # Pop extra_headers before processing API parameters.
         extra_headers: Optional[Dict[str, str]] = kwargs.pop("_extra_headers", None)
-
-        # Build merged headers: baked-in → extra_headers → BYOK auth override.
-        merged_headers: Dict[str, str] = dict(headers)
-        if extra_headers:
-            merged_headers.update(extra_headers)
-        override_auth = _request_auth_header.get()
-        if override_auth:
-            merged_headers["Authorization"] = override_auth
+        merged_headers = _build_request_headers(headers, extra_headers)
 
         # Build URL from base_url and path
         url = base_url + path
