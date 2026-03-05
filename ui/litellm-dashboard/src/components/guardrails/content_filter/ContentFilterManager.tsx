@@ -1,4 +1,4 @@
-import { Alert, Divider, Typography } from "antd";
+import { Alert, Divider, Typography, message } from "antd";
 import React, { useEffect, useState } from "react";
 import yaml from "js-yaml";
 import ContentFilterConfiguration from "./ContentFilterConfiguration";
@@ -277,10 +277,11 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
                       description: w.description || undefined,
                     })
                   );
-                  setBlockedWords([...blockedWords, ...newWords]);
+                  setBlockedWords((prev) => [...prev, ...newWords]);
                 }
               } catch (e) {
                 console.error("Failed to parse YAML:", e);
+                message.error("Failed to parse uploaded YAML. Please check the file format.");
               }
             }}
             accessToken={accessToken}

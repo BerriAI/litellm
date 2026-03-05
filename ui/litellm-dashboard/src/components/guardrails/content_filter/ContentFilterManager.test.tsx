@@ -526,13 +526,10 @@ describe("formatContentFilterDataForAPI", () => {
 describe("ContentFilterManager YAML file upload", () => {
   it("should parse uploaded YAML and merge blocked words into state", async () => {
     const user = userEvent.setup();
-    const onSave = vi.fn();
-
     render(
       <ContentFilterManager
         guardrailData={CONTENT_FILTER_GUARDRAIL_DATA}
         guardrailSettings={GUARDRAIL_SETTINGS}
-        onSave={onSave}
         accessToken="test-token"
         isEditing={true}
       />
