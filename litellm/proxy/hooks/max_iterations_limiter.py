@@ -4,7 +4,7 @@ Max Iterations Limiter for LiteLLM Proxy.
 Enforces a per-session cap on the number of LLM calls an agentic loop can make.
 Callers send a `session_id` with each request (via `x-litellm-session-id` header
 or `metadata.session_id`), and this hook counts calls per session. When the count
-exceeds `max_iterations` (configured in key/team metadata), returns 429.
+exceeds `max_iterations` (configured in agent litellm_params), returns 429.
 
 Works across multiple proxy instances via DualCache (in-memory + Redis).
 Follows the same pattern as parallel_request_limiter_v3.py.
@@ -52,8 +52,8 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
     Pre-call hook that enforces max_iterations per session.
 
     Configuration:
-        - max_iterations: set in key metadata via /key/generate or /key/update
-          e.g. metadata={"max_iterations": 25}
+        - max_iterations: set in agent litellm_params
+          e.g. litellm_params={"max_iterations": 25}
         - session_id: sent by caller via x-litellm-session-id header or
           metadata.session_id in request body
 
@@ -93,14 +93,13 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         Check session iteration count before making the API call.
 
         Extracts session_id from request metadata and max_iterations from
-        key metadata. If the session has exceeded max_iterations, raises 429.
+        agent litellm_params. If the session has exceeded max_iterations, raises 429.
         """
         # Extract session_id from request data
         session_id = self._get_session_id(data)
         if session_id is None:
             return None
 
-        # Extract max_iterations from key metadata
         max_iterations = self._get_max_iterations(user_api_key_dict)
         if max_iterations is None:
             return None
@@ -151,9 +150,20 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
     def _get_max_iterations(
         self, user_api_key_dict: UserAPIKeyAuth
     ) -> Optional[int]:
-        """Extract max_iterations from key metadata."""
-        metadata = user_api_key_dict.metadata or {}
-        max_iterations = metadata.get("max_iterations")
+        """Extract max_iterations from agent litellm_params."""
+        agent_id = user_api_key_dict.agent_id
+        if agent_id is None:
+            return None
+
+        from litellm.proxy.agent_endpoints.agent_registry import \
+            global_agent_registry
+
+        agent = global_agent_registry.get_agent_by_id(agent_id=agent_id)
+        if agent is None:
+            return None
+
+        litellm_params = agent.litellm_params or {}
+        max_iterations = litellm_params.get("max_iterations")
         if max_iterations is not None:
             return int(max_iterations)
         return None

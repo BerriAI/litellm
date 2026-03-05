@@ -189,22 +189,6 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
         </Panel>
         )}
 
-        {/* Tracing */}
-        {shouldShow(AGENT_FORM_CONFIG.tracing.key) && (
-        <Panel header={AGENT_FORM_CONFIG.tracing.title} key={AGENT_FORM_CONFIG.tracing.key}>
-          {AGENT_FORM_CONFIG.tracing.fields.map((field) => (
-            <Form.Item
-              key={field.name}
-              label={field.label}
-              name={field.name}
-              valuePropName="checked"
-              tooltip={field.tooltip}
-            >
-              <Switch />
-            </Form.Item>
-          ))}
-        </Panel>
-        )}
       </Collapse>
     </>
   );
