@@ -93,14 +93,16 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
     @staticmethod
     def _clamp_max_tokens(
-        *, max_tokens: int, model: Optional[str], drop_params: Optional[bool] = None
+        *, max_tokens: int, model: Optional[str],
+        custom_llm_provider: Optional[str] = None,
+        drop_params: Optional[bool] = None
     ) -> int:
         should_drop = drop_params if drop_params is not None else (litellm.drop_params is True)
         if not should_drop:
             return max_tokens
 
         try:
-            model_info = get_model_info(model=model)
+            model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
             model_max_output = model_info.get("max_output_tokens")
             if model_max_output is not None and max_tokens > model_max_output:
                 litellm._logging.verbose_logger.warning(
@@ -154,6 +156,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
                 max_tokens=max_tokens,
                 model=model,
+                custom_llm_provider=extra_kwargs.get("custom_llm_provider") if extra_kwargs else None,
                 drop_params=extra_kwargs.get("drop_params") if extra_kwargs else None,
             )
         )

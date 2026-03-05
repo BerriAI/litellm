@@ -8,10 +8,11 @@ from providers with lower limits (e.g. DeepSeek 8192 vs Claude Opus 4 32000).
 Related: https://github.com/BerriAI/litellm/issues/22249
 """
 
-import os
+
 import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import pytest
 
@@ -19,6 +20,10 @@ import litellm
 from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
+from litellm.utils import get_model_info
+
+# Dynamic lookup for model limits to avoid hardcoding values that may change
+_DEEPSEEK_MAX_OUTPUT = get_model_info(model="deepseek/deepseek-chat")["max_output_tokens"]
 
 
 class TestClampMaxTokens:
@@ -31,7 +36,7 @@ class TestClampMaxTokens:
             model="deepseek/deepseek-chat",
             drop_params=True,
         )
-        assert result == 8192
+        assert result == _DEEPSEEK_MAX_OUTPUT
 
     def test_no_clamp_when_within_model_limit(self):
         """max_tokens within model limit should pass through unchanged."""
@@ -70,7 +75,7 @@ class TestClampMaxTokens:
                 model="deepseek/deepseek-chat",
                 drop_params=None,
             )
-            assert result == 8192
+            assert result == _DEEPSEEK_MAX_OUTPUT
         finally:
             litellm.drop_params = original
 
@@ -86,11 +91,11 @@ class TestClampMaxTokens:
     def test_exact_limit_not_clamped(self):
         """max_tokens exactly at model limit should not be clamped."""
         result = LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
-            max_tokens=8192,
+            max_tokens=_DEEPSEEK_MAX_OUTPUT,
             model="deepseek/deepseek-chat",
             drop_params=True,
         )
-        assert result == 8192
+        assert result == _DEEPSEEK_MAX_OUTPUT
 
     def test_no_clamp_when_model_is_none(self):
         """max_tokens should pass through unchanged when model is None."""
@@ -139,7 +144,7 @@ class TestPrepareCompletionKwargsMaxTokens:
                 extra_kwargs={"drop_params": True},
             )
         )
-        assert completion_kwargs["max_tokens"] == 8192
+        assert completion_kwargs["max_tokens"] == _DEEPSEEK_MAX_OUTPUT
 
     def test_prepare_kwargs_preserves_max_tokens_without_drop_params(self):
         """_prepare_completion_kwargs should preserve max_tokens when drop_params is absent."""
@@ -164,6 +169,6 @@ class TestPrepareCompletionKwargsMaxTokens:
                     model="deepseek/deepseek-chat",
                 )
             )
-            assert completion_kwargs["max_tokens"] == 8192
+            assert completion_kwargs["max_tokens"] == _DEEPSEEK_MAX_OUTPUT
         finally:
             litellm.drop_params = original
