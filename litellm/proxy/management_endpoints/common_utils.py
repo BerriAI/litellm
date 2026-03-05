@@ -1,3 +1,4 @@
+import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
@@ -49,10 +50,7 @@ def _team_member_has_permission(
     if permission not in team_obj.team_member_permissions:
         return False
     for member in team_obj.members_with_roles:
-        if (
-            member.user_id is not None
-            and member.user_id == user_api_key_dict.user_id
-        ):
+        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
             return True
     return False
 
@@ -332,10 +330,19 @@ async def _upsert_budget_and_membership(
     """
     if max_budget is None and tpm_limit is None and rpm_limit is None:
         if models is not None:
-            # Only updating models — do not touch the existing budget
-            await tx.litellm_teammembership.update(
+            # Only updating models — do not touch the existing budget.
+            # Use upsert so that the membership row is created if it
+            # doesn't exist yet (e.g. member added without budget/models).
+            await tx.litellm_teammembership.upsert(
                 where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-                data={"models": models},
+                data={
+                    "create": {
+                        "user_id": user_id,
+                        "team_id": team_id,
+                        "models": models,
+                    },
+                    "update": {"models": models},
+                },
             )
             return
 
@@ -451,6 +458,11 @@ def _update_metadata_fields(updated_kv: dict) -> None:
 
 
 def _is_team_model_overrides_enabled() -> bool:
-    from litellm.constants import LITELLM_TEAM_MODEL_OVERRIDES
+    """
+    Check if team-scoped model overrides feature is enabled.
 
-    return LITELLM_TEAM_MODEL_OVERRIDES
+    Reads os.getenv at call time (not import time) so that environment
+    variables set via the YAML ``environment_variables`` section — which
+    are applied after module import — are respected.
+    """
+    return os.getenv("LITELLM_TEAM_MODEL_OVERRIDES", "false").lower() == "true"

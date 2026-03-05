@@ -52,9 +52,7 @@ DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 # Maximum number of base64 characters to keep in logging payloads.
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
-MAX_BASE64_LENGTH_FOR_LOGGING = int(
-    os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
-)
+MAX_BASE64_LENGTH_FOR_LOGGING = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
 
 # When true, adds detailed per-phase timing breakdown headers to responses.
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
@@ -182,11 +180,6 @@ RUNWAYML_POLLING_TIMEOUT = int(
 
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
-
-# Team-scoped model overrides feature flag
-LITELLM_TEAM_MODEL_OVERRIDES: bool = (
-    os.getenv("LITELLM_TEAM_MODEL_OVERRIDES", "false").lower() == "true"
-)
 
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
@@ -1406,9 +1399,7 @@ SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
-DEFAULT_ACCESS_GROUP_CACHE_TTL = int(
-    os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
-)
+DEFAULT_ACCESS_GROUP_CACHE_TTL = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [

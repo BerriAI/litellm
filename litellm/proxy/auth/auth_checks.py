@@ -65,7 +65,9 @@ from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
 from .auth_utils import get_model_from_request
-from litellm.constants import LITELLM_TEAM_MODEL_OVERRIDES
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_team_model_overrides_enabled,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -2068,13 +2070,11 @@ async def get_key_object(
         )
 
     # else, check db
-    _valid_token: Optional[BaseModel] = (
-        await _fetch_key_object_from_db_with_reconnect(
-            hashed_token=hashed_token,
-            prisma_client=prisma_client,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+    _valid_token: Optional[BaseModel] = await _fetch_key_object_from_db_with_reconnect(
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     if _valid_token is None:
@@ -2560,11 +2560,11 @@ def can_org_access_model(
 
 
 def compute_effective_team_models(
-    team_default_models: List[str],
-    team_member_models: List[str],
+    team_default_models: Optional[List[str]],
+    team_member_models: Optional[List[str]],
 ) -> List[str]:
     """Union of team defaults and per-user overrides, deduplicated."""
-    return list(set(team_default_models) | set(team_member_models))
+    return list(set(team_default_models or []) | set(team_member_models or []))
 
 
 async def can_team_access_model(
@@ -2581,7 +2581,7 @@ async def can_team_access_model(
     2. If not allowed natively, falls back to access_group_ids on the team
     """
     models_to_check: List[str] = team_object.models if team_object else []
-    if LITELLM_TEAM_MODEL_OVERRIDES and valid_token:
+    if _is_team_model_overrides_enabled() and valid_token:
         # Only apply override logic when overrides are actually configured.
         # Teams that haven't set default_models or member models continue
         # to use the original team_object.models / access_group path unchanged.
