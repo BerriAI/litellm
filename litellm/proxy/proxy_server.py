@@ -3039,38 +3039,21 @@ class ProxyConfig:
             # that use Redis only for LLM response caching and not for session state.
             use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
             if use_pkce and user_api_key_cache.redis_cache is None:
-                redis_host = get_secret("REDIS_HOST", None)
-                redis_port = get_secret("REDIS_PORT", None)
-                redis_password = get_secret("REDIS_PASSWORD", None)
-
-                if redis_host is not None:
-                    try:
-                        from litellm.caching.caching import RedisCache
-
-                        user_redis_cache = RedisCache(
-                            host=redis_host,
-                            port=redis_port,
-                            password=redis_password,
-                        )
-                        user_api_key_cache.redis_cache = user_redis_cache
-
-                        verbose_proxy_logger.info(
-                            "Configured user_api_key_cache to use Redis at %s:%s "
-                            "(PKCE enabled — verifiers shared across instances).",
-                            redis_host,
-                            redis_port,
-                        )
-                    except Exception as e:
-                        verbose_proxy_logger.warning(
-                            "Failed to configure Redis for user_api_key_cache: %s. "
-                            "Falling back to in-memory cache. Multi-instance PKCE will not work.",
-                            e,
-                        )
+                if redis_usage_cache is not None:
+                    # Reuse the existing Redis connection so all advanced connection
+                    # options (SSL, db, timeouts) are inherited rather than re-created
+                    # from a subset of env vars.
+                    user_api_key_cache.redis_cache = redis_usage_cache
+                    verbose_proxy_logger.info(
+                        "Configured user_api_key_cache to use Redis "
+                        "(PKCE enabled — verifiers shared across instances)."
+                    )
                 else:
                     verbose_proxy_logger.warning(
-                        "GENERIC_CLIENT_USE_PKCE=true but REDIS_HOST is not set. "
+                        "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
                         "PKCE verifiers will not be shared across instances. "
-                        "Configure Redis or enable sticky sessions for multi-instance deployments."
+                        "Configure Redis via the 'cache' section in your proxy config, "
+                        "or enable sticky sessions for multi-instance deployments."
                     )
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)

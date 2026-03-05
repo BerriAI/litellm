@@ -1937,8 +1937,7 @@ class SSOAuthenticationHandler:
 
         # Handle PKCE (Proof Key for Code Exchange) if enabled
         # Set GENERIC_CLIENT_USE_PKCE=true to enable PKCE for enhanced OAuth security
-        pkce_env_value = os.getenv("GENERIC_CLIENT_USE_PKCE", "false")
-        use_pkce = pkce_env_value.lower() == "true"
+        use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
 
         if use_pkce:
             (
@@ -2517,14 +2516,17 @@ class SSOAuthenticationHandler:
                     await redis_usage_cache.async_delete_cache(key=cache_key)
                 else:
                     await user_api_key_cache.async_delete_cache(key=cache_key)
-            else:
+            elif os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true":
+                # PKCE is enabled but verifier is missing — likely a cross-instance cache miss.
                 verbose_proxy_logger.error(
-                    f"✙ CRITICAL: No PKCE code_verifier found in cache for state '{state}'. "
-                    f"This indicates: (1) authorization request and callback handled by different instances without shared cache, "
-                    f"(2) cache entry expired (TTL: 600s), or (3) Redis serialization error. "
-                    f"SOLUTION: Ensure Redis is configured correctly. "
-                    f"Cache type: {type(user_api_key_cache).__name__}. "
-                    f"Cached data: {cached_data}"
+                    "PKCE is enabled but no code_verifier found in cache for state '%s'. "
+                    "This usually means the authorization and callback were handled by different "
+                    "instances without a shared cache. "
+                    "Ensure Redis is configured and GENERIC_CLIENT_USE_PKCE=true. "
+                    "Cache type: %s. Cached data: %s",
+                    state,
+                    type(user_api_key_cache).__name__,
+                    cached_data,
                 )
         return token_params
 
