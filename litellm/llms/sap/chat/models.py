@@ -46,8 +46,20 @@ class FunctionObj(BaseModel):
 class FunctionTool(BaseModel):
     description: str = ""
     name: str
-    parameters: dict = {}
+    parameters: dict = {"type": "object", "properties": {}}
     strict: bool = False
+
+    @field_validator("parameters", mode="before")
+    @classmethod
+    def ensure_object_type(cls, v: dict) -> dict:
+        """Ensure parameters has type='object' as required by SAP Orchestration Service."""
+        if not v:
+            return {"type": "object", "properties": {}}
+        if "type" not in v:
+            v = {"type": "object", **v}
+        if "properties" not in v:
+            v["properties"] = {}
+        return v
 
 
 class ChatCompletionTool(BaseModel):

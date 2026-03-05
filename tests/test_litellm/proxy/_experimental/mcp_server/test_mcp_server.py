@@ -28,6 +28,7 @@ def cleanup_mcp_global_state():
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+
         # Clear before test
         global_mcp_server_manager.registry.clear()
         global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
@@ -1786,6 +1787,79 @@ def test_filter_tools_by_allowed_tools():
     assert len(filtered_tools) == 2
     assert filtered_tools[0].name == "my_api_mcp-getpetbyid"
     assert filtered_tools[1].name == "my_api_mcp-findpetsbystatus"
+
+
+def test_apply_tool_overrides():
+    """Test that apply_tool_overrides applies custom display names and descriptions."""
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import apply_tool_overrides
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        transport=MCPTransport.http,
+        tool_name_to_display_name={"getpetbyid": "Get Pet"},
+        tool_name_to_description={"getpetbyid": "Custom description for get pet"},
+    )
+    tools = [
+        Tool(
+            name="my_api_mcp-getpetbyid",
+            title=None,
+            description="Original description",
+            inputSchema={"type": "object", "properties": {}},
+            outputSchema=None,
+            annotations=None,
+        ),
+        Tool(
+            name="my_api_mcp-findpetsbystatus",
+            title=None,
+            description="Finds Pets by status",
+            inputSchema={"type": "object", "properties": {}},
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+
+    result = apply_tool_overrides(tools, mcp_server)
+
+    # First tool should have overridden name and description
+    assert result[0].name == "Get Pet"
+    assert result[0].description == "Custom description for get pet"
+    # Second tool should be unchanged
+    assert result[1].name == "my_api_mcp-findpetsbystatus"
+    assert result[1].description == "Finds Pets by status"
+
+
+def test_apply_tool_overrides_no_overrides():
+    """Test that apply_tool_overrides returns tools unchanged when no overrides are set."""
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import apply_tool_overrides
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        transport=MCPTransport.http,
+    )
+    tools = [
+        Tool(
+            name="my_api_mcp-getpetbyid",
+            title=None,
+            description="Original description",
+            inputSchema={"type": "object", "properties": {}},
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+
+    result = apply_tool_overrides(tools, mcp_server)
+    assert result[0].name == "my_api_mcp-getpetbyid"
+    assert result[0].description == "Original description"
 
 
 def _make_db_mcp_server(server_id: str, updated_at: datetime) -> LiteLLM_MCPServerTable:

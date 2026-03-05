@@ -159,9 +159,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "response_format",
             "timeout",
         ]
+        # Remove response_format for providers that don't support it on SAP GenAI Hub
         if (
-            model.startswith('anthropic')
-            or model.startswith("amazon")
+            model.startswith("amazon")
             or model.startswith("cohere")
             or model.startswith("alephalpha")
             or model == "gpt-4"
@@ -170,6 +170,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         if model.startswith("gemini") or model.startswith("amazon"):
             params.remove("tool_choice")
         return params
+
 
     def validate_environment(
         self,
@@ -206,6 +207,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         optional_params.pop("deployment_url", None)
+
+        # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
+        # LangChain agents pass strict=true at top level, which fails for GPT models
+        # Anthropic models accept strict, so preserve it for them
+        if model.startswith("gpt"):
+            optional_params.pop("strict")
 
         def _build_prompt_module(
             *,
@@ -324,7 +331,37 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        return ModelResponse.model_validate(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+
+        # Strip markdown code blocks if JSON response_format was used with Anthropic models
+        # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
+        # based on prompt phrasing. GPT/Gemini models don't exhibit this behavior,
+        # so we gate the stripping to avoid accidentally modifying valid responses.
+        response_format = optional_params.get("response_format", {})
+        if response_format.get("type") in ("json_object", "json_schema"):
+            if model.startswith("anthropic"):
+                response = self._strip_markdown_json(response)
+
+        return response
+
+    def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
+        """Strip markdown code block wrapper from JSON content if present.
+
+        SAP GenAI Hub with Anthropic models sometimes returns JSON wrapped in
+        markdown code blocks (```json ... ```) depending on prompt phrasing.
+        This method strips that wrapper to ensure consistent JSON output.
+        """
+        import re
+
+        for choice in response.choices or []:
+            if choice.message and choice.message.content:
+                content = choice.message.content.strip()
+                # Match ```json ... ``` or ``` ... ```
+                match = re.match(r'^```(?:json)?\s*\n?(.*?)\n?```$', content, re.DOTALL)
+                if match:
+                    choice.message.content = match.group(1).strip()
+
+        return response
 
     def get_model_response_iterator(
             self,
@@ -333,6 +370,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             json_mode: Optional[bool] = False,
     ):
         if sync_stream:
-            return SAPStreamIterator(response=streaming_response) # type: ignore
+            return SAPStreamIterator(response=streaming_response)  # type: ignore
         else:
-            return AsyncSAPStreamIterator(response=streaming_response) # type: ignore
+            return AsyncSAPStreamIterator(response=streaming_response)  # type: ignore
