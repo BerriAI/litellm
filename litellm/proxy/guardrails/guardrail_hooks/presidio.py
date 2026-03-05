@@ -1197,6 +1197,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # (masking) phase and forwarded via request_data by the unified guardrail.
         if input_type == "response" and self.output_parse_pii:
             pii_tokens: Dict[str, str] = (request_data or {}).get("pii_tokens", {})
+            if not pii_tokens:
+                verbose_proxy_logger.debug(
+                    "output_parse_pii enabled but no pii_tokens in request_data; "
+                    "returning texts unmodified"
+                )
             texts = inputs.get("texts", [])
             inputs["texts"] = [self._unmask_pii_text(t, pii_tokens) for t in texts]
             return inputs

@@ -148,6 +148,4 @@ async def test_apply_guardrail_response_calls_check_pii_when_output_parse_pii_di
             input_type="response",
         )
 
-    mock_check_pii.assert_called_once(), (
-        "check_pii should be called for response phase when output_parse_pii=False"
-    )
+    mock_check_pii.assert_called_once()
