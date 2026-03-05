@@ -1,7 +1,7 @@
 import json
 from typing import TYPE_CHECKING, Any, Union
 
-from litellm.proxy._types import SpanAttributes
+from litellm.types.integrations.otel import SpanAttributes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span

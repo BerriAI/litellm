@@ -203,8 +203,10 @@ class OpenTelemetry(CustomLogger):
         try:
             from litellm.proxy import proxy_server
         except ImportError:
-            verbose_logger.warning(
-                "Proxy Server is not installed. Skipping OpenTelemetry initialization."
+            verbose_logger.debug(
+                "Proxy server dependencies not available. "
+                "Skipping proxy-specific OpenTelemetry initialization. "
+                "This is expected when using litellm SDK without litellm[proxy]."
             )
             return
 
@@ -1374,7 +1376,7 @@ class OpenTelemetry(CustomLogger):
     def set_tools_attributes(self, span: Span, tools):
         import json
 
-        from litellm.proxy._types import SpanAttributes
+        from litellm.types.integrations.otel import SpanAttributes
 
         if not tools:
             return
@@ -1428,7 +1430,7 @@ class OpenTelemetry(CustomLogger):
     def _tool_calls_kv_pair(
         tool_calls: List[ChatCompletionMessageToolCall],
     ) -> Dict[str, Any]:
-        from litellm.proxy._types import SpanAttributes
+        from litellm.types.integrations.otel import SpanAttributes
 
         kv_pairs: Dict[str, Any] = {}
         for idx, tool_call in enumerate(tool_calls):
@@ -1473,7 +1475,7 @@ class OpenTelemetry(CustomLogger):
 
                 set_weave_otel_attributes(span, kwargs, response_obj)
                 return
-            from litellm.proxy._types import SpanAttributes
+            from litellm.types.integrations.otel import SpanAttributes
 
             optional_params = kwargs.get("optional_params", {})
             litellm_params = kwargs.get("litellm_params", {}) or {}
