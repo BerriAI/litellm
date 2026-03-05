@@ -238,6 +238,12 @@ class OllamaConfig(BaseConfig):
             or get_secret_str("OLLAMA_API_BASE")
             or "http://localhost:11434"
         )
+        # Strip any endpoint paths that may have been appended by get_complete_url()
+        # to avoid malformed URLs like /api/generate/api/show
+        for endpoint in ["/api/generate", "/api/chat", "/api/embed"]:
+            if api_base.endswith(endpoint):
+                api_base = api_base[: -len(endpoint)]
+                break
         api_key = self.get_api_key()
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
