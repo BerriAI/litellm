@@ -862,6 +862,42 @@ def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
     )
 
 
+def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
+    """Ensure _calculate_usage accumulates repeated modality entries."""
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 210,
+        "candidatesTokenCount": 50,
+        "totalTokenCount": 260,
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 20},
+            {"modality": "IMAGE", "tokenCount": 90},
+            {"modality": "IMAGE", "token_count": 100},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 30},
+            {"modality": "TEXT", "tokenCount": 15},
+            {"modality": "TEXT", "token_count": 5},
+        ],
+        "cacheTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 4},
+            {"modality": "IMAGE", "tokenCount": 40},
+            {"modality": "IMAGE", "token_count": 10},
+        ],
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    # prompt details are total - cached per modality
+    assert result.prompt_tokens_details.text_tokens == 16  # 20 - 4
+    assert result.prompt_tokens_details.image_tokens == 140  # (90 + 100) - (40 + 10)
+
+    # candidates details accumulate duplicate modalities
+    assert result.completion_tokens_details.text_tokens == 20  # 15 + 5
+    assert result.completion_tokens_details.image_tokens == 30
+    assert result.completion_tokens == 50
+
+
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     """
     If budget_tokens is 0, do not set includeThoughts to True
@@ -3723,4 +3759,3 @@ def test_vertex_ai_usage_metadata_video_tokens_with_caching():
         "Prompt video tokens should be 10240 - 5120 (cached) = 5120"
     assert result.prompt_tokens_details.text_tokens == 9
     assert result.prompt_tokens_details.audio_tokens == 200
-
