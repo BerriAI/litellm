@@ -692,6 +692,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     event_type=event_type,
                 )
                 responses.append((resp, json_resp))
+                # Stop processing remaining chunks if this one was blocked
+                if self._should_raise_guardrail_blocked_exception(resp):
+                    break
 
             bedrock_guardrail_response, merged_json = (
                 self._merge_guardrail_responses(responses)
