@@ -1015,6 +1015,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         _metadata_variable_name=_metadata_variable_name,
     )
     ## TEAM-LEVEL SPEND LOGS/TAGS
+    # Merge semantics: team tags are always preserved. Request-level tags
+    # (from headers or body) append to the existing set but never override
+    # team tags.  Duplicates are removed while preserving insertion order.
     team_metadata = user_api_key_dict.team_metadata or {}
     if "tags" in team_metadata and team_metadata["tags"] is not None:
         data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(

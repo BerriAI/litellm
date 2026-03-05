@@ -5,6 +5,8 @@ Verifies fix for https://github.com/BerriAI/litellm/issues/14052:
 x-litellm-tags must be merged with team/project tags, not overwrite them.
 """
 
+import pytest
+
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
 
@@ -122,3 +124,111 @@ class TestTagMergeWithExistingMetadata:
     def test_both_empty_returns_empty(self):
         merged = self._merge([], [])
         assert merged == []
+
+
+
+class TestAddLitellmDataToRequestTagMerge:
+    """
+    Integration test: calls add_litellm_data_to_request end-to-end with both
+    team metadata tags AND request x-litellm-tags to verify merge works and
+    team tags are always preserved (request tags append, never override).
+    """
+
+    @staticmethod
+    async def _run_merge(team_tags, header_tags_csv):
+        """Helper that drives the full add_litellm_data_to_request flow."""
+        from unittest.mock import Mock
+
+        from starlette.datastructures import State
+        from starlette.requests import Request
+
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+        from litellm.types.utils import UserAPIKeyAuth
+
+        mock_request = Mock(spec=Request)
+        mock_request.url.path = "/chat/completions"
+        mock_request.query_params = {}
+        mock_request.headers = {"x-litellm-tags": header_tags_csv}
+        mock_request.state = State()
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            user_id="test_user",
+            org_id="test_org",
+            team_metadata={"tags": team_tags},
+        )
+
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        proxy_config = Mock()
+        result = await add_litellm_data_to_request(
+            data=data,
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=proxy_config,
+        )
+        return result["metadata"]["tags"]
+
+    @pytest.mark.asyncio
+    async def test_team_tags_merged_with_request_header_tags(self):
+        """Team tags are preserved and request header tags are appended."""
+        tags = await self._run_merge(
+            team_tags=["team:finance", "env:prod"],
+            header_tags_csv="route:gpt4, priority:high",
+        )
+        # Team tags must always be present (never overridden)
+        assert "team:finance" in tags
+        assert "env:prod" in tags
+        # Request tags are appended
+        assert "route:gpt4" in tags
+        assert "priority:high" in tags
+
+    @pytest.mark.asyncio
+    async def test_duplicate_tags_between_team_and_request(self):
+        """Shared tags between team and request are deduplicated."""
+        tags = await self._run_merge(
+            team_tags=["shared", "team_only"],
+            header_tags_csv="shared, request_only",
+        )
+        assert tags.count("shared") == 1
+        assert "team_only" in tags
+        assert "request_only" in tags
+
+    @pytest.mark.asyncio
+    async def test_team_tags_with_no_request_tags(self):
+        """Team tags alone still appear in final metadata."""
+        from unittest.mock import Mock
+
+        from starlette.datastructures import State
+        from starlette.requests import Request
+
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+        from litellm.types.utils import UserAPIKeyAuth
+
+        mock_request = Mock(spec=Request)
+        mock_request.url.path = "/chat/completions"
+        mock_request.query_params = {}
+        mock_request.headers = {}
+        mock_request.state = State()
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            user_id="test_user",
+            org_id="test_org",
+            team_metadata={"tags": ["team:ops"]},
+        )
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        proxy_config = Mock()
+        result = await add_litellm_data_to_request(
+            data=data,
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=proxy_config,
+        )
+        assert "team:ops" in result["metadata"]["tags"]
