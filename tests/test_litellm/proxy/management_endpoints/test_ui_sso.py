@@ -22,10 +22,10 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    _setup_team_mappings,
+    determine_role_from_groups,
     normalize_email,
     process_sso_jwt_access_token,
-    determine_role_from_groups,
-    _setup_team_mappings,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -1791,8 +1791,8 @@ class TestCustomUISSO:
                     async def mock_google_login():
                         # This mimics the relevant part of google_login that would trigger the import error
                         try:
-                            from enterprise.litellm_enterprise.proxy.auth.custom_sso_handler import (
-                                EnterpriseCustomSSOHandler,  # noqa: F401
+                            from enterprise.litellm_enterprise.proxy.auth.custom_sso_handler import (  # noqa: F401
+                                EnterpriseCustomSSOHandler,
                             )
 
                             return "success"
@@ -3205,7 +3205,10 @@ class TestPKCEFunctionality:
                 cache_call = mock_cache.async_set_cache.call_args
                 assert cache_call.kwargs["key"] == f"pkce_verifier:{test_state}"
                 assert cache_call.kwargs["ttl"] == 600
-                assert len(cache_call.kwargs["value"]) == 43
+                # Value is stored as dict for proper JSON serialization in Redis
+                cached = cache_call.kwargs["value"]
+                assert isinstance(cached, dict) and "code_verifier" in cached
+                assert len(cached["code_verifier"]) == 43
 
                 # Verify PKCE parameters were added to the redirect URL
                 assert result is not None
@@ -3273,7 +3276,10 @@ class TestPKCEFunctionality:
                     stored_key = "pkce_verifier:multi_pod_state_xyz"
                     assert stored_key in mock_redis._store
                     stored_value = mock_redis._store[stored_key]
-                    assert isinstance(stored_value, str) and len(json.loads(stored_value)) == 43
+                    # Stored as JSON-serialized dict for Redis compatibility
+                    stored_dict = json.loads(stored_value)
+                    assert isinstance(stored_dict, dict) and "code_verifier" in stored_dict
+                    assert len(stored_dict["code_verifier"]) == 43
 
                     # Pod B: callback with same state, retrieve from "Redis"
                     mock_request = MagicMock(spec=Request)
@@ -3282,7 +3288,7 @@ class TestPKCEFunctionality:
                         request=mock_request, generic_include_client_id=False
                     )
                     assert "code_verifier" in token_params
-                    assert token_params["code_verifier"] == json.loads(stored_value)
+                    assert token_params["code_verifier"] == stored_dict["code_verifier"]
                     mock_in_memory.async_get_cache.assert_not_called()
                     # delete_cache called; key removed (asserted below)
 
@@ -3342,7 +3348,7 @@ class TestPKCEFunctionality:
                         "value"
                     ]
                     assert stored_key == "pkce_verifier:fallback_state_xyz"
-                    assert isinstance(stored_value, str) and len(stored_value) == 43
+                    assert isinstance(stored_value, dict) and len(stored_value["code_verifier"]) == 43
 
                     # Same pod: callback retrieves from in-memory cache
                     mock_request = MagicMock(spec=Request)
@@ -3351,7 +3357,7 @@ class TestPKCEFunctionality:
                         request=mock_request, generic_include_client_id=False
                     )
                     assert "code_verifier" in token_params
-                    assert token_params["code_verifier"] == stored_value
+                    assert token_params["code_verifier"] == stored_value["code_verifier"]
                     mock_in_memory.async_get_cache.assert_called_once_with(
                         key=stored_key
                     )
@@ -4492,3 +4498,178 @@ def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
     assert result.extra_fields is not None
     assert result.extra_fields["missing_field"] is None
     assert result.extra_fields["another_missing"] is None
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tests for SSOAuthenticationHandler PKCE token exchange methods
+# ──────────────────────────────────────────────────────────────────────────────
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_pkce_token_exchange_basic_auth():
+    """When include_client_id=False, client credentials go via HTTP Basic Auth."""
+    token_resp = {
+        "access_token": "tok_abc",
+        "id_token": None,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    userinfo_resp = {"sub": "user1", "email": "user@example.com"}
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = token_resp
+
+    mock_userinfo_response = MagicMock()
+    mock_userinfo_response.status_code = 200
+    mock_userinfo_response.json.return_value = userinfo_resp
+
+    async def fake_post(*args, **kwargs):
+        # Verify Basic Auth is set
+        assert "auth" in kwargs
+        assert isinstance(kwargs["auth"], httpx.BasicAuth)
+        return mock_response
+
+    async def fake_get(*args, **kwargs):
+        return mock_userinfo_response
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(side_effect=fake_post)
+        mock_client.get = AsyncMock(return_value=mock_userinfo_response)
+        mock_client_cls.return_value = mock_client
+
+        result = await SSOAuthenticationHandler._pkce_token_exchange(
+            authorization_code="auth_code_123",
+            code_verifier="verifier_abc",
+            client_id="my_client",
+            client_secret="my_secret",
+            token_endpoint="https://example.com/token",
+            userinfo_endpoint="https://example.com/userinfo",
+            include_client_id=False,
+            redirect_url="https://proxy.example.com/callback",
+            additional_headers={},
+        )
+
+    assert result["access_token"] == "tok_abc"
+    assert result["email"] == "user@example.com"
+
+
+@pytest.mark.asyncio
+async def test_pkce_token_exchange_credentials_in_body():
+    """When include_client_id=True, credentials go in the request body."""
+    token_resp = {
+        "access_token": "tok_body",
+        "id_token": None,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    userinfo_resp = {"sub": "user2", "email": "user2@example.com"}
+
+    async def fake_post(*args, **kwargs):
+        assert "auth" not in kwargs, "Should NOT use Basic Auth when include_client_id=True"
+        data = kwargs.get("data", {})
+        assert "client_id" in data
+        assert "client_secret" in data
+        mock = MagicMock()
+        mock.status_code = 200
+        mock.json.return_value = token_resp
+        return mock
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(side_effect=fake_post)
+        mock_userinfo = MagicMock()
+        mock_userinfo.status_code = 200
+        mock_userinfo.json.return_value = userinfo_resp
+        mock_client.get = AsyncMock(return_value=mock_userinfo)
+        mock_client_cls.return_value = mock_client
+
+        result = await SSOAuthenticationHandler._pkce_token_exchange(
+            authorization_code="auth_code_456",
+            code_verifier="verifier_xyz",
+            client_id="client_id_value",
+            client_secret="client_secret_value",
+            token_endpoint="https://example.com/token",
+            userinfo_endpoint="https://example.com/userinfo",
+            include_client_id=True,
+            redirect_url="https://proxy.example.com/callback",
+            additional_headers={},
+        )
+
+    assert result["access_token"] == "tok_body"
+    assert result["sub"] == "user2"
+
+
+@pytest.mark.asyncio
+async def test_pkce_token_exchange_http200_with_error_body():
+    """Provider returns HTTP 200 but with an error field instead of tokens."""
+    from litellm.proxy._types import ProxyException
+
+    error_body = {"error": "invalid_grant", "error_description": "Code already used"}
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = error_body
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_client
+
+        with pytest.raises(ProxyException) as exc_info:
+            await SSOAuthenticationHandler._pkce_token_exchange(
+                authorization_code="expired_code",
+                code_verifier="verifier",
+                client_id="cid",
+                client_secret="csecret",
+                token_endpoint="https://example.com/token",
+                userinfo_endpoint="https://example.com/userinfo",
+                include_client_id=False,
+                redirect_url="https://proxy.example.com/callback",
+                additional_headers={},
+            )
+
+    assert "invalid_grant" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_pkce_userinfo_falls_back_to_id_token():
+    """When the userinfo endpoint fails, decode the id_token as fallback."""
+    import base64
+    import json as _json
+
+    payload = {"sub": "user_from_jwt", "email": "jwt@example.com"}
+    # Build a minimal JWT (header.payload.signature — signature not verified)
+    encoded_payload = base64.urlsafe_b64encode(
+        _json.dumps(payload).encode()
+    ).rstrip(b"=").decode()
+    fake_id_token = f"eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig"
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_fail = MagicMock()
+        mock_fail.status_code = 503
+        mock_client.get = AsyncMock(return_value=mock_fail)
+        mock_client_cls.return_value = mock_client
+
+        result = await SSOAuthenticationHandler._get_pkce_userinfo(
+            access_token="some_token",
+            id_token=fake_id_token,
+            userinfo_endpoint="https://example.com/userinfo",
+            additional_headers={},
+        )
+
+    assert result["sub"] == "user_from_jwt"
+    assert result["email"] == "jwt@example.com"
