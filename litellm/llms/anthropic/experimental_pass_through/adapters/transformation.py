@@ -693,6 +693,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking
             )
             if reasoning_effort:
+                summary = thinking.get("summary") if isinstance(thinking, dict) else None
+                if summary:
+                    return {"reasoning_effort": {"effort": reasoning_effort, "summary": summary}}
                 return {"reasoning_effort": reasoning_effort}
             return {}
 
@@ -924,7 +927,11 @@ class LiteLLMAnthropicMessagesAdapter:
                         cast(Dict[str, Any], thinking)
                     )
                     if reasoning_effort:
-                        new_kwargs["reasoning_effort"] = reasoning_effort
+                        summary = thinking.get("summary") if isinstance(thinking, dict) else None
+                        if summary:
+                            new_kwargs["reasoning_effort"] = {"effort": reasoning_effort, "summary": summary}
+                        else:
+                            new_kwargs["reasoning_effort"] = reasoning_effort
 
         ## CONVERT OUTPUT_FORMAT to RESPONSE_FORMAT
         if "output_format" in anthropic_message_request:
