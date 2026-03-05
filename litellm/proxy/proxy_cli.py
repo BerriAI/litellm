@@ -50,7 +50,10 @@ def append_query_params(url: Optional[str], params: dict) -> str:
         return ""
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
-    parsed_query.update(params)
+    # Only add params that don't already exist in the URL
+    for key, value in params.items():
+        if key not in parsed_query:
+            parsed_query[key] = value
     encoded_query = urlparse.urlencode(parsed_query, doseq=True)
     modified_url = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
     return modified_url  # type: ignore
@@ -782,7 +785,7 @@ def run_server(  # noqa: PLR0915
                 int(
                     os.getenv(
                         "LITELLM_DB_IDLE_LIFETIME",
-                        LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+                        str(LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value),
                     )
                 ),
             )
@@ -820,7 +823,7 @@ def run_server(  # noqa: PLR0915
             db_connection_idle_lifetime = int(
                 os.getenv(
                     "LITELLM_DB_IDLE_LIFETIME",
-                    LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+                    str(LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value),
                 )
             )
 
