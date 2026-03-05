@@ -169,6 +169,7 @@ async def asend_message(
     api_base: Optional[str] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
     agent_id: Optional[str] = None,
+    agent_extra_headers: Optional[Dict[str, str]] = None,
     **kwargs: Any,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -250,9 +251,12 @@ async def asend_message(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
         trace_id = trace_id or str(uuid.uuid4())
-        extra_headers = {"X-LiteLLM-Trace-Id": trace_id}
+        extra_headers: Dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
+        # Overlay agent-level headers (agent headers take precedence over LiteLLM internal ones)
+        if agent_extra_headers:
+            extra_headers.update(agent_extra_headers)
         a2a_client = await create_a2a_client(
             base_url=api_base, extra_headers=extra_headers
         )
@@ -426,6 +430,7 @@ async def asend_message_streaming(
     agent_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     proxy_server_request: Optional[Dict[str, Any]] = None,
+    agent_extra_headers: Optional[Dict[str, str]] = None,
 ) -> AsyncIterator[Any]:
     """
     Async: Send a streaming message to an A2A agent.
@@ -507,7 +512,12 @@ async def asend_message_streaming(
             raise ValueError(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
-        a2a_client = await create_a2a_client(base_url=api_base)
+        streaming_extra_headers: Optional[Dict[str, str]] = None
+        if agent_extra_headers:
+            streaming_extra_headers = dict(agent_extra_headers)
+        a2a_client = await create_a2a_client(
+            base_url=api_base, extra_headers=streaming_extra_headers
+        )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
