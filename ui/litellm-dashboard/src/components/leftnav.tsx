@@ -1,4 +1,5 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
@@ -29,7 +30,7 @@ import {
 import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
-import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
+import { all_admin_roles, internalUserRoles, isAdminRole, isUserTeamAdminForAnyTeam, rolesWithWriteAccess } from "../utils/roles";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
@@ -43,7 +44,9 @@ interface SidebarProps {
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
+  allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
+  allowVectorStoresForTeamAdmins?: boolean;
 }
 
 // Menu item configuration
@@ -356,9 +359,10 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI, disableAgentsForInternalUsers, disableVectorStoresForInternalUsers }) => {
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI, disableAgentsForInternalUsers, allowAgentsForTeamAdmins, disableVectorStoresForInternalUsers, allowVectorStoresForTeamAdmins }) => {
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
+  const { data: teams } = useTeams();
 
   // Check if user is an org_admin
   const isOrgAdmin = useMemo(() => {
@@ -367,6 +371,9 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
       org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
     );
   }, [userId, organizations]);
+
+  // Check if user is a team admin for any team
+  const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
   // Navigate to page helper
   const navigateToPage = (page: string) => {
@@ -452,9 +459,10 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         // Hide Projects page if enableProjectsUI is not enabled
         if (item.key === "projects" && !enableProjectsUI) return false;
 
-        // Hide agents and vector-stores pages for non-admin users when disabled
-        if (!isAdmin && item.key === "agents" && disableAgentsForInternalUsers) return false;
-        if (!isAdmin && item.key === "vector-stores" && disableVectorStoresForInternalUsers) return false;
+        // Hide agents and vector-stores pages for non-admin users when disabled,
+        // unless allow_*_for_team_admins is on and the user is a team admin.
+        if (!isAdmin && item.key === "agents" && disableAgentsForInternalUsers && !(allowAgentsForTeamAdmins && isTeamAdmin)) return false;
+        if (!isAdmin && item.key === "vector-stores" && disableVectorStoresForInternalUsers && !(allowVectorStoresForTeamAdmins && isTeamAdmin)) return false;
 
         // Existing role check
         if (item.roles && !item.roles.includes(userRole)) return false;
