@@ -302,16 +302,26 @@ export function isAuthenticationError(errorString: string): boolean {
  * Uses sessionStorage to persist state across page reloads.
  */
 export function shouldAllowAuthRedirect(): boolean {
-  if (typeof sessionStorage === "undefined") return true;
-  const key = "litellm_auth_redirect_ts";
-  const last = sessionStorage.getItem(key);
-  const now = Date.now();
-  if (last && now - Number(last) < 5000) {
-    // Already redirected within the last 5 seconds — break the loop
-    return false;
+  try {
+    if (typeof sessionStorage === "undefined") return true;
+    const key = "litellm_auth_redirect_ts";
+    const last = sessionStorage.getItem(key);
+    const now = Date.now();
+    if (last && now - Number(last) < 5000) {
+      // Already redirected within the last 5 seconds — break the loop
+      return false;
+    }
+    sessionStorage.setItem(key, String(now));
+    return true;
+  } catch (error) {
+    // SecurityError thrown in strict privacy mode or sandboxed iframes
+    // Return true as safe fallback to allow redirect
+    if (error instanceof Error && error.name === "SecurityError") {
+      console.warn("Cannot access sessionStorage; allowing redirect as fallback:", error.message);
+      return true;
+    }
+    throw error;
   }
-  sessionStorage.setItem(key, String(now));
-  return true;
 }
 
 export const handleError = async (errorData: string | any) => {
@@ -322,8 +332,8 @@ export const handleError = async (errorData: string | any) => {
     const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
     if (isAuthenticationError(errorString)) {
       lastErrorTime = currentTime;
-      clearTokenCookies();
       if (shouldAllowAuthRedirect()) {
+        clearTokenCookies();
         NotificationsManager.info("UI Session Expired. Logging out.");
         const browserLocation = getWindowLocation();
         if (browserLocation) {
