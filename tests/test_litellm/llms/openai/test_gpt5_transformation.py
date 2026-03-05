@@ -316,6 +316,26 @@ def test_gpt5_4_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
+def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-pro",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_pro_rejects_non_default_temperature(config: OpenAIConfig):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="gpt-5.4-pro",
+            drop_params=False,
+        )
+
+
 def test_gpt5_1_temperature_without_reasoning_effort(config: OpenAIConfig):
     """Test that GPT-5.1 supports any temperature when reasoning_effort is not specified.
     
