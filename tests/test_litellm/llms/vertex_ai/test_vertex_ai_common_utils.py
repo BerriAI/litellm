@@ -108,10 +108,11 @@ def test_anyof_conversion_preserves_sibling_fields():
 
 
 def test_anyof_conversion_precedence_on_conflict():
-    """Test that sibling fields take precedence over variant fields on conflict.
+    """Test that variant fields take precedence over sibling fields on conflict.
 
     If both the sibling (top-level) and the variant have the same field,
-    the sibling field should take precedence to respect user-defined field attributes.
+    the variant field should take precedence so core schema-defining fields
+    (type, enum, etc.) are never silently overridden by siblings.
     """
     schema = {
         "anyOf": [{"type": "integer", "description": "Variant description"}, {"type": "null"}],
@@ -120,10 +121,10 @@ def test_anyof_conversion_precedence_on_conflict():
 
     convert_anyof_null_to_nullable(schema)
 
-    # Top-level description should be preserved
+    # Variant description should be preserved (variant wins on conflict)
     expected = {
         "type": "integer",
-        "description": "Top-level description",
+        "description": "Variant description",
         "nullable": True,
     }
     assert schema == expected
