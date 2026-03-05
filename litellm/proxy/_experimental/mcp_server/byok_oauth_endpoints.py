@@ -480,7 +480,7 @@ def _build_authorize_html(
         <span class="sec-icon">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         </span>
-        <p>Your key is encrypted at rest and transmitted securely. It is never shared with third parties.</p>
+        <p>Your key is stored securely and transmitted over HTTPS. It is never shared with third parties.</p>
       </div>
 
       <button type="submit" class="btn-connect" id="connectBtn">

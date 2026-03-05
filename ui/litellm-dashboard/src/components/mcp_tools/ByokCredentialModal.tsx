@@ -233,7 +233,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
             <div className="bg-blue-50 rounded-xl p-4 flex items-start gap-3 mb-6">
               <LockOutlined className="text-blue-400 mt-0.5 flex-shrink-0" />
               <p className="text-sm text-blue-700">
-                Your key is encrypted at rest and transmitted securely. It is never shared with third parties.
+                Your key is stored securely and transmitted over HTTPS. It is never shared with third parties.
               </p>
             </div>
 
