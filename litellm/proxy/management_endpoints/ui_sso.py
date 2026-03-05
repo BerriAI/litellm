@@ -2513,12 +2513,17 @@ class SSOAuthenticationHandler:
                 if isinstance(cached_data, dict) and "code_verifier" in cached_data:
                     code_verifier = cached_data["code_verifier"]
                     verbose_proxy_logger.debug("PKCE code_verifier retrieved from cache")
-                else:
+                elif isinstance(cached_data, str):
                     # Handle legacy format (plain string) for backward compatibility
-                    code_verifier = cached_data if isinstance(cached_data, str) else str(cached_data)
+                    code_verifier = cached_data
                     verbose_proxy_logger.warning(
-                        "Retrieved code_verifier in legacy format (plain string). "
-                        "Using it but future storage will use dict format."
+                        "Retrieved code_verifier in legacy plain-string format. "
+                        "Future storage will use dict format."
+                    )
+                else:
+                    verbose_proxy_logger.error(
+                        "Unexpected PKCE verifier cache format (type=%s); skipping.",
+                        type(cached_data).__name__,
                     )
 
             if code_verifier:
@@ -2701,7 +2706,7 @@ class SSOAuthenticationHandler:
         Fetches user info from the userinfo endpoint.
         Falls back to decoding the id_token if the endpoint is unavailable.
         """
-        userinfo: dict = {}
+        userinfo: Optional[dict] = None  # None means "request not yet attempted or failed"
 
         try:
             async with httpx.AsyncClient() as client:
@@ -2731,7 +2736,9 @@ class SSOAuthenticationHandler:
                 "Userinfo endpoint error: %s, falling back to id_token", e
             )
 
-        if not userinfo and id_token:
+        # Only fall back to id_token when the userinfo request failed (None).
+        # An empty dict ({}) from the endpoint is a valid response and not retried.
+        if userinfo is None and id_token:
             try:
                 userinfo = jwt.decode(id_token, options={"verify_signature": False})
             except Exception as decode_err:
@@ -2743,7 +2750,7 @@ class SSOAuthenticationHandler:
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
 
-        if not userinfo:
+        if userinfo is None:
             raise ProxyException(
                 message=(
                     "SSO user info unavailable: userinfo endpoint failed and no id_token "

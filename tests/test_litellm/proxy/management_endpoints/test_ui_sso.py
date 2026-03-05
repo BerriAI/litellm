@@ -4667,3 +4667,29 @@ async def test_pkce_userinfo_falls_back_to_id_token():
 
     assert result["sub"] == "user_from_jwt"
     assert result["email"] == "jwt@example.com"
+
+
+@pytest.mark.asyncio
+async def test_pkce_userinfo_raises_when_both_sources_unavailable():
+    """When userinfo endpoint fails AND no id_token, raise ProxyException."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_fail = MagicMock()
+        mock_fail.status_code = 503
+        mock_client.get = AsyncMock(return_value=mock_fail)
+        mock_client_cls.return_value = mock_client
+
+        with pytest.raises(ProxyException) as exc_info:
+            await SSOAuthenticationHandler._get_pkce_userinfo(
+                access_token="token",
+                id_token=None,  # no id_token available
+                userinfo_endpoint="https://example.com/userinfo",
+                additional_headers={},
+            )
+
+    assert "unavailable" in exc_info.value.message.lower()
