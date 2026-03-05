@@ -733,6 +733,154 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert response.choices[0].finish_reason == "tool_calls"
 
 
+class MockPassThroughGuardrail(CustomGuardrail):
+    """Mock guardrail that passes through without blocking - for testing streaming fallback behavior"""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        """Simply return inputs unchanged"""
+        return inputs
+
+
+class TestOpenAIChatCompletionsHandlerStreamingOutput:
+    """Test streaming output processing functionality"""
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_empty_choices(self):
+        """Test that streaming response with empty choices doesn't raise IndexError
+
+        This test verifies the fix for the bug where accessing chunk.choices[0]
+        would raise IndexError when a streaming chunk has an empty choices list.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        # Create a streaming chunk with empty choices
+        chunk_with_empty_choices = ModelResponseStream(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[],  # Empty choices - this was causing the IndexError
+        )
+
+        responses_so_far = [chunk_with_empty_choices]
+
+        # This should not raise IndexError
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        # Should return the responses unchanged
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_with_valid_choices(self):
+        """Test that streaming response with valid choices still works correctly"""
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        # Create streaming chunks with valid choices
+        chunk1 = ModelResponseStream(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Hello"),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+        chunk2 = ModelResponseStream(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=" world"),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+        responses_so_far = [chunk1, chunk2]
+
+        # This should process successfully
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        # Should return the responses
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_mixed_empty_and_valid_choices_no_finish(self):
+        """Test streaming response with mix of empty and valid choices chunks (stream not finished)
+
+        This tests the has_stream_ended check when iterating through chunks with mixed choices.
+        The stream hasn't finished yet (no finish_reason), so it won't trigger stream_chunk_builder.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        # Mix of chunks - some with empty choices, some with valid choices
+        # Stream hasn't finished (no finish_reason)
+        chunk_empty = ModelResponseStream(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[],
+        )
+
+        chunk_valid = ModelResponseStream(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Hello"),
+                    finish_reason=None,  # Stream not finished
+                )
+            ],
+        )
+
+        responses_so_far = [chunk_empty, chunk_valid]
+
+        # This should not raise IndexError when checking has_stream_ended
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        # Should return the responses
+        assert result == responses_so_far
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])

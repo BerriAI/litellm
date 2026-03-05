@@ -8,6 +8,7 @@ from .openai import ChatCompletionToolCallChunk
 
 class CachePointBlock(TypedDict, total=False):
     type: Literal["default"]
+    ttl: str
 
 
 class SystemContentBlock(TypedDict, total=False):
@@ -301,6 +302,33 @@ class PerformanceConfigBlock(TypedDict):
     latency: Literal["optimized", "throughput"]
 
 
+class JsonSchemaDefinition(TypedDict, total=False):
+    """JSON schema structured output format options for Bedrock Converse API."""
+
+    schema: Required[str]  # JSON string, not dict
+    name: str
+    description: str
+
+
+class OutputFormatStructure(TypedDict, total=False):
+    """The structure that the model's output must adhere to (union type)."""
+
+    jsonSchema: Required[JsonSchemaDefinition]
+
+
+class OutputFormat(TypedDict):
+    """Structured output parameters to control the model's response."""
+
+    type: Literal["json_schema"]
+    structure: OutputFormatStructure
+
+
+class OutputConfigBlock(TypedDict, total=False):
+    """Output configuration for a model response in Converse/ConverseStream."""
+
+    textFormat: OutputFormat
+
+
 class CommonRequestObject(
     TypedDict, total=False
 ):  # common request object across sync + async flows
@@ -313,6 +341,7 @@ class CommonRequestObject(
     performanceConfig: Optional[PerformanceConfigBlock]
     serviceTier: Optional[ServiceTierBlock]
     requestMetadata: Optional[Dict[str, str]]
+    outputConfig: Optional[OutputConfigBlock]
 
 
 class RequestObject(CommonRequestObject, total=False):
@@ -960,6 +989,7 @@ class BedrockGetBatchResponse(TypedDict, total=False):
     outputDataConfig: BedrockOutputDataConfig
     timeoutDurationInHours: Optional[int]
     clientRequestToken: Optional[str]
+
 
 class BedrockToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]

@@ -160,3 +160,149 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].lifecycle.preStop.exec.command[2]
           value: echo "Container stopping"
+  - it: should render background health check settings from proxy_config.general_settings
+    template: configmap-litellm.yaml
+    set:
+      proxy_config.general_settings.background_health_checks: true
+      proxy_config.general_settings.health_check_interval: 240
+      proxy_config.general_settings.health_check_concurrency: 16
+      proxy_config.general_settings.health_check_details: false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^\s*background_health_checks:\s*true$'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^\s*health_check_interval:\s*240$'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^\s*health_check_concurrency:\s*16$'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^\s*health_check_details:\s*false$'
+  - it: should allow overriding liveness, readiness, and startup probes
+    template: deployment.yaml
+    set:
+      livenessProbe:
+        path: /custom/livez
+        initialDelaySeconds: 5
+        periodSeconds: 15
+        timeoutSeconds: 5
+        successThreshold: 1
+        failureThreshold: 5
+      readinessProbe:
+        path: /custom/readyz
+        initialDelaySeconds: 10
+        periodSeconds: 20
+        timeoutSeconds: 6
+        successThreshold: 1
+        failureThreshold: 6
+      startupProbe:
+        path: /custom/startupz
+        initialDelaySeconds: 15
+        periodSeconds: 25
+        timeoutSeconds: 7
+        successThreshold: 1
+        failureThreshold: 40
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /custom/livez
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /custom/readyz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 6
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /custom/startupz
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 40
+  - it: should render container resources from values
+    template: deployment.yaml
+    set:
+      resources:
+        limits:
+          cpu: 500m
+          memory: 2Gi
+        requests:
+          cpu: 250m
+          memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 500m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 2Gi
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 250m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 1Gi
+  - it: should keep default probes and empty resources unchanged
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health/liveliness
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.successThreshold
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 3
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health/readiness
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.initialDelaySeconds
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.successThreshold
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+          value: 3
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /health/readiness
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.initialDelaySeconds
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.successThreshold
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value: {}

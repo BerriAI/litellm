@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -66,3 +67,22 @@ class TestAnthropicEndpoints(unittest.TestCase):
         assert (
             mock_safe_dumps.call_count == 2
         )  # Called twice, once for each dict object
+
+
+class TestEventLoggingBatchEndpoint:
+    """Test the stubbed event logging batch endpoint"""
+
+    def test_event_logging_batch_endpoint_exists(self):
+        """Test that the event_logging_batch endpoint exists and returns 200"""
+        from fastapi import FastAPI
+
+        from litellm.proxy.anthropic_endpoints.endpoints import router
+
+        app = FastAPI()
+        app.include_router(router)
+
+        client = TestClient(app)
+        response = client.post("/api/event_logging/batch", json={"events": []})
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}

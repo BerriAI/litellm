@@ -21,7 +21,13 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import ChatCompletionToolParam
-from litellm.types.utils import Choices, GenericGuardrailAPIInputs, ModelResponse, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    Choices,
+    GenericGuardrailAPIInputs,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -80,9 +86,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
             if messages:
-                inputs["structured_messages"] = (
-                    messages  # pass the openai /chat/completions messages to the guardrail, as-is
-                )
+                inputs[
+                    "structured_messages"
+                ] = messages  # pass the openai /chat/completions messages to the guardrail, as-is
             # Pass tools (function definitions) to the guardrail
             tools = data.get("tools")
             if tools:
@@ -101,6 +107,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tool_calls = guardrailed_inputs.get("tool_calls", [])
+            guardrailed_tools = guardrailed_inputs.get("tools")
+            if guardrailed_tools is not None:
+                data["tools"] = guardrailed_tools
 
             # Step 3: Map guardrail responses back to original message structure
             if guardrailed_texts and texts_to_check:
@@ -125,6 +134,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
         return data
+
+    def extract_request_tool_names(self, data: dict) -> List[str]:
+        """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
+        names: List[str] = []
+        for tool in data.get("tools") or []:
+            if isinstance(tool, dict) and tool.get("type") == "function":
+                fn = tool.get("function")
+                if isinstance(fn, dict) and fn.get("name"):
+                    names.append(str(fn["name"]))
+        for fn in data.get("functions") or []:
+            if isinstance(fn, dict) and fn.get("name"):
+                names.append(str(fn["name"]))
+        return names
 
     def _extract_inputs(
         self,
@@ -362,14 +384,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # check if the stream has ended
         has_stream_ended = False
         for chunk in responses_so_far:
-            if chunk.choices[0].finish_reason is not None:
+            if chunk.choices and chunk.choices[0].finish_reason is not None:
                 has_stream_ended = True
                 break
 
         if has_stream_ended:
             # convert to model response
             model_response = cast(
-                ModelResponse, stream_chunk_builder(chunks=responses_so_far, logging_obj=litellm_logging_obj)
+                ModelResponse,
+                stream_chunk_builder(
+                    chunks=responses_so_far, logging_obj=litellm_logging_obj
+                ),
             )
             # run process_output_response
             await self.process_output_response(
@@ -530,16 +555,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         if len(choice.message.tool_calls) > 0:
                             return True
         elif isinstance(response, ModelResponseStream):
-            for choice in response.choices:
-                if isinstance(choice, litellm.StreamingChoices):
+            for streaming_choice in response.choices:
+                if isinstance(streaming_choice, litellm.StreamingChoices):
                     # Check for text content
-                    if choice.delta.content and isinstance(choice.delta.content, str):
+                    if streaming_choice.delta.content and isinstance(streaming_choice.delta.content, str):
                         return True
                     # Check for tool calls
-                    if choice.delta.tool_calls and isinstance(
-                        choice.delta.tool_calls, list
+                    if streaming_choice.delta.tool_calls and isinstance(
+                        streaming_choice.delta.tool_calls, list
                     ):
-                        if len(choice.delta.tool_calls) > 0:
+                        if len(streaming_choice.delta.tool_calls) > 0:
                             return True
         return False
 

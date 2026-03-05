@@ -43,8 +43,12 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         if "tool_choice" not in params:
             params.append("tool_choice")
 
-        # Only gpt-5.2 has been verified to support logprobs on Azure
-        if self.is_model_gpt_5_2_model(model):
+        # Only gpt-5.2 has been verified to support logprobs on Azure.
+        # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
+        # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2.
+        if self.is_model_gpt_5_1_model(model) and not self.is_model_gpt_5_2_model(model):
+            params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
+        elif self.is_model_gpt_5_2_model(model):
             azure_supported_params = ["logprobs", "top_logprobs"]
             params.extend(azure_supported_params)
 

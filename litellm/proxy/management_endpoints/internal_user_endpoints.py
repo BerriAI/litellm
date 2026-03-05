@@ -364,7 +364,8 @@ async def new_user(
     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
     - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
     - spend: Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
-    - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None. 
+    - agent_id: Optional[str] - The agent id associated with the user.
+    - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None.
     - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
@@ -573,7 +574,7 @@ def get_user_id_from_request(request: Request) -> Optional[str]:
     "/user/info",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
-    # response_model=UserInfoResponse,
+    response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
 async def user_info(
@@ -613,7 +614,7 @@ async def user_info(
             user_id is None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
-            return await _get_user_info_for_proxy_admin()
+            return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
@@ -713,7 +714,7 @@ async def user_info(
         raise handle_exception_on_proxy(e)
 
 
-async def _get_user_info_for_proxy_admin():
+async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     """
     Admin UI Endpoint - Returns All Teams and Keys when Proxy Admin is querying
 
@@ -753,9 +754,23 @@ async def _get_user_info_for_proxy_admin():
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
     _teams_in_db.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
+    
+    # Get admin's own user_id and user_info
+    admin_user_id = user_api_key_dict.user_id
+    admin_user_info = None
+    
+    if admin_user_id is not None:
+        admin_user_info = await prisma_client.get_data(user_id=admin_user_id)
+        if admin_user_info is not None:
+            admin_user_info = (
+                admin_user_info.model_dump()
+                if isinstance(admin_user_info, BaseModel)
+                else admin_user_info
+            )
+    
     return UserInfoResponse(
-        user_id=None,
-        user_info=None,
+        user_id=admin_user_id,
+        user_info=admin_user_info,
         keys=returned_keys,
         teams=_teams_in_db,
     )
@@ -813,9 +828,12 @@ def _update_internal_user_params(
     data_json: dict, data: Union[UpdateUserRequest, UpdateUserRequestNoUserIDorEmail]
 ) -> dict:
     non_default_values = {}
+    fields_set = data.fields_set() if hasattr(data, 'fields_set') else set()
+    
     for k, v in data_json.items():
         if k == "max_budget":
-            non_default_values[k] = v
+            if "max_budget" in fields_set:
+                non_default_values[k] = v
         elif (
             v is not None
             and v
@@ -1072,7 +1090,8 @@ async def user_update(
         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
         - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
         - spend: Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
-        - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None. 
+        - agent_id: Optional[str] - The agent id associated with the user.
+        - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None.
         - duration: Optional[str] - [NOT IMPLEMENTED].
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
@@ -1908,11 +1927,20 @@ async def get_user_daily_activity(
         default=None,
         description="Filter by specific API key",
     ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
+    ),
     page: int = fastapi.Query(
         default=1, description="Page number for pagination", ge=1
     ),
     page_size: int = fastapi.Query(
         default=50, description="Items per page", ge=1, le=1000
+    ),
+    timezone: Optional[int] = fastapi.Query(
+        default=None,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
@@ -1947,9 +1975,21 @@ async def get_user_daily_activity(
         )
 
     try:
-        entity_id: Optional[str] = None
-        if not _user_has_admin_view(user_api_key_dict):
-            entity_id = user_api_key_dict.user_id
+        is_admin = _user_has_admin_view(user_api_key_dict)
+
+        if is_admin:
+            entity_id = user_id  # None means global view, otherwise filter by user
+        else:
+            if user_id is None:
+                user_id = user_api_key_dict.user_id
+            if user_id != user_api_key_dict.user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Non-admin users can only view their own spend data."
+                    },
+                )
+            entity_id = user_id
 
         return await get_daily_activity(
             prisma_client=prisma_client,
@@ -1963,8 +2003,11 @@ async def get_user_daily_activity(
             api_key=api_key,
             page=page,
             page_size=page_size,
+            timezone_offset_minutes=timezone,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "/spend/daily/analytics: Exception occured - {}".format(str(e))
@@ -1999,6 +2042,15 @@ async def get_user_daily_activity_aggregated(
         default=None,
         description="Filter by specific API key",
     ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
+    ),
+    timezone: Optional[int] = fastapi.Query(
+        default=None,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
     """
@@ -2020,9 +2072,21 @@ async def get_user_daily_activity_aggregated(
         )
 
     try:
-        entity_id: Optional[str] = None
-        if not _user_has_admin_view(user_api_key_dict):
-            entity_id = user_api_key_dict.user_id
+        is_admin = _user_has_admin_view(user_api_key_dict)
+
+        if is_admin:
+            entity_id = user_id  # None means global view, otherwise filter by user
+        else:
+            if user_id is None:
+                user_id = user_api_key_dict.user_id
+            if user_id != user_api_key_dict.user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Non-admin users can only view their own spend data."
+                    },
+                )
+            entity_id = user_id
 
         return await get_daily_activity_aggregated(
             prisma_client=prisma_client,
@@ -2034,8 +2098,11 @@ async def get_user_daily_activity_aggregated(
             end_date=end_date,
             model=model,
             api_key=api_key,
+            timezone_offset_minutes=timezone,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "/user/daily/activity/aggregated: Exception occured - {}".format(str(e))

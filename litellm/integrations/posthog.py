@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional, Tuple
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.integrations.posthog_mock_client import (
     should_use_posthog_mock,
     create_mock_posthog_client,
@@ -100,7 +101,7 @@ class PostHogLogger(CustomBatchLogger):
 
             response = self.sync_client.post(
                 url=capture_url,
-                json=payload,
+                content=safe_dumps(payload),
                 headers=headers,
             )
             response.raise_for_status()
@@ -356,7 +357,7 @@ class PostHogLogger(CustomBatchLogger):
 
                 response = await self.async_client.post(
                     url=capture_url,
-                    json=payload,
+                    content=safe_dumps(payload),
                     headers=headers,
                 )
                 response.raise_for_status()
@@ -438,7 +439,7 @@ class PostHogLogger(CustomBatchLogger):
 
                 response = self.sync_client.post(
                     url=capture_url,
-                    json=payload,
+                    content=safe_dumps(payload),
                     headers=headers,
                 )
                 response.raise_for_status()

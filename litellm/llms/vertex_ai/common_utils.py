@@ -1,4 +1,5 @@
 import re
+from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 
@@ -523,7 +524,7 @@ def _build_json_schema(parameters: dict) -> dict:
     - Does NOT convert types to uppercase (keeps standard JSON Schema format)
     - Does NOT add propertyOrdering
     - Does NOT filter fields (allows additionalProperties)
-    - Still unpacks $defs/$ref (Gemini doesn't support JSON Schema references)
+    - Preserves $defs/$ref (Gemini 2.0+ supports JSON Schema references natively)
 
     Parameters:
         parameters: dict - the JSON schema to process
@@ -531,24 +532,12 @@ def _build_json_schema(parameters: dict) -> dict:
     Returns:
         dict - the processed schema in standard JSON Schema format
     """
-    # Unpack $defs references (Gemini doesn't support $ref)
-    defs = parameters.pop("$defs", {})
-    for name, value in defs.items():
-        unpack_defs(value, defs)
-    unpack_defs(parameters, defs)
-
-    # Convert anyOf with null to nullable
-    convert_anyof_null_to_nullable(parameters)
-
-    # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
-    _fix_enum_empty_strings(parameters)
-
-    # Remove enums for non-string typed fields (Gemini requires enum only on strings)
-    _fix_enum_types(parameters)
-
-    # Handle empty items objects
-    process_items(parameters)
-    add_object_type(parameters)
+    # Gemini 2.0+ with responseJsonSchema accepts standard JSON Schema as-is,
+    # including $ref, $defs, anyOf, etc. No transformations needed — the
+    # OpenAPI-specific fixes (unpack_defs, add_object_type, convert_anyof, etc.)
+    # are only required for responseSchema (Gemini 1.5) and can break valid
+    # JSON Schema by adding conflicting fields to $ref nodes.
+    # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
 
     return parameters
 
@@ -582,14 +571,38 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
     return schema_dict
 
 
+def _is_any_type_schema(schema: dict) -> bool:
+    """
+    Detect schemas that represent "any JSON value" (no type constraints).
+
+    In JSON Schema, an empty schema {} means "any value is valid".
+    Schemas with only metadata keys (title, description, default, examples)
+    but no type-constraining keywords also represent "any type".
+
+    Gemini's Schema proto uses TYPE_UNSPECIFIED (0) as default,
+    so omitting the type field is valid and means "any type".
+    """
+    type_constraining_keys = {
+        "type",
+        "properties",
+        "items",
+        "anyOf",
+        "oneOf",
+        "allOf",
+        "enum",
+        "required",
+        "$ref",
+        "$schema",
+    }
+    return not any(key in type_constraining_keys for key in schema.keys())
+
+
 def process_items(schema, depth=0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     if isinstance(schema, dict):
-        if "items" in schema and schema["items"] == {}:
-            schema["items"] = {"type": "object"}
         for key, value in schema.items():
             if isinstance(value, dict):
                 process_items(value, depth + 1)
@@ -684,13 +697,12 @@ def convert_anyof_null_to_nullable(schema, depth=0):
     if anyof is not None:
         contains_null = False
         for atype in anyof:
-            if atype == {"type": "null"}:
+            if isinstance(atype, dict) and atype.get("type") == "null":
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
-            elif "type" not in atype and len(atype) == 0:
-                # Handle empty object case
-                atype["type"] = "object"
+            elif isinstance(atype, dict) and _is_any_type_schema(atype):
+                pass  # preserve "any type" semantics — don't coerce to object
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
@@ -725,7 +737,8 @@ def add_object_type(schema):
     # Gemini requires all function parameters to be type OBJECT
     # Handle case where schema has no properties and no type (e.g. tools with no arguments)
     if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema and "allOf" not in schema:
-        schema["type"] = "object"
+        if not _is_any_type_schema(schema):
+            schema["type"] = "object"
 
     properties = schema.get("properties", None)
     if properties is not None:
@@ -801,8 +814,38 @@ def _convert_schema_types(schema, depth=0):
     if "type" in schema:
         type_val = schema["type"]
         if isinstance(type_val, list) and len(type_val) > 1:
-            # Convert ["string", "number"] -> {"anyOf": [{"type": "STRING"}, {"type": "NUMBER"}]}
-            schema["anyOf"] = [{"type": t} for t in type_val if isinstance(t, str)]
+            # Convert type arrays to anyOf format            
+            # Fields that are specific to object/array types and should move into anyOf
+            type_specific_fields = {"properties", "required", "additionalProperties", "items", "minItems", "maxItems", "minProperties", "maxProperties"}
+            
+            any_of: List[Dict[str, Any]] = []
+            for t in type_val:
+                if not isinstance(t, str):
+                    continue
+                if t == "null":
+                    # Keep null entry minimal so we can strip it later.
+                    any_of.append({"type": "null"})
+                    continue
+                
+                # For object/array types, include type-specific fields
+                if t in ("object", "array"):
+                    item_schema = {"type": t}
+                    # Move type-specific fields into this anyOf item
+                    for field in type_specific_fields:
+                        if field in schema:
+                            item_schema[field] = deepcopy(schema[field])
+                    any_of.append(item_schema)
+                else:
+                    # For primitive types, only include the type
+                    any_of.append({"type": t})
+            
+            # Remove type-specific fields from parent if we moved them into anyOf
+            has_object_or_array = any(t in ("object", "array") for t in type_val if isinstance(t, str))
+            if has_object_or_array:
+                for field in type_specific_fields:
+                    schema.pop(field, None)
+            
+            schema["anyOf"] = any_of
             schema.pop("type")
         elif isinstance(type_val, list) and len(type_val) == 1:
             schema["type"] = type_val[0]
@@ -1011,6 +1054,8 @@ class VertexAITokenCounter(BaseTokenCounter):
         contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system: Optional[Any] = None,
     ) -> Optional[TokenCountResponse]:
         import copy
 

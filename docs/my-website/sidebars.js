@@ -42,48 +42,66 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
-        "proxy/guardrails/guardrail_policies",
+        "proxy/guardrails/team_based_guardrails",
         "proxy/guardrails/guardrail_load_balancing",
+        "proxy/guardrails/test_playground",
+        "proxy/guardrails/litellm_content_filter",
+        "proxy/guardrails/realtime_guardrails",
         {
           type: "category",
-          "label": "Contributing to Guardrails",
+          label: "Providers",
+          items: [
+            ...[
+              "proxy/guardrails/qualifire",
+              "proxy/guardrails/aim_security",
+              "proxy/guardrails/onyx_security",
+              "proxy/guardrails/aporia_api",
+              "proxy/guardrails/azure_content_guardrail",
+              "proxy/guardrails/bedrock",
+              "proxy/guardrails/crowdstrike_aidr",
+              "proxy/guardrails/enkryptai",
+              "proxy/guardrails/ibm_guardrails",
+              "proxy/guardrails/grayswan",
+              "proxy/guardrails/hiddenlayer",
+              "proxy/guardrails/lasso_security",
+              "proxy/guardrails/guardrails_ai",
+              "proxy/guardrails/lakera_ai",
+              "proxy/guardrails/model_armor",
+              "proxy/guardrails/noma_security",
+              "proxy/guardrails/dynamoai",
+              "proxy/guardrails/openai_moderation",
+              "proxy/guardrails/pangea",
+              "proxy/guardrails/pillar_security",
+              "proxy/guardrails/pii_masking_v2",
+              "proxy/guardrails/panw_prisma_airs",
+              "proxy/guardrails/secret_detection",
+              "proxy/guardrails/custom_guardrail",
+              "proxy/guardrails/custom_code_guardrail",
+              "proxy/guardrails/prompt_injection",
+              "proxy/guardrails/tool_permission",
+              "proxy/guardrails/zscaler_ai_guard",
+              "proxy/guardrails/javelin"
+            ].sort(),
+          ],
+        },
+        {
+          type: "category",
+          label: "Contributing to Guardrails",
           items: [
             "adding_provider/generic_guardrail_api",
             "adding_provider/simple_guardrail_tutorial",
             "adding_provider/adding_guardrail_support",
           ]
         },
-        "proxy/guardrails/test_playground",
-        "proxy/guardrails/litellm_content_filter",
-        ...[
-          "proxy/guardrails/qualifire",
-          "proxy/guardrails/aim_security",
-          "proxy/guardrails/onyx_security",
-          "proxy/guardrails/aporia_api",
-          "proxy/guardrails/azure_content_guardrail",
-          "proxy/guardrails/bedrock",
-          "proxy/guardrails/enkryptai",
-          "proxy/guardrails/ibm_guardrails",
-          "proxy/guardrails/grayswan",
-          "proxy/guardrails/hiddenlayer",
-          "proxy/guardrails/lasso_security",
-          "proxy/guardrails/guardrails_ai",
-          "proxy/guardrails/lakera_ai",
-          "proxy/guardrails/model_armor",
-          "proxy/guardrails/noma_security",
-          "proxy/guardrails/dynamoai",
-          "proxy/guardrails/openai_moderation",
-          "proxy/guardrails/pangea",
-          "proxy/guardrails/pillar_security",
-          "proxy/guardrails/pii_masking_v2",
-          "proxy/guardrails/panw_prisma_airs",
-          "proxy/guardrails/secret_detection",
-          "proxy/guardrails/custom_guardrail",
-          "proxy/guardrails/prompt_injection",
-          "proxy/guardrails/tool_permission",
-          "proxy/guardrails/zscaler_ai_guard",
-          "proxy/guardrails/javelin"
-        ].sort(),
+      ],
+    },
+    {
+      type: "category",
+      label: "Policies",
+      items: [
+        "proxy/guardrails/guardrail_policies",
+        "proxy/guardrails/policy_templates",
+        "proxy/guardrails/policy_tags",
       ],
     },
     {
@@ -92,13 +110,26 @@ const sidebars = {
       items: [
         "proxy/alerting",
         "proxy/pagerduty",
-        "proxy/prometheus"
+        "proxy/prometheus",
+        "proxy/pyroscope_profiling"
       ]
+    },
+    {
+      type: "doc",
+      id: "integrations/websearch_interception",
+      label: "Web Search Integration"
     },
     {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
+        {
+          type: "category",
+          label: "Contributing to Prompt Management",
+          items: [
+            "adding_provider/generic_prompt_management_api",
+          ]
+        },
         "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
@@ -124,17 +155,21 @@ const sidebars = {
             "tutorials/claude_responses_api",
             "tutorials/claude_code_max_subscription",
             "tutorials/claude_code_customer_tracking",
+            "tutorials/claude_code_prompt_cache_routing",
             "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
             "tutorials/claude_code_plugin_marketplace",
+            "tutorials/claude_code_beta_headers",
           ]
         },
         "tutorials/opencode_integration",
+        "tutorials/openclaw_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
+        "tutorials/google_genai_sdk",
         "tutorials/litellm_qwen_code_cli",
         "tutorials/openai_codex"
       ]
@@ -149,8 +184,12 @@ const sidebars = {
         slug: "/agent_sdks"
       },
       items: [
+        "tutorials/openai_agents_sdk",
         "tutorials/claude_agent_sdk",
+        "tutorials/copilotkit_sdk",
         "tutorials/google_adk",
+        "tutorials/livekit_xai_realtime",
+        "projects/openai-agents"
       ]
     },
 
@@ -219,6 +258,7 @@ const sidebars = {
           label: "Configuration",
           items: [
             "set_keys",
+            "proxy_auth",
             "caching/all_caches",
           ],
         },
@@ -283,40 +323,54 @@ const sidebars = {
           label: "Admin UI",
           items: [
             "proxy/ui",
-            "proxy/admin_ui_sso",
-            "proxy/custom_root_ui",
-            "proxy/custom_sso",
-            "proxy/ai_hub",
-            "proxy/model_compare_ui",
-            "proxy/ui_credentials",
-            "tutorials/scim_litellm",
             {
               type: "category",
-              label: "UI User/Team Management",
+              label: "Setup & SSO",
               items: [
-            "proxy/access_control",
-                "proxy/public_teams",
+                "proxy/admin_ui_sso",
+                "proxy/custom_sso",
+                "proxy/custom_root_ui",
+                "tutorials/scim_litellm",
+              ]
+            },
+            {
+              type: "category",
+              label: "Models",
+              items: [
+                "proxy/ui_credentials",
+                "proxy/ai_hub",
+                "proxy/model_compare_ui",
+                "proxy/ui_store_model_db_setting",
+              ]
+            },
+            {
+              type: "category",
+              label: "Teams & Organizations",
+              items: [
+                "proxy/access_control",
                 "proxy/self_serve",
+                "proxy/public_teams",
+                "proxy/ui_project_management",
                 "proxy/ui/bulk_edit_users",
                 "proxy/ui/page_visibility",
               ]
             },
             {
               type: "category",
-              label: "UI Usage Tracking",
+              label: "Observability: Usage",
               items: [
                 "proxy/customer_usage",
-                "proxy/endpoint_activity"
+                "proxy/endpoint_activity",
               ]
             },
             {
               type: "category",
-              label: "UI Logs",
+              label: "Logs",
               items: [
                 "proxy/ui_logs",
                 "proxy/ui_spend_log_settings",
                 "proxy/ui_logs_sessions",
-                "proxy/deleted_keys_teams"
+                "proxy/deleted_keys_teams",
               ]
             }
           ],
@@ -364,14 +418,27 @@ const sidebars = {
           items: [
             "proxy/users",
             "proxy/team_budgets",
+            "proxy/project_management",
+            "proxy/ui_team_soft_budget_alerts",
             "proxy/tag_budgets",
             "proxy/customers",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
+            "proxy/budget_reset_and_tz",
           ],
         },
         "proxy/caching",
+        {
+          type: "link",
+          label: "Guardrails",
+          href: "https://docs.litellm.ai/docs/proxy/guardrails/quick_start",
+        },
+        {
+          type: "link",
+          label: "Policies",
+          href: "https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies",
+        },
         {
           type: "category",
           label: "Create Custom Plugins",
@@ -418,6 +485,7 @@ const sidebars = {
             "proxy/model_access_guide",
             "proxy/model_access",
             "proxy/model_access_groups",
+            "proxy/access_groups",
             "proxy/team_model_add"
           ]
         },
@@ -469,6 +537,7 @@ const sidebars = {
           label: "/a2a - A2A Agent Gateway",
           items: [
             "a2a",
+            "a2a_invoking_agents",
             "a2a_cost_tracking",
             "a2a_agent_permissions"
           ],
@@ -521,6 +590,7 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
+        "evals_api",
         "generateContent",
         "apply_guardrail",
         "bedrock_invoke",
@@ -538,6 +608,9 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_openapi",
+            "mcp_oauth",
+            "mcp_public_internet",
             "mcp_semantic_filter",
             "mcp_control",
             "mcp_cost",
@@ -566,6 +639,7 @@ const sidebars = {
             "pass_through/bedrock",
             "pass_through/azure_passthrough",
             "pass_through/cohere",
+            "pass_through/cursor",
             "pass_through/google_ai_studio",
             "pass_through/langfuse",
             "pass_through/mistral",
@@ -689,6 +763,7 @@ const sidebars = {
             "providers/vertex_batch",
             "providers/vertex_ocr",
             "providers/vertex_ai_agent_engine",
+            "providers/vertex_realtime",
           ]
         },
         {
@@ -719,13 +794,13 @@ const sidebars = {
             "providers/bedrock_batches",
             "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
-        "providers/bedrock_vector_store",
-      ]
-    },
-    "providers/litellm_proxy",
-    "providers/abliteration",
-    "providers/ai21",
-    "providers/aiml",
+            "providers/bedrock_vector_store",
+          ]
+        },
+        "providers/litellm_proxy",
+        "providers/abliteration",
+        "providers/ai21",
+        "providers/aiml",
         "providers/aleph_alpha",
         "providers/amazon_nova",
         "providers/anyscale",
@@ -804,7 +879,14 @@ const sidebars = {
         "providers/openrouter",
         "providers/sarvam",
         "providers/ovhcloud",
-        "providers/perplexity",
+        {
+          type: "category",
+          label: "Perplexity AI",
+          items: [
+            "providers/perplexity",
+            "providers/perplexity_embedding",
+          ]
+        },
         "providers/petals",
         "providers/poe",
         "providers/publicai",
@@ -823,6 +905,7 @@ const sidebars = {
         },
         "providers/sambanova",
         "providers/sap",
+        "providers/scaleway",
         "providers/stability",
         "providers/synthetic",
         "providers/snowflake",
@@ -850,7 +933,14 @@ const sidebars = {
             "providers/watsonx/audio_transcription",
           ]
         },
-        "providers/xai",
+        {
+          type: "category",
+          label: "xAI",
+          items: [
+            "providers/xai",
+            "providers/xai_realtime",
+          ]
+        },
         "providers/xiaomi_mimo",
         "providers/xinference",
         "providers/zai",
@@ -874,6 +964,7 @@ const sidebars = {
         "providers/anthropic_tool_search",
         "guides/code_interpreter",
         "completion/message_trimming",
+        "completion/message_sanitization",
         "completion/model_alias",
         "completion/mock_requests",
         "completion/predict_outputs",
@@ -945,6 +1036,7 @@ const sidebars = {
         "tutorials/presidio_pii_masking",
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
+        "tutorials/claude_code_beta_headers",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
@@ -1039,15 +1131,42 @@ const sidebars = {
         "proxy_server",
       ],
     },
-    "troubleshoot",
     {
       type: "category",
-      label: "Issue Reporting",
+      label: "Troubleshooting",
       items: [
-        "troubleshoot/prisma_migrations",
-        "troubleshoot/cpu_issues",
-        "troubleshoot/memory_issues",
-        "troubleshoot/spend_queue_warnings",
+        "troubleshoot/ui_issues",
+        "mcp_troubleshoot",
+        {
+          type: "category",
+          label: "Performance / Latency",
+          items: [
+            "troubleshoot/latency_overhead",
+            "troubleshoot/cpu_issues",
+            "troubleshoot/memory_issues",
+            "troubleshoot/spend_queue_warnings",
+            "troubleshoot/max_callbacks",
+            "troubleshoot/prisma_migrations",
+          ],
+        },
+        "troubleshoot/rollback",
+        "troubleshoot",
+      ],
+    },
+    {
+      type: "category",
+      label: "Blog",
+      items: [
+        {
+          type: "link",
+          label: "Day 0 Support: Claude Sonnet 4.6",
+          href: "/blog/claude_sonnet_4_6",
+        },
+        {
+          type: "link",
+          label: "Incident: Broken Model Cost Map",
+          href: "/blog/model-cost-map-incident",
+        },
       ],
     },
   ],

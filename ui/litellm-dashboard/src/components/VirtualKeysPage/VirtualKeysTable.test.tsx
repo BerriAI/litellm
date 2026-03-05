@@ -28,7 +28,6 @@ vi.mock("./networking", async (importOriginal) => {
 
 // Mock filter helpers
 vi.mock("./key_team_helpers/filter_helpers", () => ({
-  fetchAllKeyAliases: vi.fn().mockResolvedValue(["test-key-alias"]),
   fetchAllTeams: vi.fn().mockResolvedValue([
     {
       team_id: "team-1",
@@ -99,6 +98,7 @@ const mockKey: KeyResponse = {
   created_at: "2024-11-01T10:00:00Z",
   created_by: "user-1",
   updated_at: "2024-11-15T10:00:00Z",
+  last_active: "2024-11-20T14:30:00Z",
   team_spend: 5.5,
   team_alias: "Test Team",
   team_tpm_limit: 5000,
@@ -194,7 +194,7 @@ beforeEach(() => {
       "Sort Order": "desc",
     },
     filteredKeys: [mockKey],
-    allKeyAliases: ["test-key-alias"],
+    filteredTotalCount: null,
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -303,7 +303,6 @@ it("should show 'No keys found' message when filteredKeys is empty", () => {
       "Sort Order": "desc",
     },
     filteredKeys: [],
-    allKeyAliases: [],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -341,7 +340,6 @@ it("should handle models with more than 3 entries to trigger expansion UI", () =
       "Sort Order": "desc",
     },
     filteredKeys: [keyWithManyModels],
-    allKeyAliases: ["test-key-alias"],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -452,8 +450,8 @@ it("should open KeyInfoView when clicking on a key ID button", async () => {
   // Wait for KeyInfoView to appear - check for unique elements that only exist in KeyInfoView
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
-    // KeyInfoView shows "Created:" or "Updated:" which is unique to it
-    expect(screen.getByText(/Created:|Updated:/)).toBeInTheDocument();
+    // KeyInfoHeader shows "Created At" metadata label
+    expect(screen.getByText("Created At")).toBeInTheDocument();
   });
 
   // Verify that table-specific elements are no longer visible
@@ -477,7 +475,6 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
       "Sort Order": "desc",
     },
     filteredKeys: [keyWithDefaultUserId],
-    allKeyAliases: ["test-key-alias"],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -517,7 +514,6 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
       "Sort Order": "desc",
     },
     filteredKeys: [keyWithDefaultCreatedBy],
-    allKeyAliases: ["test-key-alias"],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -540,5 +536,262 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
     // The created_by column should display "Default Proxy Admin"
     const defaultProxyAdminElements = screen.getAllByText("Default Proxy Admin");
     expect(defaultProxyAdminElements.length).toBeGreaterThan(0);
+  });
+});
+
+
+it("should render table without crashing when models is null", async () => {
+  const keyWithNullModels = {
+    ...mockKey,
+    models: null as unknown as string[],
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithNullModels],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  // This should not throw an error
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+});
+
+it("should render table without crashing when models is undefined", async () => {
+  const keyWithUndefinedModels = {
+    ...mockKey,
+    models: undefined as unknown as string[],
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithUndefinedModels],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  // This should not throw an error
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+});
+
+it("should render Last Active column header with info icon", () => {
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  expect(screen.getByText("Last Active")).toBeInTheDocument();
+});
+
+it("should display formatted date for last_active when value exists", async () => {
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    const expectedDate = new Date("2024-11-20T14:30:00Z").toLocaleDateString();
+    expect(screen.getByText(expectedDate)).toBeInTheDocument();
+  });
+});
+
+it("should display 'Unknown' for last_active when value is null", async () => {
+  const keyWithNullLastActive = {
+    ...mockKey,
+    last_active: null,
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithNullLastActive],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
+  });
+});
+
+const defaultMockProps = {
+  teams: [mockTeam],
+  organizations: [mockOrganization],
+  onSortChange: vi.fn(),
+  currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+};
+
+describe("pagination display – total count and page count", () => {
+  it("should show total_count from useKeys when no filter is active (filteredTotalCount is null)", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 509,
+        current_page: 1,
+        total_pages: 11,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filteredKeys: [mockKey],
+      filteredTotalCount: null,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing 1 - 50 of 509 results")).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 11")).toBeInTheDocument();
+    });
+  });
+
+  it("should show filteredTotalCount in pagination text when a filter search returns results", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 509,
+        current_page: 1,
+        total_pages: 11,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filteredKeys: [mockKey],
+      filteredTotalCount: 1,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
+    });
+  });
+
+  it("should not show stale unfiltered totals when filteredTotalCount is set", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 509,
+        current_page: 1,
+        total_pages: 11,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filteredKeys: [mockKey],
+      filteredTotalCount: 1,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/509 results/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/of 11/)).not.toBeInTheDocument();
+    });
   });
 });

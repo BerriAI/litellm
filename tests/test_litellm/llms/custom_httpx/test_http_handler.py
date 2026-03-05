@@ -141,6 +141,83 @@ async def test_ssl_verification_with_aiohttp_transport():
 
 
 @pytest.mark.asyncio
+async def test_ssl_verification_with_shared_session():
+    """
+    Test that ssl_verify=False is respected even with shared sessions.
+
+    This was a bug where shared sessions bypassed SSL configuration because
+    _create_aiohttp_transport returned immediately without passing ssl_verify
+    to the LiteLLMAiohttpTransport constructor.
+
+    The fix stores ssl_verify in the transport and passes it per-request.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a shared session (simulating what happens in production)
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and ssl_verify=False
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=False,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL setting is stored in the transport for per-request use
+            assert transport._ssl_verify is False
+        finally:
+            await shared_session.close()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
+async def test_ssl_context_with_shared_session():
+    """
+    Test that ssl_context is respected even with shared sessions.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a custom SSL context
+        custom_ssl_context = ssl.create_default_context()
+
+        # Create a shared session
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and custom ssl_context
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_context=custom_ssl_context,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL context is stored in the transport for per-request use
+            assert transport._ssl_verify is custom_ssl_context
+        finally:
+            await shared_session.close()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
 async def test_aiohttp_transport_trust_env_setting(monkeypatch):
     """Test that trust_env setting is properly configured in aiohttp transport"""
     # Test 1: Default trust_env behavior
@@ -281,38 +358,40 @@ async def test_async_handler_with_shared_session():
 @pytest.mark.asyncio
 async def test_get_async_httpx_client_with_shared_session():
     """Test get_async_httpx_client with shared session"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Create a mock shared session
     mock_session = MockClientSession()
-    
+
     # Test with shared session
     client = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=mock_session  # type: ignore
     )
-    
+
     # Verify the client was created successfully
     assert client is not None
-    assert isinstance(client, AsyncHTTPHandler)
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client, AsyncHTTPHandlerReload)
 
 
 @pytest.mark.asyncio
 async def test_get_async_httpx_client_without_shared_session():
     """Test get_async_httpx_client without shared session (backward compatibility)"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Test without shared session
     client = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=None
     )
-    
+
     # Verify the client was created successfully
     assert client is not None
-    assert isinstance(client, AsyncHTTPHandler)
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client, AsyncHTTPHandlerReload)
 
 
 @pytest.mark.asyncio
@@ -373,31 +452,32 @@ def test_shared_session_parameter_in_completion():
 @pytest.mark.asyncio
 async def test_session_reuse_integration():
     """Integration test for session reuse functionality"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Create a mock session
     mock_session = MockClientSession()
-    
+
     # Create two clients with the same session
     client1 = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=mock_session  # type: ignore
     )
-    
+
     client2 = get_async_httpx_client(
         llm_provider=LlmProviders.OPENAI,
         shared_session=mock_session  # type: ignore
     )
-    
+
     # Both clients should be created successfully
     assert client1 is not None
     assert client2 is not None
-    
+
     # Both should be AsyncHTTPHandler instances
-    assert isinstance(client1, AsyncHTTPHandler)
-    assert isinstance(client2, AsyncHTTPHandler)
-    
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client1, AsyncHTTPHandlerReload)
+    assert isinstance(client2, AsyncHTTPHandlerReload)
+
     # Clean up
     await client1.close()
     await client2.close()

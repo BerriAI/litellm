@@ -1,28 +1,24 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { Form, Typography, Select, Modal, Tag, Steps } from "antd";
-import { Button, TextInput } from "@tremor/react";
-import {
-  guardrail_provider_map,
-  shouldRenderPIIConfigSettings,
-  shouldRenderContentFilterConfigSettings,
-  guardrailLogoMap,
-  populateGuardrailProviders,
-  populateGuardrailProviderMap,
-  getGuardrailProviders,
-} from "./guardrail_info_helpers";
-import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from "../networking";
-import PiiConfiguration from "./pii_configuration";
-import GuardrailProviderFields from "./guardrail_provider_fields";
-import GuardrailOptionalParams from "./guardrail_optional_params";
+import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
+import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
+import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings } from "../networking";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
-import ToolPermissionRulesEditor, {
-  ToolPermissionConfig,
-} from "./tool_permission/ToolPermissionRulesEditor";
+import {
+  getGuardrailProviders,
+  guardrail_provider_map,
+  guardrailLogoMap,
+  populateGuardrailProviderMap,
+  populateGuardrailProviders,
+  shouldRenderContentFilterConfigSettings,
+  shouldRenderPIIConfigSettings,
+} from "./guardrail_info_helpers";
+import GuardrailOptionalParams from "./guardrail_optional_params";
+import GuardrailProviderFields from "./guardrail_provider_fields";
+import PiiConfiguration from "./pii_configuration";
+import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
-const { Step } = Steps;
 
 // Define human-friendly descriptions for each mode
 const modeDescriptions = {
@@ -34,11 +30,20 @@ const modeDescriptions = {
   during_mcp_call: "During MCP Tool Call - Runs in parallel with MCP tool execution for monitoring",
 };
 
+interface GuardrailPreset {
+  provider: string;
+  categoryName?: string;
+  guardrailNameSuggestion: string;
+  mode: string;
+  defaultOn: boolean;
+}
+
 interface AddGuardrailFormProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
+  preset?: GuardrailPreset;
 }
 
 interface GuardrailSettings {
@@ -91,7 +96,7 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
 
-const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
+const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess, preset }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -110,6 +115,17 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [selectedPatterns, setSelectedPatterns] = useState<any[]>([]);
   const [blockedWords, setBlockedWords] = useState<any[]>([]);
   const [selectedContentCategories, setSelectedContentCategories] = useState<any[]>([]);
+  const [pendingCategorySelection, setPendingCategorySelection] = useState<string>("");
+  const [competitorIntentEnabled, setCompetitorIntentEnabled] = useState(false);
+  const [competitorIntentConfig, setCompetitorIntentConfig] = useState<any>(null);
+
+  // Endpoint Settings state (step 5)
+  const [selectedEndpointType, setSelectedEndpointType] = useState<string>("");
+  const [endSessionAfterNFails, setEndSessionAfterNFails] = useState<number | undefined>(undefined);
+  const [onViolation, setOnViolation] = useState<"warn" | "end_session">("warn");
+  const [realtimeViolationMessage, setRealtimeViolationMessage] = useState<string>("");
+  const [endpointSettingsOpen, setEndpointSettingsOpen] = useState<boolean>(false);
+
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>({
     rules: [],
     default_action: "deny",
@@ -152,14 +168,54 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     fetchData();
   }, [accessToken]);
 
+  // Apply preset when settings are loaded and form becomes visible
+  useEffect(() => {
+    if (!preset || !visible || !guardrailSettings) return;
+
+    // Set provider
+    setSelectedProvider(preset.provider);
+    const baseValues: Record<string, any> = {
+      provider: preset.provider,
+      guardrail_name: preset.guardrailNameSuggestion,
+      mode: preset.mode,
+      default_on: preset.defaultOn,
+    };
+    if (preset.provider === "BlockCodeExecution") {
+      baseValues.confidence_threshold = 0.5;
+    }
+    form.setFieldsValue(baseValues);
+
+    // Pre-select content category if specified
+    if (preset.categoryName && guardrailSettings.content_filter_settings?.content_categories) {
+      const category = guardrailSettings.content_filter_settings.content_categories.find(
+        (c: any) => c.name === preset.categoryName,
+      );
+      if (category) {
+        setSelectedContentCategories([
+          {
+            id: `category-${Date.now()}`,
+            category: category.name,
+            display_name: category.display_name,
+            action: category.default_action as "BLOCK" | "MASK",
+            severity_threshold: "medium",
+          },
+        ]);
+      }
+    }
+  }, [preset, visible, guardrailSettings]);
+
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
     // Reset form fields that are provider-specific
-    form.setFieldsValue({
+    const resetValues: Record<string, any> = {
       config: undefined,
       presidio_analyzer_api_base: undefined,
       presidio_anonymizer_api_base: undefined,
-    });
+    };
+    if (value === "BlockCodeExecution") {
+      resetValues.confidence_threshold = 0.5;
+    }
+    form.setFieldsValue(resetValues);
 
     // Reset PII selections when changing provider
     setSelectedEntities([]);
@@ -169,6 +225,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedCategories([]);
     setGlobalSeverityThreshold(2);
     setCategorySpecificThresholds({});
+
+    // Reset Content Filter selections
+    setSelectedPatterns([]);
+    setBlockedWords([]);
+    setSelectedContentCategories([]);
+    setPendingCategorySelection("");
+    setCompetitorIntentEnabled(false);
+    setCompetitorIntentConfig(null);
 
     setToolPermissionConfig({
       rules: [],
@@ -248,6 +312,45 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setCurrentStep(currentStep - 1);
   };
 
+  const handleAddAndContinue = (competitorIntentOnly?: boolean) => {
+    // Competitor intent only: just advance to next step (no category to add)
+    if (competitorIntentOnly) {
+      setCurrentStep(currentStep + 1);
+      return;
+    }
+
+    if (!pendingCategorySelection || !guardrailSettings) return;
+
+    const contentFilterSettings = guardrailSettings.content_filter_settings;
+    if (!contentFilterSettings) return;
+
+    const category = contentFilterSettings.content_categories?.find((c) => c.name === pendingCategorySelection);
+    if (!category) return;
+
+    // Check if already added
+    if (selectedContentCategories.some((c) => c.category === pendingCategorySelection)) {
+      setPendingCategorySelection("");
+      setCurrentStep(currentStep + 1);
+      return;
+    }
+
+    // Add the category
+    setSelectedContentCategories([
+      ...selectedContentCategories,
+      {
+        id: `category-${Date.now()}`,
+        category: category.name,
+        display_name: category.display_name,
+        action: category.default_action as "BLOCK" | "MASK",
+        severity_threshold: "medium",
+      },
+    ]);
+
+    // Clear pending selection and advance to next step
+    setPendingCategorySelection("");
+    setCurrentStep(currentStep + 1);
+  };
+
   const resetForm = () => {
     form.resetFields();
     setSelectedProvider(null);
@@ -259,12 +362,18 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedPatterns([]);
     setBlockedWords([]);
     setSelectedContentCategories([]);
+    setPendingCategorySelection("");
     setToolPermissionConfig({
       rules: [],
       default_action: "deny",
       on_disallowed_action: "block",
       violation_message_template: "",
     });
+    setSelectedEndpointType("");
+    setEndSessionAfterNFails(undefined);
+    setOnViolation("warn");
+    setRealtimeViolationMessage("");
+    setEndpointSettingsOpen(false);
     setCurrentStep(0);
   };
 
@@ -323,8 +432,23 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         }
       }
 
-      // For Content Filter, add patterns, blocked words, and categories
+      // For Content Filter, add patterns, blocked words, categories, and optionally competitor intent
       if (shouldRenderContentFilterConfigSettings(values.provider)) {
+        // Validate that at least one content filter setting is configured
+        const hasCompetitorIntent = competitorIntentEnabled && competitorIntentConfig?.brand_self?.length > 0;
+        if (
+          selectedPatterns.length === 0 &&
+          blockedWords.length === 0 &&
+          selectedContentCategories.length === 0 &&
+          !hasCompetitorIntent
+        ) {
+          NotificationsManager.fromBackend(
+            "Please configure at least one content filter setting (category, pattern, keyword, or competitor intent)",
+          );
+          setLoading(false);
+          return;
+        }
+
         if (selectedPatterns.length > 0) {
           guardrailData.litellm_params.patterns = selectedPatterns.map((p) => ({
             pattern_type: p.type === "prebuilt" ? "prebuilt" : "regex",
@@ -348,6 +472,22 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             action: c.action,
             severity_threshold: c.severity_threshold || "medium",
           }));
+        }
+        if (competitorIntentEnabled && competitorIntentConfig?.brand_self?.length > 0) {
+          guardrailData.litellm_params.competitor_intent_config = {
+            competitor_intent_type: competitorIntentConfig.competitor_intent_type ?? "airline",
+            brand_self: competitorIntentConfig.brand_self,
+            locations: competitorIntentConfig.locations?.length > 0 ? competitorIntentConfig.locations : undefined,
+            competitors:
+              competitorIntentConfig.competitor_intent_type === "generic" &&
+              competitorIntentConfig.competitors?.length > 0
+                ? competitorIntentConfig.competitors
+                : undefined,
+            policy: competitorIntentConfig.policy,
+            threshold_high: competitorIntentConfig.threshold_high,
+            threshold_medium: competitorIntentConfig.threshold_medium,
+            threshold_low: competitorIntentConfig.threshold_low,
+          };
         }
       }
       // Add config values to the guardrail_info if provided
@@ -374,6 +514,19 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         guardrailData.litellm_params.on_disallowed_action = toolPermissionConfig.on_disallowed_action;
         if (toolPermissionConfig.violation_message_template) {
           guardrailData.litellm_params.violation_message_template = toolPermissionConfig.violation_message_template;
+        }
+      }
+
+      // Endpoint Settings (realtime) — content filter only
+      if (shouldRenderContentFilterConfigSettings(values.provider)) {
+        if (endSessionAfterNFails !== undefined && endSessionAfterNFails > 0) {
+          guardrailData.litellm_params.end_session_after_n_fails = endSessionAfterNFails;
+        }
+        if (onViolation && selectedEndpointType === "realtime") {
+          guardrailData.litellm_params.on_violation = onViolation;
+        }
+        if (realtimeViolationMessage.trim()) {
+          guardrailData.litellm_params.realtime_violation_message = realtimeViolationMessage.trim();
         }
       }
 
@@ -457,7 +610,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           label="Guardrail Name"
           rules={[{ required: true, message: "Please enter a guardrail name" }]}
         >
-          <TextInput placeholder="Enter a name for this guardrail" />
+          <Input placeholder="Enter a name for this guardrail" />
         </Form.Item>
 
         <Form.Item
@@ -639,28 +792,34 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         onPatternAdd={(pattern) => setSelectedPatterns([...selectedPatterns, pattern])}
         onPatternRemove={(id) => setSelectedPatterns(selectedPatterns.filter((p) => p.id !== id))}
         onPatternActionChange={(id, action) => {
-          setSelectedPatterns(
-            selectedPatterns.map((p) => (p.id === id ? { ...p, action } : p))
-          );
+          setSelectedPatterns(selectedPatterns.map((p) => (p.id === id ? { ...p, action } : p)));
         }}
         onBlockedWordAdd={(word) => setBlockedWords([...blockedWords, word])}
         onBlockedWordRemove={(id) => setBlockedWords(blockedWords.filter((w) => w.id !== id))}
         onBlockedWordUpdate={(id, field, value) => {
-          setBlockedWords(
-            blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w))
-          );
+          setBlockedWords(blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w)));
         }}
         contentCategories={contentFilterSettings.content_categories || []}
         selectedContentCategories={selectedContentCategories}
         onContentCategoryAdd={(category) => setSelectedContentCategories([...selectedContentCategories, category])}
-        onContentCategoryRemove={(id) => setSelectedContentCategories(selectedContentCategories.filter((c) => c.id !== id))}
+        onContentCategoryRemove={(id) =>
+          setSelectedContentCategories(selectedContentCategories.filter((c) => c.id !== id))
+        }
         onContentCategoryUpdate={(id, field, value) => {
           setSelectedContentCategories(
-            selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c))
+            selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c)),
           );
         }}
+        pendingCategorySelection={pendingCategorySelection}
+        onPendingCategorySelectionChange={setPendingCategorySelection}
         accessToken={accessToken}
         showStep={step}
+        competitorIntentEnabled={competitorIntentEnabled}
+        competitorIntentConfig={competitorIntentConfig}
+        onCompetitorIntentChange={(enabled, config) => {
+          setCompetitorIntentEnabled(enabled);
+          setCompetitorIntentConfig(config);
+        }}
       />
     );
   };
@@ -669,12 +828,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     if (!selectedProvider) return null;
 
     if (isToolPermissionProvider) {
-      return (
-        <ToolPermissionRulesEditor
-          value={toolPermissionConfig}
-          onChange={setToolPermissionConfig}
-        />
-      );
+      return <ToolPermissionRulesEditor value={toolPermissionConfig} onChange={setToolPermissionConfig} />;
     }
 
     if (!providerParams) {
@@ -713,67 +867,314 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           return renderContentFilterConfiguration("keywords");
         }
         return null;
+      case 4:
+        return renderEndpointSettings();
       default:
         return null;
     }
   };
 
   const renderStepButtons = () => {
-    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 4 : 2;
+    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 5 : 2;
     const isLastStep = currentStep === totalSteps - 1;
-    
+    const isCategoriesStep = shouldRenderContentFilterConfigSettings(selectedProvider) && currentStep === 1;
+    const hasPendingCategory = pendingCategorySelection !== "";
+    const hasCompetitorIntentConfigured =
+      competitorIntentEnabled && (competitorIntentConfig?.brand_self?.length ?? 0) > 0;
+    const canContinueFromCategoriesStep = hasPendingCategory || hasCompetitorIntentConfigured;
+
     return (
       <div className="flex justify-end space-x-2 mt-4">
-        {currentStep > 0 && (
-          <Button variant="secondary" onClick={prevStep}>
-            Previous
-          </Button>
+        {currentStep > 0 && <Button onClick={prevStep}>Previous</Button>}
+        {isCategoriesStep ? (
+          <>
+            <Button onClick={nextStep}>Skip</Button>
+            <Button
+              type="primary"
+              onClick={() => handleAddAndContinue(hasCompetitorIntentConfigured)}
+              disabled={!canContinueFromCategoriesStep}
+            >
+              {hasPendingCategory ? "Add & Continue →" : "Continue →"}
+            </Button>
+          </>
+        ) : (
+          <>
+            {!isLastStep && (
+              <Button type="primary" onClick={nextStep}>
+                Next
+              </Button>
+            )}
+            {isLastStep && (
+              <Button type="primary" onClick={handleSubmit} loading={loading}>
+                Create Guardrail
+              </Button>
+            )}
+          </>
         )}
-        {!isLastStep && <Button onClick={nextStep}>Next</Button>}
-        {isLastStep && (
-          <Button onClick={handleSubmit} loading={loading}>
-            Create Guardrail
-          </Button>
-        )}
-        <Button variant="secondary" onClick={handleClose}>
-          Cancel
-        </Button>
+        <Button onClick={handleClose}>Cancel</Button>
       </div>
     );
   };
 
-  return (
-    <Modal title="Add Guardrail" open={visible} onCancel={handleClose} footer={null} width={800}>
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          mode: "pre_call",
-          default_on: false,
-        }}
-      >
-        <Steps current={currentStep} className="mb-6" style={{ overflow: "visible" }}>
-          <Step title="Basic Info" />
-          <Step
-            title={
-              shouldRenderPIIConfigSettings(selectedProvider)
-                ? "PII Configuration"
-                : shouldRenderContentFilterConfigSettings(selectedProvider)
-                  ? "Default Categories"
-                  : "Provider Configuration"
-            }
-          />
-          {shouldRenderContentFilterConfigSettings(selectedProvider) && (
-            <>
-              <Step title="Patterns" />
-              <Step title="Keywords" />
-            </>
-          )}
-        </Steps>
+  const renderEndpointSettings = () => {
+    return (
+      <div className="space-y-6">
+        <div>
+          <p className="text-sm text-gray-500">
+            Configure settings for a specific call type. Most guardrails don't need this — skip it
+            unless you're using a specific endpoint like <code>/v1/realtime</code>.
+          </p>
+        </div>
 
-        {renderStepContent()}
-        {renderStepButtons()}
-      </Form>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Call type</label>
+          <Select
+            placeholder="Select a call type"
+            value={selectedEndpointType || undefined}
+            onChange={(v) => {
+              setSelectedEndpointType(v);
+              setEndpointSettingsOpen(false);
+            }}
+            style={{ width: 260 }}
+            allowClear
+            options={[{ value: "realtime", label: "/v1/realtime" }]}
+          />
+          <p className="text-xs text-gray-400 mt-1">More call types coming soon.</p>
+        </div>
+
+        {selectedEndpointType === "realtime" && (
+          <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setEndpointSettingsOpen((o) => !o)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700"
+            >
+              <span>/v1/realtime settings</span>
+              <svg
+                className={`w-4 h-4 text-gray-500 transition-transform ${endpointSettingsOpen ? "rotate-180" : ""}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {endpointSettingsOpen && (
+              <div className="space-y-5 px-4 py-4 border-t border-gray-200">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    End session after X violations
+                  </label>
+                  <p className="text-xs text-gray-400 mb-2">
+                    Automatically close the session after this many guardrail violations. Leave
+                    empty to never auto-close.
+                  </p>
+                  <input
+                    type="number"
+                    min={1}
+                    placeholder="e.g. 3"
+                    value={endSessionAfterNFails ?? ""}
+                    onChange={(e) =>
+                      setEndSessionAfterNFails(
+                        e.target.value ? parseInt(e.target.value, 10) : undefined
+                      )
+                    }
+                    className="border border-gray-300 rounded px-3 py-1.5 text-sm w-32"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    On violation
+                  </label>
+                  <div className="space-y-2">
+                    {(["warn", "end_session"] as const).map((opt) => (
+                      <label key={opt} className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="on_violation"
+                          value={opt}
+                          checked={onViolation === opt}
+                          onChange={() => setOnViolation(opt)}
+                          className="mt-0.5"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-gray-800">
+                            {opt === "warn" ? "Warn" : "End session"}
+                          </span>
+                          <p className="text-xs text-gray-400 m-0">
+                            {opt === "warn"
+                              ? "Bot speaks the message, session continues"
+                              : "Bot speaks the message, connection closes immediately"}
+                          </p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Message the user hears
+                  </label>
+                  <p className="text-xs text-gray-400 mb-2">
+                    What the bot says aloud when this guardrail fires. Falls back to the default
+                    violation message if empty.
+                  </p>
+                  <textarea
+                    rows={3}
+                    placeholder="e.g. I'm not able to continue this conversation. Please contact us at 1-800-774-2678."
+                    value={realtimeViolationMessage}
+                    onChange={(e) => setRealtimeViolationMessage(e.target.value)}
+                    className="border border-gray-300 rounded px-3 py-2 text-sm w-full resize-none"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const getStepConfigs = () => {
+    if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
+      return [
+        { title: "Basic Info", optional: false },
+        { title: "Topics", optional: false },
+        { title: "Patterns", optional: false },
+        { title: "Keywords", optional: false },
+        { title: "Endpoint Settings (Optional)", optional: true },
+      ];
+    }
+    if (shouldRenderPIIConfigSettings(selectedProvider)) {
+      return [
+        { title: "Basic Info", optional: false },
+        { title: "PII Configuration", optional: false },
+      ];
+    }
+    return [
+      { title: "Basic Info", optional: false },
+      { title: "Provider Configuration", optional: false },
+    ];
+  };
+
+  const stepConfigs = getStepConfigs();
+
+  return (
+    <Modal
+      title={null}
+      open={visible}
+      onCancel={handleClose}
+      footer={null}
+      width={1000}
+      closable={false}
+      className="top-8"
+      styles={{
+        body: { padding: 0 },
+      }}
+    >
+      <div className="flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <h3 className="text-base font-semibold text-gray-900 m-0">Create guardrail</h3>
+          <button
+            onClick={handleClose}
+            className="text-gray-400 hover:text-gray-600 bg-transparent border-none cursor-pointer text-base leading-none p-1"
+          >
+            &#x2715;
+          </button>
+        </div>
+
+        {/* Scrollable content - inline vertical stepper */}
+        <div className="overflow-auto px-6 py-4" style={{ maxHeight: "calc(80vh - 120px)" }}>
+          <Form
+            form={form}
+            layout="vertical"
+            initialValues={{
+              mode: "pre_call",
+              default_on: false,
+            }}
+          >
+            {stepConfigs.map((step, index) => {
+              const isDone = index < currentStep;
+              const isCurrent = index === currentStep;
+              const isLast = index === stepConfigs.length - 1;
+              return (
+                <div key={index} className="relative flex gap-4" style={{ paddingBottom: isLast ? 0 : 8 }}>
+                  {/* Vertical line + step indicator */}
+                  <div className="flex flex-col items-center flex-shrink-0" style={{ width: 24 }}>
+                    <div
+                      className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0"
+                      style={{
+                        background: isDone ? "#4f46e5" : isCurrent ? "#fff" : "#f8fafc",
+                        color: isDone ? "#fff" : isCurrent ? "#4f46e5" : "#94a3b8",
+                        border: isCurrent ? "2px solid #4f46e5" : isDone ? "none" : "1px solid #e2e8f0",
+                      }}
+                    >
+                      {isDone ? "\u2713" : index + 1}
+                    </div>
+                    {!isLast && (
+                      <div
+                        className="flex-1"
+                        style={{
+                          width: 1,
+                          background: isDone ? "#4f46e5" : "#e2e8f0",
+                          minHeight: 16,
+                        }}
+                      />
+                    )}
+                  </div>
+
+                  {/* Step content */}
+                  <div className="flex-1 min-w-0" style={{ paddingBottom: isLast ? 0 : 16 }}>
+                    {/* Step header - clickable for completed steps */}
+                    <div
+                      className={`flex items-center gap-2 ${isDone ? "cursor-pointer" : ""}`}
+                      onClick={() => {
+                        if (isDone) setCurrentStep(index);
+                      }}
+                      style={{ minHeight: 24 }}
+                    >
+                      <span
+                        className="text-sm"
+                        style={{
+                          fontWeight: isCurrent ? 600 : 500,
+                          color: isCurrent ? "#1e293b" : isDone ? "#4f46e5" : "#94a3b8",
+                        }}
+                      >
+                        {step.title}
+                      </span>
+                      {step.optional && !isCurrent && <span className="text-[11px] text-slate-400">optional</span>}
+                      {isDone && <span className="text-[11px] text-indigo-500 hover:underline">Edit</span>}
+                    </div>
+
+                    {/* Expanded form content for current step */}
+                    {isCurrent && <div className="mt-3">{renderStepContent()}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </Form>
+        </div>
+
+        {/* Bottom bar */}
+        <div className="flex items-center justify-end space-x-3 px-6 py-3 border-t border-gray-200">
+          <Button onClick={handleClose}>Cancel</Button>
+          {currentStep > 0 && <Button onClick={prevStep}>Previous</Button>}
+          {currentStep < stepConfigs.length - 1 ? (
+            <Button type="primary" onClick={nextStep}>
+              Next
+            </Button>
+          ) : (
+            <Button type="primary" onClick={handleSubmit} loading={loading}>
+              Create Guardrail
+            </Button>
+          )}
+        </div>
+      </div>
     </Modal>
   );
 };

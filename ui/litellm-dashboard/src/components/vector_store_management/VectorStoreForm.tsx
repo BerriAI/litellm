@@ -108,7 +108,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
   };
 
   return (
-    <Modal title="Add New Vector Store" visible={isVisible} width={1000} footer={null} onCancel={handleCancel}>
+    <Modal title="Add New Vector Store" open={isVisible} width={1000} footer={null} onCancel={handleCancel}>
       <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
         <Form.Item
           label={

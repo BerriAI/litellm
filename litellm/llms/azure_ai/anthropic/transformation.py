@@ -2,7 +2,6 @@
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
-
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
@@ -86,6 +85,7 @@ class AzureAnthropicConfig(AnthropicConfig):
         # Ensure anthropic-version header is set
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = "2023-06-01"
+
 
         return headers
 

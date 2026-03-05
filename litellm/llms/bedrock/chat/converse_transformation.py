@@ -3,6 +3,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 """
 
 import copy
+import json
 import time
 import types
 from typing import List, Literal, Optional, Tuple, Union, cast, overload
@@ -11,7 +12,10 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
     filter_internal_params,
@@ -66,6 +70,7 @@ from ..common_utils import (
     BedrockModelInfo,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
+    is_claude_4_5_on_bedrock,
 )
 
 # Computer use tool prefixes supported by Bedrock
@@ -81,7 +86,36 @@ BEDROCK_COMPUTER_USE_TOOLS = [
 UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
     "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
     "prompt-caching",  # Prompt caching not supported in Converse API
+    "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
+
+# Models that support Bedrock's native structured outputs API (outputConfig.textFormat)
+# Uses substring matching against the Bedrock model ID
+# Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
+BEDROCK_NATIVE_STRUCTURED_OUTPUT_MODELS = {
+    # Anthropic Claude 4.5+
+    "claude-haiku-4-5",
+    "claude-sonnet-4-5",
+    "claude-opus-4-5",
+    "claude-opus-4-6",
+    # Qwen3
+    "qwen3",
+    # DeepSeek
+    "deepseek-v3.1",
+    # Gemma 3
+    "gemma-3",
+    # MiniMax
+    "minimax-m2",
+    # Mistral (magistral-small excluded: broken constrained decoding on Bedrock)
+    "ministral",
+    "mistral-large-3",
+    "voxtral",
+    # Moonshot
+    "kimi-k2",
+    # NVIDIA
+    "nemotron-nano",
+    # OpenAI (gpt-oss excluded: broken constrained decoding, works via tool-call fallback)
+}
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -265,50 +299,59 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock",
                 )
 
-    def _is_nova_lite_2_model(self, model: str) -> bool:
+    def _is_nova_2_model(self, model: str) -> bool:
         """
-        Check if the model is a Nova Lite 2 model that supports reasoningConfig.
+        Check if the model is a Nova 2 model that supports reasoningConfig.
 
-        Nova Lite 2 models use a different reasoning configuration structure compared to
+        Nova 2 models use a different reasoning configuration structure compared to
         Anthropic's thinking parameter and GPT-OSS's reasoning_effort parameter.
 
         Supported models:
         - amazon.nova-2-lite-v1:0
+        - amazon.nova-2-pro-preview-20251202-v1:0
         - us.amazon.nova-2-lite-v1:0
         - eu.amazon.nova-2-lite-v1:0
         - apac.amazon.nova-2-lite-v1:0
+        - (and other regional variants)
 
         Args:
             model: The model identifier
 
         Returns:
-            True if the model is a Nova Lite 2 model, False otherwise
+            True if the model is a Nova 2 model, False otherwise
 
         Examples:
             >>> config = AmazonConverseConfig()
-            >>> config._is_nova_lite_2_model("amazon.nova-2-lite-v1:0")
+            >>> config._is_nova_2_model("amazon.nova-2-lite-v1:0")
             True
-            >>> config._is_nova_lite_2_model("us.amazon.nova-2-lite-v1:0")
+            >>> config._is_nova_2_model("us.amazon.nova-2-lite-v1:0")
             True
-            >>> config._is_nova_lite_2_model("amazon.nova-pro-1-5-v1:0")
+            >>> config._is_nova_2_model("us.amazon.nova-2-pro-preview-20251202-v1:0")
+            True
+            >>> config._is_nova_2_model("amazon.nova-pro-1-5-v1:0")
             False
-            >>> config._is_nova_lite_2_model("amazon.nova-pro-v1:0")
+            >>> config._is_nova_2_model("amazon.nova-pro-v1:0")
             False
         """
-        # Remove regional prefix if present (us., eu., apac.)
+        # Remove provider routing prefix if present (bedrock/converse/, bedrock/, converse/)
         model_without_region = model
-        for prefix in ["us.", "eu.", "apac."]:
-            if model.startswith(prefix):
-                model_without_region = model[len(prefix) :]
+        for routing_prefix in ["bedrock/converse/", "bedrock/", "converse/"]:
+            if model_without_region.startswith(routing_prefix):
+                model_without_region = model_without_region[len(routing_prefix) :]
                 break
 
-        # Check if the model is specifically Nova Lite 2
-        return "nova-2-lite" in model_without_region
+        # Remove regional prefix if present (us., eu., apac.)
+        for prefix in ["us.", "eu.", "apac."]:
+            if model_without_region.startswith(prefix):
+                model_without_region = model_without_region[len(prefix) :]
+                break
+
+        # Check if the model is a Nova 2 model (matches nova-2-lite, nova-2-pro, etc.)
+        # Also check for nova-2/ spec prefix for imported models
+        return model_without_region.startswith("amazon.nova-2-") or model_without_region.startswith("nova-2/")
 
     def _map_web_search_options(
-        self,
-        web_search_options: dict,
-        model: str
+        self, web_search_options: dict, model: str
     ) -> Optional[BedrockToolBlock]:
         """
         Map web_search_options to Nova grounding systemTool.
@@ -393,7 +436,7 @@ class AmazonConverseConfig(BaseConfig):
 
         Different model families handle reasoning effort differently:
         - GPT-OSS models: Keep reasoning_effort as-is (passed to additionalModelRequestFields)
-        - Nova Lite 2 models: Transform to reasoningConfig structure
+        - Nova 2 models: Transform to reasoningConfig structure
         - Other models (Anthropic, etc.): Convert to thinking parameter
 
         Args:
@@ -422,8 +465,8 @@ class AmazonConverseConfig(BaseConfig):
             # GPT-OSS models: keep reasoning_effort as-is
             # It will be passed through to additionalModelRequestFields
             optional_params["reasoning_effort"] = reasoning_effort
-        elif self._is_nova_lite_2_model(model):
-            # Nova Lite 2 models: transform to reasoningConfig
+        elif self._is_nova_2_model(model):
+            # Nova 2 models: transform to reasoningConfig
             reasoning_config = self._transform_reasoning_effort_to_reasoning_config(
                 reasoning_effort
             )
@@ -431,8 +474,27 @@ class AmazonConverseConfig(BaseConfig):
         else:
             # Anthropic and other models: convert to thinking parameter
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort
+                reasoning_effort=reasoning_effort, model=model
             )
+
+    @staticmethod
+    def _clamp_thinking_budget_tokens(optional_params: dict) -> None:
+        """
+        Clamp thinking.budget_tokens to the Bedrock minimum (1024).
+
+        Bedrock returns a 400 error if budget_tokens < 1024.
+        """
+        thinking = optional_params.get("thinking")
+        if isinstance(thinking, dict):
+            budget = thinking.get("budget_tokens")
+            if isinstance(budget, int) and budget < BEDROCK_MIN_THINKING_BUDGET_TOKENS:
+                verbose_logger.debug(
+                    "Bedrock requires thinking.budget_tokens >= %d, got %d. "
+                    "Clamping to minimum.",
+                    BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+                    budget,
+                )
+                thinking["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         from litellm.utils import supports_function_calling
@@ -449,6 +511,7 @@ class AmazonConverseConfig(BaseConfig):
             "response_format",
             "requestMetadata",
             "service_tier",
+            "parallel_tool_calls",
         ]
 
         if (
@@ -458,6 +521,9 @@ class AmazonConverseConfig(BaseConfig):
             supported_params.append("tool_choice")
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+            # For nova imported models, also add web_search_options
+            if "nova" in model.lower():
+                supported_params.append("web_search_options")
             return supported_params
 
         ## Filter out 'cross-region' from model name
@@ -492,8 +558,8 @@ class AmazonConverseConfig(BaseConfig):
 
         if "gpt-oss" in model:
             supported_params.append("reasoning_effort")
-        elif self._is_nova_lite_2_model(model):
-            # Nova Lite 2 models support reasoning_effort (transformed to reasoningConfig)
+        elif self._is_nova_2_model(model):
+            # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
             # These models use a different reasoning structure than Anthropic's thinking parameter
             supported_params.append("reasoning_effort")
         elif (
@@ -617,37 +683,6 @@ class AmazonConverseConfig(BaseConfig):
 
         return transformed_tools
 
-    def _filter_unsupported_beta_headers_for_bedrock(
-        self, model: str, beta_list: list
-    ) -> list:
-        """
-        Remove beta headers that are not supported on Bedrock Converse API for the given model.
-
-        Extended thinking beta headers are only supported on specific Claude 4+ models.
-        Some beta headers are universally unsupported on Bedrock Converse API.
-
-        Args:
-            model: The model name
-            beta_list: The list of beta headers to filter
-
-        Returns:
-            Filtered list of beta headers
-        """
-        filtered_betas = []
-        
-        # 1. Filter out beta headers that are universally unsupported on Bedrock Converse
-        for beta in beta_list:
-            should_keep = True
-            for unsupported_pattern in UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS:
-                if unsupported_pattern in beta.lower():
-                    should_keep = False
-                    break
-            
-            if should_keep:
-                filtered_betas.append(beta)
-                
-        return filtered_betas
-
     def _separate_computer_use_tools(
         self, tools: List[OpenAIChatCompletionToolParam], model: str
     ) -> Tuple[
@@ -723,6 +758,100 @@ class AmazonConverseConfig(BaseConfig):
         )
         return _tool
 
+    @staticmethod
+    def _supports_native_structured_outputs(model: str) -> bool:
+        """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat)."""
+        return any(
+            substring in model
+            for substring in BEDROCK_NATIVE_STRUCTURED_OUTPUT_MODELS
+        )
+
+    @staticmethod
+    def _add_additional_properties_to_schema(schema: dict) -> dict:
+        """
+        Recursively ensure all object types in a JSON schema have
+        ``"additionalProperties": false``.
+
+        Bedrock's native structured-outputs API requires this field to be
+        explicitly set on every object node, otherwise it returns a
+        validation error.
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        result = dict(schema)
+
+        if result.get("type") == "object" and "additionalProperties" not in result:
+            result["additionalProperties"] = False
+
+        # Recurse into nested schemas
+        if "properties" in result and isinstance(result["properties"], dict):
+            result["properties"] = {
+                k: AmazonConverseConfig._add_additional_properties_to_schema(v)
+                for k, v in result["properties"].items()
+            }
+        if "items" in result and isinstance(result["items"], dict):
+            result["items"] = AmazonConverseConfig._add_additional_properties_to_schema(
+                result["items"]
+            )
+        for defs_key in ("$defs", "definitions"):
+            if defs_key in result and isinstance(result[defs_key], dict):
+                result[defs_key] = {
+                    k: AmazonConverseConfig._add_additional_properties_to_schema(v)
+                    for k, v in result[defs_key].items()
+                }
+        for key in ("anyOf", "allOf", "oneOf"):
+            if key in result and isinstance(result[key], list):
+                result[key] = [
+                    AmazonConverseConfig._add_additional_properties_to_schema(item)
+                    for item in result[key]
+                ]
+
+        return result
+
+    @staticmethod
+    def _create_output_config_for_response_format(
+        json_schema: Optional[dict] = None,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> "OutputConfigBlock":
+        """
+        Build an outputConfig block for Bedrock's native structured outputs API.
+
+        The Converse API expects:
+        {
+            "outputConfig": {
+                "textFormat": {
+                    "type": "json_schema",
+                    "structure": {
+                        "jsonSchema": {
+                            "schema": "<json-string>",
+                            "name": "optional",
+                            "description": "optional"
+                        }
+                    }
+                }
+            }
+        }
+        """
+        if json_schema is not None:
+            json_schema = AmazonConverseConfig._add_additional_properties_to_schema(
+                json_schema
+            )
+        schema_str = json.dumps(json_schema) if json_schema is not None else "{}"
+        json_schema_def: JsonSchemaDefinition = {"schema": schema_str}
+        if name is not None:
+            json_schema_def["name"] = name
+        if description is not None:
+            json_schema_def["description"] = description
+
+        return OutputConfigBlock(
+            textFormat=OutputFormat(
+                type="json_schema",
+                structure=OutputFormatStructure(jsonSchema=json_schema_def),
+            )
+        )
+
     def _apply_tool_call_transformation(
         self,
         tools: List[OpenAIChatCompletionToolParam],
@@ -785,6 +914,13 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
+            if param == "parallel_tool_calls":
+                disable_parallel = not value
+                optional_params["_parallel_tool_use_config"] = {
+                    "tool_choice": {
+                        "disable_parallel_tool_use": disable_parallel
+                    }
+                }
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
@@ -796,27 +932,20 @@ class AmazonConverseConfig(BaseConfig):
                     self._validate_request_metadata(value)  # type: ignore
                     optional_params["requestMetadata"] = value
             if param == "service_tier" and isinstance(value, str):
-                # Map OpenAI service_tier (string) to Bedrock serviceTier (object)
-                # OpenAI values: "auto", "default", "flex", "priority"
-                # Bedrock values: "default", "flex", "priority" (no "auto")
-                bedrock_tier = value
-                if value == "auto":
-                    bedrock_tier = "default"  # Bedrock doesn't support "auto"
-                if bedrock_tier in ("default", "flex", "priority"):
-                    optional_params["serviceTier"] = {"type": bedrock_tier}
+                self._map_service_tier_param(value, optional_params)
 
             if param == "web_search_options" and isinstance(value, dict):
                 # Note: we use `isinstance(value, dict)` instead of `value and isinstance(value, dict)`
                 # because empty dict {} is falsy but is a valid way to enable Nova grounding
-                grounding_tool = self._map_web_search_options(value, model)                                                                                         
-                if grounding_tool is not None:                                                                                                                      
-                    optional_params = self._add_tools_to_optional_params(                                                                                           
-                        optional_params=optional_params, tools=[grounding_tool]                                                                                     
-                    )  
+                grounding_tool = self._map_web_search_options(value, model)
+                if grounding_tool is not None:
+                    optional_params = self._add_tools_to_optional_params(
+                        optional_params=optional_params, tools=[grounding_tool]
+                    )
 
         # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
-        # Nova Lite 2 handles token budgeting differently through reasoningConfig
-        if "gpt-oss" not in model and not self._is_nova_lite_2_model(model):
+        # Nova 2 handles token budgeting differently through reasoningConfig
+        if "gpt-oss" not in model and not self._is_nova_2_model(model):
             self.update_optional_params_with_thinking_tokens(
                 non_default_params=non_default_params, optional_params=optional_params
             )
@@ -833,6 +962,18 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(auto={})
 
         return optional_params
+
+    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
+        """Map OpenAI service_tier (string) to Bedrock serviceTier (object).
+
+        OpenAI values: "auto", "default", "flex", "priority"
+        Bedrock values: "default", "flex", "priority" (no "auto")
+        """
+        bedrock_tier = value
+        if value == "auto":
+            bedrock_tier = "default"  # Bedrock doesn't support "auto"
+        if bedrock_tier in ("default", "flex", "priority"):
+            optional_params["serviceTier"] = {"type": bedrock_tier}
 
     def _translate_response_format_param(
         self,
@@ -852,45 +993,53 @@ class AmazonConverseConfig(BaseConfig):
             return optional_params
 
         json_schema: Optional[dict] = None
+        name: Optional[str] = None
         description: Optional[str] = None
         if "response_schema" in value:
             json_schema = value["response_schema"]
         elif "json_schema" in value:
             json_schema = value["json_schema"]["schema"]
+            name = value["json_schema"].get("name")
             description = value["json_schema"].get("description")
 
         if "type" in value and value["type"] == "text":
             return optional_params
 
-        """
-        Follow similar approach to anthropic - translate to a single tool call.
-
-        When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
-        - You usually want to provide a single tool
-        - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-        - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
-        """
-        _tool = self._create_json_tool_call_for_response_format(
-            json_schema=json_schema,
-            description=description,
-        )
-        optional_params = self._add_tools_to_optional_params(
-            optional_params=optional_params, tools=[_tool]
-        )
-
-        if (
-            litellm.utils.supports_tool_choice(
-                model=model, custom_llm_provider=self.custom_llm_provider
+        if self._supports_native_structured_outputs(model) and json_schema is not None:
+            # Use Bedrock's native structured outputs API (outputConfig.textFormat)
+            # No synthetic tool injection, no fake_stream needed.
+            # Requires an explicit schema — json_object with no schema falls through
+            # to the tool-call path below.
+            output_config = self._create_output_config_for_response_format(
+                json_schema=json_schema,
+                name=name,
+                description=description,
             )
-            and not is_thinking_enabled
-        ):
-            optional_params["tool_choice"] = ToolChoiceValuesBlock(
-                tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
+            optional_params["outputConfig"] = output_config
+        else:
+            # Fallback: translate to a synthetic tool call
+            # https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+            _tool = self._create_json_tool_call_for_response_format(
+                json_schema=json_schema,
+                description=description,
             )
+            optional_params = self._add_tools_to_optional_params(
+                optional_params=optional_params, tools=[_tool]
+            )
+
+            if (
+                litellm.utils.supports_tool_choice(
+                    model=model, custom_llm_provider=self.custom_llm_provider
+                )
+                and not is_thinking_enabled
+            ):
+                optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                    tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
+                )
+            if non_default_params.get("stream", False) is True:
+                optional_params["fake_stream"] = True
+
         optional_params["json_mode"] = True
-        if non_default_params.get("stream", False) is True:
-            optional_params["fake_stream"] = True
-
         return optional_params
 
     def update_optional_params_with_thinking_tokens(
@@ -902,8 +1051,13 @@ class AmazonConverseConfig(BaseConfig):
         Checks 'non_default_params' for 'thinking' and 'max_tokens'
 
         if 'thinking' is enabled and 'max_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
+
+        Also clamps thinking.budget_tokens to the Bedrock minimum (1024) to
+        prevent 400 errors from the Bedrock API.
         """
         from litellm.constants import DEFAULT_MAX_TOKENS
+
+        self._clamp_thinking_budget_tokens(optional_params)
 
         is_thinking_enabled = self.is_thinking_enabled(optional_params)
         is_max_tokens_in_request = self.is_max_tokens_in_request(non_default_params)
@@ -926,6 +1080,7 @@ class AmazonConverseConfig(BaseConfig):
             ChatCompletionAssistantMessage,
         ],
         block_type: Literal["system"],
+        model: Optional[str] = None,
     ) -> Optional[SystemContentBlock]:
         pass
 
@@ -939,6 +1094,7 @@ class AmazonConverseConfig(BaseConfig):
             ChatCompletionAssistantMessage,
         ],
         block_type: Literal["content_block"],
+        model: Optional[str] = None,
     ) -> Optional[ContentBlock]:
         pass
 
@@ -951,16 +1107,26 @@ class AmazonConverseConfig(BaseConfig):
             ChatCompletionAssistantMessage,
         ],
         block_type: Literal["system", "content_block"],
+        model: Optional[str] = None,
     ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
-        if message_block.get("cache_control", None) is None:
+        cache_control = message_block.get("cache_control", None)
+        if cache_control is None:
             return None
+
+        cache_point = CachePointBlock(type="default")
+        if isinstance(cache_control, dict) and "ttl" in cache_control:
+            ttl = cache_control["ttl"]
+            if ttl in ["5m", "1h"] and model is not None:
+                if is_claude_4_5_on_bedrock(model):
+                    cache_point["ttl"] = ttl
+
         if block_type == "system":
-            return SystemContentBlock(cachePoint=CachePointBlock(type="default"))
+            return SystemContentBlock(cachePoint=cache_point)
         else:
-            return ContentBlock(cachePoint=CachePointBlock(type="default"))
+            return ContentBlock(cachePoint=cache_point)
 
     def _transform_system_message(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: Optional[str] = None
     ) -> Tuple[List[AllMessageValues], List[SystemContentBlock]]:
         system_prompt_indices = []
         system_content_blocks: List[SystemContentBlock] = []
@@ -972,7 +1138,7 @@ class AmazonConverseConfig(BaseConfig):
                         SystemContentBlock(text=message["content"])
                     )
                     cache_block = self._get_cache_point_block(
-                        message, block_type="system"
+                        message, block_type="system", model=model
                     )
                     if cache_block:
                         system_content_blocks.append(cache_block)
@@ -983,7 +1149,7 @@ class AmazonConverseConfig(BaseConfig):
                                 SystemContentBlock(text=m["text"])
                             )
                             cache_block = self._get_cache_point_block(
-                                m, block_type="system"
+                                m, block_type="system", model=model
                             )
                             if cache_block:
                                 system_content_blocks.append(cache_block)
@@ -1016,7 +1182,7 @@ class AmazonConverseConfig(BaseConfig):
 
     def _prepare_request_params(
         self, optional_params: dict, model: str
-    ) -> Tuple[dict, dict, dict]:
+    ) -> Tuple[dict, dict, dict, Optional[OutputConfigBlock]]:
         """Prepare and separate request parameters."""
         # Filter out exception objects before deepcopy to prevent deepcopy failures
         # Exceptions should not be stored in optional_params (this is a defensive fix)
@@ -1039,6 +1205,8 @@ class AmazonConverseConfig(BaseConfig):
         if request_metadata is not None:
             self._validate_request_metadata(request_metadata)
 
+        output_config: Optional[OutputConfigBlock] = inference_params.pop("outputConfig", None)
+
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
             k: v for k, v in inference_params.items() if k not in total_supported_params
@@ -1046,6 +1214,17 @@ class AmazonConverseConfig(BaseConfig):
         inference_params = {
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
+
+        # Handle parallel_tool_calls configuration
+        parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
+        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
+            for key, value in parallel_tool_use_config.items():
+                if key in additional_request_params and isinstance(additional_request_params[key], dict) and isinstance(value, dict):
+                    additional_request_params[key].update(value)
+                else:
+                    additional_request_params[key] = value
+
+        additional_request_params.pop("parallel_tool_calls", None)
 
         # Only set the topK value in for models that support it
         additional_request_params.update(
@@ -1063,7 +1242,12 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params
         )
 
-        return inference_params, additional_request_params, request_metadata
+        return (
+            inference_params,
+            additional_request_params,
+            request_metadata,
+            output_config,
+        )
 
     def _process_tools_and_beta(
         self,
@@ -1112,7 +1296,50 @@ class AmazonConverseConfig(BaseConfig):
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
-                anthropic_beta_list.append("computer-use-2024-10-22")
+                # Determine the correct computer-use beta header based on model
+                # "computer-use-2025-11-24" for Claude Opus 4.6, Claude Opus 4.5
+                # "computer-use-2025-01-24" for Claude Sonnet 4.5, Haiku 4.5, Opus 4.1, Sonnet 4, Opus 4, and Sonnet 3.7
+                # "computer-use-2024-10-22" for older models
+                model_lower = model.lower()
+                if "opus-4.6" in model_lower or "opus_4.6" in model_lower or "opus-4-6" in model_lower or "opus_4_6" in model_lower or "sonnet-4.6" in model_lower or "sonnet_4.6" in model_lower or "sonnet-4-6" in model_lower or "sonnet_4_6" in model_lower:
+                    computer_use_header = "computer-use-2025-11-24"
+                elif (
+                    "opus-4.5" in model_lower
+                    or "opus_4.5" in model_lower
+                    or "opus-4-5" in model_lower
+                    or "opus_4_5" in model_lower
+                ):
+                    computer_use_header = "computer-use-2025-11-24"
+                elif any(
+                    pattern in model_lower
+                    for pattern in [
+                        "sonnet-4.5",
+                        "sonnet_4.5",
+                        "sonnet-4-5",
+                        "sonnet_4_5",
+                        "haiku-4.5",
+                        "haiku_4.5",
+                        "haiku-4-5",
+                        "haiku_4_5",
+                        "opus-4.1",
+                        "opus_4.1",
+                        "opus-4-1",
+                        "opus_4_1",
+                        "sonnet-4",
+                        "sonnet_4",
+                        "opus-4",
+                        "opus_4",
+                        "sonnet-3.7",
+                        "sonnet_3.7",
+                        "sonnet-3-7",
+                        "sonnet_3_7",
+                    ]
+                ):
+                    computer_use_header = "computer-use-2025-01-24"
+                else:
+                    computer_use_header = "computer-use-2024-10-22"
+
+                anthropic_beta_list.append(computer_use_header)
                 # Transform computer use tools to proper Bedrock format
                 transformed_computer_tools = self._transform_computer_use_tools(
                     computer_use_tools
@@ -1127,24 +1354,9 @@ class AmazonConverseConfig(BaseConfig):
 
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
-        # and will error with "unknown variant anthropic_beta" if included
         base_model = BedrockModelInfo.get_base_model(model)
         if anthropic_beta_list and base_model.startswith("anthropic"):
-            # Remove duplicates while preserving order
-            unique_betas = []
-            seen = set()
-            for beta in anthropic_beta_list:
-                if beta not in seen:
-                    unique_betas.append(beta)
-                    seen.add(beta)
-            
-            # Filter out unsupported beta headers for Bedrock Converse API
-            filtered_betas = self._filter_unsupported_beta_headers_for_bedrock(
-                model=model,
-                beta_list=unique_betas,
-            )
-            
-            additional_request_params["anthropic_beta"] = filtered_betas
+            additional_request_params["anthropic_beta"] = anthropic_beta_list
 
         return bedrock_tools, anthropic_beta_list
 
@@ -1196,9 +1408,12 @@ class AmazonConverseConfig(BaseConfig):
                 )
 
         # Prepare and separate parameters
-        inference_params, additional_request_params, request_metadata = self._prepare_request_params(
-            optional_params, model
-        )
+        (
+            inference_params,
+            additional_request_params,
+            request_metadata,
+            output_config,
+        ) = self._prepare_request_params(optional_params, model)
 
         original_tools = inference_params.pop("tools", [])
 
@@ -1240,6 +1455,9 @@ class AmazonConverseConfig(BaseConfig):
         if request_metadata is not None:
             data["requestMetadata"] = request_metadata
 
+        if output_config is not None:
+            data["outputConfig"] = output_config
+
         return data
 
     async def _async_transform_request(
@@ -1250,7 +1468,9 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: Optional[dict] = None,
     ) -> RequestObject:
-        messages, system_content_blocks = self._transform_system_message(messages)
+        messages, system_content_blocks = self._transform_system_message(
+            messages, model=model
+        )
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
@@ -1306,7 +1526,9 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: Optional[dict] = None,
     ) -> RequestObject:
-        messages, system_content_blocks = self._transform_system_message(messages)
+        messages, system_content_blocks = self._transform_system_message(
+            messages, model=model
+        )
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
@@ -1557,7 +1779,93 @@ class AmazonConverseConfig(BaseConfig):
 
         return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
-    def _transform_response( # noqa: PLR0915
+    @staticmethod
+    def _unwrap_bedrock_properties(json_str: str) -> str:
+        """
+        Unwrap Bedrock's response_format JSON structure.
+
+        If the JSON has a single "properties" key, extract its value.
+        Otherwise, return the original string.
+
+        Args:
+            json_str: JSON string to unwrap
+
+        Returns:
+            Unwrapped JSON string or original if unwrapping not needed
+        """
+        try:
+            response_data = json.loads(json_str)
+            if (
+                isinstance(response_data, dict)
+                and "properties" in response_data
+                and len(response_data) == 1
+            ):
+                response_data = response_data["properties"]
+                return json.dumps(response_data)
+        except json.JSONDecodeError:
+            pass
+        return json_str
+
+    @staticmethod
+    def _filter_json_mode_tools(
+        json_mode: Optional[bool],
+        tools: List[ChatCompletionToolCallChunk],
+        chat_completion_message: ChatCompletionResponseMessage,
+    ) -> Optional[List[ChatCompletionToolCallChunk]]:
+        """
+        When json_mode is True, Bedrock may return the internal `json_tool_call`
+        tool alongside real user-defined tools. This method handles 3 scenarios:
+
+        1. Only json_tool_call present  -> convert to text content, return None
+        2. Mixed json_tool_call + real  -> filter out json_tool_call, return real tools
+        3. No json_tool_call / no json_mode -> return tools as-is
+        """
+        if not json_mode or not tools:
+            return tools if tools else None
+
+        json_tool_indices = [
+            i
+            for i, t in enumerate(tools)
+            if t["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
+        ]
+
+        if not json_tool_indices:
+            # No json_tool_call found, return tools unchanged
+            return tools
+
+        if len(json_tool_indices) == len(tools):
+            # All tools are json_tool_call — convert first one to content
+            verbose_logger.debug(
+                "Processing JSON tool call response for response_format"
+            )
+            json_mode_content_str: Optional[str] = tools[0]["function"].get(
+                "arguments"
+            )
+            if json_mode_content_str is not None:
+                json_mode_content_str = AmazonConverseConfig._unwrap_bedrock_properties(
+                    json_mode_content_str
+                )
+                chat_completion_message["content"] = json_mode_content_str
+            return None
+
+        # Mixed: filter out json_tool_call, keep real tools.
+        # Preserve the json_tool_call content as message text so the structured
+        # output from response_format is not silently lost.
+        first_idx = json_tool_indices[0]
+        json_mode_args = tools[first_idx]["function"].get("arguments")
+        if json_mode_args is not None:
+            json_mode_args = AmazonConverseConfig._unwrap_bedrock_properties(
+                json_mode_args
+            )
+            existing = chat_completion_message.get("content") or ""
+            chat_completion_message["content"] = (
+                existing + json_mode_args if existing else json_mode_args
+            )
+
+        real_tools = [t for i, t in enumerate(tools) if i not in json_tool_indices]
+        return real_tools if real_tools else None
+
+    def _transform_response(  # noqa: PLR0915
         self,
         model: str,
         response: httpx.Response,
@@ -1579,7 +1887,7 @@ class AmazonConverseConfig(BaseConfig):
                 additional_args={"complete_input_dict": data},
             )
 
-        json_mode: Optional[bool] = optional_params.pop("json_mode", None)
+        json_mode: Optional[bool] = optional_params.get("json_mode", None)
         ## RESPONSE OBJECT
         try:
             completion_response = ConverseResponseBlock(**response.json())  # type: ignore
@@ -1651,7 +1959,9 @@ class AmazonConverseConfig(BaseConfig):
             provider_specific_fields["citationsContent"] = citationsContentBlocks
 
         if provider_specific_fields:
-            chat_completion_message["provider_specific_fields"] = provider_specific_fields
+            chat_completion_message["provider_specific_fields"] = (
+                provider_specific_fields
+            )
 
         if reasoningContentBlocks is not None:
             chat_completion_message["reasoning_content"] = (
@@ -1661,39 +1971,13 @@ class AmazonConverseConfig(BaseConfig):
                 self._transform_thinking_blocks(reasoningContentBlocks)
             )
         chat_completion_message["content"] = content_str
-        if (
-            json_mode is True
-            and tools is not None
-            and len(tools) == 1
-            and tools[0]["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
-        ):
-            verbose_logger.debug(
-                "Processing JSON tool call response for response_format"
-            )
-            json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
-            if json_mode_content_str is not None:
-                import json
-
-                # Bedrock returns the response wrapped in a "properties" object
-                # We need to extract the actual content from this wrapper
-                try:
-                    response_data = json.loads(json_mode_content_str)
-
-                    # If Bedrock wrapped the response in "properties", extract the content
-                    if (
-                        isinstance(response_data, dict)
-                        and "properties" in response_data
-                        and len(response_data) == 1
-                    ):
-                        response_data = response_data["properties"]
-                        json_mode_content_str = json.dumps(response_data)
-                except json.JSONDecodeError:
-                    # If parsing fails, use the original response
-                    pass
-
-                chat_completion_message["content"] = json_mode_content_str
-        else:
-            chat_completion_message["tool_calls"] = tools
+        filtered_tools = self._filter_json_mode_tools(
+            json_mode=json_mode,
+            tools=tools,
+            chat_completion_message=chat_completion_message,
+        )
+        if filtered_tools:
+            chat_completion_message["tool_calls"] = filtered_tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
         usage = self._transform_usage(completion_response["usage"])

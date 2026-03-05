@@ -1,9 +1,9 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Annotated
 
 import litellm
@@ -39,6 +39,37 @@ def _sanitize_prometheus_label_name(label: str) -> str:
         sanitized = "_"
 
     return sanitized
+
+
+def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
+    """
+    Sanitize a label value for Prometheus text format compatibility.
+
+    Removes or replaces characters that break the Prometheus exposition format:
+    - U+2028 (Line Separator) and U+2029 (Paragraph Separator) are removed
+    - Carriage returns are removed
+    - Newlines are replaced with spaces
+    - Backslashes and double quotes are escaped per Prometheus spec
+    """
+    if value is None:
+        return None
+
+    # Coerce non-string values (int, bool, etc.) to str before sanitizing
+    str_value: str = value if isinstance(value, str) else str(value)
+
+    # Remove Unicode line/paragraph separators that break text format
+    str_value = str_value.replace("\u2028", "").replace("\u2029", "")
+
+    # Remove carriage returns
+    str_value = str_value.replace("\r", "")
+
+    # Replace newlines with spaces
+    str_value = str_value.replace("\n", " ")
+
+    # Escape backslashes and double quotes per Prometheus exposition format
+    str_value = str_value.replace("\\", "\\\\").replace('"', '\\"')
+
+    return str_value
 
 
 @dataclass
@@ -153,6 +184,7 @@ class UserAPIKeyLabelNames(Enum):
     CLIENT_IP = "client_ip"
     USER_AGENT = "user_agent"
     CALLBACK_NAME = "callback_name"
+    STREAM = "stream"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -205,6 +237,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_api_key_tokens_for_model",
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
+    "litellm_in_flight_requests",
 ]
 
 
@@ -606,6 +639,14 @@ class PrometheusMetricLabels:
             ]
         )
 
+        # Conditionally add stream label to litellm_proxy_total_requests_metric
+        if (
+            label_name == "litellm_proxy_total_requests_metric"
+            and litellm.prometheus_emit_stream_label is True
+            and UserAPIKeyLabelNames.STREAM.value not in default_labels
+        ):
+            custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
+
         return default_labels + custom_labels
 
 
@@ -677,6 +718,16 @@ class UserAPIKeyLabelValues(BaseModel):
     user_agent: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER_AGENT.value)
     ] = None
+    stream: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.STREAM.value)
+    ] = None
+
+    @field_validator("stream", mode="before")
+    @classmethod
+    def coerce_stream_to_str(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        return str(v)
 
 
 class PrometheusMetricsConfig(BaseModel):

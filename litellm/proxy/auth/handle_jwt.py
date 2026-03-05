@@ -8,6 +8,7 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 import fnmatch
 import os
+import re
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
 
 from cryptography import x509
@@ -165,7 +166,6 @@ class JWTHandler:
         return False
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
-
         if self.litellm_jwtauth.team_ids_jwt_field is not None:
             team_ids: Optional[List[str]] = get_nested_value(
                 data=token,
@@ -235,7 +235,17 @@ class JWTHandler:
                         return self.litellm_jwtauth.team_id_default
                     else:
                         return default_value
-                # At this point, team_id is not the sentinel, so it should be a string
+                # AAD and other IdPs often send roles/groups as a list of strings.
+                # team_id_jwt_field is singular, so take the first element when a list
+                # is returned.  This avoids "unhashable type: 'list'" errors downstream.
+                if isinstance(team_id, list):
+                    if not team_id:
+                        return default_value
+                    verbose_proxy_logger.debug(
+                        f"JWT Auth: team_id_jwt_field '{self.litellm_jwtauth.team_id_jwt_field}' "
+                        f"returned a list {team_id}; using first element '{team_id[0]}' automatically."
+                    )
+                    team_id = team_id[0]
                 return team_id  # type: ignore[return-value]
             elif self.litellm_jwtauth.team_id_default is not None:
                 team_id = self.litellm_jwtauth.team_id_default
@@ -245,7 +255,9 @@ class JWTHandler:
             team_id = default_value
         return team_id
 
-    def get_team_alias(self, token: dict, default_value: Optional[str]) -> Optional[str]:
+    def get_team_alias(
+        self, token: dict, default_value: Optional[str]
+    ) -> Optional[str]:
         """
         Extract team name/alias from JWT token using the configured team_alias_jwt_field.
 
@@ -453,6 +465,52 @@ class JWTHandler:
             scopes = []
         return scopes
 
+    async def _resolve_jwks_url(self, url: str) -> str:
+        """
+        If url points to an OIDC discovery document (*.well-known/openid-configuration),
+        fetch it and return the jwks_uri contained within.  Otherwise return url unchanged.
+        This lets JWT_PUBLIC_KEY_URL be set to a well-known discovery endpoint instead of
+        requiring operators to manually find the JWKS URL.
+        """
+        if ".well-known/openid-configuration" not in url:
+            return url
+
+        cache_key = f"litellm_oidc_discovery_{url}"
+        cached_jwks_uri = await self.user_api_key_cache.async_get_cache(cache_key)
+        if cached_jwks_uri is not None:
+            return cached_jwks_uri
+
+        verbose_proxy_logger.debug(
+            f"JWT Auth: Fetching OIDC discovery document from {url}"
+        )
+        response = await self.http_handler.get(url)
+        if response.status_code != 200:
+            raise Exception(
+                f"JWT Auth: OIDC discovery endpoint {url} returned status {response.status_code}: {response.text}"
+            )
+        try:
+            discovery = response.json()
+        except Exception as e:
+            raise Exception(
+                f"JWT Auth: Failed to parse OIDC discovery document at {url}: {e}"
+            )
+
+        jwks_uri = discovery.get("jwks_uri")
+        if not jwks_uri:
+            raise Exception(
+                f"JWT Auth: OIDC discovery document at {url} does not contain a 'jwks_uri' field."
+            )
+
+        verbose_proxy_logger.debug(
+            f"JWT Auth: Resolved OIDC discovery {url} -> jwks_uri={jwks_uri}"
+        )
+        await self.user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=jwks_uri,
+            ttl=self.litellm_jwtauth.public_key_ttl,
+        )
+        return jwks_uri
+
     async def get_public_key(self, kid: Optional[str]) -> dict:
         keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
@@ -462,6 +520,7 @@ class JWTHandler:
         keys_url_list = [url.strip() for url in keys_url.split(",")]
 
         for key_url in keys_url_list:
+            key_url = await self._resolve_jwks_url(key_url)
             cache_key = f"litellm_jwt_auth_keys_{key_url}"
 
             cached_keys = await self.user_api_key_cache.async_get_cache(cache_key)
@@ -538,17 +597,17 @@ class JWTHandler:
     async def get_oidc_userinfo(self, token: str) -> dict:
         """
         Fetch user information from OIDC UserInfo endpoint.
-        
+
         This follows the OpenID Connect protocol where an access token
         is sent to the identity provider's UserInfo endpoint to retrieve
         user identity information.
-        
+
         Args:
             token: The access token to use for authentication
-            
+
         Returns:
             dict: User information from the UserInfo endpoint
-            
+
         Raises:
             Exception: If UserInfo endpoint is not configured or request fails
         """
@@ -556,19 +615,21 @@ class JWTHandler:
             raise Exception(
                 "OIDC UserInfo endpoint not configured. Set 'oidc_userinfo_endpoint' in JWT auth config."
             )
-        
+
         # Check cache first
-        cache_key = f"oidc_userinfo_{token[:20]}"  # Use first 20 chars of token as cache key
+        cache_key = (
+            f"oidc_userinfo_{token[:20]}"  # Use first 20 chars of token as cache key
+        )
         cached_userinfo = await self.user_api_key_cache.async_get_cache(cache_key)
-        
+
         if cached_userinfo is not None:
             verbose_proxy_logger.debug("Returning cached OIDC UserInfo")
             return cached_userinfo
-        
+
         verbose_proxy_logger.debug(
             f"Calling OIDC UserInfo endpoint: {self.litellm_jwtauth.oidc_userinfo_endpoint}"
         )
-        
+
         try:
             # Call the UserInfo endpoint with the access token
             response = await self.http_handler.get(
@@ -578,24 +639,24 @@ class JWTHandler:
                     "Accept": "application/json",
                 },
             )
-            
+
             if response.status_code != 200:
                 raise Exception(
                     f"OIDC UserInfo endpoint returned status {response.status_code}: {response.text}"
                 )
-            
+
             userinfo = response.json()
             verbose_proxy_logger.debug(f"Received OIDC UserInfo: {userinfo}")
-            
+
             # Cache the userinfo response
             await self.user_api_key_cache.async_set_cache(
                 key=cache_key,
                 value=userinfo,
                 ttl=self.litellm_jwtauth.oidc_userinfo_cache_ttl,
             )
-            
+
             return userinfo
-            
+
         except Exception as e:
             verbose_proxy_logger.error(f"Error fetching OIDC UserInfo: {str(e)}")
             raise Exception(f"Failed to fetch OIDC UserInfo: {str(e)}")
@@ -659,7 +720,7 @@ class JWTHandler:
                     token,
                     public_key_obj,  # type: ignore
                     algorithms=algorithms,
-                    options=decode_options,
+                    options=decode_options,  # type: ignore[arg-type]
                     audience=audience,
                     leeway=self.leeway,  # allow testing of expired tokens
                 )
@@ -828,6 +889,7 @@ class JWTAuthManager:
         user_id: Optional[str],
         org_id: Optional[str],
         api_key: str,
+        jwt_valid_token: Optional[dict] = None,
     ) -> Optional[JWTAuthBuilderResult]:
         """Check admin status and route access permissions"""
         if not jwt_handler.is_admin(scopes=scopes):
@@ -857,6 +919,7 @@ class JWTAuthManager:
             end_user_id=None,
             org_id=org_id,
             team_membership=None,
+            jwt_claims=jwt_valid_token or {},
         )
 
     @staticmethod
@@ -913,8 +976,30 @@ class JWTAuthManager:
         if jwt_handler.is_required_team_id() is True:
             team_id_field = jwt_handler.litellm_jwtauth.team_id_jwt_field
             team_alias_field = jwt_handler.litellm_jwtauth.team_alias_jwt_field
+            hint = ""
+            if team_id_field:
+                # "roles.0" — dot-notation numeric indexing is not supported
+                if "." in team_id_field:
+                    parts = team_id_field.rsplit(".", 1)
+                    if parts[-1].isdigit():
+                        base_field = parts[0]
+                        hint = (
+                            f" Hint: dot-notation array indexing (e.g. '{team_id_field}') is not "
+                            f"supported. Use '{base_field}' instead — LiteLLM automatically "
+                            f"uses the first element when the field value is a list."
+                        )
+                # "roles[0]" — bracket-notation indexing is also not supported in get_nested_value
+                elif "[" in team_id_field and team_id_field.endswith("]"):
+                    m = re.match(r"^(\w+)\[(\d+)\]$", team_id_field)
+                    if m:
+                        base_field = m.group(1)
+                        hint = (
+                            f" Hint: array indexing (e.g. '{team_id_field}') is not supported "
+                            f"in team_id_jwt_field. Use '{base_field}' instead — LiteLLM "
+                            f"automatically uses the first element when the field value is a list."
+                        )
             raise Exception(
-                f"No team found in token. Checked team_id field '{team_id_field}' and team_alias field '{team_alias_field}'"
+                f"No team found in token. Checked team_id field '{team_id_field}' and team_alias field '{team_alias_field}'.{hint}"
             )
 
         return individual_team_id, team_object
@@ -964,7 +1049,7 @@ class JWTAuthManager:
                     team_models = team_object.models
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or can_team_access_model(
+                        or await can_team_access_model(
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
@@ -975,6 +1060,9 @@ class JWTAuthManager:
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+                        )
+                        verbose_proxy_logger.debug(
+                            f"JWT team route check: team_id={team_id}, route={route}, is_allowed={is_allowed}"
                         )
                         if is_allowed:
                             return team_id, team_object
@@ -1028,11 +1116,11 @@ class JWTAuthManager:
     ) -> Tuple[
         Optional[LiteLLM_UserTable],
         Optional[LiteLLM_OrganizationTable],
-        Optional[LiteLLM_EndUserTable], 
+        Optional[LiteLLM_EndUserTable],
         Optional[LiteLLM_TeamMembership],
     ]:
         """Get user, org, and end user objects. Also resolves org aliases to IDs if configured."""
-        
+
         # Get org object - first try by ID, then by alias
         org_object: Optional[LiteLLM_OrganizationTable] = None
         if org_id:
@@ -1062,6 +1150,15 @@ class JWTAuthManager:
                 verbose_proxy_logger.info(
                     f"JWT Auth: Resolved org_alias='{org_alias}' to org_id='{org_object.organization_id}'"
                 )
+
+        # Check if email domain is allowed before attempting to get/create user
+        if valid_user_email is False:
+            raise ProxyException(
+                message=f"Email domain not allowed. User email: {user_email}. Allowed domain: {jwt_handler.litellm_jwtauth.user_allowed_email_domain}",
+                type=ProxyErrorTypes.auth_error,
+                param="user_email",
+                code=403,
+            )
 
         user_object: Optional[LiteLLM_UserTable] = None
         if user_id:
@@ -1352,7 +1449,7 @@ class JWTAuthManager:
 
         # Check admin access
         admin_result = await JWTAuthManager.check_admin_access(
-            jwt_handler, scopes, route, user_id, org_id, api_key
+            jwt_handler, scopes, route, user_id, org_id, api_key, jwt_valid_token
         )
         if admin_result:
             return admin_result
@@ -1360,7 +1457,9 @@ class JWTAuthManager:
         # Get team with model access
         ## Check if team_id is specified via x-litellm-team-id header
         all_team_ids = JWTAuthManager.get_all_team_ids(jwt_handler, jwt_valid_token)
-        specific_team_id = jwt_handler.get_team_id(token=jwt_valid_token, default_value=None)
+        specific_team_id = jwt_handler.get_team_id(
+            token=jwt_valid_token, default_value=None
+        )
         if specific_team_id:
             all_team_ids.add(specific_team_id)
 
@@ -1408,22 +1507,25 @@ class JWTAuthManager:
         org_alias = jwt_handler.get_org_alias(token=jwt_valid_token, default_value=None)
 
         # Get other objects
-        user_object, org_object, end_user_object, team_membership_object = (
-            await JWTAuthManager.get_objects(
-                user_id=user_id,
-                user_email=user_email,
-                org_id=org_id,
-                end_user_id=end_user_id,
-                team_id=team_id,
-                valid_user_email=valid_user_email,
-                jwt_handler=jwt_handler,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                route=route,
-                org_alias=org_alias,
-            )
+        (
+            user_object,
+            org_object,
+            end_user_object,
+            team_membership_object,
+        ) = await JWTAuthManager.get_objects(
+            user_id=user_id,
+            user_email=user_email,
+            org_id=org_id,
+            end_user_id=end_user_id,
+            team_id=team_id,
+            valid_user_email=valid_user_email,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
+            org_alias=org_alias,
         )
 
         # Derive org_id from org_object if resolved by alias
@@ -1467,4 +1569,5 @@ class JWTAuthManager:
             end_user_object=end_user_object,
             token=api_key,
             team_membership=team_membership_object,
+            jwt_claims=jwt_valid_token,
         )

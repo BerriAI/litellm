@@ -109,86 +109,91 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
-        all_chunks = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(
-            raw_bytes
-        )
-        standard_logging_response_object: Optional[
-            PassThroughEndpointLoggingResultValues
-        ] = None
-        kwargs: dict = {}
-        if endpoint_type == EndpointType.ANTHROPIC:
-            anthropic_passthrough_logging_handler_result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
-                litellm_logging_obj=litellm_logging_obj,
-                passthrough_success_handler_obj=passthrough_success_handler_obj,
-                url_route=url_route,
-                request_body=request_body,
-                endpoint_type=endpoint_type,
+        try:
+            all_chunks = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(
+                raw_bytes
+            )
+            standard_logging_response_object: Optional[
+                PassThroughEndpointLoggingResultValues
+            ] = None
+            kwargs: dict = {}
+            if endpoint_type == EndpointType.ANTHROPIC:
+                anthropic_passthrough_logging_handler_result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+                    litellm_logging_obj=litellm_logging_obj,
+                    passthrough_success_handler_obj=passthrough_success_handler_obj,
+                    url_route=url_route,
+                    request_body=request_body,
+                    endpoint_type=endpoint_type,
+                    start_time=start_time,
+                    all_chunks=all_chunks,
+                    end_time=end_time,
+                )
+                standard_logging_response_object = (
+                    anthropic_passthrough_logging_handler_result["result"]
+                )
+                kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
+            elif endpoint_type == EndpointType.VERTEX_AI:
+                vertex_passthrough_logging_handler_result = (
+                    VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
+                        litellm_logging_obj=litellm_logging_obj,
+                        passthrough_success_handler_obj=passthrough_success_handler_obj,
+                        url_route=url_route,
+                        request_body=request_body,
+                        endpoint_type=endpoint_type,
+                        start_time=start_time,
+                        all_chunks=all_chunks,
+                        end_time=end_time,
+                        model=model,
+                    )
+                )
+                standard_logging_response_object = (
+                    vertex_passthrough_logging_handler_result["result"]
+                )
+                kwargs = vertex_passthrough_logging_handler_result["kwargs"]
+            elif endpoint_type == EndpointType.OPENAI:
+                openai_passthrough_logging_handler_result = (
+                    OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+                        litellm_logging_obj=litellm_logging_obj,
+                        passthrough_success_handler_obj=passthrough_success_handler_obj,
+                        url_route=url_route,
+                        request_body=request_body,
+                        endpoint_type=endpoint_type,
+                        start_time=start_time,
+                        all_chunks=all_chunks,
+                        end_time=end_time,
+                    )
+                )
+                standard_logging_response_object = (
+                    openai_passthrough_logging_handler_result["result"]
+                )
+                kwargs = openai_passthrough_logging_handler_result["kwargs"]
+
+            if standard_logging_response_object is None:
+                standard_logging_response_object = StandardPassThroughResponseObject(
+                    response=f"cannot parse chunks to standard response object. Chunks={all_chunks}"
+                )
+            await litellm_logging_obj.async_success_handler(
+                result=standard_logging_response_object,
                 start_time=start_time,
-                all_chunks=all_chunks,
                 end_time=end_time,
+                cache_hit=False,
+                **kwargs,
             )
-            standard_logging_response_object = (
-                anthropic_passthrough_logging_handler_result["result"]
-            )
-            kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
-        elif endpoint_type == EndpointType.VERTEX_AI:
-            vertex_passthrough_logging_handler_result = (
-                VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
-                    litellm_logging_obj=litellm_logging_obj,
-                    passthrough_success_handler_obj=passthrough_success_handler_obj,
-                    url_route=url_route,
-                    request_body=request_body,
-                    endpoint_type=endpoint_type,
-                    start_time=start_time,
-                    all_chunks=all_chunks,
-                    end_time=end_time,
-                    model=model,
-                )
-            )
-            standard_logging_response_object = (
-                vertex_passthrough_logging_handler_result["result"]
-            )
-            kwargs = vertex_passthrough_logging_handler_result["kwargs"]
-        elif endpoint_type == EndpointType.OPENAI:
-            openai_passthrough_logging_handler_result = (
-                OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
-                    litellm_logging_obj=litellm_logging_obj,
-                    passthrough_success_handler_obj=passthrough_success_handler_obj,
-                    url_route=url_route,
-                    request_body=request_body,
-                    endpoint_type=endpoint_type,
-                    start_time=start_time,
-                    all_chunks=all_chunks,
-                    end_time=end_time,
-                )
-            )
-            standard_logging_response_object = (
-                openai_passthrough_logging_handler_result["result"]
-            )
-            kwargs = openai_passthrough_logging_handler_result["kwargs"]
+            if litellm_logging_obj._should_run_sync_callbacks_for_async_calls() is False:
+                return
 
-        if standard_logging_response_object is None:
-            standard_logging_response_object = StandardPassThroughResponseObject(
-                response=f"cannot parse chunks to standard response object. Chunks={all_chunks}"
+            executor.submit(
+                litellm_logging_obj.success_handler,
+                result=standard_logging_response_object,
+                end_time=end_time,
+                cache_hit=False,
+                start_time=start_time,
+                **kwargs,
             )
-        await litellm_logging_obj.async_success_handler(
-            result=standard_logging_response_object,
-            start_time=start_time,
-            end_time=end_time,
-            cache_hit=False,
-            **kwargs,
-        )
-        if litellm_logging_obj._should_run_sync_callbacks_for_async_calls() is False:
-            return
-
-        executor.submit(
-            litellm_logging_obj.success_handler,
-            result=standard_logging_response_object,
-            end_time=end_time,
-            cache_hit=False,
-            start_time=start_time,
-            **kwargs,
-        )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error in _route_streaming_logging_to_handler: {str(e)}"
+            )
 
     @staticmethod
     def _extract_model_for_cost_injection(

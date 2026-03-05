@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
+    _convert_to_bedrock_tool_call_invoke,
     ollama_pt,
 )
 
@@ -1590,3 +1591,153 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     # Verify $defs have been removed (Bedrock doesn't support them)
     tool_schema = result[0]["toolSpec"].get("inputSchema", {}).get("json", {})
     assert "$defs" not in tool_schema, "$defs should be removed after expansion"
+
+
+# ── _convert_to_bedrock_tool_call_invoke tests ──
+
+
+def test_bedrock_tool_call_invoke_normal_single_tool():
+    """Normal single tool call with valid JSON arguments."""
+    tool_calls = [
+        {
+            "id": "call_abc123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston, MA"}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["toolUseId"] == "call_abc123"
+    assert result[0]["toolUse"]["name"] == "get_weather"
+    assert result[0]["toolUse"]["input"] == {"location": "Boston, MA"}
+
+
+def test_bedrock_tool_call_invoke_empty_arguments():
+    """Tool call with empty arguments produces an empty dict input."""
+    tool_calls = [
+        {
+            "id": "call_empty",
+            "type": "function",
+            "function": {"name": "do_something", "arguments": ""},
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_concatenated_json():
+    """
+    Tool call whose arguments contain multiple concatenated JSON objects
+    (the bug from issue #20543) is split into separate Bedrock toolUse blocks.
+
+    Bedrock Claude Sonnet 4.5 sometimes returns multiple tool call arguments
+    concatenated in a single string like:
+        '{"command":["curl",...]}{"command":["curl",...]}{"command":["curl",...]}'
+    """
+    tool_calls = [
+        {
+            "id": "tooluse_L7I3TewYAUhoheJZQEuwVN",
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "arguments": (
+                    '{"command": ["curl", "-i", "http://localhost:9009", "-m", "10"]}'
+                    '{"command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]}'
+                    '{"command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]}'
+                ),
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    # Should produce 3 separate toolUse blocks
+    assert len(result) == 3
+
+    # First block keeps original tool id
+    assert result[0]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN"
+    assert result[0]["toolUse"]["name"] == "shell"
+    assert result[0]["toolUse"]["input"] == {
+        "command": ["curl", "-i", "http://localhost:9009", "-m", "10"]
+    }
+
+    # Subsequent blocks get suffixed ids
+    assert result[1]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_1"
+    assert result[1]["toolUse"]["name"] == "shell"
+    assert result[1]["toolUse"]["input"] == {
+        "command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]
+    }
+
+    assert result[2]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_2"
+    assert result[2]["toolUse"]["name"] == "shell"
+    assert result[2]["toolUse"]["input"] == {
+        "command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]
+    }
+
+
+def test_bedrock_tool_call_invoke_concatenated_json_with_cache_control():
+    """
+    When a tool call has cache_control AND concatenated JSON arguments,
+    the cachePoint block is appended after the last split block.
+    """
+    tool_calls = [
+        {
+            "id": "call_cached",
+            "type": "function",
+            "cache_control": {"type": "default"},
+            "function": {
+                "name": "shell",
+                "arguments": '{"a": 1}{"b": 2}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    # 2 toolUse blocks + 1 cachePoint block
+    assert len(result) == 3
+    assert "toolUse" in result[0]
+    assert "toolUse" in result[1]
+    assert "cachePoint" in result[2]
+
+
+def test_bedrock_tool_call_invoke_non_dict_arguments():
+    """Arguments that parse to a non-dict (e.g. '""') produce empty dict input."""
+    tool_calls = [
+        {
+            "id": "call_non_dict",
+            "type": "function",
+            "function": {"name": "tool", "arguments": '""'},
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_multiple_normal_tools():
+    """Multiple separate tool calls (normal parallel calling) work correctly."""
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city": "NYC"}',
+            },
+        },
+        {
+            "id": "call_2",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city": "LA"}',
+            },
+        },
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 2
+    assert result[0]["toolUse"]["toolUseId"] == "call_1"
+    assert result[1]["toolUse"]["toolUseId"] == "call_2"

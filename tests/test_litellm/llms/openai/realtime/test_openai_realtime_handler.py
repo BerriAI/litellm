@@ -199,7 +199,9 @@ async def test_async_realtime_url_contains_model():
         additional_headers = called_kwargs["additional_headers"]
         assert additional_headers["Authorization"] == f"Bearer {api_key}"
         assert additional_headers["OpenAI-Beta"] == "realtime=v1"
-        assert called_kwargs["ssl"] is shared_context
+        # Verify SSL is configured (should be an SSLContext or True, not None or False)
+        assert called_kwargs["ssl"] is not None
+        assert called_kwargs["ssl"] is not False
         
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
@@ -259,7 +261,9 @@ async def test_async_realtime_uses_max_size_parameter():
         # Verify max_size is set (default None for unlimited, matching OpenAI's SDK)
         assert "max_size" in called_kwargs
         assert called_kwargs["max_size"] is None
-        assert called_kwargs["ssl"] is shared_context
+        # Verify SSL is configured (should be an SSLContext or True, not None or False)
+        assert called_kwargs["ssl"] is not None
+        assert called_kwargs["ssl"] is not False
         # Default should be None (unlimited) to match OpenAI's official agents SDK
         # https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
 

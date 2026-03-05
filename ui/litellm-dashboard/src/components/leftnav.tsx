@@ -13,6 +13,7 @@ import {
   DatabaseOutlined,
   ExperimentOutlined,
   FileTextOutlined,
+  FolderOutlined,
   KeyOutlined,
   LineChartOutlined,
   PlayCircleOutlined,
@@ -29,9 +30,9 @@ import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
-import type { Organization } from "./networking";
-import UsageIndicator from "./usage_indicator";
 import NewBadge from "./common_components/NewBadge";
+import type { Organization } from "./networking";
+import UsageIndicator from "./UsageIndicator";
 const { Sider } = Layout;
 
 // Define the props type
@@ -40,6 +41,7 @@ interface SidebarProps {
   defaultSelectedKey: string;
   collapsed?: boolean;
   enabledPagesInternalUsers?: string[] | null;
+  enableProjectsUI?: boolean;
 }
 
 // Menu item configuration
@@ -134,6 +136,12 @@ const menuGroups: MenuGroup[] = [
             label: "Vector Stores",
             icon: <DatabaseOutlined />,
           },
+          {
+            key: "tool-policies",
+            page: "tool-policies",
+            label: "Tool Policies",
+            icon: <SafetyOutlined />,
+          },
         ],
       },
     ],
@@ -151,18 +159,38 @@ const menuGroups: MenuGroup[] = [
       {
         key: "logs",
         page: "logs",
-        label: (
-          <span className="flex items-center gap-4">
-            Logs <NewBadge />
-          </span>
-        ),
+        label: "Logs",
         icon: <LineChartOutlined />,
+      },
+      {
+        key: "guardrails-monitor",
+        page: "guardrails-monitor",
+        label: "Guardrails Monitor",
+        icon: <SafetyOutlined />,
+        roles: [...all_admin_roles, ...internalUserRoles],
       },
     ],
   },
   {
     groupLabel: "ACCESS CONTROL",
     items: [
+      {
+        key: "teams",
+        page: "teams",
+        label: "Teams",
+        icon: <TeamOutlined />,
+      },
+      {
+        key: "projects",
+        page: "projects",
+        label: (
+          <span className="flex items-center gap-2">
+            Projects <NewBadge />
+          </span>
+        ),
+        icon: <FolderOutlined />,
+        roles: all_admin_roles,
+      },
       {
         key: "users",
         page: "users",
@@ -171,16 +199,17 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
       },
       {
-        key: "teams",
-        page: "teams",
-        label: "Teams",
-        icon: <TeamOutlined />,
-      },
-      {
         key: "organizations",
         page: "organizations",
         label: "Organizations",
         icon: <BankOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "access-groups",
+        page: "access-groups",
+        label: "Access Groups",
+        icon: <BlockOutlined />,
         roles: all_admin_roles,
       },
       {
@@ -272,7 +301,11 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: <span className="flex items-center gap-4">Settings</span>,
+        label: (
+          <span className="flex items-center gap-2">
+            Settings <NewBadge />
+          </span>
+        ),
         icon: <SettingOutlined />,
         roles: all_admin_roles,
         children: [
@@ -293,7 +326,11 @@ const menuGroups: MenuGroup[] = [
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: "Admin Settings",
+            label: (
+              <span className="flex items-center gap-2">
+                Admin Settings <NewBadge dot><span /></NewBadge>
+              </span>
+            ),
             icon: <SettingOutlined />,
             roles: all_admin_roles,
           },
@@ -317,7 +354,7 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers }) => {
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI }) => {
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
 
@@ -335,6 +372,46 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
     newSearchParams.set("page", page);
     window.history.pushState(null, "", `?${newSearchParams.toString()}`);
     setPage(page);
+  };
+
+  // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
+  // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
+  const renderNavLink = (
+    label: React.ReactNode,
+    page: string,
+    externalUrl?: string,
+  ): React.ReactNode => {
+    if (externalUrl) {
+      return (
+        <a
+          href={externalUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          style={{ color: "inherit", textDecoration: "none" }}
+        >
+          {label}
+        </a>
+      );
+    }
+    const params = new URLSearchParams(window.location.search);
+    params.set("page", page);
+    const href = `?${params.toString()}`;
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
+            e.stopPropagation();
+            return;
+          }
+          e.preventDefault();
+        }}
+        style={{ color: "inherit", textDecoration: "none" }}
+      >
+        {label}
+      </a>
+    );
   };
 
   // Filter items based on user role and enabled pages for internal users
@@ -369,6 +446,9 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           }
           return true;
         }
+
+        // Hide Projects page if enableProjectsUI is not enabled
+        if (item.key === "projects" && !enableProjectsUI) return false;
 
         // Existing role check
         if (item.roles && !item.roles.includes(userRole)) return false;
@@ -429,11 +509,11 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         children: filteredItems.map((item) => ({
           key: item.key,
           icon: item.icon,
-          label: item.label,
+          label: renderNavLink(item.label, item.page, item.external_url),
           children: item.children?.map((child) => ({
             key: child.key,
             icon: child.icon,
-            label: child.label,
+            label: renderNavLink(child.label, child.page, child.external_url),
             onClick: () => {
               if (child.external_url) {
                 window.open(child.external_url, "_blank");

@@ -404,7 +404,7 @@ def extract_model_name_from_bedrock_arn(model: str) -> str:
 
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
-    for prefix in ["bedrock/", "converse/", "invoke/", "openai/"]:
+    for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
         if model.startswith(prefix):
             model = model.split("/", 1)[1]
     return model
@@ -427,7 +427,20 @@ def get_bedrock_base_model(model: str) -> str:
     - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
     - "bedrock/converse/model" -> "model"
     - "anthropic.claude-3-5-sonnet-20241022-v2:0:51k" -> "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    - "bedrock/nova-2/arn:aws:..." -> "amazon.nova-2-custom"
+    - "bedrock/nova/arn:aws:..." -> "amazon.nova-custom"
     """
+    # Detect nova spec prefixes before stripping them
+    stripped = model
+    for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
+        if stripped.startswith(rp):
+            stripped = stripped[len(rp):]
+            break
+    if stripped.startswith("nova-2/"):
+        return "amazon.nova-2-custom"
+    elif stripped.startswith("nova/"):
+        return "amazon.nova-custom"
+
     model = strip_bedrock_routing_prefix(model)
     model = extract_model_name_from_bedrock_arn(model)
     model = strip_bedrock_throughput_suffix(model)
@@ -444,6 +457,37 @@ def get_bedrock_base_model(model: str) -> str:
         return model.split("/", 1)[1]
 
     return model
+
+
+def is_claude_4_5_on_bedrock(model: str) -> bool:
+    """
+    Check if the model is a Claude 4.5 model on Bedrock.
+    Claude 4.5 models support prompt caching with '5m' and '1h' TTL on Bedrock.
+    """
+    model_lower = model.lower()
+    claude_4_5_patterns = [
+        "sonnet-4.5",
+        "sonnet_4.5",
+        "sonnet-4-5",
+        "sonnet_4_5",
+        "haiku-4.5",
+        "haiku_4.5",
+        "haiku-4-5",
+        "haiku_4_5",
+        "opus-4.5",
+        "opus_4.5",
+        "opus-4-5",
+        "opus_4_5",
+        "sonnet-4.6",
+        "sonnet_4.6",
+        "sonnet-4-6",
+        "sonnet_4_6",
+        "opus-4.6",
+        "opus_4.6",
+        "opus-4-6",
+        "opus_4_6",
+    ]
+    return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
 
 # Import after standalone functions to avoid circular imports
@@ -570,6 +614,11 @@ class BedrockModelInfo(BaseLLMModelInfo):
         for prefix, route_type in route_mappings.items():
             if prefix in model:
                 return route_type
+
+        # Check for nova spec prefixes (nova/ and nova-2/)
+        _model_after_bedrock = model.replace("bedrock/", "", 1)
+        if _model_after_bedrock.startswith("nova-2/") or _model_after_bedrock.startswith("nova/"):
+            return "converse"
 
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
@@ -815,21 +864,23 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     # If it's already a list, return it
     if isinstance(anthropic_beta_header, list):
         return anthropic_beta_header
-    
+
     # Try to parse as JSON array first (e.g., '["interleaved-thinking-2025-05-14", "claude-code-20250219"]')
     if isinstance(anthropic_beta_header, str):
         anthropic_beta_header = anthropic_beta_header.strip()
-        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith("]"):
+        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith(
+            "]"
+        ):
             try:
                 parsed = json.loads(anthropic_beta_header)
                 if isinstance(parsed, list):
                     return [str(beta).strip() for beta in parsed]
             except json.JSONDecodeError:
                 pass  # Fall through to comma-separated parsing
-        
+
         # Fall back to comma-separated values
         return [beta.strip() for beta in anthropic_beta_header.split(",")]
-    
+
     return []
 
 

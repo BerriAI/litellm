@@ -5,12 +5,26 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
-from datetime import datetime
+import time
 import traceback
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast, Callable
+from datetime import datetime
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
+
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
@@ -19,16 +33,53 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    get_request_base_url,
+)
+from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    add_server_prefix_to_name,
+    get_server_prefix,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    get_chain_id_from_headers,
+)
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
+
+# Short-lived in-memory cache for BYOK credentials.
+# Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).
+# Storing the credential value (not just a bool) means _get_byok_credential and
+# _check_byok_credential share a single DB round-trip per TTL window.
+_byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
+_BYOK_CRED_CACHE_TTL = 60  # seconds
+_BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
+
+
+def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
+    """Remove a (user_id, server_id) entry from the BYOK credential cache.
+
+    Call this after storing or deleting a credential so subsequent calls
+    see the fresh value rather than a stale cached result.
+    """
+    _byok_cred_cache.pop((user_id, server_id), None)
+
+
+def _write_byok_cred_cache(
+    user_id: str, server_id: str, credential: Optional[str]
+) -> None:
+    """Write a credential value to the cache, evicting all entries if at capacity."""
+    if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
+        _byok_cred_cache.clear()
+    _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -65,6 +116,7 @@ except ImportError as e:
 _SESSION_MANAGERS_INITIALIZED = False
 _INITIALIZATION_LOCK = asyncio.Lock()
 
+
 if MCP_AVAILABLE:
     from mcp.server import Server
 
@@ -92,6 +144,9 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_auth_header,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -128,7 +183,7 @@ if MCP_AVAILABLE:
         app=server,
         event_store=None,
         json_response=False, # enables SSE streaming
-        stateless=False, # enables session state
+        stateless=True,
     )
 
     # Create SSE session manager
@@ -213,6 +268,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
+                _client_ip,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
@@ -276,6 +332,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers,
             oauth2_headers,
             raw_headers,
+            _client_ip,
         ) = get_auth_context()
 
         verbose_logger.debug(
@@ -288,7 +345,7 @@ if MCP_AVAILABLE:
                 host_token = getattr(host_ctx.meta, 'progressToken', None)
                 if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
                     host_session = host_ctx.session
-                    
+
                     async def forward_progress(progress: float, total: float | None):
                         """Forward progress notifications from external MCP to Host"""
                         try:
@@ -300,7 +357,7 @@ if MCP_AVAILABLE:
                             verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
                         except Exception as e:
                             verbose_logger.error(f"Failed to forward progress to Host: {e}")
-                    
+
                     host_progress_callback = forward_progress
                     verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
         except Exception as e:
@@ -308,6 +365,11 @@ if MCP_AVAILABLE:
         try:
             # Create a body date for logging
             body_data = {"name": name, "arguments": arguments}
+            # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
+            chain_id = get_chain_id_from_headers(raw_headers)
+            if chain_id:
+                body_data["litellm_trace_id"] = chain_id
+                body_data["litellm_session_id"] = chain_id
 
             request = Request(
                 scope={
@@ -387,6 +449,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
+                _client_ip,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_prompts - User API Key Auth from context: {user_api_key_auth}"
@@ -440,6 +503,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers,
             oauth2_headers,
             raw_headers,
+            _client_ip,
         ) = get_auth_context()
 
         verbose_logger.debug(
@@ -467,6 +531,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
+                _client_ip,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_resources - User API Key Auth from context: {user_api_key_auth}"
@@ -505,6 +570,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
+                _client_ip,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_resource_templates - User API Key Auth from context: {user_api_key_auth}"
@@ -544,6 +610,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers,
             oauth2_headers,
             raw_headers,
+            _client_ip,
         ) = get_auth_context()
 
         read_resource_result = await mcp_read_resource(
@@ -702,14 +769,91 @@ if MCP_AVAILABLE:
 
         return tools_to_return
 
+    def apply_tool_overrides(
+        tools: List[MCPTool],
+        mcp_server: MCPServer,
+    ) -> List[MCPTool]:
+        """Apply admin-configured display name/description overrides to tools.
+
+        Overrides are keyed by the unprefixed tool name, same convention as
+        allowed_tools configuration.
+        """
+        display_name_map = mcp_server.tool_name_to_display_name or {}
+        description_map = mcp_server.tool_name_to_description or {}
+        if not display_name_map and not description_map:
+            return tools
+
+        for tool in tools:
+            unprefixed, _ = split_server_prefix_from_name(tool.name)
+            lookup_key = unprefixed or tool.name
+            if lookup_key in display_name_map:
+                tool.name = display_name_map[lookup_key]
+            if lookup_key in description_map:
+                tool.description = description_map[lookup_key]
+        return tools
+
+    def _get_client_ip_from_context() -> Optional[str]:
+        """
+        Extract client_ip from auth context.
+        Returns None if context not set (caller should handle this as "no IP filtering").
+        """
+        try:
+            auth_user = auth_context_var.get()
+            if auth_user and isinstance(auth_user, MCPAuthenticatedUser):
+                return auth_user.client_ip
+        except Exception:
+            pass
+        return None
+
     async def _get_allowed_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_servers: Optional[List[str]],
+        client_ip: Optional[str] = None,
     ) -> List[MCPServer]:
-        """Return allowed MCP servers for a request after applying filters."""
+        """Return allowed MCP servers for a request after applying filters.
+
+        Args:
+            user_api_key_auth: The authenticated user's API key info.
+            mcp_servers: Optional list of server names to filter to.
+            client_ip: Client IP for IP-based access control. If None, falls back to
+                      auth context. Pass explicitly from request handlers for safety.
+        Note: If client_ip is None and auth context is not set, IP filtering is skipped.
+              This is intentional for internal callers but may indicate a bug if called
+              from a request handler without proper context setup.
+        """
+        # Use explicit client_ip if provided, otherwise try auth context
+        if client_ip is None:
+            client_ip = _get_client_ip_from_context()
+            if client_ip is None:
+                verbose_logger.debug(
+                    "MCP _get_allowed_mcp_servers called without client_ip and no auth context. "
+                    "IP filtering will be skipped. This is expected for internal calls."
+                )
+
         allowed_mcp_server_ids = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+            await global_mcp_server_manager.get_allowed_mcp_servers(
+                user_api_key_auth
+            )
         )
+        allowed_mcp_server_ids, _ip_blocked = (
+            global_mcp_server_manager.filter_server_ids_by_ip_with_info(
+                allowed_mcp_server_ids, client_ip
+            )
+        )
+        verbose_logger.debug(
+            "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
+            client_ip, allowed_mcp_server_ids,
+        )
+        if _ip_blocked > 0:
+            verbose_logger.debug(
+                "MCP IP filtering: %d server(s) are not accessible from client IP %s "
+                "because they are restricted to internal networks. "
+                "No tools from those servers will be returned. "
+                "To expose a server externally, set 'available_on_public_internet: true' "
+                "in its configuration.",
+                _ip_blocked,
+                client_ip,
+            )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
             mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
@@ -723,6 +867,7 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
+        
 
         return allowed_mcp_servers
 
@@ -775,6 +920,7 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
+        litellm_trace_id: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -800,6 +946,10 @@ if MCP_AVAILABLE:
             # This is intentionally minimal: only async_success_handler / post_call_failure_hook
             rules_obj = Rules()
             list_tools_call_id = str(uuid.uuid4())
+            # Derive trace_id from raw_headers when not explicitly passed (same as A2A / MCP call_tool)
+            effective_litellm_trace_id = litellm_trace_id or get_chain_id_from_headers(
+                raw_headers
+            )
             spend_logs_metadata: Dict[str, Any] = {
                 "mcp_operation": "list_tools",
             }
@@ -812,6 +962,7 @@ if MCP_AVAILABLE:
                 "model": "MCP: list_tools",
                 "call_type": CallTypes.list_mcp_tools.value,
                 "litellm_call_id": list_tools_call_id,
+                "litellm_trace_id": effective_litellm_trace_id,
                 "metadata": {
                     "spend_logs_metadata": spend_logs_metadata,
                 },
@@ -827,13 +978,14 @@ if MCP_AVAILABLE:
                 ],
             }
 
-            # Attach user identifiers when available (matches call_mcp_tool style)
+            # Attach user identifiers using the standard helper
             if user_api_key_auth is not None:
-                user_api_key = getattr(user_api_key_auth, "api_key", None)
-                if user_api_key:
-                    cast(dict, list_tools_request_data["metadata"])[
-                        "user_api_key"
-                    ] = user_api_key
+
+                LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+                    data=list_tools_request_data,
+                    user_api_key_dict=user_api_key_auth,
+                    _metadata_variable_name="metadata",
+                )
 
                 user_identifier = getattr(
                     user_api_key_auth, "end_user_id", None
@@ -863,9 +1015,6 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
             )
 
-            # Decide whether to add prefix based on number of allowed servers
-            add_prefix = not (len(allowed_mcp_servers) == 1)
-
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
             ) -> List[MCPTool]:
@@ -886,7 +1035,7 @@ if MCP_AVAILABLE:
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=add_prefix,
+                        add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -896,6 +1045,10 @@ if MCP_AVAILABLE:
                         server_id=server.server_id,
                         user_api_key_auth=user_api_key_auth,
                     )
+
+                    # Apply display-name/description overrides last so that
+                    # permission filtering always works against original names.
+                    filtered_tools = apply_tool_overrides(filtered_tools, server)
 
                     verbose_logger.debug(
                         f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
@@ -1004,8 +1157,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        # Decide whether to add prefix based on number of allowed servers
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
         # Get prompts from each allowed server
         all_prompts = []
@@ -1026,7 +1177,7 @@ if MCP_AVAILABLE:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=add_prefix,
+                    add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
                 )
 
@@ -1065,7 +1216,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
         all_resources: List[Resource] = []
         for server in allowed_mcp_servers:
@@ -1085,7 +1235,7 @@ if MCP_AVAILABLE:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=add_prefix,
+                    add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
                 )
                 all_resources.extend(resources)
@@ -1122,7 +1272,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
         all_resource_templates: List[ResourceTemplate] = []
         for server in allowed_mcp_servers:
@@ -1143,7 +1292,7 @@ if MCP_AVAILABLE:
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=add_prefix,
+                        add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                     )
                 )
@@ -1359,6 +1508,142 @@ if MCP_AVAILABLE:
 
         return managed_resource_templates
 
+    def _resolve_display_name_to_original(
+        name: str,
+        allowed_mcp_servers: List[MCPServer],
+    ) -> str:
+        """Translate a display-name override back to the original prefixed tool name.
+
+        When a client received a customised display name from tools/list (e.g.
+        "Get Pet") it will call tools/call with that same string.  We need to
+        reverse-map it to the original prefixed name (e.g.
+        "petstore_mcp-getPetById") before any routing or permission logic runs.
+        """
+        for server in allowed_mcp_servers:
+            display_map = server.tool_name_to_display_name or {}
+            for unprefixed_name, display_name in display_map.items():
+                if display_name == name:
+                    return add_server_prefix_to_name(
+                        unprefixed_name, get_server_prefix(server)
+                    )
+        return name
+
+    async def _get_byok_credential(
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[str]:
+        """Retrieve the stored BYOK credential for a user+server pair.
+
+        Uses the shared _byok_cred_cache to avoid a DB round-trip on every
+        tool call within the TTL window.
+        """
+        if not mcp_server.is_byok:
+            return None
+        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
+        if not user_id:
+            return None
+
+        cache_key = (user_id, mcp_server.server_id)
+        cached = _byok_cred_cache.get(cache_key)
+        if cached is not None:
+            credential, ts = cached
+            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
+                return credential
+
+        from litellm.proxy._experimental.mcp_server.db import get_user_credential
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return None
+        credential = await get_user_credential(
+            prisma_client=prisma_client,
+            user_id=user_id,
+            server_id=mcp_server.server_id,
+        )
+        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
+        return credential
+
+    async def _check_byok_credential(
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> None:
+        """
+        If the MCP server is BYOK-enabled, verify that the requesting user has a
+        stored credential.  When no credential is found, raise an HTTP 401 with a
+        WWW-Authenticate header that points the MCP client to our OAuth metadata
+        endpoint so it can drive the authorization flow.
+        """
+        if not mcp_server.is_byok:
+            return
+
+        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "byok_auth_required",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": "User identity is required for BYOK servers",
+                },
+                headers={
+                    "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                },
+            )
+
+        # Check shared credential cache before hitting the DB.
+        cache_key = (user_id, mcp_server.server_id)
+        cached = _byok_cred_cache.get(cache_key)
+        if cached is not None:
+            cached_cred, ts = cached
+            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
+                if cached_cred is None:
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error": "byok_auth_required",
+                            "server_id": mcp_server.server_id,
+                            "server_name": mcp_server.server_name or mcp_server.name,
+                            "message": (
+                                "No stored credential found for this BYOK server. "
+                                "Complete the OAuth authorization flow to provide your API key."
+                            ),
+                        },
+                        headers={
+                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                        },
+                    )
+                return
+
+        from litellm.proxy._experimental.mcp_server.db import get_user_credential
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+
+        credential = await get_user_credential(
+            prisma_client=prisma_client,
+            user_id=user_id,
+            server_id=mcp_server.server_id,
+        )
+        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
+        if credential is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "byok_auth_required",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": (
+                        "No stored credential found for this BYOK server. "
+                        "Complete the OAuth authorization flow to provide your API key."
+                    ),
+                },
+                headers={
+                    "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                },
+            )
+
     async def execute_mcp_tool(
         name: str,
         arguments: Dict[str, Any],
@@ -1395,6 +1680,10 @@ if MCP_AVAILABLE:
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None
 
+        # If the client called with a display-name override (e.g. "Get Pet"),
+        # translate it back to the original prefixed name before any routing.
+        name = _resolve_display_name_to_original(name, allowed_mcp_servers)
+
         # Remove prefix from tool name for logging and processing
         original_tool_name, server_name = split_server_prefix_from_name(name)
 
@@ -1430,57 +1719,99 @@ if MCP_AVAILABLE:
                 "mcp_tool_call_metadata"
             ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
+        # Resolve the MCP server early so BYOK checks and credential injection
+        # apply to ALL dispatch paths (local tool registry AND managed MCP server).
+        if mcp_server is None:
+            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+
+        if mcp_server:
+            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                mcp_server.mcp_info or {}
+            ).get("mcp_server_cost_info")
+            if litellm_logging_obj:
+                litellm_logging_obj.model_call_details[
+                    "mcp_tool_call_metadata"
+                ] = standard_logging_mcp_tool_call
+
+            # BYOK: retrieve the stored per-user credential.  A single DB call
+            # both checks existence and fetches the value, avoiding a double query.
+            if mcp_server.is_byok and not mcp_auth_header:
+                byok_cred = await _get_byok_credential(mcp_server, user_api_key_auth)
+                if byok_cred is None:
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error": "byok_auth_required",
+                            "server_id": mcp_server.server_id,
+                            "server_name": mcp_server.server_name or mcp_server.name,
+                            "message": (
+                                "No stored credential found for this BYOK server. "
+                                "Complete the OAuth authorization flow to provide your API key."
+                            ),
+                        },
+                        headers={
+                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                        },
+                    )
+                mcp_auth_header = byok_cred
+            elif mcp_server.is_byok:
+                # External auth header supplied; still enforce user-identity check.
+                await _check_byok_credential(mcp_server, user_api_key_auth)
+
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
         #########################################################
         local_tool = global_mcp_tool_registry.get_tool(name)
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
-            local_content = await _handle_local_mcp_tool(name, arguments)
+            # For BYOK servers the credential must be injected via a ContextVar
+            # because the tool function has headers baked into its closure.
+            # Pre-format the full Authorization header value using the server's
+            # configured auth_type so the generator doesn't need to know the prefix.
+            auth_header_value: Optional[str] = None
+            if mcp_auth_header:
+                server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
+                if server_auth_type == MCPAuth.api_key:
+                    auth_header_value = f"ApiKey {mcp_auth_header}"
+                elif server_auth_type == MCPAuth.basic:
+                    auth_header_value = f"Basic {mcp_auth_header}"
+                else:
+                    auth_header_value = f"Bearer {mcp_auth_header}"
+            _auth_token = _request_auth_header.set(auth_header_value)
+            try:
+                local_content = await _handle_local_mcp_tool(name, arguments)
+            finally:
+                _request_auth_header.reset(_auth_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)
         # Primary and recommended way to use external MCP servers
         #########################################################
-        else:
-            # If we haven't already resolved the server, do it now for dispatch
-            if mcp_server is None:
-                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(
-                    name
-                )
-            if mcp_server:
-                standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
-                    mcp_server.mcp_info or {}
-                ).get("mcp_server_cost_info")
-                # Update model_call_details with the cost info
-                if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details[
-                        "mcp_tool_call_metadata"
-                    ] = standard_logging_mcp_tool_call
-                response = await _handle_managed_mcp_tool(
-                    server_name=server_name,
-                    name=original_tool_name,  # Pass the full name (potentially prefixed)
-                    arguments=arguments,
-                    user_api_key_auth=user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    litellm_logging_obj=litellm_logging_obj,
-                    host_progress_callback=host_progress_callback,
-                )
+        elif mcp_server:
+            response = await _handle_managed_mcp_tool(
+                server_name=server_name,
+                name=original_tool_name,  # Pass the full name (potentially prefixed)
+                arguments=arguments,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                litellm_logging_obj=litellm_logging_obj,
+                host_progress_callback=host_progress_callback,
+            )
 
-            # Fall back to local tool registry with original name (legacy support)
-            #########################################################
-            # Deprecated: Local MCP Server Tool
-            #########################################################
-            else:
-                local_content = await _handle_local_mcp_tool(
-                    original_tool_name, arguments
-                )
-                response = CallToolResult(
-                    content=cast(Any, local_content), isError=False
-                )
+        # Fall back to local tool registry with original name (legacy support)
+        #########################################################
+        # Deprecated: Local MCP Server Tool
+        #########################################################
+        else:
+            local_content = await _handle_local_mcp_tool(
+                original_tool_name, arguments
+            )
+            response = CallToolResult(
+                content=cast(Any, local_content), isError=False
+            )
 
         return response
 
@@ -1601,14 +1932,9 @@ if MCP_AVAILABLE:
                 detail="User not allowed to get this prompt.",
             )
 
-        # Decide whether to add prefix based on number of allowed servers
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
-        if add_prefix:
-            original_prompt_name, server_name = split_server_prefix_from_name(name)
-        else:
-            original_prompt_name = name
-            server_name = allowed_mcp_servers[0].name
+        # Extract server name from prefixed prompt name
+        original_prompt_name, server_name = split_server_prefix_from_name(name)
 
         server = next((s for s in allowed_mcp_servers if s.name == server_name), None)
         if server is None:
@@ -1715,7 +2041,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
-        host_progress_callback: Optional[Callable] = None, 
+        host_progress_callback: Optional[Callable] = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -1840,42 +2166,93 @@ if MCP_AVAILABLE:
             raw_headers,
         )
 
-    def _strip_stale_mcp_session_header(
+    async def _handle_stale_mcp_session(
         scope: Scope,
+        receive: Receive,
+        send: Send,
         mgr: "StreamableHTTPSessionManager",
-    ) -> None:
+    ) -> bool:
         """
-        Strip stale ``mcp-session-id`` headers so the session manager
-        creates a fresh session instead of returning 404 "Session not found".
+        Inspect the incoming ``mcp-session-id`` header **before** the
+        request reaches the MCP SDK.  If the session is stale (not known
+        to this worker), strip the header so the SDK creates a fresh
+        stateless session instead of returning a 400.
 
-        When clients like VSCode reconnect after a reload they may resend a
-        session id that has already been cleaned up.  Rather than letting the
-        SDK return a 404 error loop, we detect the stale id and remove the
-        header so a brand-new session is created transparently.
+        Returns:
+            True if the request was fully handled (e.g. DELETE on
+            non-existent session).  False if the request should continue
+            to the session manager.
 
-        Fixes https://github.com/BerriAI/litellm/issues/20292
+        Fixes https://github.com/BerriAI/litellm/issues/20992
         """
         _mcp_session_header = b"mcp-session-id"
+        _headers = scope.get("headers", [])
+
+        def _normalize_header_name(header_name: Any) -> Optional[bytes]:
+            if isinstance(header_name, bytes):
+                return header_name.lower()
+            if isinstance(header_name, str):
+                return header_name.lower().encode("utf-8", errors="replace")
+            return None
+
         _session_id: Optional[str] = None
-        for header_name, header_value in scope.get("headers", []):
-            if header_name == _mcp_session_header:
-                _session_id = header_value.decode("utf-8", errors="replace")
+        for header_name, header_value in _headers:
+            if _normalize_header_name(header_name) == _mcp_session_header:
+                if isinstance(header_value, bytes):
+                    _session_id = header_value.decode("utf-8", errors="replace")
+                else:
+                    _session_id = str(header_value)
                 break
 
         if _session_id is None:
-            return
+            return False
 
+        # Check in-memory session tracking
         known_sessions = getattr(mgr, "_server_instances", None)
-        if known_sessions is not None and _session_id not in known_sessions:
-            verbose_logger.warning(
-                "MCP session ID '%s' not found in active sessions. "
-                "Stripping stale header to force new session creation.",
+        # If we cannot inspect known_sessions, let the manager handle it
+        if known_sessions is None:
+            return False
+
+        # If session exists in this worker's memory, let the manager handle it
+        try:
+            if _session_id in known_sessions:
+                return False
+        except Exception:
+            verbose_logger.debug(
+                "Unable to inspect active MCP sessions for '%s'. "
+                "Deferring to session manager.",
                 _session_id,
             )
-            scope["headers"] = [
-                (k, v) for k, v in scope["headers"]
-                if k != _mcp_session_header
-            ]
+            return False
+
+        # --- Session not in this worker's memory ---
+        method = scope.get("method", "").upper()
+
+        if method == "DELETE":
+            verbose_logger.info(
+                "DELETE request for non-existent MCP session '%s'. "
+                "Returning success (idempotent DELETE).",
+                _session_id,
+            )
+            success_response = JSONResponse(
+                status_code=200,
+                content={"message": "Session terminated successfully"},
+            )
+            await success_response(scope, receive, send)
+            return True
+
+        # Non-DELETE: strip stale session ID to allow new session creation
+        verbose_logger.warning(
+            "MCP session ID '%s' not found in this worker's memory. "
+            "Stripping stale header to force new session creation.",
+            _session_id,
+        )
+        scope["headers"] = [
+            (k, v)
+            for k, v in _headers
+            if _normalize_header_name(k) != _mcp_session_header
+        ]
+        return False
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
@@ -1891,6 +2268,10 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+
+            # Extract client IP for MCP access control
+            _client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
+
             verbose_logger.debug(
                 f"MCP request mcp_servers (header/path): {mcp_servers}"
             )
@@ -1899,12 +2280,12 @@ if MCP_AVAILABLE:
             )
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             for server_name in mcp_servers or []:
-                server = global_mcp_server_manager.get_mcp_server_by_name(server_name)
+                server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_name, client_ip=_client_ip
+                )
                 if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                    from starlette.requests import Request
-
-                    request = Request(scope)
-                    base_url = str(request.base_url).rstrip("/")
+                    request = StarletteRequest(scope)
+                    base_url = get_request_base_url(request)
 
                     authorization_uri = (
                         f"Bearer authorization_uri="
@@ -1917,6 +2298,19 @@ if MCP_AVAILABLE:
                         headers={"www-authenticate": authorization_uri},
                     )
 
+            # Inject masked debug headers when client sends x-litellm-mcp-debug: true
+            _debug_headers = MCPDebug.maybe_build_debug_headers(
+                raw_headers=raw_headers,
+                scope=dict(scope),
+                mcp_servers=mcp_servers,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                client_ip=_client_ip,
+            )
+            if _debug_headers:
+                send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers)
+
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
@@ -1925,6 +2319,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_client_ip,
             )
 
             # Ensure session managers are initialized
@@ -1933,15 +2328,23 @@ if MCP_AVAILABLE:
                 # Give it a moment to start up
                 await asyncio.sleep(0.1)
 
-            _strip_stale_mcp_session_header(scope, session_manager)
+            # Handle stale session IDs - either strip them for reconnection
+            # or return success for idempotent DELETE operations
+            handled = await _handle_stale_mcp_session(
+                scope, receive, send, session_manager
+            )
+            if handled:
+                # Request was fully handled (e.g., DELETE on non-existent session)
+                return
 
             await session_manager.handle_request(scope, receive, send)
+        except HTTPException:
+            # Re-raise HTTP exceptions to preserve status codes and details
+            raise
         except Exception as e:
-            raise e
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            # Instead of re-raising, try to send a graceful error response
+            # Try to send a graceful error response for non-HTTP exceptions
             try:
-                # Send a proper HTTP error response instead of letting the exception bubble up
                 from starlette.responses import JSONResponse
                 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 
@@ -1969,6 +2372,10 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+
+            # Extract client IP for MCP access control
+            _sse_client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
+
             verbose_logger.debug(
                 f"MCP request mcp_servers (header/path): {mcp_servers}"
             )
@@ -1982,6 +2389,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_sse_client_ip,
             )
 
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -2045,6 +2453,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> None:
         """
         Set the UserAPIKeyAuth in the auth context variable.
@@ -2054,6 +2463,7 @@ if MCP_AVAILABLE:
             mcp_auth_header: MCP auth header to be passed to the MCP server (deprecated)
             mcp_servers: Optional list of server names and access groups to filter by
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            client_ip: Client IP address for MCP access control
         """
         auth_user = MCPAuthenticatedUser(
             user_api_key_auth=user_api_key_auth,
@@ -2062,6 +2472,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
+            client_ip=client_ip,
         )
         auth_context_var.set(auth_user)
 
@@ -2073,14 +2484,15 @@ if MCP_AVAILABLE:
             Optional[Dict[str, Dict[str, str]]],
             Optional[Dict[str, str]],
             Optional[Dict[str, str]],
+            Optional[str],
         ]
     ):
         """
         Get the UserAPIKeyAuth from the auth context variable.
 
         Returns:
-            Tuple[Optional[UserAPIKeyAuth], Optional[str], Optional[List[str]], Optional[Dict[str, str]]]:
-            UserAPIKeyAuth object, MCP auth header (deprecated), MCP servers (can include access groups), and server-specific auth headers
+            Tuple containing: UserAPIKeyAuth, MCP auth header (deprecated),
+            MCP servers, server-specific auth headers, OAuth2 headers, raw headers, client IP
         """
         auth_user = auth_context_var.get()
         if auth_user and isinstance(auth_user, MCPAuthenticatedUser):
@@ -2091,8 +2503,9 @@ if MCP_AVAILABLE:
                 auth_user.mcp_server_auth_headers,
                 auth_user.oauth2_headers,
                 auth_user.raw_headers,
+                auth_user.client_ip,
             )
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None
 
     ########################################################
     ############ End of Auth Context Functions #############
