@@ -2535,10 +2535,10 @@ class SSOAuthenticationHandler:
                     "This usually means the authorization and callback were handled by different "
                     "instances without a shared cache. "
                     "Ensure Redis is configured and GENERIC_CLIENT_USE_PKCE=true. "
-                    "Cache type: %s. Cached data: %s",
+                    "Cache type: %s. Cache entry present: %s",
                     state,
                     type(user_api_key_cache).__name__,
-                    cached_data,
+                    cached_data is not None,
                 )
         return token_params
 
