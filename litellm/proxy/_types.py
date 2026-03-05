@@ -931,6 +931,7 @@ class LiteLLMKeyType(str, enum.Enum):
 
 class GenerateKeyRequest(KeyRequestBase):
     soft_budget: Optional[float] = None
+    user_email: Optional[str] = None
     send_invite_email: Optional[bool] = None
     key_type: Optional[LiteLLMKeyType] = Field(
         default=LiteLLMKeyType.DEFAULT,

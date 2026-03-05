@@ -6455,3 +6455,147 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_with_user_email_creates_user(monkeypatch):
+    """When user_email is provided to generate_key_helper_fn with table_name='key',
+    a user record should be created and the key should link to it via user_id."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_usertable = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    captured_user_data = {}
+    captured_key_data = {}
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            captured_user_data.update(kwargs.get("data", {}))
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            captured_key_data.update(kwargs.get("data", {}))
+            return MagicMock(
+                token="hashed_token",
+                litellm_budget_table=None,
+                object_permission=None,
+                created_at=None,
+                updated_at=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    result = await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",
+        user_email="test@example.com",
+    )
+
+    # User record was created
+    assert captured_user_data.get("user_email") == "test@example.com"
+    # user_id was auto-generated (not None)
+    assert captured_user_data.get("user_id") is not None
+    # Key links to the same user_id
+    assert captured_key_data.get("user_id") == captured_user_data.get("user_id")
+
+
+@pytest.mark.asyncio
+async def test_generate_key_with_user_email_reuses_existing_user(monkeypatch):
+    """When user_email matches an existing user, reuse their user_id
+    without creating or updating the user record."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    existing_user = MagicMock()
+    existing_user.user_id = "existing-user-id-123"
+
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_usertable = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        return_value=existing_user
+    )
+
+    captured_key_data = {}
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            raise AssertionError("Should NOT create a new user record")
+        elif table_name == "key":
+            captured_key_data.update(kwargs.get("data", {}))
+            return MagicMock(
+                token="hashed_token",
+                litellm_budget_table=None,
+                object_permission=None,
+                created_at=None,
+                updated_at=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    result = await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",
+        user_email="test@example.com",
+    )
+
+    # Key links to the existing user's ID
+    assert captured_key_data.get("user_id") == "existing-user-id-123"
+    # find_first was called with the email
+    mock_prisma_client.db.litellm_usertable.find_first.assert_called_once_with(
+        where={"user_email": "test@example.com"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_key_without_user_email_skips_user_creation(monkeypatch):
+    """When user_email is NOT provided, the existing behavior is preserved:
+    no user record is created for table_name='key'."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    mock_prisma_client.db = MagicMock()
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            raise AssertionError("Should NOT create a user when user_email is not provided")
+        elif table_name == "key":
+            return MagicMock(
+                token="hashed_token",
+                litellm_budget_table=None,
+                object_permission=None,
+                created_at=None,
+                updated_at=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # No user_email — should NOT attempt user creation
+    result = await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",
+        user_id="some-user",
+    )
+
+    # Key was created successfully
+    assert result is not None
+
+
+def test_generate_key_request_accepts_user_email():
+    """GenerateKeyRequest should accept user_email as a valid field."""
+    req = GenerateKeyRequest(user_email="test@example.com")
+    assert req.user_email == "test@example.com"
+
+    # Also verify it's included in model_dump
+    dumped = req.model_dump(exclude_unset=True, exclude_none=True)
+    assert dumped.get("user_email") == "test@example.com"
