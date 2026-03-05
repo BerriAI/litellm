@@ -204,6 +204,23 @@ class TestFilterDeploymentsByAccessGroups:
         )
         assert len(result) == 2
 
+    def test_all_team_models_no_filtering(self, deployments_with_access_groups):
+        """Key with models=["all-team-models"] should get all deployments.
+
+        "all-team-models" is treated as a wildcard by the auth layer
+        (user_api_key_auth.py) — the filter must honour the same behaviour
+        to avoid incorrectly restricting team-scoped keys.
+        """
+        request_kwargs = {
+            "metadata": {"user_api_key_auth": _make_auth(models=["all-team-models"])}
+        }
+        result = filter_deployments_by_access_groups(
+            model="gpt-4o",
+            healthy_deployments=deployments_with_access_groups,
+            request_kwargs=request_kwargs,
+        )
+        assert len(result) == 2
+
     # ── Unrestricted deployments ────────────────────────────────────────
 
     def test_unrestricted_deployments_always_kept(self, deployments_mixed):

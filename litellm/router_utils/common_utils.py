@@ -123,7 +123,8 @@ def filter_deployments_by_access_groups(
     if not key_models and not key_access_group_ids:
         return healthy_deployments
     if any(
-        m in key_models for m in ("*", "all-proxy-models", "openai-proxy-all-models")
+        m in key_models
+        for m in ("*", "all-proxy-models", "openai-proxy-all-models", "all-team-models")
     ):
         return healthy_deployments
 
