@@ -91,7 +91,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     if (!orgId) return kList;
     return kList.map((k: KeyResponse) => ({
       ...k,
-      organization_id: k.organization_id || orgId,
+      organization_id: (k.organization_id ?? k.org_id) || orgId,
     }));
   }, [keys?.keys, organization?.organization_id]);
 
