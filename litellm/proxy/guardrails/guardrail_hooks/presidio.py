@@ -1130,13 +1130,27 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # delivery at response completion when output_parse_pii is enabled.
             # This is unavoidable for correct PII token restoration because tokens
             # may span multiple delta events.
+            if remaining_bytes_chunks and remaining_chunks:
+                verbose_proxy_logger.warning(
+                    "PII streaming unmask: mixed bytes (%d) and model (%d) chunks; "
+                    "bytes chunks will be discarded",
+                    len(remaining_bytes_chunks),
+                    len(remaining_chunks),
+                )
+
             if remaining_bytes_chunks and not remaining_chunks:
                 combined = b"".join(remaining_bytes_chunks)
                 # Split on double-newline SSE event boundaries
                 raw_events = [e for e in combined.split(b"\n\n") if e.strip()]
 
+                # Pass 1: classify events; record original slot positions so we
+                # can re-insert the merged text_delta at the position of the FIRST
+                # original text_delta rather than appending it after non-text
+                # events (which would put message_stop before text content).
                 text_parts: List[str] = []
-                non_text_events: List[bytes] = []
+                # Each entry: (raw_event_bytes, is_text_delta)
+                event_slots: List[tuple] = []
+                last_text_delta_index: int = 0
 
                 for raw_event in raw_events:
                     lines = raw_event.split(b"\n")
@@ -1144,12 +1158,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         (ln for ln in lines if ln.startswith(b"data:")), None
                     )
                     if data_line is None:
-                        non_text_events.append(raw_event)
+                        event_slots.append((raw_event, False))
                         continue
                     try:
                         payload = json.loads(data_line[len(b"data:"):].strip())
                     except (json.JSONDecodeError, ValueError):
-                        non_text_events.append(raw_event)
+                        event_slots.append((raw_event, False))
                         continue
 
                     delta = payload.get("delta") if isinstance(payload, dict) else None
@@ -1159,26 +1173,43 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         and delta.get("type") == "text_delta"
                     ):
                         text_parts.append(delta.get("text", ""))
+                        last_text_delta_index = payload.get("index", 0)
+                        event_slots.append((raw_event, True))
                     else:
-                        non_text_events.append(raw_event)
+                        event_slots.append((raw_event, False))
 
                 # Unmask the full concatenated text in one pass so that tokens
                 # which span multiple delta events are correctly restored.
                 combined_text = "".join(text_parts)
                 unmasked_text = self._unmask_pii_text(combined_text, pii_tokens)
 
-                # Rebuild: emit all non-text events, then a single text_delta
-                # containing the fully unmasked text.
+                # Build the merged text_delta event, preserving the original
+                # `index` value from the last text_delta (not hardcoded 0).
                 text_delta_payload = {
                     "type": "content_block_delta",
-                    "index": 0,
+                    "index": last_text_delta_index,
                     "delta": {"type": "text_delta", "text": unmasked_text},
                 }
                 text_delta_event = (
                     b"event: content_block_delta\n"
                     b"data: " + json.dumps(text_delta_payload).encode() + b"\n"
                 )
-                rebuilt = b"\n\n".join(non_text_events + [text_delta_event]) + b"\n\n"
+
+                # Pass 2: rebuild event stream in original order.
+                # The merged text_delta is placed at the slot of the FIRST
+                # original text_delta; all subsequent text_delta slots are dropped.
+                merged_events: List[bytes] = []
+                first_text_delta_placed = False
+                for raw_event, is_text_delta in event_slots:
+                    if is_text_delta:
+                        if not first_text_delta_placed:
+                            merged_events.append(text_delta_event)
+                            first_text_delta_placed = True
+                        # skip remaining text_delta slots
+                    else:
+                        merged_events.append(raw_event)
+
+                rebuilt = b"\n\n".join(merged_events) + b"\n\n"
                 yield rebuilt  # type: ignore[misc]
                 return
 
