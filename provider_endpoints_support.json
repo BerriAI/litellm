@@ -2476,6 +2476,13 @@
         "messages": true,
         "responses": true
       }
+    },
+    "searchapi": {
+      "display_name": "SearchAPI (`searchapi`)",
+      "url": "https://docs.litellm.ai/docs/search/searchapi",
+      "endpoints": {
+        "search": true
+      }
     }
   },
   "endpoints": {

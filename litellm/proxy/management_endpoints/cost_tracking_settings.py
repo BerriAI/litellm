@@ -59,7 +59,7 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                 model_info = first_deployment.get("model_info", {})
 
                 # Check base_model first (needed for Azure custom deployment names)
-                base_model = model_info.get("base_model") or litellm_params.get(
+                base_model: Optional[str] = model_info.get("base_model") or litellm_params.get(
                     "base_model"
                 )
                 if base_model:
@@ -69,7 +69,7 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
                     return base_model, custom_llm_provider
 
-                resolved_model = litellm_params.get("model")
+                resolved_model: Optional[str] = litellm_params.get("model")
 
                 if resolved_model:
                     verbose_proxy_logger.debug(

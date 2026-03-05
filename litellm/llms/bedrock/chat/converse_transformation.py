@@ -1206,6 +1206,9 @@ class AmazonConverseConfig(BaseConfig):
             self._validate_request_metadata(request_metadata)
 
         output_config: Optional[OutputConfigBlock] = inference_params.pop("outputConfig", None)
+        # Also handle snake_case variant that may come from SDK pass-through
+        if output_config is None:
+            output_config = inference_params.pop("output_config", None)
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
