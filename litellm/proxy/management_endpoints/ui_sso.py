@@ -816,13 +816,16 @@ async def get_generic_sso_response(
                 redirect_url=redirect_url,
                 additional_headers=additional_generic_sso_headers_dict,
             )
-            # Strip OAuth token credentials before passing to response_convertor.
-            # combined_response is stored as received_response and may appear in
-            # restricted-group error messages — do not expose tokens to callers.
-            result = response_convertor(
-                {k: v for k, v in combined_response.items() if k not in _OAUTH_TOKEN_FIELDS},
-                generic_sso,
-            )
+            # Pass the full response so custom response_convertor implementations
+            # can access all fields (including id_token for claim extraction).
+            result = response_convertor(combined_response, generic_sso)
+            # Strip bearer credentials from received_response after conversion.
+            # received_response may appear in restricted-group error messages —
+            # do not expose tokens to callers.
+            if received_response:
+                received_response = {
+                    k: v for k, v in received_response.items() if k not in _OAUTH_TOKEN_FIELDS
+                }
             # In the PKCE path verify_and_process is skipped, so generic_sso.access_token
             # is never set. Read the token directly from the exchange response instead so
             # process_sso_jwt_access_token can extract JWT-embedded roles/teams.
@@ -2584,7 +2587,7 @@ class SSOAuthenticationHandler:
         client_id: str,
         client_secret: Optional[str],
         token_endpoint: str,
-        userinfo_endpoint: str,
+        userinfo_endpoint: Optional[str],
         include_client_id: bool,
         redirect_url: str,
         additional_headers: Dict[str, str],
@@ -2699,7 +2702,7 @@ class SSOAuthenticationHandler:
     async def _get_pkce_userinfo(
         access_token: str,
         id_token: Optional[str],
-        userinfo_endpoint: str,
+        userinfo_endpoint: Optional[str],
         additional_headers: Dict[str, str],
     ) -> dict:
         """
@@ -2708,33 +2711,34 @@ class SSOAuthenticationHandler:
         """
         userinfo: Optional[dict] = None  # None means "request not yet attempted or failed"
 
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    userinfo_endpoint,
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        **additional_headers,
-                    },
-                    timeout=30.0,
-                )
-                if resp.status_code == 200:
-                    try:
-                        userinfo = resp.json()
-                    except Exception as json_err:
-                        verbose_proxy_logger.warning(
-                            "Userinfo endpoint returned non-JSON response (status 200): %s",
-                            json_err,
-                        )
-                else:
-                    verbose_proxy_logger.warning(
-                        "Userinfo endpoint returned %s, falling back to id_token",
-                        resp.status_code,
+        if userinfo_endpoint:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        userinfo_endpoint,
+                        headers={
+                            "Authorization": f"Bearer {access_token}",
+                            **additional_headers,
+                        },
+                        timeout=30.0,
                     )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Userinfo endpoint error: %s, falling back to id_token", e
-            )
+                    if resp.status_code == 200:
+                        try:
+                            userinfo = resp.json()
+                        except Exception as json_err:
+                            verbose_proxy_logger.warning(
+                                "Userinfo endpoint returned non-JSON response (status 200): %s",
+                                json_err,
+                            )
+                    else:
+                        verbose_proxy_logger.warning(
+                            "Userinfo endpoint returned %s, falling back to id_token",
+                            resp.status_code,
+                        )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Userinfo endpoint error: %s, falling back to id_token", e
+                )
 
         # Only fall back to id_token when the userinfo request failed (None).
         # An empty dict ({}) from the endpoint is a valid response and not retried.
