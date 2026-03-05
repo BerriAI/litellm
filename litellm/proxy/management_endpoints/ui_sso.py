@@ -104,11 +104,11 @@ else:
 
 router = APIRouter()
 
-# OAuth token credential fields that must not appear in SSO debug responses
+# OAuth bearer credential fields that must not appear in SSO debug responses
 # (received_response is included in restricted-group error messages).
-_OAUTH_TOKEN_FIELDS = frozenset(
-    {"access_token", "id_token", "refresh_token", "token_type", "expires_in", "scope"}
-)
+# Metadata fields (token_type, expires_in, scope) are intentionally kept so
+# response convertors see the same fields in the PKCE path as in the non-PKCE path.
+_OAUTH_TOKEN_FIELDS = frozenset({"access_token", "id_token", "refresh_token"})
 
 
 def normalize_email(email: Optional[str]) -> Optional[str]:
@@ -2577,7 +2577,7 @@ class SSOAuthenticationHandler:
         authorization_code: str,
         code_verifier: str,
         client_id: str,
-        client_secret: str,
+        client_secret: Optional[str],
         token_endpoint: str,
         userinfo_endpoint: str,
         include_client_id: bool,
