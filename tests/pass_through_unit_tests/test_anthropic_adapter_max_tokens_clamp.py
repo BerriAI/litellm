@@ -10,7 +10,6 @@ Related: https://github.com/BerriAI/litellm/issues/22249
 
 import os
 import sys
-from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath("../.."))
 
