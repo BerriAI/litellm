@@ -644,7 +644,7 @@ export default function KeyInfoView({
 
                   <div>
                     <Text className="font-medium">Organization</Text>
-                    <Text>{currentKeyData.organization_id || "Not Set"}</Text>
+                    <Text>{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</Text>
                   </div>
 
                   <div>
