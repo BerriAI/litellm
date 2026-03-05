@@ -4,14 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Version bump type"
-        required: true
+        description: "Version bump type (ignored if 'version' is set)"
+        required: false
         default: "patch"
         type: choice
         options:
           - patch
           - minor
           - major
+      version:
+        description: "Explicit version to publish (e.g. 0.1.33.post1). Overrides bump."
+        required: false
+        default: ""
+        type: string
 
 jobs:
   publish:
@@ -37,7 +42,11 @@ jobs:
         id: bump
         run: |
           OLD=$(poetry version -s)
-          poetry version ${{ github.event.inputs.bump }}
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            poetry version "${{ github.event.inputs.version }}"
+          else
+            poetry version ${{ github.event.inputs.bump }}
+          fi
           NEW=$(poetry version -s)
           echo "old=$OLD" >> $GITHUB_OUTPUT
           echo "new=$NEW" >> $GITHUB_OUTPUT
