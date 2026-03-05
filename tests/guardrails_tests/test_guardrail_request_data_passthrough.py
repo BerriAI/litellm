@@ -46,7 +46,7 @@ def test_all_handler_implementations_accept_request_data():
         try:
             mod = importlib.import_module(module_path)
         except ImportError:
-            pytest.skip(f"Module {module_path} not available")
+            continue  # module not installed in this environment; check next handler
 
         # Find the class that implements process_output_response
         for name, obj in inspect.getmembers(mod, inspect.isclass):
