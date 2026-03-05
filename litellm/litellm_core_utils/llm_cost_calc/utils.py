@@ -660,11 +660,10 @@ def generic_cost_per_token(  # noqa: PLR0915
     cache_creation = prompt_tokens_details["cache_creation_tokens"]
     image_tokens = prompt_tokens_details["image_tokens"]
 
-    # Check for double-counting: sum of details > prompt_tokens means overlap
-    total_details = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
-    has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
+    accounted_tokens = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+    has_double_counting = cache_hit > 0 and accounted_tokens > usage.prompt_tokens
 
-    if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
+    if has_double_counting:
         text_tokens = (
             usage.prompt_tokens
             - cache_hit
@@ -673,7 +672,10 @@ def generic_cost_per_token(  # noqa: PLR0915
             - image_tokens
         )
         prompt_tokens_details["text_tokens"] = text_tokens
-
+    elif accounted_tokens < usage.prompt_tokens:
+        unaccounted_tokens = usage.prompt_tokens - accounted_tokens
+        prompt_tokens_details["text_tokens"] += unaccounted_tokens
+        
     (
         prompt_base_cost,
         completion_base_cost,
