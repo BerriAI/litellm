@@ -8,7 +8,8 @@ export enum Providers {
   ANTHROPIC_TEXT = "Anthropic Text",
   AssemblyAI = "AssemblyAI",
   AUTO_ROUTER = "Auto Router",
-  Bedrock = "Amazon Bedrock",
+  Bedrock = "Amazon Bedrock",\
+  BedrockMantle = "Amazon Bedrock Mantle",
   SageMaker = "AWS SageMaker",
   Azure = "Azure",
   Azure_AI_Studio = "Azure AI Foundry (Studio)",
@@ -118,7 +119,8 @@ export const provider_map: Record<string, string> = {
   Azure_AI_Studio: "azure_ai",
   AZURE_TEXT: "azure_text",
   BASETEN: "baseten",
-  Bedrock: "bedrock",
+  Bedrock: "bedrock",\
+  BedrockMantle: "bedrock_mantle",
   BYTEZ: "bytez",
   Cerebras: "cerebras",
   CLARIFAI: "clarifai",
@@ -226,6 +228,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.AZURE_TEXT]: `${asset_logos_folder}microsoft_azure.svg`,
   [Providers.BASETEN]: `${asset_logos_folder}baseten.svg`,
   [Providers.Bedrock]: `${asset_logos_folder}bedrock.svg`,
+  [Providers.BedrockMantle]: `${asset_logos_folder}bedrock.svg`,
   [Providers.SageMaker]: `${asset_logos_folder}bedrock.svg`,
   [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
   [Providers.CLOUDFLARE]: `${asset_logos_folder}cloudflare.svg`,
