@@ -29,6 +29,7 @@ export const AGENT_FORM_CONFIG: {
   optional: SectionConfig;
   litellm: SectionConfig;
   cost: SectionConfig;
+  tracing: SectionConfig;
 } = {
   basic: {
     key: "basic",
@@ -171,6 +172,19 @@ export const AGENT_FORM_CONFIG: {
         type: "text",
         placeholder: "0.000002",
         tooltip: "Cost per output token",
+      },
+    ],
+  },
+  tracing: {
+    key: "tracing",
+    title: "Tracing",
+    fields: [
+      {
+        name: "enable_tracing",
+        label: "Enable Tracing",
+        type: "switch",
+        defaultValue: false,
+        tooltip: "Enable request tracing for this agent",
       },
     ],
   },
