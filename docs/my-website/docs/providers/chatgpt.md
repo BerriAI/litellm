@@ -80,6 +80,11 @@ model_list:
       mode: responses
     litellm_params:
       model: chatgpt/gpt-5.3-instant
+  - model_name: chatgpt/gpt-5.3-chat-latest
+    model_info:
+      mode: responses
+    litellm_params:
+      model: chatgpt/gpt-5.3-chat-latest
 ```
 
 ```bash showLineNumbers title="Start LiteLLM Proxy"
