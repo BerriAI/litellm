@@ -4735,11 +4735,24 @@ def join_paths(base_path: str, route: str) -> str:
     return final_path
 
 
-def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
+def get_custom_url(
+    request_base_url: str,
+    route: Optional[str] = None,
+    request: Optional[Any] = None,
+) -> str:
     # Use environment variable value, otherwise use URL from request
     server_base_url = get_proxy_base_url()
     if server_base_url is not None:
         base_url = server_base_url
+    elif request is not None:
+        # Use X-Forwarded-Host/Proto if present (reverse proxy scenario)
+        forwarded_proto = request.headers.get("x-forwarded-proto", "")
+        forwarded_host = request.headers.get("x-forwarded-host", "")
+        if forwarded_host:
+            scheme = forwarded_proto or "https"
+            base_url = f"{scheme}://{forwarded_host}"
+        else:
+            base_url = request_base_url
     else:
         base_url = request_base_url
 

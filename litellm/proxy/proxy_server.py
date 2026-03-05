@@ -1318,7 +1318,35 @@ try:
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+    class NoTrailingSlashRedirectStaticFiles(StaticFiles):
+        """
+        StaticFiles subclass that serves directory index.html directly
+        without issuing a trailing-slash 302 redirect.
+
+        This avoids redirect issues behind reverse proxies where
+        Starlette constructs the redirect Location from the internal
+        Host header / scheme, causing redirects to internal pod IPs.
+        """
+
+        async def get_response(self, path: str, scope: Any) -> Response:
+            response = await super().get_response(path, scope)
+            if response.status_code in (301, 302, 307, 308):
+                # This is a trailing-slash redirect for a directory.
+                # Serve the index.html directly instead.
+                trailing_path = path if path.endswith("/") else path + "/"
+                modified_scope = dict(scope)
+                modified_scope["path"] = scope["path"].rstrip("/") + "/"
+                try:
+                    return await super().get_response(trailing_path, modified_scope)
+                except Exception:
+                    pass
+            return response
+
+    app.mount(
+        "/ui",
+        NoTrailingSlashRedirectStaticFiles(directory=ui_path, html=True),
+        name="ui",
+    )
 
     def _restructure_ui_html_files(ui_root: str) -> None:
         """Ensure each exported HTML route is available as <route>/index.html."""
@@ -10357,7 +10385,7 @@ async def fallback_login(request: Request):
     from litellm.proxy.proxy_server import ui_link
 
     # get url from request
-    redirect_url = get_custom_url(str(request.base_url))
+    redirect_url = get_custom_url(str(request.base_url), request=request)
     ui_username = os.getenv("UI_USERNAME")
     if redirect_url.endswith("/"):
         redirect_url += "sso/callback"
@@ -10417,7 +10445,7 @@ async def login(request: Request):  # noqa: PLR0915
     )
 
     # Build redirect URL
-    litellm_dashboard_ui = get_custom_url(str(request.base_url))
+    litellm_dashboard_ui = get_custom_url(str(request.base_url), request=request)
     if litellm_dashboard_ui.endswith("/"):
         litellm_dashboard_ui += "ui/"
     else:
@@ -10464,7 +10492,7 @@ async def login_v2(request: Request):  # noqa: PLR0915
             algorithm="HS256",
         )
 
-        litellm_dashboard_ui = get_custom_url(str(request.base_url))
+        litellm_dashboard_ui = get_custom_url(str(request.base_url), request=request)
         if litellm_dashboard_ui.endswith("/"):
             litellm_dashboard_ui += "ui/"
         else:
@@ -10585,7 +10613,7 @@ async def onboarding(invite_link: str, request: Request):
     )
     key = response["token"]  # type: ignore
 
-    litellm_dashboard_ui = get_custom_url(str(request.base_url))
+    litellm_dashboard_ui = get_custom_url(str(request.base_url), request=request)
     if litellm_dashboard_ui.endswith("/"):
         litellm_dashboard_ui += "ui/onboarding"
     else:

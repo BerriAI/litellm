@@ -1883,7 +1883,9 @@ class SSOAuthenticationHandler:
         """
         from litellm.proxy.utils import get_custom_url
 
-        redirect_url = get_custom_url(request_base_url=str(request.base_url))
+        redirect_url = get_custom_url(
+            request_base_url=str(request.base_url), request=request
+        )
         if redirect_url.endswith("/"):
             redirect_url += sso_callback_route
         else:
@@ -2313,7 +2315,7 @@ class SSOAuthenticationHandler:
             get_disabled_non_admin_personal_key_creation()
         )
         litellm_dashboard_ui = get_custom_url(
-            request_base_url=str(request.base_url), route="ui/"
+            request_base_url=str(request.base_url), route="ui/", request=request
         )
 
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):

@@ -138,6 +138,8 @@ class ProxyInitializationHelpers:
             "app": "litellm.proxy.proxy_server:app",
             "host": host,
             "port": port,
+            "proxy_headers": True,
+            "forwarded_allow_ips": "*",
         }
         if log_config is not None:
             print(f"Using log_config: {log_config}")  # noqa

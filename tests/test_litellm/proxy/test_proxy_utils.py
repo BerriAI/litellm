@@ -135,6 +135,61 @@ def test_join_paths_nested_path():
     assert result == "http://0.0.0.0:4000/v1/chat/completions"
 
 
+def test_get_custom_url_with_forwarded_headers():
+    """Test that get_custom_url uses X-Forwarded-Host/Proto when request is provided"""
+    mock_request = MagicMock()
+    mock_request.headers = {
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "external.company.com",
+    }
+    url = get_custom_url(
+        request_base_url="http://10.0.0.5:4000",
+        route="ui/",
+        request=mock_request,
+    )
+    assert url == "https://external.company.com/ui/"
+
+
+def test_get_custom_url_with_forwarded_host_only():
+    """Test that get_custom_url defaults to https when only X-Forwarded-Host is set"""
+    mock_request = MagicMock()
+    mock_request.headers = {"x-forwarded-host": "external.company.com"}
+    url = get_custom_url(
+        request_base_url="http://10.0.0.5:4000",
+        route="ui/",
+        request=mock_request,
+    )
+    assert url == "https://external.company.com/ui/"
+
+
+def test_get_custom_url_no_forwarded_headers():
+    """Test that get_custom_url falls back to request_base_url without forwarded headers"""
+    mock_request = MagicMock()
+    mock_request.headers = {}
+    url = get_custom_url(
+        request_base_url="http://10.0.0.5:4000",
+        route="ui/",
+        request=mock_request,
+    )
+    assert url == "http://10.0.0.5:4000/ui/"
+
+
+def test_get_custom_url_proxy_base_url_takes_priority(monkeypatch):
+    """Test that PROXY_BASE_URL takes priority over forwarded headers"""
+    monkeypatch.setenv("PROXY_BASE_URL", "https://configured.company.com")
+    mock_request = MagicMock()
+    mock_request.headers = {
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "external.company.com",
+    }
+    url = get_custom_url(
+        request_base_url="http://10.0.0.5:4000",
+        route="ui/",
+        request=mock_request,
+    )
+    assert url == "https://configured.company.com/ui/"
+
+
 def _patch_today(monkeypatch, year, month, day):
     class PatchedDate(real_datetime.date):
         @classmethod
