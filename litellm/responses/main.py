@@ -712,6 +712,8 @@ def responses(
             # included in **kwargs, so without this the value is lost. (#15466)
             if metadata is not None and "metadata" not in kwargs:
                 kwargs["metadata"] = metadata
+            if service_tier is not None and "service_tier" not in kwargs:
+                kwargs["service_tier"] = service_tier
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,
