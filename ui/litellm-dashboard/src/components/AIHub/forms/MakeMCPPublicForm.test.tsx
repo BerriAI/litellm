@@ -252,7 +252,9 @@ describe("MakeMCPPublicForm", () => {
     expect(checkboxes[2]).not.toBeChecked();
   });
 
-  it("should show error when no servers selected", async () => {
+  it("should allow proceeding with no servers selected to make all private", async () => {
+    mockMakeMCPPublicCall.mockResolvedValueOnce({});
+
     render(<MakeMCPPublicForm {...mockProps} />);
 
     // Deselect all servers first
@@ -268,8 +270,23 @@ describe("MakeMCPPublicForm", () => {
       fireEvent.click(nextButton);
     });
 
-    // Should stay on same step
-    expect(screen.getByText("Select MCP Servers to Make Public")).toBeInTheDocument();
+    // Should move to confirmation step with "make all private" messaging
+    await waitFor(() => {
+      expect(screen.getByText("Confirm Making All MCP Servers Private")).toBeInTheDocument();
+    });
+
+    // Submit button should say "Make All Private"
+    const submitButton = screen.getByRole("button", { name: "Make All Private" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+
+    // Should call API with empty array
+    await waitFor(() => {
+      expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", []);
+      expect(mockProps.onSuccess).toHaveBeenCalled();
+      expect(mockProps.onClose).toHaveBeenCalled();
+    });
   });
 
   it("should display empty state when no servers are available", () => {
