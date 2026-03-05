@@ -4,21 +4,12 @@ Support for OVHcloud AI Endpoints `/v1/responses` endpoint.
 Our unified API follows the OpenAI standard.
 More information on our website: https://oai.endpoints.kepler.ai.cloud.ovh.net/doc/gpt-oss-20b/openapi.json
 """
-from typing import TYPE_CHECKING, Any, Optional
-
+from typing import Optional
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = Any
-
 
 class OVHCloudResponsesAPIConfig(OpenAIResponsesAPIConfig):
     """
@@ -82,5 +73,8 @@ class OVHCloudResponsesAPIConfig(OpenAIResponsesAPIConfig):
         
         # Remove trailing slashes
         api_base = api_base.rstrip("/")
-        
-        return f"{api_base}/responses"
+
+        # Avoid double-appending /responses
+        if not api_base.endswith("/responses"):
+            return f"{api_base}/responses"
+        return api_base
