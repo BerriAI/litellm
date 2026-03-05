@@ -128,6 +128,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.current_content_block_type = block_type
                     self.current_content_block_start = content_block_start
 
+                    # Restore original tool name for first block (same logic
+                    # as _should_start_new_content_block, which is bypassed here)
+                    if block_type == "tool_use" and content_block_start.get("name"):
+                        truncated = content_block_start["name"]
+                        content_block_start["name"] = self.tool_name_mapping.get(truncated, truncated)
+
                     processed_chunk = self._adapter.translate_streaming_openai_response_to_anthropic(
                         response=chunk,
                         current_content_block_index=self.current_content_block_index,
@@ -182,19 +188,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.sent_content_block_finish = True
                     self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
-                elif self.holding_chunk is not None:
-                    self.chunk_queue.append(self.holding_chunk)
-                    self.chunk_queue.append(processed_chunk)
-                    self.holding_chunk = None
-                    return self.chunk_queue.popleft()
                 else:
                     self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
-
-            # Handle any remaining held chunks after stream ends
-            if self.holding_chunk is not None:
-                self.chunk_queue.append(self.holding_chunk)
-                self.holding_chunk = None
 
             if not self.sent_last_message:
                 self.sent_last_message = True
@@ -259,6 +255,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     )
                     self.current_content_block_type = block_type
                     self.current_content_block_start = content_block_start
+
+                    # Restore original tool name for first block (same logic
+                    # as _should_start_new_content_block, which is bypassed here)
+                    if block_type == "tool_use" and content_block_start.get("name"):
+                        truncated = content_block_start["name"]
+                        content_block_start["name"] = self.tool_name_mapping.get(truncated, truncated)
 
                     processed_chunk = self._adapter.translate_streaming_openai_response_to_anthropic(
                         response=chunk,

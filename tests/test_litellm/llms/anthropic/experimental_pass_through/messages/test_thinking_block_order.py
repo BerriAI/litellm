@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
 )
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 
 class MockThinkingStream:
@@ -32,8 +32,7 @@ class MockThinkingStream:
     def __init__(self):
         self.responses = [
             # First chunk: thinking block
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(
@@ -48,8 +47,7 @@ class MockThinkingStream:
                 ],
             ),
             # Second chunk: more thinking
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(
@@ -64,8 +62,7 @@ class MockThinkingStream:
                 ],
             ),
             # Third chunk: thinking signature (end of thinking)
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(
@@ -79,20 +76,28 @@ class MockThinkingStream:
                     )
                 ],
             ),
-            # Fourth chunk: text content (the answer)
-            ModelResponse(
-                stream=True,
+            # Fourth chunk: text content (triggers thinking->text block transition)
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
-                        delta=Delta(content="The answer is 4."),
+                        delta=Delta(content="The answer"),
                         index=0,
                         finish_reason=None,
                     )
                 ],
             ),
-            # Fifth chunk: finish
-            ModelResponse(
-                stream=True,
+            # Fifth chunk: more text content (emitted as text_delta)
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content=" is 4."),
+                        index=0,
+                        finish_reason=None,
+                    )
+                ],
+            ),
+            # Sixth chunk: finish
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(content=""),
@@ -136,8 +141,7 @@ class MockTextOnlyStream:
 
     def __init__(self):
         self.responses = [
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(content="Hello"),
@@ -146,8 +150,7 @@ class MockTextOnlyStream:
                     )
                 ],
             ),
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(content=" World"),
@@ -156,8 +159,7 @@ class MockTextOnlyStream:
                     )
                 ],
             ),
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(content=""),
@@ -215,6 +217,11 @@ def test_thinking_block_is_first_content_block_sync():
     assert first_block["content_block"]["type"] == "thinking", (
         f"First content block should be 'thinking', got '{first_block['content_block']['type']}'"
     )
+    # Anthropic protocol: content_block_start.content_block.thinking must be ""
+    # (all content arrives via deltas, not in the start event)
+    assert first_block["content_block"]["thinking"] == "", (
+        f"content_block_start thinking field must be empty string, got {first_block['content_block']['thinking']!r}"
+    )
 
     # Second content block must be "text" (index 1)
     second_block = block_starts[1]
@@ -258,6 +265,7 @@ def test_thinking_stream_event_sequence_sync():
     # The first content_block_start must be followed by thinking deltas
     first_block_start = events[1]
     assert first_block_start["content_block"]["type"] == "thinking"
+    assert first_block_start["content_block"]["thinking"] == ""
 
     # Must end with message_stop
     assert event_types[-1] == "message_stop"
@@ -293,6 +301,7 @@ def test_thinking_sse_format_sync():
     # Second event: content_block_start with thinking type
     assert events[1]["event"] == "content_block_start"
     assert events[1]["data"]["content_block"]["type"] == "thinking"
+    assert events[1]["data"]["content_block"]["thinking"] == ""
 
 
 @pytest.mark.asyncio
@@ -313,6 +322,10 @@ async def test_thinking_block_is_first_content_block_async():
     first_block = block_starts[0]
     assert first_block["index"] == 0
     assert first_block["content_block"]["type"] == "thinking"
+    # Anthropic protocol: content_block_start.content_block.thinking must be ""
+    assert first_block["content_block"]["thinking"] == "", (
+        f"content_block_start thinking field must be empty string, got {first_block['content_block']['thinking']!r}"
+    )
 
     second_block = block_starts[1]
     assert second_block["index"] == 1
@@ -414,3 +427,4 @@ async def test_thinking_sse_format_async():
     assert events[0]["event"] == "message_start"
     assert events[1]["event"] == "content_block_start"
     assert events[1]["data"]["content_block"]["type"] == "thinking"
+    assert events[1]["data"]["content_block"]["thinking"] == ""

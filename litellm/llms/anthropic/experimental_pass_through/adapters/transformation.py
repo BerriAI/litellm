@@ -1175,7 +1175,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             )
 
                         return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking", thinking=thinking, signature=signature
+                            type="thinking", thinking="", signature=""
                         )
 
         return "text", TextBlock(type="text", text="")
