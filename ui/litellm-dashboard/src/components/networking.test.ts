@@ -66,8 +66,8 @@ describe("shouldAllowAuthRedirect - circuit breaker", () => {
     // @ts-ignore
     delete globalThis.sessionStorage;
     // When sessionStorage is undefined, it should default to allowing
-    // (the function checks typeof sessionStorage === "undefined")
-    // Restore before assertion to avoid test pollution
+    expect(Networking.shouldAllowAuthRedirect()).toBe(true);
+    // Restore to avoid test pollution
     globalThis.sessionStorage = original;
   });
 });

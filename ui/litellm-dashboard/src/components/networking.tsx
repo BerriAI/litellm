@@ -272,8 +272,17 @@ const AUTH_ERROR_PATTERNS = [
   "Authentication Error",
   "Expired Key",
   "Invalid proxy server token",
-  "Invalid API Key",
   "Unauthorized",
+];
+
+/**
+ * Patterns that indicate an auth error only when the entire error message
+ * matches (exact, case-insensitive). Avoids false positives from downstream
+ * provider errors like "Invalid API Key for OpenAI".
+ */
+const AUTH_ERROR_EXACT_PATTERNS = [
+  "Invalid API key",
+  "Invalid API key, no token associated",
 ];
 
 /**
@@ -281,7 +290,11 @@ const AUTH_ERROR_PATTERNS = [
  */
 export function isAuthenticationError(errorString: string): boolean {
   const lower = errorString.toLowerCase();
-  return AUTH_ERROR_PATTERNS.some((pattern) => lower.includes(pattern.toLowerCase()));
+  if (AUTH_ERROR_PATTERNS.some((pattern) => lower.includes(pattern.toLowerCase()))) {
+    return true;
+  }
+  const trimmed = lower.trim();
+  return AUTH_ERROR_EXACT_PATTERNS.some((p) => trimmed === p.toLowerCase());
 }
 
 /**
@@ -315,7 +328,7 @@ export const handleError = async (errorData: string | any) => {
         const browserLocation = getWindowLocation();
         if (browserLocation) {
           // Redirect to login instead of reloading the current page
-          const loginPath = (proxyBaseUrl || "") + "/ui/login";
+          const loginPath = getProxyBaseUrl() + "/ui/login";
           window.location.href = loginPath;
         }
       }
