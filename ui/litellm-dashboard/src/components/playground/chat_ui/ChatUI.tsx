@@ -1636,9 +1636,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   loading={isLoadingMCPServers}
                   className="mb-2"
                   allowClear
+                  showSearch
                   optionLabelProp="label"
                   disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType)}
                   maxTagCount={endpointType === EndpointType.MCP ? 1 : "responsive"}
+                  filterOption={(input, option) => {
+                    if (option?.value === "__all__") {
+                      return "All MCP Servers".toLowerCase().includes(input.toLowerCase());
+                    }
+                    const server = mcpServers.find((s) => s.server_id === option?.value);
+                    if (!server) return false;
+                    const searchText = [
+                      server.server_name,
+                      server.alias,
+                      server.server_id,
+                      server.description,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")
+                      .toLowerCase();
+                    return searchText.includes(input.toLowerCase());
+                  }}
                 >
                   {/* All MCP Servers option - hidden for MCP direct mode */}
                   {endpointType !== EndpointType.MCP && (
