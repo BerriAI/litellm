@@ -277,13 +277,11 @@ async def create_interaction(
 
     data = await _read_request_body(request=request)
 
-    # `agent` and `model` are mutually exclusive in the Interactions API.
-    # Sending both is ambiguous - reject early with a clear error.
+    # When both `agent` and `model` are provided, `agent` takes precedence
+    # for routing. Drop `model` so downstream code doesn't send a conflicting
+    # field to the provider.
     if data.get("agent") and data.get("model"):
-        raise HTTPException(
-            status_code=400,
-            detail="'agent' and 'model' are mutually exclusive. Provide one or the other, not both.",
-        )
+        data.pop("model")
 
     # Default to gemini provider for interactions
     if "custom_llm_provider" not in data:
@@ -307,8 +305,8 @@ async def create_interaction(
             # If we pass an agent id via `model`, downstream transformation
             # sends `{"model": "deep-research-..."}` instead of
             # `{"agent": "deep-research-..."}`, which Google rejects.
-            # When both are present, `model` is used for routing; `agent`
-            # remains in `data` and is forwarded as-is to the provider.
+            # When `agent` is set it takes precedence: `model` is dropped
+            # above, so data.get("model") returns None for agent requests.
             model=data.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
