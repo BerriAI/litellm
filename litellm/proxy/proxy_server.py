@@ -372,6 +372,9 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     user_update,
 )
+from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
+    router as jwt_key_mapping_router,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -379,9 +382,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
-)
-from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
-    router as jwt_key_mapping_router,
 )
 from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     router as mcp_management_router,
@@ -2473,6 +2473,17 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
+            ## CONFIGURE USER API KEY CACHE TO USE REDIS ##
+            # This is critical for multi-task deployments (e.g., multiple ECS tasks)
+            # to share cached data like PKCE code_verifiers across all tasks
+            global user_api_key_cache
+            if user_api_key_cache.redis_cache is None:
+                user_api_key_cache.redis_cache = redis_usage_cache
+                verbose_proxy_logger.info(
+                    "\u2713 Configured user_api_key_cache to use Redis. "
+                    "PKCE and other cached data will now be shared across all tasks/instances."
+                )
+
     def switch_on_llm_response_caching(self):
         """
         Enable caching on the router by setting cache_responses=True.
@@ -3018,8 +3029,43 @@ class ProxyConfig:
             if user_api_key_cache_ttl is not None:
                 user_api_key_cache.update_cache_ttl(
                     default_in_memory_ttl=float(user_api_key_cache_ttl),
-                    default_redis_ttl=None,  # user_api_key_cache is an in-memory cache
+                    default_redis_ttl=None,  # will be set below if Redis is available
                 )
+
+            ### CONFIGURE USER API KEY CACHE TO USE REDIS (if available) ###
+            # This is critical for multi-task/multi-instance deployments (e.g., multiple ECS tasks)
+            # to share cached data like PKCE code_verifiers, API keys, etc. across all instances
+            if user_api_key_cache.redis_cache is None:
+                redis_host = get_secret("REDIS_HOST", None)
+                redis_port = get_secret("REDIS_PORT", None)
+                redis_password = get_secret("REDIS_PASSWORD", None)
+
+                if redis_host is not None:
+                    try:
+                        # Initialize Redis for user_api_key_cache
+                        from litellm.caching.caching import RedisCache
+
+                        user_redis_cache = RedisCache(
+                            host=redis_host,
+                            port=redis_port,
+                            password=redis_password,
+                        )
+                        user_api_key_cache.redis_cache = user_redis_cache
+
+                        verbose_proxy_logger.info(
+                            f"\u2713 Configured user_api_key_cache to use Redis at {redis_host}:{redis_port}. "
+                            f"PKCE verifiers and other session data will now be shared across all tasks/instances."
+                        )
+                    except Exception as e:
+                        verbose_proxy_logger.warning(
+                            f"Failed to configure Redis for user_api_key_cache: {e}. "
+                            f"Falling back to in-memory cache only. Multi-task PKCE will not work."
+                        )
+                else:
+                    verbose_proxy_logger.debug(
+                        "REDIS_HOST not configured. user_api_key_cache will use in-memory cache only. "
+                        "For multi-task deployments with PKCE, configure Redis or enable sticky sessions."
+                    )
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
