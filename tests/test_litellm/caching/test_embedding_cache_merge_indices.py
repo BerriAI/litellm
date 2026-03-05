@@ -76,3 +76,28 @@ def test_embedding_cache_merge_preserves_global_indices_on_miss_merge():
     assert len(response.data) == 2
     assert response.data[0].index == 0
     assert response.data[1].index == 1
+
+    # Also verify behavior when the API response data contains dict items
+    dict_api_response = MagicMock()
+    dict_api_response.model = "text-embedding-3-small"
+    dict_api_response.usage = None
+    dict_api_response.data = [
+        {
+            "embedding": [0.3, 0.4],
+            "index": 0,
+            "object": "embedding",
+        }
+    ]
+
+    response_with_dicts = (
+        llm_caching_handler._combine_cached_embedding_response_with_api_result(
+            _caching_handler_response=caching_handler_response,
+            embedding_response=dict_api_response,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+    )
+
+    assert len(response_with_dicts.data) == 2
+    assert response_with_dicts.data[0]["index"] == 0
+    assert response_with_dicts.data[1]["index"] == 1
