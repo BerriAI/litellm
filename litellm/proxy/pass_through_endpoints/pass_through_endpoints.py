@@ -957,6 +957,13 @@ async def pass_through_request(  # noqa: PLR0915
         if "custom_llm_provider" not in request_payload and custom_llm_provider:
             request_payload["custom_llm_provider"] = custom_llm_provider
 
+        # Pass the existing logging_obj so _handle_logging_proxy_only_error
+        # uses it (preserves call_type="pass_through_endpoint" for dedup)
+        try:
+            request_payload["litellm_logging_obj"] = logging_obj
+        except NameError:
+            pass
+
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -1697,6 +1704,12 @@ async def websocket_passthrough_request(  # noqa: PLR0915
             for key, value in kwargs.items():
                 request_payload[key] = value
 
+        # Pass the existing logging_obj (preserves call_type for dedup)
+        try:
+            request_payload["litellm_logging_obj"] = logging_obj
+        except NameError:
+            pass
+
         # Log the connection failure using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -1722,6 +1735,12 @@ async def websocket_passthrough_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
+
+        # Pass the existing logging_obj (preserves call_type for dedup)
+        try:
+            request_payload["litellm_logging_obj"] = logging_obj
+        except NameError:
+            pass
 
         # Log the unexpected error using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
@@ -2114,11 +2133,7 @@ class InitPassThroughEndpointHelpers:
 
                 # If path matches and method filter is provided, check if method is allowed
                 if path_matches:
-                    if (
-                        method is None
-                        or not route_methods
-                        or method in route_methods
-                    ):
+                    if method is None or not route_methods or method in route_methods:
                         return _registered_pass_through_routes[key]
 
         return None
