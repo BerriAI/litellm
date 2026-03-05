@@ -30,7 +30,11 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     get_daily_activity_aggregated,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.auth.auth_checks import get_team_object
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _user_has_admin_view,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
@@ -766,19 +770,6 @@ async def user_info_v2(
                 detail="user_id is required",
             )
 
-        # Non-admin users can only query their own info
-        if (
-            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-            and user_id != user_api_key_dict.user_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not allowed to access other user's info. Your user_id={}, requested user_id={}".format(
-                    user_api_key_dict.user_id, user_id
-                ),
-            )
-
         user_info = await prisma_client.get_data(user_id=user_id)
 
         if user_info is None:
@@ -786,6 +777,25 @@ async def user_info_v2(
                 status_code=404,
                 detail=f"User {user_id} not found",
             )
+
+        # Access control: non-admin users can only query their own info
+        # or info of users in teams they admin
+        if (
+            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+            and user_id != user_api_key_dict.user_id
+        ):
+            if not await _is_team_admin_for_user(
+                user_api_key_dict=user_api_key_dict,
+                target_user_teams=user_info.teams,
+                prisma_client=prisma_client,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not allowed to access other user's info. Your user_id={}, requested user_id={}".format(
+                        user_api_key_dict.user_id, user_id
+                    ),
+                )
 
         return UserInfoV2Response(
             user_id=user_id,
@@ -798,6 +808,33 @@ async def user_info_v2(
             )
         )
         raise handle_exception_on_proxy(e)
+
+
+async def _is_team_admin_for_user(
+    user_api_key_dict: UserAPIKeyAuth,
+    target_user_teams: list,
+    prisma_client: "PrismaClient",
+) -> bool:
+    """
+    Check if the caller is a team admin for any team that the target user belongs to.
+    """
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    for team_id in target_user_teams:
+        try:
+            team_obj = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
+            if _is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=team_obj
+            ):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):

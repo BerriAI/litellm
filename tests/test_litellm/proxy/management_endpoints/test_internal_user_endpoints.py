@@ -1514,17 +1514,24 @@ async def test_user_info_v1_has_deprecation_header(mocker):
 @pytest.mark.asyncio
 async def test_user_info_v2_non_admin_cannot_query_other_user(mocker):
     """
-    Test that a non-admin user gets 403 when querying another user's info
-    via /v2/user/info endpoint handler (defense-in-depth).
+    Test that a non-admin, non-team-admin user gets 403 when querying
+    another user's info via /v2/user/info.
     """
     from fastapi import Request
 
-    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_UserTable, ProxyException, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         user_info_v2,
     )
 
     mock_prisma_client = mocker.MagicMock()
+
+    mock_target_user = LiteLLM_UserTable(
+        user_id="user-B",
+        teams=[],
+    )
+
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=mock_target_user)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
@@ -1541,3 +1548,121 @@ async def test_user_info_v2_non_admin_cannot_query_other_user(mocker):
 
     assert exc_info.value.code == "403"
     assert "Not allowed" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_team_admin_can_query_team_member(mocker):
+    """
+    Test that a team admin can query info for a user in their team.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_UserTable,
+        Member,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    # Target user is in team-1
+    mock_target_user = LiteLLM_UserTable(
+        user_id="user-B",
+        user_email="userB@example.com",
+        teams=["team-1"],
+    )
+
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=mock_target_user)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Caller (user-A) is admin of team-1
+    mock_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        members_with_roles=[
+            Member(user_id="user-A", role="admin"),
+            Member(user_id="user-B", role="user"),
+        ],
+    )
+
+    mock_get_team_object = mocker.AsyncMock(return_value=mock_team)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="user-A", user_role="internal_user"
+    )
+
+    result = await user_info_v2(
+        user_id="user-B",
+        user_api_key_dict=mock_user_api_key_dict,
+        request=mock_request,
+    )
+
+    assert result.user_id == "user-B"
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_team_member_cannot_query_other_team_member(mocker):
+    """
+    Test that a non-admin team member cannot query another member's info.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_UserTable,
+        Member,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_target_user = LiteLLM_UserTable(
+        user_id="user-B",
+        teams=["team-1"],
+    )
+
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=mock_target_user)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Caller (user-A) is a regular member, NOT admin
+    mock_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        members_with_roles=[
+            Member(user_id="user-A", role="user"),
+            Member(user_id="user-B", role="user"),
+        ],
+    )
+
+    mock_get_team_object = mocker.AsyncMock(return_value=mock_team)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="user-A", user_role="internal_user"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            user_id="user-B",
+            user_api_key_dict=mock_user_api_key_dict,
+            request=mock_request,
+        )
+
+    assert exc_info.value.code == "403"
