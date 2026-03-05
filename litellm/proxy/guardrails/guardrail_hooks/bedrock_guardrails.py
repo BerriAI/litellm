@@ -465,9 +465,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
                 slice_end = min(offset + remaining_space, text_len)
                 chunk_text = text[offset:slice_end]
-                current_chunk.append(
-                    BedrockContentItem(text=BedrockTextContent(text=chunk_text))
+                split_item = BedrockContentItem(
+                    **{k: v for k, v in item.items() if k != "text"}
                 )
+                split_item["text"] = BedrockTextContent(text=chunk_text)
+                current_chunk.append(split_item)
                 current_chars += len(chunk_text)
                 offset = slice_end
 

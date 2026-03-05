@@ -850,10 +850,11 @@ def run_server(  # noqa: PLR0915
                 # (non-Docker) installs may not have done so yet.
                 try:
                     PrismaManager.ensure_client_generated()
-                except RuntimeError:
+                except RuntimeError as e:
                     verbose_proxy_logger.warning(
-                        "Prisma client auto-generation failed — "
-                        "setup_database will retry schema push"
+                        "Prisma client auto-generation failed: %s — "
+                        "setup_database will retry schema push",
+                        e,
                     )
 
                 if (

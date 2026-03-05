@@ -20,7 +20,7 @@ class TestEnsureClientGenerated:
     def test_skips_generate_when_client_exists(self, mock_run):
         """When the Prisma client is already importable, prisma generate is NOT called."""
         prisma_module = MagicMock()
-        prisma_module.Client = object()
+        prisma_module.Prisma = object()
         with patch(
             "litellm.proxy.db.prisma_client.importlib.import_module",
             return_value=prisma_module,
@@ -36,7 +36,7 @@ class TestEnsureClientGenerated:
             args=["prisma", "generate"], returncode=0, stdout="", stderr=""
         )
         prisma_module = MagicMock()
-        prisma_module.Client = object()
+        prisma_module.Prisma = object()
         with patch(
             "litellm.proxy.db.prisma_client.importlib.import_module",
             side_effect=[ImportError("missing prisma"), prisma_module],
