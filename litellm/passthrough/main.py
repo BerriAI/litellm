@@ -277,7 +277,7 @@ def llm_passthrough_route(
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
         litellm_params=litellm_params_dict,
-        request_data=data if data else (json if json else content),
+        request_data=data if data else json,
         api_base=str(updated_url),
         model=model,
     )
