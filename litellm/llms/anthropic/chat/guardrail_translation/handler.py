@@ -315,7 +315,10 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
-            # Create a request_data dict with response info and user API key metadata
+            # Build request_data, merging caller's dict (which may carry pii_tokens
+            # from the input masking phase) with response info.  The "response" key
+            # is always set to the current response object so downstream guardrails
+            # can inspect it.
             request_data: dict = {**(request_data or {}), "response": response}
 
             # Add user API key metadata with prefixed keys

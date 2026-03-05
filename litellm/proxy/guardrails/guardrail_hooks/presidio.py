@@ -1110,10 +1110,77 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return
 
         remaining_chunks: List[ModelResponseStream] = []
+        remaining_bytes_chunks: List[bytes] = []
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
                     remaining_chunks.append(chunk)
+                elif isinstance(chunk, bytes):
+                    remaining_bytes_chunks.append(chunk)
+
+            # --- Anthropic native SSE path ---
+            # When the LLM is called via the Anthropic native API path (not OpenAI
+            # compat), response chunks arrive as raw SSE bytes rather than
+            # ModelResponseStream objects. stream_chunk_builder() cannot handle
+            # bytes, so we parse the SSE events directly, reassemble all text
+            # deltas, apply _unmask_pii_text(), then yield the rebuilt SSE as a
+            # single bytes chunk.
+            #
+            # Trade-off: progressive streaming output is replaced by a single
+            # delivery at response completion when output_parse_pii is enabled.
+            # This is unavoidable for correct PII token restoration because tokens
+            # may span multiple delta events.
+            if remaining_bytes_chunks and not remaining_chunks:
+                combined = b"".join(remaining_bytes_chunks)
+                # Split on double-newline SSE event boundaries
+                raw_events = [e for e in combined.split(b"\n\n") if e.strip()]
+
+                text_parts: List[str] = []
+                non_text_events: List[bytes] = []
+
+                for raw_event in raw_events:
+                    lines = raw_event.split(b"\n")
+                    data_line = next(
+                        (ln for ln in lines if ln.startswith(b"data:")), None
+                    )
+                    if data_line is None:
+                        non_text_events.append(raw_event)
+                        continue
+                    try:
+                        payload = json.loads(data_line[len(b"data:"):].strip())
+                    except (json.JSONDecodeError, ValueError):
+                        non_text_events.append(raw_event)
+                        continue
+
+                    delta = payload.get("delta") if isinstance(payload, dict) else None
+                    if (
+                        payload.get("type") == "content_block_delta"
+                        and isinstance(delta, dict)
+                        and delta.get("type") == "text_delta"
+                    ):
+                        text_parts.append(delta.get("text", ""))
+                    else:
+                        non_text_events.append(raw_event)
+
+                # Unmask the full concatenated text in one pass so that tokens
+                # which span multiple delta events are correctly restored.
+                combined_text = "".join(text_parts)
+                unmasked_text = self._unmask_pii_text(combined_text, pii_tokens)
+
+                # Rebuild: emit all non-text events, then a single text_delta
+                # containing the fully unmasked text.
+                text_delta_payload = {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": unmasked_text},
+                }
+                text_delta_event = (
+                    b"event: content_block_delta\n"
+                    b"data: " + json.dumps(text_delta_payload).encode() + b"\n"
+                )
+                rebuilt = b"\n\n".join(non_text_events + [text_delta_event]) + b"\n\n"
+                yield rebuilt  # type: ignore[misc]
+                return
 
             if not remaining_chunks:
                 return
@@ -1153,6 +1220,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
             for chunk in remaining_chunks:
                 yield chunk
+            for chunk in remaining_bytes_chunks:  # type: ignore[misc]
+                yield chunk  # type: ignore[misc]
 
     def get_presidio_settings_from_request_data(
         self, data: dict
