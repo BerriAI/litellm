@@ -31,13 +31,8 @@ fix/guardrail-request-data-passthrough (PR 1, BerriAI/litellm#22821) addresses.
 Without PR 1, request_data will be empty and unmasking silently no-ops.  The two
 fixes together form the complete end-to-end unmask pipeline.
 """
-import os
-import sys
-
 import pytest
 from unittest.mock import AsyncMock, patch
-
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
 
