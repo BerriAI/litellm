@@ -55,11 +55,20 @@ pip install litellm
 ```
 
 ### Step 2: Set Your Credentials
+ 
+ Choose **one** of these authentication methods:
+ 
+> **Breaking change**: credential resolution is "first-source-wins" 
+> 
+> Credential resolution no longer merges individual fields across sources.
+> 
+> Resolution order is:
+`kwargs` → `service key` → `env (AICORE_*)` → `config` → `VCAP service`
+>
+> **Important behavior:** once LiteLLM finds *any* credential value in a source, it takes **all** credentials from that source exclusively (except `resource_group`, which may still be resolved separately).
 
-Choose **one** of these authentication methods:
-
-<Tabs>
-<TabItem value="service-key" label="Service Key JSON (Recommended)">
+ <Tabs>
+ <TabItem value="service-key" label="Service Key JSON (Recommended)">
 
 The simplest approach - paste your entire service key as a single environment variable. The service key must be wrapped in a `credentials` object:
 
