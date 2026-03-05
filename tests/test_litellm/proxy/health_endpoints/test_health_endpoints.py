@@ -12,7 +12,7 @@ sys.path.insert(
 import pytest
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
-import litellm.proxy.health_endpoints._health_endpoints as _health_module
+import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
@@ -37,7 +37,7 @@ async def test_db_health_cache_hit_returns_cached():
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock()
 
-    _health_module.db_health_cache = {
+    _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now(),
     }
@@ -58,7 +58,7 @@ async def test_db_health_cache_expired_calls_health_check():
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock()
 
-    _health_module.db_health_cache = {
+    _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
@@ -79,7 +79,7 @@ async def test_db_health_non_connected_ignores_cache_ttl():
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock()
 
-    _health_module.db_health_cache = {
+    _health_endpoints_module.db_health_cache = {
         "status": "disconnected",
         "last_updated": datetime.now(),
     }
@@ -97,7 +97,7 @@ async def test_db_health_prisma_client_none():
     When prisma_client is None, return 'disconnected' without attempting
     a health_check call.
     """
-    _health_module.db_health_cache = {
+    _health_endpoints_module.db_health_cache = {
         "status": "unknown",
         "last_updated": datetime.now() - timedelta(minutes=5),
     }
@@ -127,7 +127,7 @@ async def test_db_health_error_flag_off_raises_no_reconnect(prisma_error):
     mock_prisma.health_check = AsyncMock(side_effect=prisma_error)
     mock_prisma.disconnect = AsyncMock()
 
-    _health_module.db_health_cache = {
+    _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
@@ -166,7 +166,7 @@ async def test_db_health_error_flag_on_reconnect_succeeds(prisma_error):
     mock_prisma.disconnect = AsyncMock()
     mock_prisma.connect = AsyncMock()
 
-    _health_module.db_health_cache = {
+    _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
@@ -203,7 +203,7 @@ async def test_db_health_error_flag_on_reconnect_fails(prisma_error):
     mock_prisma.disconnect = AsyncMock()
     mock_prisma.connect = AsyncMock()
 
-    _health_module.db_health_cache = {
+    _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
