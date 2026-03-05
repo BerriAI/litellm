@@ -376,7 +376,7 @@ export default function ByokDemoPage() {
                 client_id: CLIENT_ID,
               });
 
-              const tokenRes = await fetch(`${PROXY_BASE_URL}/v1/mcp/token`, {
+              const tokenRes = await fetch(`${PROXY_BASE_URL}/v1/mcp/oauth/token`, {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/x-www-form-urlencoded",
