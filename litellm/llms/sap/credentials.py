@@ -168,7 +168,7 @@ def extract_credentials(source: Source, exclude: Optional[List[str]] = None) -> 
 def resolve_credentials(sources: List[Source]) -> Dict[str, str]:
     """Extract credentials from the first source that has any defined."""
     for source in sources:
-        credentials = extract_credentials(source, exclude=['resource_group'])
+        credentials = extract_credentials(source)
         if credentials:
             verbose_logger.debug(f"Resolved SAP credentials from source {source.name}")
             return credentials
@@ -213,7 +213,7 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
         Source("environment variables",
                lambda cv: _str_or_none(os.environ.get(f'AICORE_{cv.name.upper()}'))),
         Source("config file",
-               lambda cv: _str_or_none(config.get(f'AICORE_{cv.name.upper()}'))),
+               lambda cv: _str_or_none(config.get(f'AICORE_{cv.name.upper()}') or config.get(cv.name))),
         Source("VCAP service",
                lambda cv: _get_nested(vcap_service, ("credentials",) + cv.vcap_key if cv.vcap_key else (cv.name,))), # type: ignore[arg-type]
     ]
