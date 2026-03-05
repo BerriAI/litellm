@@ -309,6 +309,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if (
             "format" in schema
             and schema.get("type") == "string"
+            and schema["format"] is not None
             and schema["format"] not in _ANTHROPIC_SUPPORTED_STRING_FORMATS
         ):
             constraint_descriptions.append(f"format: {schema['format']}")
@@ -412,11 +413,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Ensure additionalProperties: false on object schemas that don't
         # already have it set — preserves explicit additionalProperties: true
-        if (
-            enforce_additional_properties
-            and result.get("type") == "object"
-            and "additionalProperties" not in result
-        ):
+        if enforce_additional_properties and result.get("type") == "object":
+            result["additionalProperties"] = False
+        elif result.get("type") == "object" and "additionalProperties" not in result:
             result["additionalProperties"] = False
 
         return result
