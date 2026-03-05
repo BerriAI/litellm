@@ -2755,11 +2755,12 @@ class SSOAuthenticationHandler:
                 )
 
         if userinfo is None:
+            if userinfo_endpoint:
+                detail = "userinfo endpoint failed and no id_token was present in the token response"
+            else:
+                detail = "no userinfo endpoint is configured (GENERIC_USERINFO_ENDPOINT) and no id_token was present"
             raise ProxyException(
-                message=(
-                    "SSO user info unavailable: userinfo endpoint failed and no id_token "
-                    "was present in the token response."
-                ),
+                message=f"SSO user info unavailable: {detail}.",
                 type=ProxyErrorTypes.auth_error,
                 param="userinfo",
                 code=status.HTTP_401_UNAUTHORIZED,

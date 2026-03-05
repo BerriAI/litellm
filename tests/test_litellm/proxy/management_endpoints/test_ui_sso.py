@@ -4670,6 +4670,32 @@ async def test_pkce_userinfo_falls_back_to_id_token():
 
 
 @pytest.mark.asyncio
+async def test_pkce_userinfo_uses_id_token_when_no_endpoint():
+    """When userinfo_endpoint is None, fall back to id_token directly without HTTP call."""
+    import base64
+    import json as _json
+
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    payload = {"sub": "id_token_user", "email": "id@example.com"}
+    encoded_payload = (
+        base64.urlsafe_b64encode(_json.dumps(payload).encode()).rstrip(b"=").decode()
+    )
+    fake_id_token = f"eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig"
+
+    # No httpx call should happen when userinfo_endpoint is None
+    result = await SSOAuthenticationHandler._get_pkce_userinfo(
+        access_token="some_token",
+        id_token=fake_id_token,
+        userinfo_endpoint=None,
+        additional_headers={},
+    )
+
+    assert result["sub"] == "id_token_user"
+    assert result["email"] == "id@example.com"
+
+
+@pytest.mark.asyncio
 async def test_pkce_userinfo_raises_when_both_sources_unavailable():
     """When userinfo endpoint fails AND no id_token, raise ProxyException."""
     from litellm.proxy._types import ProxyException
