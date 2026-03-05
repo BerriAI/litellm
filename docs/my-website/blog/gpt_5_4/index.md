@@ -28,7 +28,7 @@ LiteLLM now supports fully GPT-5.4!
 ## Docker Image
 
 ```bash
-docker pull ghcr.io/berriai/litellm:v1.81.14-stable.gpt-5.4.1
+docker pull ghcr.io/berriai/litellm:v1.81.14-stable.gpt-5.4_patch
 ```
 
 ## Usage
@@ -53,7 +53,7 @@ docker run -d \
   -p 4000:4000 \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
   -v $(pwd)/config.yaml:/app/config.yaml \
-  ghcr.io/berriai/litellm:v1.81.14-stable.gpt-5.4.1 \
+  ghcr.io/berriai/litellm:v1.81.14-stable.gpt-5.4_patch \
   --config /app/config.yaml
 ```
 
