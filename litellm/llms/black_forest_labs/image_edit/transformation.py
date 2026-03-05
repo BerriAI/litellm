@@ -54,7 +54,20 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
         Note: BFL uses different parameter names, these are mapped in map_openai_params.
         """
-        return []
+        return [
+            "seed",
+            "output_format",
+            "safety_tolerance",
+            "prompt_upsampling",
+            "aspect_ratio",
+            "steps",
+            "guidance",
+            "grow_mask",
+            "top",
+            "bottom",
+            "left",
+            "right",
+        ]
 
     def map_openai_params(
         self,
