@@ -1999,15 +1999,24 @@ class ExperimentalUIJWTToken:
             # Use first team if user has teams
             _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
 
+        _budget = litellm.max_cli_session_budget
+        if _budget is None:
+            verbose_proxy_logger.info(
+                "CLI JWT session created with no budget cap. "
+                "Set LITELLM_CLI_JWT_MAX_BUDGET env var to enforce a cap "
+                "(previously the default was $0.25 via max_ui_session_budget)."
+            )
+
         valid_token = UserAPIKeyAuth(
             token=CLI_JWT_TOKEN_NAME,
             key_name=CLI_JWT_TOKEN_NAME,
             key_alias=CLI_JWT_TOKEN_NAME,
             # Explicit CLI budget policy:
             # - default: no CLI cap (None)
-            # - optional: set litellm.max_cli_session_budget to enforce a cap
+            # - optional: set LITELLM_CLI_JWT_MAX_BUDGET env var or
+            #   litellm.max_cli_session_budget to enforce a cap.
             # This remains decoupled from UI session defaults.
-            max_budget=litellm.max_cli_session_budget,
+            max_budget=_budget,
             expires=expires,
             user_id=user_info.user_id,
             team_id=_team_id,
