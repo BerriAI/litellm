@@ -350,9 +350,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         formValues.rotation_interval = rotationInterval;
       }
 
-      // Handle duration field for key expiry - convert empty string to null
-      if (!formValues.duration || formValues.duration.trim() === "") {
-        formValues.duration = null;
+      // Handle duration field for key expiry:
+      // - null means Never Expires (explicitly set by checkbox) — keep as-is
+      // - empty string or undefined means not provided — omit entirely
+      if (formValues.duration !== null && (!formValues.duration || formValues.duration.trim() === "")) {
+        delete formValues.duration;
       }
 
       // Update the formValues with the final metadata
@@ -1407,7 +1409,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                         />
                       </div>
                     </AccordionBody>
-                    <Form.Item name="duration" hidden initialValue={null}>
+                    <Form.Item name="duration" hidden>
                       <Input />
                     </Form.Item>
                   </Accordion>

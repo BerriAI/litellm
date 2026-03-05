@@ -263,6 +263,11 @@ export function KeyEditView({
       }
       // If it's already an array (shouldn't happen, but handle it), keep as is
 
+      // Handle duration: null = Never Expires (keep); empty string or undefined = not changed (omit)
+      if (values.duration !== null && (!values.duration || values.duration.trim() === "")) {
+        delete values.duration;
+      }
+
       await onSubmit(values);
     } finally {
       setIsKeySaving(false);
@@ -659,7 +664,7 @@ export function KeyEditView({
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
         />
-        <Form.Item name="duration" hidden initialValue="">
+        <Form.Item name="duration" hidden>
           <Input />
         </Form.Item>
       </div>
