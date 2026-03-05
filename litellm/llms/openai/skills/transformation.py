@@ -116,6 +116,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Skill:
         """Transform OpenAI response to canonical Skill object."""
+        raw_response.raise_for_status()
         response_json = raw_response.json()
         verbose_logger.debug(
             "Transforming OpenAI create skill response: %s", response_json
@@ -213,6 +214,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> DeleteSkillResponse:
         """Transform OpenAI DeletedSkill response to canonical DeleteSkillResponse."""
+        raw_response.raise_for_status()
         response_json = raw_response.json()
         verbose_logger.debug(
             "Transforming OpenAI delete skill response: %s", response_json
@@ -251,6 +253,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Skill:
         """Transform OpenAI update skill response to canonical Skill."""
+        raw_response.raise_for_status()
         response_json = raw_response.json()
         verbose_logger.debug("Transforming OpenAI update skill response: %s", response_json)
         return self._openai_skill_to_canonical(response_json)
@@ -306,6 +309,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> SkillVersion:
         """Transform create skill version response."""
+        raw_response.raise_for_status()
         response_json = raw_response.json()
         verbose_logger.debug(
             "Transforming OpenAI create skill version response: %s", response_json
