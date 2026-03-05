@@ -17,6 +17,7 @@ export default function UISettings() {
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
+  const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
@@ -67,6 +68,21 @@ export default function UISettings() {
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleEnableProjectsUI = (checked: boolean) => {
+    updateSettings(
+      { enable_projects_ui: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully. Refreshing page...");
+          setTimeout(() => window.location.reload(), 1000);
         },
         onError: (error) => {
           NotificationManager.fromBackend(error);
@@ -172,6 +188,23 @@ export default function UISettings() {
               <Typography.Text type="secondary">
                 {forwardClientHeadersProperty?.description ??
                   "If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription."}
+              </Typography.Text>
+            </Space>
+          </Space>
+
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.enable_projects_ui)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleEnableProjectsUI}
+              aria-label={enableProjectsUIProperty?.description ?? "Enable Projects UI"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>[BETA] Enable Projects (page will refresh)</Typography.Text>
+              <Typography.Text type="secondary">
+                {enableProjectsUIProperty?.description ??
+                  "If enabled, shows the Projects feature in the UI sidebar and the project field in key management."}
               </Typography.Text>
             </Space>
           </Space>

@@ -1,4 +1,5 @@
 import json
+import ssl
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -68,6 +69,7 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
+    ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
 )
 from litellm.types.containers.main import (
@@ -4659,6 +4661,8 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
+        user_api_key_dict: Optional[Any] = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -4672,6 +4676,11 @@ class BaseLLMHTTPHandler:
 
         try:
             ssl_context = get_shared_realtime_ssl_context()
+            if url.startswith("wss://") and ssl_context is False:
+                # Keep TLS for wss:// while honoring SSL_VERIFY=False semantics.
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
             async with websockets.connect(  # type: ignore
                 url,
                 additional_headers=headers,
@@ -4686,12 +4695,17 @@ class BaseLLMHTTPHandler:
                     if _session_config:
                         await backend_ws.send(_session_config)
 
+                _request_data: Dict[str, Any] = {}
+                if litellm_metadata:
+                    _request_data["litellm_metadata"] = litellm_metadata
                 realtime_streaming = RealTimeStreaming(
                     websocket,
                     cast(ClientConnection, backend_ws),
                     logging_obj,
                     provider_config,
                     model,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=_request_data,
                 )
                 if _session_config:
                     realtime_streaming.session_configuration_request = _session_config
@@ -4714,6 +4728,123 @@ class BaseLLMHTTPHandler:
                     pass
                 else:
                     # If it's a different RuntimeError, we might want to log it or handle it differently
+                    raise Exception(
+                        f"Unexpected error while closing WebSocket: {close_error}"
+                    )
+
+    async def async_responses_websocket(
+        self,
+        model: str,
+        websocket: Any,
+        logging_obj: LiteLLMLoggingObj,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig],
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: Optional[float] = None,
+        user_api_key_dict: Optional[Any] = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        """
+        Handles Responses API WebSocket mode.
+
+        For providers with native websocket support (OpenAI, Azure):
+        - Opens a persistent WebSocket to the provider's /v1/responses endpoint
+        - Proxies response.create events bidirectionally for lower-latency agentic workflows
+
+        For providers without native websocket support (all others):
+        - Uses ManagedResponsesWebSocketHandler which makes HTTP streaming calls
+        - Forwards events over the websocket connection
+        """
+        if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
+            from litellm.responses.streaming_iterator import (
+                ManagedResponsesWebSocketHandler,
+            )
+
+            handler = ManagedResponsesWebSocketHandler(
+                websocket=websocket,
+                model=model,
+                logging_obj=logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                litellm_metadata=litellm_metadata,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
+            await handler.run()
+            return
+
+        import websockets
+        from websockets.asyncio.client import ClientConnection
+
+        litellm_params = GenericLiteLLMParams()
+        headers = responses_api_provider_config.validate_environment(
+            headers={},
+            model=model,
+            litellm_params=litellm_params,
+        )
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        http_url = responses_api_provider_config.get_complete_url(
+            api_base=api_base,
+            litellm_params={},
+        )
+        ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
+
+        try:
+            ssl_context = get_shared_realtime_ssl_context()
+            if ws_url.startswith("wss://") and ssl_context is False:
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+
+            logging_obj.pre_call(
+                input=None,
+                api_key=api_key or "",
+                additional_args={
+                    "api_base": ws_url,
+                    "headers": headers,
+                    "complete_input_dict": {"mode": "responses_websocket"},
+                },
+            )
+
+            async with websockets.connect(  # type: ignore
+                ws_url,
+                additional_headers=headers,
+                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=ssl_context,
+            ) as backend_ws:
+                _request_data: Dict[str, Any] = {}
+                if litellm_metadata:
+                    _request_data["litellm_metadata"] = litellm_metadata
+                streaming = ResponsesWebSocketStreaming(
+                    websocket=websocket,
+                    backend_ws=cast(ClientConnection, backend_ws),
+                    logging_obj=logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=_request_data,
+                )
+                await streaming.bidirectional_forward()
+
+        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+            verbose_logger.exception(f"Error connecting to responses WS backend: {e}")
+            await websocket.close(code=e.status_code, reason=str(e))
+        except Exception as e:
+            verbose_logger.exception(f"Error in responses WS: {e}")
+            try:
+                await websocket.close(
+                    code=1011, reason=f"Internal server error: {str(e)}"
+                )
+            except RuntimeError as close_error:
+                if "already completed" in str(close_error) or "websocket.close" in str(
+                    close_error
+                ):
+                    pass
+                else:
                     raise Exception(
                         f"Unexpected error while closing WebSocket: {close_error}"
                     )

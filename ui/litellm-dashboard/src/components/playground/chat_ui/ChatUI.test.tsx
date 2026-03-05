@@ -13,7 +13,6 @@ vi.mock("../networking", () => ({
   tagListCall: vi.fn().mockResolvedValue({ data: [] }),
   vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
   getGuardrailsList: vi.fn().mockResolvedValue({ data: [] }),
-  mcpToolsCall: vi.fn().mockResolvedValue({ data: [] }),
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
@@ -372,5 +371,44 @@ describe("ChatUI", () => {
 
     const customProxyInput = screen.getByPlaceholderText("Optional: Enter custom proxy URL (e.g., http://localhost:5000)");
     expect(customProxyInput).toHaveValue(testProxyUrl);
+  });
+
+  it("should enable search functionality for MCP server selector", async () => {
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const mcpServersText = screen.queryByText("MCP Servers");
+    expect(mcpServersText).toBeInTheDocument();
+
+    if (mcpServersText) {
+      const selectContainer = mcpServersText.parentElement?.nextElementSibling;
+      const selectElement = selectContainer?.querySelector(".ant-select-selector");
+      expect(selectElement).toBeInTheDocument();
+
+      if (selectElement) {
+        fireEvent.mouseDown(selectElement);
+
+        await waitFor(() => {
+          const allServersOption = screen.queryByText("All MCP Servers");
+          if (allServersOption) {
+            expect(allServersOption).toBeInTheDocument();
+          }
+        });
+
+        const searchInput = document.querySelector(".ant-select-selection-search-input");
+        expect(searchInput).toBeInTheDocument();
+      }
+    }
   });
 });

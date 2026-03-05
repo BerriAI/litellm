@@ -10,7 +10,7 @@ PATCH /config/cost_margin_config - Update cost margin configuration
 POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -54,18 +54,29 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
             deployments = llm_router.get_model_list(model_name=model)
 
             if deployments and len(deployments) > 0:
-                # Get the first deployment's litellm model
                 first_deployment = deployments[0]
                 litellm_params = first_deployment.get("litellm_params", {})
+                model_info = first_deployment.get("model_info", {})
+
+                # Check base_model first (needed for Azure custom deployment names)
+                base_model = model_info.get("base_model") or litellm_params.get(
+                    "base_model"
+                )
+                if base_model:
+                    verbose_proxy_logger.debug(
+                        f"Resolved model '{model}' to base_model '{base_model}' from router"
+                    )
+                    custom_llm_provider = cast(Optional[str], litellm_params.get("custom_llm_provider"))
+                    return cast(str, base_model), custom_llm_provider
+
                 resolved_model = litellm_params.get("model")
 
                 if resolved_model:
                     verbose_proxy_logger.debug(
                         f"Resolved model '{model}' to '{resolved_model}' from router"
                     )
-                    # Extract custom_llm_provider if present
-                    custom_llm_provider = litellm_params.get("custom_llm_provider")
-                    return resolved_model, custom_llm_provider
+                    custom_llm_provider = cast(Optional[str], litellm_params.get("custom_llm_provider"))
+                    return cast(str, resolved_model), custom_llm_provider
         except Exception as e:
             verbose_proxy_logger.debug(
                 f"Could not resolve model '{model}' from router: {e}"
