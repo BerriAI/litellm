@@ -1,3 +1,4 @@
+import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -77,22 +78,30 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             # Prefix model with "responses/" to route to OpenAI Responses API
             completion_kwargs["model"] = f"responses/{model}"
             
+        summary_disabled = (
+            litellm.disable_default_reasoning_summary
+            or os.getenv("LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY", "false").lower() == "true"
+        )
+
         reasoning_effort = completion_kwargs.get("reasoning_effort")
         summary = thinking.get("summary")
         if isinstance(reasoning_effort, str) and reasoning_effort:
             reasoning_dict: Dict[str, Any] = {"effort": reasoning_effort}
             if summary:
                 reasoning_dict["summary"] = summary
+            elif not summary_disabled:
+                reasoning_dict["summary"] = "detailed"
             completion_kwargs["reasoning_effort"] = reasoning_dict
         elif isinstance(reasoning_effort, dict):
             if (
-                summary
-                and "summary" not in reasoning_effort
+                "summary" not in reasoning_effort
                 and "generate_summary" not in reasoning_effort
             ):
-                updated_reasoning_effort = dict(reasoning_effort)
-                updated_reasoning_effort["summary"] = summary
-                completion_kwargs["reasoning_effort"] = updated_reasoning_effort
+                effective_summary = summary if summary else ("detailed" if not summary_disabled else None)
+                if effective_summary:
+                    updated_reasoning_effort = dict(reasoning_effort)
+                    updated_reasoning_effort["summary"] = effective_summary
+                    completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
     def _prepare_completion_kwargs(
