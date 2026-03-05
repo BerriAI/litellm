@@ -962,7 +962,6 @@ model_list = list(
     | ovhcloud_models
     | lemonade_models
     | docker_model_runner_models
-    | bedrock_mantle_models
     | set(clarifai_models)
 )
 
@@ -1066,7 +1065,6 @@ models_by_provider: dict = {
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
-    "bedrock_mantle": bedrock_mantle_models
 }
 
 # mapping for those models which have larger equivalents
