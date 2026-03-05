@@ -152,23 +152,6 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _redact_auth_headers(headers: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Redact sensitive auth headers for logging.
-
-    Args:
-        headers: Dictionary of HTTP headers
-
-    Returns:
-        Headers dict with auth headers redacted, or None if input is None
-    """
-    if headers is None:
-        return None
-
-    return {
-        k: '[REDACTED]' if k.lower() in ('authorization', 'x-api-key') else v
-        for k, v in headers.items()
-    }
-
 
 class BaseLLMHTTPHandler:
     async def _make_common_async_call(
@@ -456,7 +439,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -885,7 +868,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -1024,7 +1007,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -1171,7 +1154,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data or {},
                 "api_base": complete_url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -1417,7 +1400,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -1485,7 +1468,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -1709,7 +1692,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -1791,7 +1774,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -1965,7 +1948,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": str(request_url),
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -2163,7 +2146,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -2308,7 +2291,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -2432,7 +2415,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -2516,7 +2499,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -2601,7 +2584,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -2672,7 +2655,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -2769,7 +2752,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -2842,7 +2825,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -3077,7 +3060,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": transformed_request,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -3406,7 +3389,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": transformed_request,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -3492,7 +3475,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": transformed_request,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "batch_id": batch_id,
             },
         )
@@ -3609,7 +3592,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -3685,7 +3668,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -3774,7 +3757,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -3853,7 +3836,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -3925,7 +3908,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "file_id": file_id,
             },
         )
@@ -3985,7 +3968,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "file_id": file_id,
             },
         )
@@ -4055,7 +4038,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "file_id": file_id,
             },
         )
@@ -4115,7 +4098,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "file_id": file_id,
             },
         )
@@ -4185,7 +4168,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "purpose": purpose,
             },
         )
@@ -4245,7 +4228,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "purpose": purpose,
             },
         )
@@ -4315,7 +4298,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "file_id": file_content_request.get("file_id"),
             },
         )
@@ -4375,7 +4358,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "file_id": file_content_request.get("file_id"),
             },
         )
@@ -4953,7 +4936,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": files,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -5049,7 +5032,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -5172,7 +5155,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -5282,7 +5265,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -5412,7 +5395,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -5513,7 +5496,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -5795,7 +5778,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "video_id": video_id,
             },
         )
@@ -5877,7 +5860,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "video_id": video_id,
             },
         )
@@ -6015,7 +5998,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
             },
         )
@@ -6091,7 +6074,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "video_id": video_id,
             },
         )
@@ -6185,7 +6168,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "video_id": video_id,
                 "data": data,
             },
@@ -6272,7 +6255,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "video_id": video_id,
                 "data": data,
             },
@@ -6371,7 +6354,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -6447,7 +6430,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -6539,7 +6522,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
             },
         )
@@ -6616,7 +6599,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
             },
         )
@@ -6705,7 +6688,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
                 "container_id": container_id,
             },
@@ -6782,7 +6765,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
                 "container_id": container_id,
             },
@@ -6872,7 +6855,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
                 "container_id": container_id,
             },
@@ -6949,7 +6932,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
                 "container_id": container_id,
             },
@@ -7044,7 +7027,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
             },
         )
@@ -7123,7 +7106,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
             },
         )
@@ -7208,7 +7191,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
             },
         )
@@ -7281,7 +7264,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": params,
             },
         )
@@ -7380,7 +7363,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -7483,7 +7466,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -7552,7 +7535,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -7628,7 +7611,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -7700,7 +7683,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -7785,7 +7768,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -7855,7 +7838,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -7941,7 +7924,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8005,7 +7988,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8082,7 +8065,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8146,7 +8129,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8226,7 +8209,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8298,7 +8281,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8385,7 +8368,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8449,7 +8432,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8529,7 +8512,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8635,7 +8618,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8744,7 +8727,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8869,7 +8852,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -8968,7 +8951,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_data,
                 "api_base": api_base,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9086,7 +9069,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9146,7 +9129,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9220,7 +9203,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9269,7 +9252,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9329,7 +9312,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9374,7 +9357,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9434,7 +9417,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9481,7 +9464,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9549,7 +9532,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9598,7 +9581,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9658,7 +9641,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9703,7 +9686,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9766,7 +9749,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9823,7 +9806,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9894,7 +9877,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -9943,7 +9926,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10003,7 +9986,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10048,7 +10031,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10108,7 +10091,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10155,7 +10138,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10215,7 +10198,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10260,7 +10243,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10327,7 +10310,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10376,7 +10359,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10439,7 +10422,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10488,7 +10471,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10548,7 +10531,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10593,7 +10576,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10656,7 +10639,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10705,7 +10688,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10765,7 +10748,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10812,7 +10795,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10872,7 +10855,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10919,7 +10902,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -10986,7 +10969,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -11035,7 +11018,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -11097,7 +11080,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": query_params,
             },
         )
@@ -11146,7 +11129,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
                 "params": query_params,
             },
         )
@@ -11207,7 +11190,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -11252,7 +11235,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -11312,7 +11295,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -11359,7 +11342,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -11419,7 +11402,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
@@ -11466,7 +11449,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": _redact_auth_headers(headers),
+                "headers": headers,
             },
         )
 
