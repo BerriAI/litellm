@@ -14,19 +14,24 @@ import httpx
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
-from litellm.integrations.custom_guardrail import (CustomGuardrail,
-                                                   log_guardrail_information)
-from litellm.llms.custom_httpx.http_handler import (get_async_httpx_client,
-                                                    httpxSpecialProvider)
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
-    GenericGuardrailAPIMetadata, GenericGuardrailAPIRequest,
-    GenericGuardrailAPIResponse)
+    GenericGuardrailAPIMetadata,
+    GenericGuardrailAPIRequest,
+    GenericGuardrailAPIResponse,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "generic_guardrail_api"
 
@@ -307,6 +312,13 @@ class GenericGuardrailAPI(CustomGuardrail):
         return_inputs.update(inputs)
         return return_inputs
 
+    def _build_request_headers(self) -> dict:
+        """Build HTTP headers for the guardrail API request."""
+        headers = {"Content-Type": "application/json"}
+        if self.headers:
+            headers.update(self.headers)
+        return headers
+
     def _build_guardrail_return_inputs(
         self,
         *,
@@ -435,10 +447,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             model=model,
         )
 
-        # Prepare headers
-        headers = {"Content-Type": "application/json"}
-        if self.headers:
-            headers.update(self.headers)
+        headers = self._build_request_headers()
 
         try:
             # Make the API request

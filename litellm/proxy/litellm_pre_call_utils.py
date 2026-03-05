@@ -805,7 +805,7 @@ class LiteLLMProxyRequestSetup:
         Add team-based callbacks from the config
         """
         team_config = proxy_config.load_team_config(team_id=team_id)
-        if len(team_config.keys()) == 0:
+        if not isinstance(team_config, dict) or len(team_config) == 0:
             return None
 
         callback_vars_dict = {**team_config.get("callback_vars", team_config)}
@@ -1097,6 +1097,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ] = user_api_key_dict.user_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
+    data[_metadata_variable_name]["user_api_key_team_metadata"] = (
+        user_api_key_dict.team_metadata
+    )
+    data[_metadata_variable_name]["user_api_key_object_permission_id"] = (
+        getattr(user_api_key_dict, "object_permission_id", None)
+    )
+    data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = (
+        getattr(user_api_key_dict, "team_object_permission_id", None)
+    )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
 

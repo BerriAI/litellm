@@ -247,6 +247,10 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response._hidden_params["headers"] = raw_response_headers
         return response
 
+    def supports_native_websocket(self) -> bool:
+        """Manus does not support native WebSocket for Responses API"""
+        return False
+
     def transform_get_response_api_request(
         self,
         response_id: str,

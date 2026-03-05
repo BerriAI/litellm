@@ -14,6 +14,7 @@ Requests to /chat/completions may be bridged here automatically when the provide
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
 | Streaming | ✅ | |
+| WebSocket Mode | ✅ | Lower-latency persistent connections for all providers |
 | Image Generation Streaming | ✅ | Progressive image generation with partial images (1-3) |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
@@ -809,6 +810,245 @@ for event in response:
 
 </TabItem>
 </Tabs>
+
+## WebSocket Mode
+
+The Responses API supports **WebSocket mode** for lower-latency, persistent connections ideal for agentic workflows. WebSocket mode works with **all LiteLLM providers**, not just those with native WebSocket support.
+
+### Architecture
+
+LiteLLM provides two WebSocket modes:
+
+1. **Native WebSocket**: Direct `wss://` connection to providers that support it (OpenAI, Azure)
+2. **Managed WebSocket**: HTTP streaming over WebSocket for all other providers (Anthropic, Gemini, Bedrock, etc.)
+
+The system automatically selects the appropriate mode based on provider capabilities.
+
+### Usage
+
+<Tabs>
+<TabItem value="python" label="Python (websocket-client)">
+
+```python showLineNumbers title="WebSocket with Python"
+import json
+from websocket import create_connection  # pip install websocket-client
+
+# Connect to LiteLLM proxy WebSocket endpoint
+ws = create_connection(
+    "ws://localhost:4000/v1/responses?model=gemini-2.5-flash",
+    header=["Authorization: Bearer sk-1234"]
+)
+
+try:
+    # Send initial message
+    ws.send(json.dumps({
+        "type": "response.create",
+        "model": "gemini-2.5-flash",
+        "store": True,
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "My favorite color is blue."}]
+        }]
+    }))
+    
+    # Collect response events
+    response_id = None
+    while True:
+        event = json.loads(ws.recv())
+        print(f"Event: {event['type']}")
+        
+        if event["type"] == "response.completed":
+            response_id = event["response"]["id"]
+            break
+        elif event["type"] == "response.output_text.delta":
+            print(f"Text: {event.get('delta', '')}", end="", flush=True)
+    
+    print(f"\nResponse ID: {response_id}")
+    
+    # Send follow-up with previous_response_id for multi-turn
+    ws.send(json.dumps({
+        "type": "response.create",
+        "model": "gemini-2.5-flash",
+        "previous_response_id": response_id,
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "What is my favorite color?"}]
+        }]
+    }))
+    
+    # Collect follow-up response
+    while True:
+        event = json.loads(ws.recv())
+        if event["type"] == "response.completed":
+            break
+        elif event["type"] == "response.output_text.delta":
+            print(event.get("delta", ""), end="", flush=True)
+            
+finally:
+    ws.close()
+```
+
+</TabItem>
+<TabItem value="javascript" label="JavaScript (ws)">
+
+```javascript showLineNumbers title="WebSocket with JavaScript"
+const WebSocket = require('ws'); // npm install ws
+
+const ws = new WebSocket(
+    'ws://localhost:4000/v1/responses?model=gemini-2.5-flash',
+    {
+        headers: {
+            'Authorization': 'Bearer sk-1234'
+        }
+    }
+);
+
+ws.on('open', () => {
+    // Send initial message
+    ws.send(JSON.stringify({
+        type: 'response.create',
+        model: 'gemini-2.5-flash',
+        store: true,
+        input: [{
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'My favorite color is blue.' }]
+        }]
+    }));
+});
+
+let responseId = null;
+
+ws.on('message', (data) => {
+    const event = JSON.parse(data.toString());
+    console.log(`Event: ${event.type}`);
+    
+    if (event.type === 'response.completed') {
+        responseId = event.response.id;
+        console.log(`Response ID: ${responseId}`);
+        
+        // Send follow-up
+        ws.send(JSON.stringify({
+            type: 'response.create',
+            model: 'gemini-2.5-flash',
+            previous_response_id: responseId,
+            input: [{
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: 'What is my favorite color?' }]
+            }]
+        }));
+    } else if (event.type === 'response.output_text.delta') {
+        process.stdout.write(event.delta || '');
+    }
+});
+
+ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
+});
+```
+
+</TabItem>
+<TabItem value="curl" label="curl (websocat)">
+
+```bash showLineNumbers title="WebSocket with websocat"
+# Install websocat: brew install websocat (macOS) or cargo install websocat
+
+# Connect to WebSocket endpoint
+websocat "ws://localhost:4000/v1/responses?model=gemini-2.5-flash" \
+  -H="Authorization: Bearer sk-1234"
+
+# Then send JSON events (paste and press Enter):
+{"type":"response.create","model":"gemini-2.5-flash","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello!"}]}]}
+
+# You'll receive streaming events back:
+# {"type":"response.created",...}
+# {"type":"response.in_progress",...}
+# {"type":"response.output_text.delta","delta":"Hello",...}
+# {"type":"response.completed",...}
+```
+
+</TabItem>
+</Tabs>
+
+### Event Types
+
+WebSocket connections receive Server-Sent Events (SSE) formatted as JSON:
+
+| Event Type | Description |
+|------------|-------------|
+| `response.created` | Response generation started |
+| `response.in_progress` | Response is being generated |
+| `response.output_item.added` | New output item (message, tool call, etc.) added |
+| `response.output_text.delta` | Incremental text chunk |
+| `response.output_text.done` | Text output completed |
+| `response.content_part.done` | Content part completed |
+| `response.output_item.done` | Output item completed |
+| `response.completed` | Full response completed successfully |
+| `response.failed` | Response generation failed |
+| `response.incomplete` | Response incomplete (e.g., max tokens reached) |
+| `error` | Error occurred |
+
+### Multi-Turn Conversations
+
+Use `previous_response_id` to maintain conversation context across multiple WebSocket messages:
+
+```python showLineNumbers title="Multi-turn WebSocket Conversation"
+# Turn 1
+ws.send(json.dumps({
+    "type": "response.create",
+    "model": "gemini-2.5-flash",
+    "store": True,  # Required for multi-turn
+    "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}]
+}))
+
+# ... collect events and get response_id from response.completed event ...
+
+# Turn 2 - reference previous response
+ws.send(json.dumps({
+    "type": "response.create",
+    "model": "gemini-2.5-flash",
+    "previous_response_id": response_id,  # Links to previous turn
+    "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Continue"}]}]
+}))
+```
+
+### Provider Support
+
+| Provider | WebSocket Mode | Notes |
+|----------|----------------|-------|
+| OpenAI | Native | Direct `wss://` connection to OpenAI |
+| Azure OpenAI | Native | Direct `wss://` connection to Azure |
+| Anthropic | Managed | HTTP streaming over WebSocket |
+| Google AI Studio (Gemini) | Managed | HTTP streaming over WebSocket |
+| Vertex AI | Managed | HTTP streaming over WebSocket |
+| AWS Bedrock | Managed | HTTP streaming over WebSocket |
+| All other providers | Managed | HTTP streaming over WebSocket |
+
+**Note**: Both native and managed modes provide the same event stream format. The difference is transparent to clients.
+
+### Configuration
+
+No special configuration needed. WebSocket mode is automatically available on the `/v1/responses` endpoint when accessed via WebSocket protocol (`ws://` or `wss://`).
+
+For LiteLLM Proxy, ensure your models are configured normally:
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+  
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+Both models will automatically support WebSocket mode at `ws://localhost:4000/v1/responses`.
 
 ## Response ID Security
 

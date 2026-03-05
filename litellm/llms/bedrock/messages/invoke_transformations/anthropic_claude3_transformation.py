@@ -26,6 +26,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
@@ -118,10 +119,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         self, anthropic_messages_request: Dict, model: Optional[str] = None
     ) -> None:
         """
-        Remove `ttl` field from cache_control in messages.
-        Bedrock doesn't support the ttl field in cache_control.
+        Remove unsupported fields from cache_control for Bedrock.
 
-        Update: Bedock supports `5m` and `1h` for Claude 4.5 models.
+        Bedrock only supports `type` and `ttl` in cache_control. It does NOT support:
+        - `scope` (e.g., "global") - always removed
+        - `ttl` - removed for older models; Claude 4.5+ supports "5m" and "1h"
+
+        Processes both `system` and `messages` content blocks.
 
         Args:
             anthropic_messages_request: The request dictionary to modify in-place
@@ -131,23 +135,36 @@ class AmazonAnthropicClaudeMessagesConfig(
         if model:
             is_claude_4_5 = self._is_claude_4_5_on_bedrock(model)
 
+        def _sanitize_cache_control(cache_control: dict) -> None:
+            if not isinstance(cache_control, dict):
+                return
+            # Bedrock doesn't support scope (e.g., "global" for cross-request caching)
+            cache_control.pop("scope", None)
+            # Remove ttl for models that don't support it
+            if "ttl" in cache_control:
+                ttl = cache_control["ttl"]
+                if is_claude_4_5 and ttl in ["5m", "1h"]:
+                    return
+                cache_control.pop("ttl", None)
+
+        def _process_content_list(content: list) -> None:
+            for item in content:
+                if isinstance(item, dict) and "cache_control" in item:
+                    _sanitize_cache_control(item["cache_control"])
+
+        # Process system (list of content blocks)
+        if "system" in anthropic_messages_request:
+            system = anthropic_messages_request["system"]
+            if isinstance(system, list):
+                _process_content_list(system)
+
+        # Process messages
         if "messages" in anthropic_messages_request:
             for message in anthropic_messages_request["messages"]:
                 if isinstance(message, dict) and "content" in message:
                     content = message["content"]
                     if isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, dict) and "cache_control" in item:
-                                cache_control = item["cache_control"]
-                                if (
-                                    isinstance(cache_control, dict)
-                                    and "ttl" in cache_control
-                                ):
-                                    ttl = cache_control["ttl"]
-                                    if is_claude_4_5 and ttl in ["5m", "1h"]:
-                                        continue
-
-                                    cache_control.pop("ttl", None)
+                        _process_content_list(content)
 
     def _supports_extended_thinking_on_bedrock(self, model: str) -> bool:
         """
@@ -401,6 +418,12 @@ class AmazonAnthropicClaudeMessagesConfig(
                 output_format=output_format,
                 anthropic_messages_request=anthropic_messages_request,
             )
+
+        # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
+        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
+        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # Ref: https://github.com/BerriAI/litellm/issues/22847
+        remove_custom_field_from_tools(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
