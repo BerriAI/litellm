@@ -22,6 +22,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
@@ -35,6 +36,7 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_model,
     common_checks,
     get_end_user_object,
+    get_jwt_key_mapping_object,
     get_key_object,
     get_project_object,
     get_team_object,
@@ -438,6 +440,75 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     return api_key
 
 
+async def _resolve_jwt_to_virtual_key(
+    jwt_claims: dict,
+    jwt_handler: JWTHandler,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span],
+    proxy_logging_obj: ProxyLogging,
+) -> Optional[UserAPIKeyAuth]:
+    virtual_key_claim_field = jwt_handler.litellm_jwtauth.virtual_key_claim_field
+    if virtual_key_claim_field is None:
+        return None
+
+    claim_value = get_nested_value(
+        data=jwt_claims,
+        key_path=virtual_key_claim_field,
+        default=None,
+    )
+
+    if claim_value is None:
+        verbose_proxy_logger.debug(
+            f"JWT Key Mapping: Claim field '{virtual_key_claim_field}' not found in JWT claims."
+        )
+        return None
+
+    cache_key = f"jwt_key_mapping:{virtual_key_claim_field}:{claim_value}"
+    cached_mapping = await user_api_key_cache.async_get_cache(cache_key)
+
+    if cached_mapping == "__NO_MAPPING__":
+        return None
+    elif cached_mapping is not None:
+        return await get_key_object(
+            hashed_token=cached_mapping,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    if prisma_client is None:
+        return None
+
+    token_hash = await get_jwt_key_mapping_object(
+        jwt_claim_name=virtual_key_claim_field,
+        jwt_claim_value=str(claim_value),
+        prisma_client=prisma_client,
+    )
+
+    if token_hash is not None:
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=token_hash,
+            ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
+        )
+        return await get_key_object(
+            hashed_token=token_hash,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    else:
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value="__NO_MAPPING__",
+            ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
+        )
+        return None
+
+
 async def _user_api_key_auth_builder(  # noqa: PLR0915
     request: Request,
     api_key: str,
@@ -589,145 +660,174 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
-                result = await JWTAuthManager.auth_builder(
-                    request_data=request_data,
-                    general_settings=general_settings,
-                    api_key=api_key,
-                    jwt_handler=jwt_handler,
-                    route=route,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                    parent_otel_span=parent_otel_span,
-                    request_headers=_safe_get_request_headers(request),
-                )
+                # Try JWT-to-Virtual-Key mapping first to avoid
+                # unnecessary DB queries in auth_builder
+                do_standard_jwt_auth = True
+                if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
+                    # Decode JWT to get claims without running full auth_builder
+                    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+                        jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
+                    else:
+                        jwt_claims = await jwt_handler.auth_jwt(token=api_key)
 
-                is_proxy_admin = result["is_proxy_admin"]
-                team_id = result["team_id"]
-                team_object = result["team_object"]
-                user_id = result["user_id"]
-                user_object = result["user_object"]
-                end_user_id = result["end_user_id"]
-                end_user_object = result["end_user_object"]
-                org_id = result["org_id"]
-                token = result["token"]
-                team_membership: Optional[LiteLLM_TeamMembership] = result.get(
-                    "team_membership", None
-                )
+                    valid_token = await _resolve_jwt_to_virtual_key(
+                        jwt_claims=jwt_claims,
+                        jwt_handler=jwt_handler,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                    if valid_token is not None:
+                        api_key = valid_token.token or ""
+                        do_standard_jwt_auth = False
+                        # Fall through to virtual key checks
 
-                global_proxy_spend = await get_global_proxy_spend(
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    user_api_key_cache=user_api_key_cache,
-                    prisma_client=prisma_client,
-                    token=token,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
+                if do_standard_jwt_auth:
+                    result = await JWTAuthManager.auth_builder(
+                        request_data=request_data,
+                        general_settings=general_settings,
+                        api_key=api_key,
+                        jwt_handler=jwt_handler,
+                        route=route,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                        parent_otel_span=parent_otel_span,
+                        request_headers=_safe_get_request_headers(request),
+                    )
 
-                if is_proxy_admin:
-                    return UserAPIKeyAuth(
+                    is_proxy_admin = result["is_proxy_admin"]
+                    team_id = result["team_id"]
+                    team_object = result["team_object"]
+                    user_id = result["user_id"]
+                    user_object = result["user_object"]
+                    end_user_id = result["end_user_id"]
+                    end_user_object = result["end_user_object"]
+                    org_id = result["org_id"]
+                    token = result["token"]
+                    team_membership: Optional[LiteLLM_TeamMembership] = result.get(
+                        "team_membership", None
+                    )
+
+                    global_proxy_spend = await get_global_proxy_spend(
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        user_api_key_cache=user_api_key_cache,
+                        prisma_client=prisma_client,
+                        token=token,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+
+                    if is_proxy_admin:
+                        return UserAPIKeyAuth(
+                            api_key=None,
+                            user_role=LitellmUserRoles.PROXY_ADMIN,
+                            user_id=user_id,
+                            team_id=team_id,
+                            team_alias=(
+                                team_object.team_alias
+                                if team_object is not None
+                                else None
+                            ),
+                            team_metadata=team_object.metadata
+                            if team_object is not None
+                            else None,
+                            org_id=org_id,
+                            end_user_id=end_user_id,
+                            parent_otel_span=parent_otel_span,
+                        )
+
+                    valid_token = UserAPIKeyAuth(
                         api_key=None,
-                        user_role=LitellmUserRoles.PROXY_ADMIN,
-                        user_id=user_id,
                         team_id=team_id,
                         team_alias=(
                             team_object.team_alias if team_object is not None else None
                         ),
+                        team_tpm_limit=(
+                            team_object.tpm_limit if team_object is not None else None
+                        ),
+                        team_rpm_limit=(
+                            team_object.rpm_limit if team_object is not None else None
+                        ),
+                        team_models=team_object.models
+                        if team_object is not None
+                        else [],
+                        user_role=(
+                            LitellmUserRoles(user_object.user_role)
+                            if user_object is not None
+                            and user_object.user_role is not None
+                            else LitellmUserRoles.INTERNAL_USER
+                        ),
+                        user_id=user_id,
+                        org_id=org_id,
+                        parent_otel_span=parent_otel_span,
+                        end_user_id=end_user_id,
+                        user_tpm_limit=(
+                            user_object.tpm_limit if user_object is not None else None
+                        ),
+                        user_rpm_limit=(
+                            user_object.rpm_limit if user_object is not None else None
+                        ),
+                        team_member_rpm_limit=(
+                            team_membership.safe_get_team_member_rpm_limit()
+                            if team_membership is not None
+                            else None
+                        ),
+                        team_member_tpm_limit=(
+                            team_membership.safe_get_team_member_tpm_limit()
+                            if team_membership is not None
+                            else None
+                        ),
                         team_metadata=team_object.metadata
                         if team_object is not None
                         else None,
-                        org_id=org_id,
-                        end_user_id=end_user_id,
-                        parent_otel_span=parent_otel_span,
                     )
 
-                valid_token = UserAPIKeyAuth(
-                    api_key=None,
-                    team_id=team_id,
-                    team_alias=(
-                        team_object.team_alias if team_object is not None else None
-                    ),
-                    team_tpm_limit=(
-                        team_object.tpm_limit if team_object is not None else None
-                    ),
-                    team_rpm_limit=(
-                        team_object.rpm_limit if team_object is not None else None
-                    ),
-                    team_models=team_object.models if team_object is not None else [],
-                    user_role=(
-                        LitellmUserRoles(user_object.user_role)
-                        if user_object is not None and user_object.user_role is not None
-                        else LitellmUserRoles.INTERNAL_USER
-                    ),
-                    user_id=user_id,
-                    org_id=org_id,
-                    parent_otel_span=parent_otel_span,
-                    end_user_id=end_user_id,
-                    user_tpm_limit=(
-                        user_object.tpm_limit if user_object is not None else None
-                    ),
-                    user_rpm_limit=(
-                        user_object.rpm_limit if user_object is not None else None
-                    ),
-                    team_member_rpm_limit=(
-                        team_membership.safe_get_team_member_rpm_limit()
-                        if team_membership is not None
-                        else None
-                    ),
-                    team_member_tpm_limit=(
-                        team_membership.safe_get_team_member_tpm_limit()
-                        if team_membership is not None
-                        else None
-                    ),
-                    team_metadata=team_object.metadata
-                    if team_object is not None
-                    else None,
-                )
+                    # Check if model has zero cost - if so, skip all budget checks
+                    model = get_model_from_request(request_data, route)
+                    skip_budget_checks = False
+                    if model is not None and llm_router is not None:
+                        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
-                # Check if model has zero cost - if so, skip all budget checks
-                model = get_model_from_request(request_data, route)
-                skip_budget_checks = False
-                if model is not None and llm_router is not None:
-                    from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-
-                    skip_budget_checks = _is_model_cost_zero(
-                        model=model, llm_router=llm_router
-                    )
-                    if skip_budget_checks:
-                        verbose_proxy_logger.info(
-                            f"Skipping all budget checks for zero-cost model: {model}"
+                        skip_budget_checks = _is_model_cost_zero(
+                            model=model, llm_router=llm_router
                         )
+                        if skip_budget_checks:
+                            verbose_proxy_logger.info(
+                                f"Skipping all budget checks for zero-cost model: {model}"
+                            )
 
-                # Fetch project object for JWT path if project_id is set
-                _jwt_project_obj = None
-                if valid_token.project_id is not None:
-                    _jwt_project_obj = await get_project_object(
-                        project_id=valid_token.project_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
+                    # Fetch project object for JWT path if project_id is set
+                    _jwt_project_obj = None
+                    if valid_token.project_id is not None:
+                        _jwt_project_obj = await get_project_object(
+                            project_id=valid_token.project_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                        if _jwt_project_obj is not None:
+                            valid_token.project_metadata = _jwt_project_obj.metadata
+
+                    # run through common checks
+                    _ = await common_checks(
+                        request=request,
+                        request_body=request_data,
+                        team_object=team_object,
+                        user_object=user_object,
+                        end_user_object=end_user_object,
+                        general_settings=general_settings,
+                        global_proxy_spend=global_proxy_spend,
+                        route=route,
+                        llm_router=llm_router,
                         proxy_logging_obj=proxy_logging_obj,
+                        valid_token=valid_token,
+                        skip_budget_checks=skip_budget_checks,
+                        project_object=_jwt_project_obj,
                     )
-                    if _jwt_project_obj is not None:
-                        valid_token.project_metadata = _jwt_project_obj.metadata
 
-                # run through common checks
-                _ = await common_checks(
-                    request=request,
-                    request_body=request_data,
-                    team_object=team_object,
-                    user_object=user_object,
-                    end_user_object=end_user_object,
-                    general_settings=general_settings,
-                    global_proxy_spend=global_proxy_spend,
-                    route=route,
-                    llm_router=llm_router,
-                    proxy_logging_obj=proxy_logging_obj,
-                    valid_token=valid_token,
-                    skip_budget_checks=skip_budget_checks,
-                    project_object=_jwt_project_obj,
-                )
-
-                # return UserAPIKeyAuth object
-                return cast(UserAPIKeyAuth, valid_token)
+                    # return UserAPIKeyAuth object
+                    return cast(UserAPIKeyAuth, valid_token)
 
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
@@ -830,25 +930,26 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
-        ## Check CACHE
-        try:
-            valid_token = await get_key_object(
-                hashed_token=hash_token(api_key),
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                check_cache_only=True,
-            )
-        except Exception:
-            verbose_logger.debug("api key not found in cache.")
-            valid_token = None
+        if valid_token is None:
+            ## Check CACHE
+            try:
+                valid_token = await get_key_object(
+                    hashed_token=hash_token(api_key),
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    check_cache_only=True,
+                )
+            except Exception:
+                verbose_logger.debug("api key not found in cache.")
+                valid_token = None
 
-        ## Check UI Hash Key
-        if valid_token is None and get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
-            valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(
-                api_key
-            )
+            ## Check UI Hash Key
+            if valid_token is None and get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+                valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(
+                    api_key
+                )
 
         if (
             valid_token is not None
@@ -985,9 +1086,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 code=400,
                 param=None,
             )
-
-        ## check for cache hit (In-Memory Cache)
-        _user_role = None
 
         if valid_token is None:
             if isinstance(
