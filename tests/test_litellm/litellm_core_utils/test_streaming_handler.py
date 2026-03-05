@@ -1400,3 +1400,94 @@ async def test_custom_stream_wrapper_aclose_none_stream():
 
     # Should not raise
     await wrapper.aclose()
+
+
+def test_content_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #22098: Vertex AI Claude streaming truncation.
+
+    When content_block_delta and message_delta arrive in rapid succession,
+    received_finish_reason can be set BEFORE the last content chunk is
+    processed. The old code raised StopIteration unconditionally, dropping
+    content. The fix checks for text/tool_use content before stopping.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    content_chunk = {
+        "text": "world!",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=content_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None — content was dropped (issue #22098)"
+    )
+    assert result.choices[0].delta.content == "world!"
+
+
+def test_empty_chunk_still_stops_after_finish_reason_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Companion test for #22098: an empty GenericStreamingChunk must still
+    raise StopIteration when received_finish_reason is already set.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    empty_chunk = {
+        "text": "",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    with pytest.raises(StopIteration):
+        initialized_custom_stream_wrapper.chunk_creator(chunk=empty_chunk)
+
+
+def test_tool_use_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #22098: tool_use-only chunks must not be dropped
+    when received_finish_reason is already set.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    tool_chunk = {
+        "text": "",
+        "tool_use": {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+        },
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=tool_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None — tool_use data was dropped"
+    )
+
+    tool_calls = result.choices[0].delta.tool_calls
+    assert tool_calls is not None and len(tool_calls) > 0, (
+        "tool_calls should contain at least one tool call"
+    )
+    assert tool_calls[0].id == "call_1"
+    assert tool_calls[0].function.name == "get_weather"
