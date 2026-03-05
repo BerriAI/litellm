@@ -786,8 +786,6 @@ def _update_internal_user_params(
             )
             _reset_at = None
         non_default_values["budget_reset_at"] = _reset_at
-    elif "initial_budget_reset_at" in non_default_values:
-        non_default_values.pop("initial_budget_reset_at")
 
     if "budget_duration" in non_default_values:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
