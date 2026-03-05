@@ -7617,9 +7617,13 @@ async def acount_tokens(
         )
 
     # Fallback to local tiktoken-based token counting
+    fallback_messages = messages or []
+    if system and fallback_messages:
+        fallback_messages = [{"role": "system", "content": system}] + fallback_messages
     local_count = litellm.token_counter(
         model=model,
-        messages=messages or [],
+        messages=fallback_messages,
+        tools=tools,
     )
 
     return TokenCountResponse(

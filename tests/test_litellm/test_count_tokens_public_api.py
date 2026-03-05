@@ -71,9 +71,11 @@ def test_acount_tokens_with_tools():
     tools = [
         {
             "type": "function",
-            "name": "get_weather",
-            "description": "Get weather info",
-            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather info",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
         }
     ]
 
