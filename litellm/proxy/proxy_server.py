@@ -231,6 +231,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
+    router as mcp_byok_oauth_router,
+)
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     router as mcp_discoverable_endpoints_router,
 )
@@ -12975,6 +12978,7 @@ app.include_router(vector_store_files_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
+app.include_router(mcp_byok_oauth_router)
 app.include_router(anthropic_router)
 app.include_router(anthropic_skills_router)
 app.include_router(evals_router)

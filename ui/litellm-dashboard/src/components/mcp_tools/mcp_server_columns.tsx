@@ -4,6 +4,7 @@ import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
+import { CheckOutlined } from "@ant-design/icons";
 
 export const mcpServerColumns = (
   userRole: string,
@@ -11,6 +12,7 @@ export const mcpServerColumns = (
   onEdit: (serverId: string) => void,
   onDelete: (serverId: string) => void,
   isLoadingHealth?: boolean,
+  onByokConnect?: (server: MCPServer) => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -190,6 +192,41 @@ export const mcpServerColumns = (
       return (
         <span className="text-xs">{server.updated_at ? new Date(server.updated_at).toLocaleDateString() : "-"}</span>
       );
+    },
+  },
+  {
+    id: "byok_credential",
+    header: "Credential",
+    cell: ({ row }) => {
+      const server = row.original;
+      if (!server.is_byok) {
+        return <span className="text-gray-300 text-xs">—</span>;
+      }
+      if (server.has_user_credential) {
+        return (
+          <div className="flex items-center gap-2">
+            <span className="text-green-600 text-xs font-medium flex items-center gap-1">
+              <CheckOutlined /> Connected
+            </span>
+            {onByokConnect && (
+              <button
+                className="text-xs text-gray-400 hover:text-blue-500 underline"
+                onClick={() => onByokConnect(server)}
+              >
+                Reconnect
+              </button>
+            )}
+          </div>
+        );
+      }
+      return onByokConnect ? (
+        <button
+          className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg font-medium"
+          onClick={() => onByokConnect(server)}
+        >
+          Connect
+        </button>
+      ) : null;
     },
   },
   {
