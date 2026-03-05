@@ -2150,7 +2150,7 @@ if MCP_AVAILABLE:
     async def extract_mcp_auth_context(scope, path):
         """
         Extracts mcp_servers from the path and processes the MCP request for auth context.
-        Returns: (user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers)
+        Returns: (user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers, oauth2_headers, raw_headers)
         """
         mcp_servers_from_path = _get_mcp_servers_in_path(path)
         if mcp_servers_from_path is None:

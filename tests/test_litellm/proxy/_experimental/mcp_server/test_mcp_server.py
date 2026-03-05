@@ -905,6 +905,9 @@ def test_get_mcp_servers_in_path_supports_server_scoped_mount_form():
     assert _get_mcp_servers_in_path("/mcp") is None
     assert _get_mcp_servers_in_path("/github_onprem/not_mcp") is None
 
+    # Deep paths: /a/mcp/mcp should treat 'a/mcp' as 2-segment server name
+    assert _get_mcp_servers_in_path("/a/mcp/mcp") == ["a/mcp"]
+
 
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
