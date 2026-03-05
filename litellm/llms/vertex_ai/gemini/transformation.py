@@ -595,6 +595,8 @@ def _transform_request_body(
         safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
             "safety_settings", None
         )  # type: ignore
+        # Drop output_config as it's not supported by Vertex AI
+        optional_params.pop("output_config", None)
         config_fields = GenerationConfig.__annotations__.keys()
 
         # If the LiteLLM client sends Gemini-supported parameter "labels", add it
