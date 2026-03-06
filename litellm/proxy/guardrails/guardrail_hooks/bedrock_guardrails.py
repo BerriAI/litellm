@@ -676,8 +676,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 api_key = request_data["api_key"]
 
         verbose_proxy_logger.debug(
-            "Bedrock AI request body: %s",
+            "Bedrock AI request: body=%s, guardrail=%s/%s, region=%s",
             bedrock_request_data,
+            self.guardrailIdentifier,
+            self.guardrailVersion,
+            aws_region_name,
         )
 
         event_type = (
