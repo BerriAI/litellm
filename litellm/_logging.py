@@ -360,7 +360,14 @@ def _create_stream_handler():
 
 
 def _ensure_stream_handler():
-    """Add a StreamHandler to the litellm parent logger if one is not already present."""
+    """
+    Add a StreamHandler to the litellm parent logger if one is not already present.
+
+    Note: If _turn_on_json() was called first, this function returns early because
+    a JSON-formatted StreamHandler is already present. This means that calling
+    _turn_on_debug() after _turn_on_json() will keep the JSON formatting. This is
+    by design — the handlers remain in the state set by _turn_on_json().
+    """
     for h in verbose_logger.handlers:
         if isinstance(h, logging.StreamHandler):
             return

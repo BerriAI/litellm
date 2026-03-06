@@ -186,14 +186,20 @@ class TestChildLoggerPropagation:
     """Child loggers (proxy, router) should propagate to the parent by default."""
 
     def test_proxy_logger_propagates(self):
-        from litellm._logging import verbose_proxy_logger
-
-        assert verbose_proxy_logger.propagate is True
+        """Test in subprocess to isolate from JSON_LOGS environment."""
+        out = _run_in_subprocess("""
+            from litellm._logging import verbose_proxy_logger
+            print(verbose_proxy_logger.propagate)
+        """)
+        assert out == "True"
 
     def test_router_logger_propagates(self):
-        from litellm._logging import verbose_router_logger
-
-        assert verbose_router_logger.propagate is True
+        """Test in subprocess to isolate from JSON_LOGS environment."""
+        out = _run_in_subprocess("""
+            from litellm._logging import verbose_router_logger
+            print(verbose_router_logger.propagate)
+        """)
+        assert out == "True"
 
 
 class TestLegacyLoggerBackwardCompat:
@@ -207,6 +213,7 @@ class TestLegacyLoggerBackwardCompat:
 
         old = logging.getLogger("LiteLLM")
         captured = []
+        original_verbose_logger_level = verbose_logger.level
 
         class _Capture(logging.Handler):
             def emit(self, record):
@@ -222,6 +229,7 @@ class TestLegacyLoggerBackwardCompat:
             )
         finally:
             old.removeHandler(handler)
+            verbose_logger.setLevel(original_verbose_logger_level)
 
     def test_old_and_canonical_share_handlers(self):
         """Old and canonical loggers must share the same handlers list object."""
