@@ -845,16 +845,15 @@ async def get_generic_sso_response(
             # Pass the full response so custom response_convertor implementations
             # can access all fields (including id_token for claim extraction).
             result = response_convertor(combined_response, generic_sso)
-            # Strip bearer credentials from received_response after conversion.
-            # received_response may appear in restricted-group error messages —
-            # do not expose tokens to callers.
-            # Note: response_convertor always sets received_response via nonlocal, so it is
-            # non-None here at runtime.  The guard satisfies Pyright's type narrowing since
-            # it cannot track nonlocal mutations inside closures.
-            if received_response is not None:
-                received_response = {
-                    k: v for k, v in received_response.items() if k not in _OAUTH_TOKEN_FIELDS
-                }
+            # Strip bearer credentials from combined_response before storing in
+            # received_response. received_response may appear in restricted-group
+            # error messages — bearer tokens (access_token, id_token, refresh_token)
+            # must not be exposed to callers.
+            # Assign directly rather than relying on nonlocal mutation so that Pyright
+            # can track that received_response is non-None from this point on.
+            received_response = {
+                k: v for k, v in combined_response.items() if k not in _OAUTH_TOKEN_FIELDS
+            }
             # In the PKCE path verify_and_process is skipped, so generic_sso.access_token
             # is never set. Read the token directly from the exchange response instead so
             # process_sso_jwt_access_token can extract JWT-embedded roles/teams.

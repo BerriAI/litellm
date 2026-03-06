@@ -3663,7 +3663,7 @@ class TestPKCEFunctionality:
                 )
 
         assert "verifier not found" in exc_info.value.message.lower() or "cache" in exc_info.value.message.lower()
-        assert exc_info.value.code == 401
+        assert str(exc_info.value.code) == "401"
 
 
     @pytest.mark.asyncio
@@ -3882,6 +3882,103 @@ class TestPKCEFunctionality:
         # No raise in non-strict mode; verifier simply absent from params
         assert "code_verifier" not in result
         assert "_pkce_cache_key" not in result
+
+    @pytest.mark.asyncio
+    async def test_pkce_legacy_string_cache_format_backward_compat(self):
+        """Legacy plain-string cache entries (stored before dict format was introduced)
+        are handled transparently via the backward-compat branch."""
+        import os
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from starlette.requests import Request
+
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        legacy_verifier = "legacy_plain_string_verifier_abc123"
+        mock_cache = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=legacy_verifier)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {"state": "legacy_state_xyz"}
+
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+        ), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}, clear=False):
+            result = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=mock_request, generic_include_client_id=False
+            )
+
+        assert result["code_verifier"] == legacy_verifier
+        assert result["_pkce_cache_key"] == "pkce_verifier:legacy_state_xyz"
+
+    @pytest.mark.asyncio
+    async def test_pkce_token_exchange_null_json_body_raises_proxy_exception(self):
+        """HTTP 200 with JSON body `null` raises a clean ProxyException instead of
+        AttributeError when .get() is called on the None return value."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = None  # JSON null response body
+            mock_resp.text = "null"
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(ProxyException) as exc_info:
+                await SSOAuthenticationHandler._pkce_token_exchange(
+                    authorization_code="some_code",
+                    code_verifier="verifier",
+                    client_id="cid",
+                    client_secret="csecret",
+                    token_endpoint="https://example.com/token",
+                    userinfo_endpoint=None,
+                    include_client_id=False,
+                    redirect_url=None,
+                    additional_headers={},
+                )
+
+        assert "unexpected response format" in exc_info.value.message.lower()
+        assert str(exc_info.value.code) == "401"
+
+    @pytest.mark.asyncio
+    async def test_pkce_token_exchange_http200_no_error_field_no_access_token(self):
+        """HTTP 200 with no error field and no access_token raises ProxyException
+        with a descriptive message showing the actual response keys."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        body_without_token = {"token_type": "Bearer", "scope": "openid"}
+
+        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = body_without_token
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(ProxyException) as exc_info:
+                await SSOAuthenticationHandler._pkce_token_exchange(
+                    authorization_code="some_code",
+                    code_verifier="verifier",
+                    client_id="cid",
+                    client_secret="csecret",
+                    token_endpoint="https://example.com/token",
+                    userinfo_endpoint=None,
+                    include_client_id=False,
+                    redirect_url=None,
+                    additional_headers={},
+                )
+
+        assert "no access_token" in exc_info.value.message or "access_token" in exc_info.value.message
+        assert str(exc_info.value.code) == "401"
 
 
 # Tests for SSO user team assignment bug (Issue: SSO Users Not Added to Entra-Synced Teams on First Login)
