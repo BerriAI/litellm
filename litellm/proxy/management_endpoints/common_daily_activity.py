@@ -474,16 +474,21 @@ def _build_aggregated_sql_query(
     start_date: str,
     end_date: str,
     model: Optional[str],
-    api_key: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
     exclude_entity_ids: Optional[List[str]] = None,
     timezone_offset_minutes: Optional[int] = None,
+    include_entity_id: bool = False,
 ) -> Tuple[str, List[Any]]:
     """Build a parameterized SQL GROUP BY query for aggregated daily activity.
 
     Groups by (date, api_key, model, model_group, custom_llm_provider,
     mcp_namespaced_tool_name, endpoint) with SUMs on all metric columns.
-    The entity_id column is intentionally omitted from GROUP BY to collapse
-    rows across entities — this is where the biggest row reduction comes from.
+
+    When include_entity_id is False (default), the entity_id column is omitted
+    from GROUP BY to collapse rows across entities.
+
+    When include_entity_id is True, the entity_id column is included in both
+    SELECT and GROUP BY, preserving per-entity breakdown in the results.
 
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
@@ -538,14 +543,24 @@ def _build_aggregated_sql_query(
 
     # Optional api_key filter
     if api_key:
-        sql_conditions.append(f"api_key = ${p}")
-        sql_params.append(api_key)
-        p += 1
+        if isinstance(api_key, list):
+            placeholders = ", ".join(f"${p + i}" for i in range(len(api_key)))
+            sql_conditions.append(f"api_key IN ({placeholders})")
+            sql_params.extend(api_key)
+            p += len(api_key)
+        else:
+            sql_conditions.append(f"api_key = ${p}")
+            sql_params.append(api_key)
+            p += 1
 
     where_clause = " AND ".join(sql_conditions)
 
+    entity_select = f'"{entity_id_field}",' if include_entity_id else ""
+    entity_group_by = f'"{entity_id_field}",' if include_entity_id else ""
+
     sql_query = f"""
         SELECT
+            {entity_select}
             date,
             api_key,
             model,
@@ -563,7 +578,7 @@ def _build_aggregated_sql_query(
             SUM(failed_requests)::bigint AS failed_requests
         FROM "{pg_table}"
         WHERE {where_clause}
-        GROUP BY date, api_key, model, model_group, custom_llm_provider,
+        GROUP BY {entity_group_by} date, api_key, model, model_group, custom_llm_provider,
                  mcp_namespaced_tool_name, endpoint
         ORDER BY date DESC
     """
@@ -735,15 +750,21 @@ async def get_daily_activity_aggregated(
     start_date: Optional[str],
     end_date: Optional[str],
     model: Optional[str],
-    api_key: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
     exclude_entity_ids: Optional[List[str]] = None,
     timezone_offset_minutes: Optional[int] = None,
+    include_entity_breakdown: bool = False,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
     Uses SQL GROUP BY to aggregate rows in the database rather than fetching
     all individual rows into Python. This collapses rows across entities
     (users/teams/orgs), reducing ~150k rows to ~2-3k grouped rows.
+
+    When include_entity_breakdown is True, the entity_id column is included
+    in the GROUP BY so that per-entity breakdown data is preserved in the
+    response (e.g. per-team spend). This is needed for entity-specific views
+    like the team usage dashboard.
 
     Matches the response model of the paginated endpoint so the UI does not need to transform.
     """
@@ -770,6 +791,7 @@ async def get_daily_activity_aggregated(
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
             timezone_offset_minutes=timezone_offset_minutes,
+            include_entity_id=include_entity_breakdown,
         )
 
         # Execute GROUP BY query — returns pre-aggregated dicts
@@ -780,13 +802,11 @@ async def get_daily_activity_aggregated(
         # Convert dicts to objects for compatibility with _aggregate_spend_records
         records = [SimpleNamespace(**row) for row in rows]
 
-        # entity_id_field=None skips entity breakdown (entity dimension was
-        # collapsed by the GROUP BY, so per-entity data is not available)
         aggregated = await _aggregate_spend_records(
             prisma_client=prisma_client,
             records=records,
-            entity_id_field=None,
-            entity_metadata_field=None,
+            entity_id_field=entity_id_field if include_entity_breakdown else None,
+            entity_metadata_field=entity_metadata_field if include_entity_breakdown else None,
         )
 
         return SpendAnalyticsPaginatedResponse(

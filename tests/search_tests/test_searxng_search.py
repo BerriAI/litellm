@@ -83,6 +83,7 @@ class TestSearXNGSearch(BaseSearchTest):
         except Exception as e:
             pytest.fail(f"Search call failed: {str(e)}")
     
+    @pytest.mark.flaky(retries=3, delay=5)
     def test_search_with_optional_params(self):
         """
         Test search with optional parameters.

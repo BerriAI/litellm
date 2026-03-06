@@ -5,8 +5,21 @@ FROM ghcr.io/berriai/litellm:litellm_fwd_server_root_path-dev
 WORKDIR /app
 
 # Install Node.js and npm (adjust version as needed)
-RUN apt-get update && apt-get install -y nodejs npm && \
-    npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
+RUN apt-get update && apt-get upgrade -y \
+        libxml2 \
+        libexpat1 \
+        openssl \
+        libssl3 \
+        git \
+        libkrb5-3 \
+        libglib2.0-0 \
+        wget \
+        libaom3 \
+        libxslt1.1 \
+        libgnutls30 \
+        libc6 && \
+    apt-get install -y nodejs npm && \
+    npm install -g npm@latest tar@7.5.8 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.1 diff@8.0.3 && \
     GLOBAL="$(npm root -g)" && \
     find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
@@ -16,6 +29,12 @@ RUN apt-get update && apt-get install -y nodejs npm && \
     done && \
     find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
     done && \
     npm cache clean --force
 

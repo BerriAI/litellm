@@ -30,6 +30,8 @@ class BedrockTokenCounter(BaseTokenCounter):
         contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system: Optional[Any] = None,
     ) -> Optional[TokenCountResponse]:
         """
         Count tokens using AWS Bedrock's CountTokens API.
@@ -54,10 +56,16 @@ class BedrockTokenCounter(BaseTokenCounter):
         litellm_params = deployment.get("litellm_params", {})
 
         # Build request data in the format expected by BedrockCountTokensHandler
-        request_data = {
+        request_data: Dict[str, Any] = {
             "model": model_to_use,
             "messages": messages,
         }
+
+        if tools:
+            request_data["tools"] = tools
+
+        if system:
+            request_data["system"] = system
 
         # Get the resolved model (strip prefixes like bedrock/, converse/, etc.)
         resolved_model = get_bedrock_base_model(model_to_use)

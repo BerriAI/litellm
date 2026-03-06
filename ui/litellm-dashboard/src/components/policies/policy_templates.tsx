@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Card, Button, Spin, message, Checkbox, Badge } from "antd";
+import { Card, Button, Spin, message, Checkbox } from "antd";
 import {
   ShieldCheckIcon,
   ShieldExclamationIcon,

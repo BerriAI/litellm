@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
-import { ToolOutlined, CheckCircleOutlined, SearchOutlined } from "@ant-design/icons";
+import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from "@ant-design/icons";
 import { Badge, Spin, Checkbox, Input } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 
@@ -11,6 +11,10 @@ interface MCPToolConfigurationProps {
   allowedTools: string[];
   existingAllowedTools: string[] | null;
   onAllowedToolsChange: (tools: string[]) => void;
+  toolNameToDisplayName: Record<string, string>;
+  toolNameToDescription: Record<string, string>;
+  onToolNameToDisplayNameChange: (map: Record<string, string>) => void;
+  onToolNameToDescriptionChange: (map: Record<string, string>) => void;
 }
 
 const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
@@ -20,9 +24,15 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   allowedTools,
   existingAllowedTools,
   onAllowedToolsChange,
+  toolNameToDisplayName,
+  toolNameToDescription,
+  onToolNameToDisplayNameChange,
+  onToolNameToDescriptionChange,
 }) => {
-  const previousToolsLengthRef = useRef(0);
+  const previousToolsRef = useRef<any[]>([]);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
+  const hasInitializedRef = useRef(false);
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   const { tools, isLoadingTools, toolsError, canFetchTools } = useTestMCPConnection({
     accessToken,
@@ -40,28 +50,43 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     );
   });
 
-  // Auto-select tools when tools are first loaded
+  // Auto-select tools when tools are first loaded or when tools list changes
   useEffect(() => {
-    // Only auto-select if:
-    // 1. We have tools
-    // 2. Tools length changed (new tools loaded)
-    // 3. No tools are currently selected (initial state)
-    if (tools.length > 0 && tools.length !== previousToolsLengthRef.current && allowedTools.length === 0) {
-      if (existingAllowedTools && existingAllowedTools.length > 0) {
-        // If we have existing allowed tools, use those as the initial selection
-        // Filter to only include tools that are actually available from the server
-        const availableToolNames = tools.map((tool) => tool.name);
-        const validExistingTools = existingAllowedTools.filter((toolName) => availableToolNames.includes(toolName));
-        onAllowedToolsChange(validExistingTools);
+    // Check if the tools list has actually changed by comparing tool names
+    const currentToolNames = tools.map((tool) => tool.name).sort().join(",");
+    const previousToolNames = previousToolsRef.current.map((tool) => tool.name).sort().join(",");
+    const toolsListChanged = currentToolNames !== previousToolNames;
+
+    if (tools.length > 0 && toolsListChanged) {
+      const availableToolNames = tools.map((tool) => tool.name);
+      
+      // On initial load (first time tools are fetched)
+      if (!hasInitializedRef.current) {
+        hasInitializedRef.current = true;
+        
+        if (existingAllowedTools && existingAllowedTools.length > 0) {
+          // Edit mode: pre-select tools that match existing allowed tools
+          const validExistingTools = existingAllowedTools.filter((toolName) => availableToolNames.includes(toolName));
+          onAllowedToolsChange(validExistingTools);
+        } else {
+          // Create mode: auto-select all tools
+          onAllowedToolsChange(availableToolNames);
+        }
       } else {
-        // If no existing allowed tools, auto-select all tools (create mode)
-        const allToolNames = tools.map((tool) => tool.name);
-        onAllowedToolsChange(allToolNames);
+        // Tools list changed after initial load (e.g., URL was edited)
+        // Keep any tools from the current selection that exist in the new tools list
+        const matchingTools = allowedTools.filter((toolName) => availableToolNames.includes(toolName));
+        onAllowedToolsChange(matchingTools);
       }
+    } else if (tools.length === 0 && previousToolsRef.current.length > 0) {
+      // Tools were cleared (e.g., URL became invalid or is being edited)
+      // Don't clear allowedTools here - let the user keep their selection
+      // until new tools are loaded
     }
-    // Update ref to track tools length (will be 0 when tools clear)
-    previousToolsLengthRef.current = tools.length;
-  }, [tools, allowedTools.length, existingAllowedTools, onAllowedToolsChange]);
+    
+    // Update ref to track current tools
+    previousToolsRef.current = tools;
+  }, [tools, allowedTools, existingAllowedTools, onAllowedToolsChange]);
 
   const handleToolToggle = (toolName: string) => {
     if (allowedTools.includes(toolName)) {
@@ -78,6 +103,39 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
 
   const handleDeselectAll = () => {
     onAllowedToolsChange([]);
+  };
+
+  const handleToggleEditExpanded = (toolName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(toolName)) {
+        next.delete(toolName);
+      } else {
+        next.add(toolName);
+      }
+      return next;
+    });
+  };
+
+  const handleDisplayNameChange = (toolName: string, value: string) => {
+    const next = { ...toolNameToDisplayName };
+    if (value) {
+      next[toolName] = value;
+    } else {
+      delete next[toolName];
+    }
+    onToolNameToDisplayNameChange(next);
+  };
+
+  const handleDescriptionChange = (toolName: string, value: string) => {
+    const next = { ...toolNameToDescription };
+    if (value) {
+      next[toolName] = value;
+    } else {
+      delete next[toolName];
+    }
+    onToolNameToDescriptionChange(next);
   };
 
   // Don't show anything if required fields aren't filled
@@ -194,42 +252,109 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               {filteredTools.length === 0 ? (
                 <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
                   <SearchOutlined className="text-2xl mb-2" />
-                  <Text>No tools found matching "{toolSearchTerm}"</Text>
+                  <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
                 </div>
               ) : (
-                filteredTools.map((tool, index) => (
-                <div
-                  key={index}
-                  className={`p-4 rounded-lg border transition-colors cursor-pointer ${
-                    allowedTools.includes(tool.name)
-                      ? "bg-blue-50 border-blue-300 hover:border-blue-400"
-                      : "bg-gray-50 border-gray-200 hover:border-gray-300"
-                  }`}
-                  onClick={() => handleToolToggle(tool.name)}
-                >
-                  <div className="flex items-start gap-3">
-                    <Checkbox checked={allowedTools.includes(tool.name)} onChange={() => handleToolToggle(tool.name)} />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <Text className="font-medium text-gray-900">{tool.name}</Text>
-                        <span
-                          className={`px-2 py-0.5 text-xs rounded-full font-medium ${
-                            allowedTools.includes(tool.name) ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                filteredTools.map((tool, index) => {
+                  const isEnabled = allowedTools.includes(tool.name);
+                  const isEditExpanded = expandedTools.has(tool.name);
+                  return (
+                  <div
+                    key={index}
+                    className={`rounded-lg border transition-colors ${
+                      isEnabled
+                        ? "bg-blue-50 border-blue-300 hover:border-blue-400"
+                        : "bg-gray-50 border-gray-200 hover:border-gray-300"
+                    }`}
+                  >
+                    {/* Main tool row */}
+                    <div
+                      className="p-4 cursor-pointer"
+                      onClick={() => handleToolToggle(tool.name)}
+                    >
+                      <div className="flex items-start gap-3">
+                        <Checkbox checked={isEnabled} onChange={() => handleToolToggle(tool.name)} />
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <Text className="font-medium text-gray-900">
+                              {toolNameToDisplayName[tool.name] || tool.name}
+                            </Text>
+                            <span
+                              className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                                isEnabled ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                              }`}
+                            >
+                              {isEnabled ? "Enabled" : "Disabled"}
+                            </span>
+                            {toolNameToDisplayName[tool.name] && (
+                              <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-purple-100 text-purple-800">
+                                Custom name
+                              </span>
+                            )}
+                          </div>
+                          {(toolNameToDescription[tool.name] || tool.description) && (
+                            <Text className="text-gray-500 text-sm block mt-1">
+                              {toolNameToDescription[tool.name] || tool.description}
+                            </Text>
+                          )}
+                          <Text className="text-gray-400 text-xs block mt-1">
+                            {isEnabled ? "✓ Users can call this tool" : "✗ Users cannot call this tool"}
+                          </Text>
+                        </div>
+                        {/* Edit toggle button */}
+                        <button
+                          type="button"
+                          onClick={(e) => handleToggleEditExpanded(tool.name, e)}
+                          className={`p-1.5 rounded-md transition-colors ${
+                            isEditExpanded
+                              ? "bg-blue-100 text-blue-600"
+                              : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
                           }`}
+                          title="Edit display name and description"
                         >
-                          {allowedTools.includes(tool.name) ? "Enabled" : "Disabled"}
-                        </span>
+                          <EditOutlined />
+                        </button>
                       </div>
-                      {tool.description && <Text className="text-gray-500 text-sm block mt-1">{tool.description}</Text>}
-                      <Text className="text-gray-400 text-xs block mt-1">
-                        {allowedTools.includes(tool.name)
-                          ? "✓ Users can call this tool"
-                          : "✗ Users cannot call this tool"}
-                      </Text>
                     </div>
+
+                    {/* Inline edit section */}
+                    {isEditExpanded && (
+                      <div
+                        className="px-4 pb-4 pt-3 border-t border-gray-200 space-y-3 bg-gray-50 rounded-b-lg"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div>
+                          <Text className="text-xs font-medium text-gray-600 mb-1 block">
+                            Display Name
+                          </Text>
+                          <Input
+                            placeholder={tool.name}
+                            value={toolNameToDisplayName[tool.name] || ""}
+                            onChange={(e) => handleDisplayNameChange(tool.name, e.target.value)}
+                          />
+                          <Text className="text-xs text-gray-400 mt-1 block">
+                            Override how this tool&apos;s name appears to users. Leave blank to use original.
+                          </Text>
+                        </div>
+                        <div>
+                          <Text className="text-xs font-medium text-gray-600 mb-1 block">
+                            Description
+                          </Text>
+                          <Input.TextArea
+                            placeholder={tool.description || "No description"}
+                            value={toolNameToDescription[tool.name] || ""}
+                            onChange={(e) => handleDescriptionChange(tool.name, e.target.value)}
+                            rows={2}
+                          />
+                          <Text className="text-xs text-gray-400 mt-1 block">
+                            Override the tool description shown to users. Leave blank to use original.
+                          </Text>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

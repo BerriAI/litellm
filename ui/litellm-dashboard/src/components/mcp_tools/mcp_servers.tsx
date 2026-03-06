@@ -16,6 +16,7 @@ import { DiscoverableMCPServer, MCPServer, MCPServerProps, Team } from "./types"
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
+import { ByokCredentialModal } from "./ByokCredentialModal";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -70,6 +71,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
+  const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
 
   useEffect(() => {
@@ -170,6 +172,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         },
         handleDelete,
         isLoadingHealth,
+        (server: MCPServer) => setByokModalServer(server),
       ),
     [userRole, isLoadingHealth],
   );
@@ -348,7 +351,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               />
             ) : (
               <div className="w-full h-full">
-                <div className="w-full px-6">
+                <div className="w-full">
                   <div className="flex flex-col space-y-4">
                     <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
                       <div className="flex items-center gap-4">
@@ -401,7 +404,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     </div>
                   </div>
                 </div>
-                <div className="w-full px-6 mt-6">
+                <div className="w-full mt-6">
                   <DataTable
                     data={filteredServers}
                     columns={columns}
@@ -410,6 +413,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     isLoading={isLoadingServers}
                     noDataMessage="No MCP servers configured"
                     loadingMessage="🚅 Loading MCP servers..."
+                    enableSorting={true}
                   />
                 </div>
               </div>
@@ -426,6 +430,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      {byokModalServer && (
+        <ByokCredentialModal
+          server={byokModalServer}
+          open={!!byokModalServer}
+          onClose={() => setByokModalServer(null)}
+          onSuccess={(_serverId) => {
+            refetch();
+            setByokModalServer(null);
+          }}
+          accessToken={accessToken || ""}
+        />
+      )}
     </div>
   );
 };
