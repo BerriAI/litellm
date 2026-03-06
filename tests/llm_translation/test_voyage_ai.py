@@ -459,16 +459,18 @@ class TestVoyage4LargeTextEmbedding:
         assert url == "https://api.voyageai.com/v1/embeddings"
 
     def test_voyage_4_large_request_transformation(self):
-        """voyage-4-large request body must use 'input' (singular) and pass model through."""
+        """voyage-4-large request body must use 'input' (singular) and pass model through.
+        In production, get_llm_provider strips the provider prefix, so transform_embedding_request
+        receives "voyage-4-large", not "voyage/voyage-4-large"."""
         from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 
         config = VoyageEmbeddingConfig()
         transformed = config.transform_embedding_request(
-            "voyage/voyage-4-large", ["Hello world"], {}, {}
+            "voyage-4-large", ["Hello world"], {}, {}
         )
         assert "input" in transformed
         assert transformed["input"] == ["Hello world"]
-        assert transformed["model"] == "voyage/voyage-4-large"
+        assert transformed["model"] == "voyage-4-large"
 
     def test_voyage_4_large_supported_params(self):
         """voyage-4-large must support encoding_format and dimensions."""
