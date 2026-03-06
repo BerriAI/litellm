@@ -828,6 +828,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 # Emit any pending tool events before reading a new chunk
                 if self._pending_tool_events:
                     return self._pending_tool_events.popleft()
+                # Emit any pending annotation events before reading a new chunk
+                if self._pending_annotation_events:
+                    return self._pending_annotation_events.popleft()
 
                 try:
                     chunk = await self.litellm_custom_stream_wrapper.__anext__()
@@ -922,6 +925,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 # Emit any pending tool events before reading a new chunk
                 if self._pending_tool_events:
                     return self._pending_tool_events.popleft()
+                # Emit any pending annotation events before reading a new chunk
+                if self._pending_annotation_events:
+                    return self._pending_annotation_events.popleft()
                 try:
                     chunk = self.litellm_custom_stream_wrapper.__next__()
                     self._ensure_output_item_for_chunk(chunk)
