@@ -67,7 +67,7 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                         f"Resolved model '{model}' to base_model '{base_model}' from router"
                     )
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
-                    return base_model, custom_llm_provider
+                    return str(base_model), custom_llm_provider
 
                 resolved_model = litellm_params.get("model")
 

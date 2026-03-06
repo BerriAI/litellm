@@ -131,7 +131,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 "text:analyze", cast(dict, request_body)
             )
 
-            chunk_response = AzureTextModerationGuardrailResponse(**response_json)
+            chunk_response = AzureTextModerationGuardrailResponse(**response_json)  # type: ignore[misc]
 
             # For multi-chunk texts the callers only see the final response,
             # so we must check every intermediate chunk here to avoid silently
