@@ -9,6 +9,7 @@ vi.mock("../utils/roles", () => {
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
     isAdminRole: (role: string) => role === "admin",
+    isUserTeamAdminForAnyTeam: () => false,
   };
 });
 
