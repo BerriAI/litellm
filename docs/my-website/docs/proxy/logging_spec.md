@@ -108,16 +108,18 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 
 ## StandardLoggingAdditionalHeaders
 
+All fields are optional — only fields present in the provider's response headers are included.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `x_ratelimit_limit_requests` | `int` | Rate limit for requests |
 | `x_ratelimit_limit_tokens` | `int` | Rate limit for tokens |
 | `x_ratelimit_remaining_requests` | `int` | Remaining requests in rate limit |
 | `x_ratelimit_remaining_tokens` | `int` | Remaining tokens in rate limit |
-| `llm_provider_x_request_id` | `str` | LLM provider's `x-request-id` response header |
-| `llm_provider_request_id` | `str` | LLM provider's `request-id` response header |
-| `llm_provider_openai_organization` | `str` | OpenAI organization from response headers |
-| `llm_provider_openai_processing_ms` | `int` | OpenAI processing time in milliseconds from response headers |
+| `llm_provider_x_request_id` | `str` | LLM provider's `x-request-id` response header (e.g., OpenAI, Anthropic) |
+| `llm_provider_request_id` | `str` | LLM provider's `request-id` response header (e.g., Anthropic) |
+| `llm_provider_openai_organization` | `str` | OpenAI `openai-organization` response header |
+| `llm_provider_openai_processing_ms` | `int` | OpenAI `openai-processing-ms` response header (milliseconds) |
 
 ## StandardLoggingHiddenParams
 
