@@ -16,7 +16,6 @@ import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
@@ -220,7 +219,13 @@ class ModelsLabVideoConfig(BaseVideoConfig):
     ) -> VideoObject:
         response_data = raw_response.json()
         status = response_data.get("status", "")
-        request_id = str(response_data.get("request_id", response_data.get("id", "")))
+        # ModelsLab may return request_id, id, or neither on immediate success.
+        # Fall back to a timestamp-based placeholder so VideoObject.id is never empty.
+        request_id = str(
+            response_data.get("request_id")
+            or response_data.get("id")
+            or f"modelslab-{int(time.time())}"
+        )
 
         if status == "error":
             raise BaseLLMException(
@@ -255,7 +260,6 @@ class ModelsLabVideoConfig(BaseVideoConfig):
         deadline = time.time() + timeout
 
         while time.time() < deadline:
-            time.sleep(interval)
             try:
                 resp = client.post(fetch_url, json=body)
                 resp.raise_for_status()
@@ -269,7 +273,8 @@ class ModelsLabVideoConfig(BaseVideoConfig):
             status = data.get("status", "")
             if status in ("success", "error"):
                 return data
-            # still processing — keep polling
+            # Still processing — sleep before next poll (not before the first attempt)
+            time.sleep(interval)
 
         raise BaseLLMException(
             status_code=408,
@@ -292,7 +297,6 @@ class ModelsLabVideoConfig(BaseVideoConfig):
         deadline = time.time() + timeout
 
         while time.time() < deadline:
-            await asyncio.sleep(interval)
             try:
                 resp = await async_client.post(fetch_url, json=body)
                 resp.raise_for_status()
@@ -306,7 +310,8 @@ class ModelsLabVideoConfig(BaseVideoConfig):
             status = data.get("status", "")
             if status in ("success", "error"):
                 return data
-            # still processing — keep polling
+            # Still processing — sleep before next poll (not before the first attempt)
+            await asyncio.sleep(interval)
 
         raise BaseLLMException(
             status_code=408,
@@ -330,7 +335,11 @@ class ModelsLabVideoConfig(BaseVideoConfig):
         """
         response_data = raw_response.json()
         status = response_data.get("status", "")
-        request_id = str(response_data.get("request_id", response_data.get("id", "")))
+        request_id = str(
+            response_data.get("request_id")
+            or response_data.get("id")
+            or f"modelslab-{int(time.time())}"
+        )
 
         if status == "error":
             raise BaseLLMException(
