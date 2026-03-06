@@ -4,6 +4,8 @@ import threading
 import pytest
 from unittest.mock import patch
 
+from litellm.litellm_core_utils.get_model_cost_map import _FetchResult
+
 
 @pytest.fixture
 def isolate_model_cost_state():
@@ -63,16 +65,16 @@ class TestLazyModelCostMap:
     def test_ensure_remote_idempotent(self, isolate_model_cost_state):
         """Calling _ensure_remote_model_cost multiple times only fetches once."""
         import litellm
-        from litellm.litellm_core_utils.get_model_cost_map import _cost_map_source_info
 
         litellm._model_cost_remote_loaded = False
 
         def fake_remote_get(url):
-            _cost_map_source_info.source = "remote"
-            _cost_map_source_info.fallback_reason = None
-            return {"test_idempotent": {"litellm_provider": "openai"}}
+            return _FetchResult(
+                data={"test_idempotent": {"litellm_provider": "openai"}},
+                source="remote",
+            )
 
-        with patch("litellm.get_model_cost_map", side_effect=fake_remote_get) as mock_get:
+        with patch("litellm._get_model_cost_map_with_source", side_effect=fake_remote_get) as mock_get:
             litellm._ensure_remote_model_cost()
             litellm._ensure_remote_model_cost()
             litellm._ensure_remote_model_cost()
@@ -99,21 +101,21 @@ class TestLazyModelCostMap:
             assert litellm._model_cost_remote_loaded is False
 
     def test_silent_local_fallback_does_not_set_flag(self, isolate_model_cost_state):
-        """If get_model_cost_map returns local backup (source != 'remote'),
+        """If _get_model_cost_map_with_source returns local source,
         _model_cost_remote_loaded must stay False so retries remain active."""
         import litellm
-        from litellm.litellm_core_utils.get_model_cost_map import _cost_map_source_info
 
         litellm._model_cost_remote_loaded = False
         original_keys = set(litellm.model_cost.keys())
 
-        # Simulate get_model_cost_map silently falling back to local backup
         def fake_get(url):
-            _cost_map_source_info.source = "local"
-            _cost_map_source_info.fallback_reason = "Remote fetch failed: timeout"
-            return dict(litellm.model_cost)
+            return _FetchResult(
+                data=dict(litellm.model_cost),
+                source="local",
+                fallback_reason="Remote fetch failed: timeout",
+            )
 
-        with patch("litellm.get_model_cost_map", side_effect=fake_get) as mock_get:
+        with patch("litellm._get_model_cost_map_with_source", side_effect=fake_get) as mock_get:
             litellm._ensure_remote_model_cost()
             mock_get.assert_called_once()
             # Flag must NOT be set — only local data was loaded
@@ -135,7 +137,7 @@ class TestLazyModelCostMap:
 
         litellm._model_cost_remote_loaded = False
         original_keys = set(litellm.model_cost.keys())
-        with patch("litellm.get_model_cost_map", side_effect=Exception("network")) as mock_get:
+        with patch("litellm._get_model_cost_map_with_source", side_effect=Exception("network")) as mock_get:
             litellm._ensure_remote_model_cost()
             assert set(litellm.model_cost.keys()) == original_keys
             assert litellm._model_cost_remote_loaded is False  # flag NOT set on failure
@@ -175,17 +177,17 @@ class TestLazyModelCostMap:
     def test_concurrent_ensure_fetches_only_once(self, isolate_model_cost_state):
         """Only one thread should perform the remote fetch even under contention."""
         import litellm
-        from litellm.litellm_core_utils.get_model_cost_map import _cost_map_source_info
 
         litellm._model_cost_remote_loaded = False
         barrier = threading.Barrier(4)
 
         def fake_remote_get(url):
-            _cost_map_source_info.source = "remote"
-            _cost_map_source_info.fallback_reason = None
-            return {"concurrent_test": {"litellm_provider": "openai"}}
+            return _FetchResult(
+                data={"concurrent_test": {"litellm_provider": "openai"}},
+                source="remote",
+            )
 
-        with patch("litellm.get_model_cost_map", side_effect=fake_remote_get) as mock_get:
+        with patch("litellm._get_model_cost_map_with_source", side_effect=fake_remote_get) as mock_get:
 
             def worker():
                 barrier.wait()

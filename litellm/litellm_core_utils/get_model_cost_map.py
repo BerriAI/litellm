@@ -183,6 +183,66 @@ def get_model_cost_map_source_info() -> dict:
     }
 
 
+class _FetchResult:
+    """Return value of ``_get_model_cost_map_with_source`` carrying both the
+    cost map and an *isolated* snapshot of source metadata so the caller never
+    needs to read the mutable ``_cost_map_source_info`` singleton."""
+
+    __slots__ = ("data", "source", "fallback_reason")
+
+    def __init__(self, data: dict, source: str, fallback_reason: Optional[str] = None):
+        self.data = data
+        self.source = source
+        self.fallback_reason = fallback_reason
+
+
+def _get_model_cost_map_with_source(url: str) -> _FetchResult:
+    """Fetch the model cost map and return an atomic result with source info.
+
+    This is the internal implementation shared by the public
+    ``get_model_cost_map()`` (which also updates the legacy singleton) and
+    ``_ensure_remote_model_cost()`` (which needs a race-free source check).
+    """
+    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+        return _FetchResult(
+            data=GetModelCostMap.load_local_model_cost_map(),
+            source="local",
+            fallback_reason=None,
+        )
+
+    try:
+        content = GetModelCostMap.fetch_remote_model_cost_map(url)
+    except Exception as e:
+        verbose_logger.warning(
+            "LiteLLM: Failed to fetch remote model cost map from %s: %s. "
+            "Falling back to local backup.",
+            url,
+            str(e),
+        )
+        return _FetchResult(
+            data=GetModelCostMap.load_local_model_cost_map(),
+            source="local",
+            fallback_reason=f"Remote fetch failed: {str(e)}",
+        )
+
+    if not GetModelCostMap.validate_model_cost_map(
+        fetched_map=content,
+        backup_model_count=GetModelCostMap._get_backup_model_count(),
+    ):
+        verbose_logger.warning(
+            "LiteLLM: Fetched model cost map failed integrity check. "
+            "Using local backup instead. url=%s",
+            url,
+        )
+        return _FetchResult(
+            data=GetModelCostMap.load_local_model_cost_map(),
+            source="local",
+            fallback_reason="Remote data failed integrity validation",
+        )
+
+    return _FetchResult(data=content, source="remote")
+
+
 def get_model_cost_map(url: str) -> dict:
     """
     Public entry point — returns the model cost map dict.
@@ -194,46 +254,18 @@ def get_model_cost_map(url: str) -> dict:
     Only the backup model count is cached (a single int) for validation.
     The full backup dict is only parsed when it must be *returned* as a
     fallback — it is never held in memory long-term.
+
+    Note: also updates the module-level ``_cost_map_source_info`` singleton
+    for backward-compatible callers.  Thread-safe callers should prefer
+    ``_get_model_cost_map_with_source`` to avoid reading a shared mutable.
     """
-    # Note: can't use get_secret_bool here — this runs during litellm.__init__
-    # before litellm._key_management_settings is set.
-    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
-        _cost_map_source_info.source = "local"
-        _cost_map_source_info.url = None
-        _cost_map_source_info.is_env_forced = True
-        _cost_map_source_info.fallback_reason = None
-        return GetModelCostMap.load_local_model_cost_map()
+    result = _get_model_cost_map_with_source(url)
 
-    _cost_map_source_info.url = url
-    _cost_map_source_info.is_env_forced = False
+    # Update legacy singleton (best-effort; concurrent calls may interleave
+    # but the singleton is only informational).
+    _cost_map_source_info.source = result.source
+    _cost_map_source_info.url = url if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() != "true" else None
+    _cost_map_source_info.is_env_forced = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true"
+    _cost_map_source_info.fallback_reason = result.fallback_reason
 
-    try:
-        content = GetModelCostMap.fetch_remote_model_cost_map(url)
-    except Exception as e:
-        verbose_logger.warning(
-            "LiteLLM: Failed to fetch remote model cost map from %s: %s. "
-            "Falling back to local backup.",
-            url,
-            str(e),
-        )
-        _cost_map_source_info.source = "local"
-        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {str(e)}"
-        return GetModelCostMap.load_local_model_cost_map()
-
-    # Validate using cached count (cheap int comparison, no file I/O)
-    if not GetModelCostMap.validate_model_cost_map(
-        fetched_map=content,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),
-    ):
-        verbose_logger.warning(
-            "LiteLLM: Fetched model cost map failed integrity check. "
-            "Using local backup instead. url=%s",
-            url,
-        )
-        _cost_map_source_info.source = "local"
-        _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
-        return GetModelCostMap.load_local_model_cost_map()
-
-    _cost_map_source_info.source = "remote"
-    _cost_map_source_info.fallback_reason = None
-    return content
+    return result.data
