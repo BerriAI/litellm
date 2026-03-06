@@ -2976,10 +2976,23 @@ class SSOAuthenticationHandler:
                 )
 
         if userinfo is None:
+            id_token_attempted = isinstance(id_token, str) and bool(id_token)
             if userinfo_endpoint:
-                detail = "userinfo endpoint failed and no id_token was present in the token response"
+                if id_token_attempted:
+                    detail = (
+                        "userinfo endpoint failed and id_token was present but "
+                        "decoded to an empty payload — no identity claims available"
+                    )
+                else:
+                    detail = "userinfo endpoint failed and no id_token was present in the token response"
             else:
-                detail = "no userinfo endpoint is configured (GENERIC_USERINFO_ENDPOINT) and no id_token was present"
+                if id_token_attempted:
+                    detail = (
+                        "no userinfo endpoint is configured (GENERIC_USERINFO_ENDPOINT) "
+                        "and id_token decoded to an empty payload — no identity claims available"
+                    )
+                else:
+                    detail = "no userinfo endpoint is configured (GENERIC_USERINFO_ENDPOINT) and no id_token was present"
             raise ProxyException(
                 message=f"SSO user info unavailable: {detail}.",
                 type=ProxyErrorTypes.auth_error,
