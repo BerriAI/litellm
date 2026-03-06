@@ -326,24 +326,27 @@ export function shouldAllowAuthRedirect(): boolean {
 
 export const handleError = async (errorData: string | any) => {
   const currentTime = Date.now();
-  if (currentTime - lastErrorTime > 60000) {
-    // 60000 milliseconds = 60 seconds
-    // Convert errorData to string if it isn't already
-    const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
-    if (isAuthenticationError(errorString)) {
-      lastErrorTime = currentTime;
-      if (shouldAllowAuthRedirect()) {
-        clearTokenCookies();
-        NotificationsManager.info("UI Session Expired. Logging out.");
-        const browserLocation = getWindowLocation();
-        if (browserLocation) {
-          // Redirect to login instead of reloading the current page
-          const loginPath = getProxyBaseUrl() + "/ui/login";
-          window.location.href = loginPath;
-        }
+  // Convert errorData to string if it isn't already
+  const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
+
+  // Auth errors must never be throttled — always process immediately
+  if (isAuthenticationError(errorString)) {
+    lastErrorTime = currentTime;
+    if (shouldAllowAuthRedirect()) {
+      clearTokenCookies();
+      NotificationsManager.info("UI Session Expired. Logging out.");
+      const browserLocation = getWindowLocation();
+      if (browserLocation) {
+        // Redirect to login instead of reloading the current page
+        const loginPath = getProxyBaseUrl() + "/ui/login";
+        window.location.href = loginPath;
       }
-      return;
     }
+    return;
+  }
+
+  // Throttle repeated non-auth errors to prevent spam (60s window)
+  if (currentTime - lastErrorTime > 60000) {
     lastErrorTime = currentTime;
   } else {
     console.log("Error suppressed to prevent spam:", errorData);
