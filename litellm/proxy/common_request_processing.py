@@ -1198,7 +1198,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=None,
-                request_headers=self.data.get("proxy_server_request", {}).get("headers", {}),
+                request_headers=(self.data.get("proxy_server_request") or {}).get("headers", {}),
             )
             if callback_headers:
                 headers.update(callback_headers)
