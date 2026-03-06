@@ -1603,6 +1603,16 @@ class Usage(SafeAttributeModel, CompletionUsage):
         ):
             self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
 
+        if (
+            _prompt_tokens_details is not None
+            and "cache_read_input_tokens" not in params
+        ):
+            cached = getattr(_prompt_tokens_details, "cached_tokens", None)
+            if cached is not None:
+                self._cache_read_input_tokens = cached
+                params = dict(params)
+                params["cache_read_input_tokens"] = cached
+
         for k, v in params.items():
             setattr(self, k, v)
 
