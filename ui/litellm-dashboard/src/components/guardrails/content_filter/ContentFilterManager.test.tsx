@@ -123,10 +123,13 @@ vi.mock("./ContentFilterDisplay", () => ({
   ),
 }));
 
+const mockMessageError = vi.fn();
+
 vi.mock("antd", async (importOriginal) => {
   const actual = await importOriginal<typeof import("antd")>();
   return {
     ...actual,
+    message: { error: mockMessageError, success: vi.fn(), warning: vi.fn(), info: vi.fn() },
     Divider: ({ children }: { children: React.ReactNode }) => (
       <div data-testid="divider">{children}</div>
     ),
@@ -594,6 +597,11 @@ describe("ContentFilterManager YAML file upload", () => {
         expect.any(Error)
       );
     });
+
+    // Verify user-facing error notification was shown
+    expect(mockMessageError).toHaveBeenCalledWith(
+      "Failed to parse uploaded YAML. Please check the file format."
+    );
 
     // State should remain unchanged (1 blocked word)
     expect(screen.getByTestId("blocked-word-count").textContent).toBe("1");
