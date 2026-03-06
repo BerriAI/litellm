@@ -4576,6 +4576,7 @@ async def test_pkce_token_exchange_credentials_in_body():
         data = kwargs.get("data", {})
         assert "client_id" in data
         assert "client_secret" in data
+        assert data.get("code_verifier") == "verifier_xyz", "code_verifier must be in POST body"
         mock = MagicMock()
         mock.status_code = 200
         mock.json.return_value = token_resp

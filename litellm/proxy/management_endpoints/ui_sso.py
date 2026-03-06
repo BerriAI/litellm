@@ -806,6 +806,13 @@ async def get_generic_sso_response(
             )
 
         if code_verifier:
+            if not generic_token_endpoint:
+                raise ProxyException(
+                    message="GENERIC_TOKEN_ENDPOINT must be set when PKCE is enabled",
+                    type=ProxyErrorTypes.auth_error,
+                    param="GENERIC_TOKEN_ENDPOINT",
+                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
             combined_response = await SSOAuthenticationHandler._pkce_token_exchange(
                 authorization_code=authorization_code,
                 code_verifier=code_verifier,
@@ -2558,13 +2565,24 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def _delete_pkce_verifier(cache_key: str) -> None:
-        """Delete a single-use PKCE verifier from cache after a successful exchange."""
+        """Delete a single-use PKCE verifier from cache after a successful exchange.
+
+        Failure is non-fatal: a leftover verifier is a minor security concern
+        (unused key in cache) but not worth aborting an otherwise-successful login.
+        """
         from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
-        if redis_usage_cache is not None:
-            await redis_usage_cache.async_delete_cache(key=cache_key)
-        else:
-            await user_api_key_cache.async_delete_cache(key=cache_key)
+        try:
+            if redis_usage_cache is not None:
+                await redis_usage_cache.async_delete_cache(key=cache_key)
+            else:
+                await user_api_key_cache.async_delete_cache(key=cache_key)
+        except Exception as exc:
+            verbose_proxy_logger.warning(
+                "PKCE: failed to delete verifier cache key '%s' (best-effort cleanup): %s",
+                cache_key,
+                exc,
+            )
 
     @staticmethod
     def generate_pkce_params() -> Tuple[str, str]:
@@ -2764,9 +2782,9 @@ class SSOAuthenticationHandler:
 
         # Only fall back to id_token when the userinfo request failed (None).
         # An empty dict ({}) from the endpoint is a valid response and not retried.
-        # Explicitly check for non-None and non-empty string to avoid attempting
-        # JWT decode on a blank id_token field.
-        if userinfo is None and id_token is not None and id_token != "":
+        # Explicitly check for a non-empty string to avoid attempting JWT decode on
+        # a blank or non-string id_token field from a misbehaving provider.
+        if userinfo is None and isinstance(id_token, str) and id_token:
             try:
                 userinfo = jwt.decode(id_token, options={"verify_signature": False})
             except Exception as decode_err:
