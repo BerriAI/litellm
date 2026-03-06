@@ -67,20 +67,21 @@ class TaskRegistry:
             prev_pending = len(self._tasks)
             self._tasks.add(task)
             new_pending = len(self._tasks)
-        task.add_done_callback(self._task_done)
-
-        with self._lock:
-            if (
+            should_warn = (
                 not self._warned
                 and prev_pending <= self._max_pending_warning < new_pending
-            ):
-                logger.warning(
-                    "TaskRegistry: %d pending tasks (threshold: %d). "
-                    "Possible task leak detected.",
-                    new_pending,
-                    self._max_pending_warning,
-                )
+            )
+            if should_warn:
                 self._warned = True
+        task.add_done_callback(self._task_done)
+
+        if should_warn:
+            logger.warning(
+                "TaskRegistry: %d pending tasks (threshold: %d). "
+                "Possible task leak detected.",
+                new_pending,
+                self._max_pending_warning,
+            )
 
         return task
 
@@ -140,7 +141,9 @@ class TaskRegistry:
             logger.debug("TaskRegistry: event loop closed during shutdown")
         else:
             for task, result in zip(pending, results):
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
                     logger.debug(
                         "Task %s raised during shutdown: %s",
                         task.get_name(),

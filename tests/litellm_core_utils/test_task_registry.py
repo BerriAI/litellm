@@ -122,12 +122,14 @@ async def test_shutdown_timeout_is_enforced(caplog):
     registry = TaskRegistry.get_instance()
 
     async def _stubborn():
-        """Task that catches cancellation and keeps running."""
-        while True:
+        """Resists one cancellation, then yields to the second."""
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
             try:
                 await asyncio.sleep(3600)
             except asyncio.CancelledError:
-                await asyncio.sleep(10)
+                return
 
     registry.create_task(_stubborn(), name="stubborn")
     await asyncio.sleep(0)

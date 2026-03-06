@@ -847,7 +847,8 @@ class ProxyBaseLLMRequestProcessing:
                     data=self.data,
                     user_api_key_dict=user_api_key_dict,
                     call_type=route_type,  # type: ignore
-                )
+                ),
+                name="during-call-hook",
             )
         )
 
@@ -893,7 +894,8 @@ class ProxyBaseLLMRequestProcessing:
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=self.data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
         if self._is_streaming_request(
             data=self.data, is_streaming_request=is_streaming_request

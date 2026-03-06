@@ -877,7 +877,8 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 user_api_key_cache=user_api_key_cache,
                 prisma_client=prisma_client,
-            )
+            ),
+            name="warm-global-spend-cache",
         )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
@@ -896,7 +897,8 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:
         tracked_create_task(
-            _run_background_health_check()
+            _run_background_health_check(),
+            name="background-health-check",
         )  # start the background health check coroutine.
 
     ## [Optional] Initialize dd tracer
@@ -1719,7 +1721,8 @@ async def update_cache(  # noqa: PLR0915
                 proxy_logging_obj.budget_alerts(
                     type="projected_limit_exceeded",
                     user_info=call_info,
-                )
+                ),
+                name="budget-alert",
             )
             # set cooldown on alert
 
@@ -1963,7 +1966,8 @@ async def update_cache(  # noqa: PLR0915
             cache_list=values_to_update_in_cache,
             ttl=60,
             litellm_parent_otel_span=parent_otel_span,
-        )
+        ),
+        name="update-key-cache-pipeline",
     )
 
 
@@ -2059,7 +2063,8 @@ def _schedule_background_health_check_db_save(
             unhealthy_endpoints,
             start_time,
             checked_by=checked_by,
-        )
+        ),
+        name="save-health-checks-to-db",
     )
 
 
@@ -5607,7 +5612,8 @@ class ProxyStartupEvent:
                     "max_budget": litellm.max_budget,
                     "budget_duration": litellm.budget_duration,
                 },
-            )
+            ),
+            name="generate-proxy-budget-key",
         )
 
     @classmethod
@@ -5740,7 +5746,8 @@ class ProxyStartupEvent:
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,
                     proxy_logging_obj=proxy_logging_obj,
-                )
+                ),
+                name="monitor-spend-logs-queue",
             )
 
         ### ADD NEW MODELS ###
@@ -6117,11 +6124,13 @@ class ProxyStartupEvent:
 
                 ## Add necessary views to proxy ##
                 tracked_create_task(
-                    prisma_client.check_view_exists()
+                    prisma_client.check_view_exists(),
+                    name="check-view-exists",
                 )  # check if all necessary views exist. Don't block execution
 
                 tracked_create_task(
-                    prisma_client._set_spend_logs_row_count_in_proxy_state()
+                    prisma_client._set_spend_logs_row_count_in_proxy_state(),
+                    name="set-spend-logs-row-count",
                 )  # set the spend logs row count in proxy state. Don't block execution
 
                 # run a health check to ensure the DB is ready
@@ -7027,7 +7036,8 @@ async def moderations(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -7149,7 +7159,8 @@ async def audio_speech(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -7303,7 +7314,8 @@ async def audio_transcriptions(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -7589,7 +7601,8 @@ async def get_assistants(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -7688,7 +7701,8 @@ async def create_assistant(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -7785,7 +7799,8 @@ async def delete_assistant(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -7882,7 +7897,8 @@ async def create_threads(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -7977,7 +7993,8 @@ async def get_thread(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -8076,7 +8093,8 @@ async def add_messages(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -8171,7 +8189,8 @@ async def get_messages(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
@@ -8281,7 +8300,8 @@ async def run_thread(
         tracked_create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            ),
+            name="update-request-status",
         )
 
         ### RESPONSE HEADERS ###
