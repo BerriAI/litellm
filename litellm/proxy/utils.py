@@ -286,6 +286,19 @@ class InternalUsageCache:
 
 
 ### LOGGING ###
+
+# Cache for inspect.signature checks — avoids repeated introspection per request
+_CALLBACK_ACCEPTS_CALL_INFO: Dict[int, bool] = {}
+
+
+def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
+    key = id(cb)
+    if key not in _CALLBACK_ACCEPTS_CALL_INFO:
+        sig = inspect.signature(cb.async_post_call_response_headers_hook)
+        _CALLBACK_ACCEPTS_CALL_INFO[key] = "litellm_call_info" in sig.parameters
+    return _CALLBACK_ACCEPTS_CALL_INFO[key]
+
+
 class ProxyLogging:
     """
     Logging/Custom Handlers for proxy.
@@ -1989,8 +2002,7 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
 
                 if _callback is not None and isinstance(_callback, CustomLogger):
-                    sig = inspect.signature(_callback.async_post_call_response_headers_hook)
-                    if "litellm_call_info" in sig.parameters:
+                    if _accepts_litellm_call_info(_callback):
                         result = await _callback.async_post_call_response_headers_hook(
                             data=data,
                             user_api_key_dict=user_api_key_dict,
