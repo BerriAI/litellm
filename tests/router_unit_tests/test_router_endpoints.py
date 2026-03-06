@@ -128,12 +128,14 @@ async def test_transcription_on_router():
             router_level_clients.append(str(_deployment_openai_client))
 
         ## test 1: user facing function
+        audio_file.seek(0)
         response = await router.atranscription(
             model="whisper",
             file=audio_file,
         )
 
         ## test 2: underlying function
+        audio_file.seek(0)
         response = await router._atranscription(
             model="whisper",
             file=audio_file,

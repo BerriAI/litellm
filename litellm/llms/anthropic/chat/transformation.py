@@ -210,14 +210,66 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return params
 
     @staticmethod
+    def _resolve_refs(schema: Dict[str, Any], defs: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Recursively resolve $ref references by inlining the referenced definitions.
+
+        Anthropic's output_format API does not support $ref (external schema references).
+        This method replaces all $ref pointers with the actual definition content.
+
+        Args:
+            schema: The JSON schema dictionary to process
+            defs: The $defs dictionary containing all definitions
+
+        Returns:
+            A new dictionary with all $ref references resolved inline
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        # If this node is a $ref, resolve it
+        if "$ref" in schema:
+            ref_path = schema["$ref"]
+            # Handle both "/$defs/Name" and "#/$defs/Name" formats
+            ref_name = ref_path.split("/")[-1]
+            if ref_name in defs:
+                # Recursively resolve refs in the definition itself
+                return AnthropicConfig._resolve_refs(defs[ref_name], defs)
+            return schema
+
+        result: Dict[str, Any] = {}
+        for key, value in schema.items():
+            if key == "$defs":
+                # Skip $defs at the top level - they're inlined now
+                continue
+            elif key == "properties" and isinstance(value, dict):
+                result[key] = {
+                    k: AnthropicConfig._resolve_refs(v, defs)
+                    for k, v in value.items()
+                }
+            elif key == "items" and isinstance(value, dict):
+                result[key] = AnthropicConfig._resolve_refs(value, defs)
+            elif key in ("anyOf", "allOf", "oneOf") and isinstance(value, list):
+                result[key] = [
+                    AnthropicConfig._resolve_refs(item, defs)
+                    for item in value
+                ]
+            else:
+                result[key] = value
+
+        return result
+
+    @staticmethod
     def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Filter out unsupported fields from JSON schema for Anthropic's output_format API.
+        Filter and transform JSON schema for Anthropic's output_format API.
 
-        Anthropic's output_format doesn't support certain JSON schema properties:
+        Anthropic's output_format has specific requirements:
         - maxItems/minItems: Not supported for array types
         - minimum/maximum: Not supported for numeric types
         - minLength/maxLength: Not supported for string types
+        - $ref: External schema references are not supported (must be inlined)
+        - additionalProperties: Must be explicitly set to false for object types
 
         This mirrors the transformation done by the Anthropic Python SDK.
         See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
@@ -234,6 +286,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         Related issues:
         - https://github.com/BerriAI/litellm/issues/19444
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        # First, resolve all $ref references by inlining definitions.
+        # Anthropic does not support $ref in output_format schemas.
+        defs = schema.get("$defs", {})
+        if defs or "$ref" in schema:
+            schema = AnthropicConfig._resolve_refs(schema, defs)
+
+        return AnthropicConfig._filter_schema_recursive(schema)
+
+    @staticmethod
+    def _filter_schema_recursive(schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Recursively filter unsupported fields from a JSON schema for Anthropic.
         """
         if not isinstance(schema, dict):
             return schema
@@ -288,33 +356,40 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
             if key == "properties" and isinstance(value, dict):
                 result[key] = {
-                    k: AnthropicConfig.filter_anthropic_output_schema(v)
+                    k: AnthropicConfig._filter_schema_recursive(v)
                     for k, v in value.items()
                 }
             elif key == "items" and isinstance(value, dict):
-                result[key] = AnthropicConfig.filter_anthropic_output_schema(value)
+                result[key] = AnthropicConfig._filter_schema_recursive(value)
             elif key == "$defs" and isinstance(value, dict):
                 result[key] = {
-                    k: AnthropicConfig.filter_anthropic_output_schema(v)
+                    k: AnthropicConfig._filter_schema_recursive(v)
                     for k, v in value.items()
                 }
             elif key == "anyOf" and isinstance(value, list):
                 result[key] = [
-                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    AnthropicConfig._filter_schema_recursive(item)
                     for item in value
                 ]
             elif key == "allOf" and isinstance(value, list):
                 result[key] = [
-                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    AnthropicConfig._filter_schema_recursive(item)
                     for item in value
                 ]
             elif key == "oneOf" and isinstance(value, list):
                 result[key] = [
-                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    AnthropicConfig._filter_schema_recursive(item)
                     for item in value
                 ]
             else:
                 result[key] = value
+
+        # Anthropic's output_format requires 'additionalProperties' to be explicitly
+        # set to false for object types. Pydantic's model_json_schema() (used when
+        # ref_template is set) does not include this, so we add it here.
+        # See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+        if result.get("type") == "object" and "additionalProperties" not in result:
+            result["additionalProperties"] = False
 
         return result
 

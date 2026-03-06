@@ -1,16 +1,14 @@
-FROM python:3.13-alpine
+FROM python:3.13-slim
 
 WORKDIR /app
 
 ENV HOME=/home/litellm
 ENV PATH="${HOME}/venv/bin:$PATH"
 
-# Install runtime dependencies
-# Note: Using Python 3.13 for compatibility with ddtrace and other packages
-# rust and cargo are required for building ddtrace from source
-# musl-dev and libffi-dev are needed for some Python packages on Alpine
-RUN apk update && \
-    apk add --no-cache gcc musl-dev libffi-dev openssl openssl-dev rust cargo
+# Install build dependencies (slim/Debian provides pre-built wheels for most packages)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc libffi-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv ${HOME}/venv
 RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip

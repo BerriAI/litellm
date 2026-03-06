@@ -3069,7 +3069,7 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     loop_amount, chunk_value, expected_chunk_fail
 ):
     """
-    Test if InternalServerError raised if model enters infinite loop
+    Test if MidStreamFallbackError raised if model enters infinite loop
 
     Test if request passes if model loop is below accepted limit
     """
