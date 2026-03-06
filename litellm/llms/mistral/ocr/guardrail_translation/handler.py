@@ -137,7 +137,7 @@ class OCRHandler(BaseTranslation):
 
         guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data or {},
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
