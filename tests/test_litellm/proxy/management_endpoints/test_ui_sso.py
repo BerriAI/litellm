@@ -3517,6 +3517,10 @@ class TestPKCEFunctionality:
 
         assert result["access_token"] == "tok_body"
         assert result["sub"] == "user2"
+        # Verify userinfo GET used the correct Bearer token header
+        get_call = mock_userinfo_client.get.call_args
+        assert get_call is not None
+        assert get_call.kwargs["headers"]["Authorization"] == "Bearer tok_body"
 
 
     @pytest.mark.asyncio
@@ -3817,6 +3821,8 @@ class TestPKCEFunctionality:
         # Should return params without code_verifier (no raise)
         assert "code_verifier" not in result
         assert "_pkce_cache_key" not in result
+        # Non-strict mode emits a warning rather than raising
+        mock_cache.async_get_cache.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_pkce_token_exchange_non200_raises_proxy_exception(self):
@@ -3890,6 +3896,8 @@ class TestPKCEFunctionality:
         # No raise in non-strict mode; verifier simply absent from params
         assert "code_verifier" not in result
         assert "_pkce_cache_key" not in result
+        # Cache was queried (the unexpected format was retrieved and logged at WARNING)
+        mock_cache.async_get_cache.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_pkce_legacy_string_cache_format_backward_compat(self):
