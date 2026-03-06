@@ -173,8 +173,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         handleDelete,
         isLoadingHealth,
         (server: MCPServer) => setByokModalServer(server),
+        accessToken ?? undefined,
+        refetch,
       ),
-    [userRole, isLoadingHealth],
+    [userRole, isLoadingHealth, accessToken, refetch],
   );
 
   function handleDelete(server_id: string) {
