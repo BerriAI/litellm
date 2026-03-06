@@ -374,7 +374,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         {/* Sidebar nav buttons */}
         <div style={{ padding: "0 8px 4px", flexShrink: 0 }}>
           {sidebarNavItem(<EditOutlined />, "New chat", () => router.push("/chat"))}
-          {sidebarNavItem(<SearchOutlined />, "Search chats", () => {}, false, "⌘K")}
+          {sidebarNavItem(<SearchOutlined />, "Search chats", () => setSidebarView("chats"))}
         </div>
 
         <div style={{ height: 1, background: "#e5e7eb", margin: "4px 8px", flexShrink: 0 }} />
