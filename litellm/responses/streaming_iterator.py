@@ -79,6 +79,7 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params = {
             "model_id": _model_info.get("id", None),
             "api_base": _api_base,
+            "custom_llm_provider": custom_llm_provider,
         }
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
