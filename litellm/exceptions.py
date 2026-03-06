@@ -35,10 +35,12 @@ def _rebuild_exception(cls, message, llm_provider, model, extra_kwargs=None):
 
 def _exception_reduce(self):
     """Allow pickling across process boundaries (e.g. concurrent.futures)."""
+    import inspect
     extra = {}
-    if hasattr(self, "status_code") and "status_code" in type(self).__init__.__code__.co_varnames:
-        extra["status_code"] = self.status_code
-    if hasattr(self, "request_data"):
+    params = inspect.signature(type(self).__init__).parameters
+    if "status_code" in params:
+        extra["status_code"] = getattr(self, "status_code", 500)
+    if "request_data" in params:
         extra["request_data"] = getattr(self, "request_data", {})
     return (
         _rebuild_exception,
