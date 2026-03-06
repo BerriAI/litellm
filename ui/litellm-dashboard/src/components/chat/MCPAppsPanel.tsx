@@ -236,7 +236,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                   display: "flex", alignItems: "center", gap: 12,
                   padding: "14px 16px", background: "#fff",
                   borderRight: isLeftCol ? "1px solid #f3f4f6" : "none",
-                  borderBottom: idx < filtered.length - 2 ? "1px solid #f3f4f6" : "none",
+                  borderBottom: Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "1px solid #f3f4f6" : "none",
                   cursor: "pointer", minWidth: 0,
                   transition: "background 0.1s",
                 }}
