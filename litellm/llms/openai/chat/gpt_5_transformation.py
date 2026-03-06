@@ -65,6 +65,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return model_name.startswith("gpt-5.2") or model_name.startswith("gpt-5.4")
 
     @classmethod
+    def is_model_gpt_5_4_model(cls, model: str) -> bool:
+        """Check if the model is a gpt-5.4 variant (including pro)."""
+        model_name = model.split("/")[-1]
+        return model_name.startswith("gpt-5.4")
+
+    @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Check if the model supports a specific reasoning_effort level.
 
@@ -178,6 +184,17 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             optional_params["max_completion_tokens"] = non_default_params.pop(
                 "max_tokens"
             )
+
+        # gpt-5.4: function calls not supported when reasoning_effort != "none"
+        # Drop reasoning_effort when tools are present (small minority of volume)
+        if self.is_model_gpt_5_4_model(model):
+            has_tools = bool(
+                non_default_params.get("tools") or optional_params.get("tools")
+            )
+            if has_tools and reasoning_effort not in (None, "none"):
+                non_default_params.pop("reasoning_effort", None)
+                optional_params.pop("reasoning_effort", None)
+                reasoning_effort = None
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
         supports_none = self._supports_reasoning_effort_level(model, "none")
