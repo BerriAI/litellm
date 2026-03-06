@@ -21,7 +21,7 @@ import httpx
 
 
 @runtime_checkable
-class HTTPClientAdapter(Protocol):
+class HTTPClientAdapterSync(Protocol):
     def get(self, url: str, **kwargs) -> Any:
         ...
 
@@ -48,7 +48,7 @@ class HTTPClientAdapter(Protocol):
 
 
 @runtime_checkable
-class AsyncHTTPClientAdapter(Protocol):
+class HTTPClientAdapterAsync(Protocol):
     async def get(self, url: str, **kwargs) -> Any:
         ...
 
@@ -74,7 +74,7 @@ class AsyncHTTPClientAdapter(Protocol):
         ...
 
 
-class HTTPXAdapter(HTTPClientAdapter):
+class HTTPXAdapter(HTTPClientAdapterSync):
     def __init__(self, client: httpx.Client):
         self.client = client
 
@@ -106,7 +106,7 @@ class HTTPXAdapter(HTTPClientAdapter):
         return getattr(self.client, name)
 
 
-class HTTPXAsyncAdapter(AsyncHTTPClientAdapter):
+class HTTPXAsyncAdapter(HTTPClientAdapterAsync):
     def __init__(self, client: httpx.AsyncClient):
         self.client = client
 
@@ -173,6 +173,7 @@ try:
 except Exception:
     version = "0.0.0"
 
+
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
@@ -185,6 +186,7 @@ def get_default_headers() -> dict:
         return {"User-Agent": user_agent}
 
     return {"User-Agent": f"litellm/{version}"}
+
 
 # Initialize headers (User-Agent)
 headers = get_default_headers()
@@ -471,7 +473,7 @@ class AsyncHTTPHandler:
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
-        client: Optional[AsyncHTTPClientAdapter] = None,
+        client: Optional[HTTPClientAdapterAsync] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -492,7 +494,7 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> AsyncHTTPClientAdapter:
+    ) -> HTTPClientAdapterAsync:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration(ssl_verify)
 
@@ -827,7 +829,7 @@ class AsyncHTTPHandler:
     async def single_connection_post_request(
         self,
         url: str,
-        client: AsyncHTTPClientAdapter,
+        client: HTTPClientAdapterAsync,
         data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
@@ -1042,7 +1044,7 @@ class HTTPHandler:
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
-        client: Optional[Union[httpx.Client, HTTPClientAdapter]] = None,
+        client: Optional[Union[httpx.Client, HTTPClientAdapterSync]] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
         disable_default_headers: Optional[
             bool
@@ -1073,7 +1075,7 @@ class HTTPHandler:
                 headers=default_headers,
                 follow_redirects=True,
             )
-            self.client: HTTPClientAdapter = HTTPXAdapter(httpx_client)
+            self.client: HTTPClientAdapterSync = HTTPXAdapter(httpx_client)
         else:
             if isinstance(client, httpx.Client):
                 self.client = HTTPXAdapter(client)
@@ -1366,7 +1368,9 @@ def get_async_httpx_client(
 
     if params is not None:
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params = {
+            k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+        }
         handler_params["shared_session"] = shared_session
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
@@ -1415,7 +1419,9 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
 
     if params is not None:
         # Filter out params that are only used for cache key, not for HTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params = {
+            k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+        }
         _new_client = HTTPHandler(**handler_params)
     else:
         _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))

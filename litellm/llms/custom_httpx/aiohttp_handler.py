@@ -14,6 +14,7 @@ from litellm.llms.base_llm.image_variations.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
+    HTTPClientAdapterAsync,
     HTTPHandler,
     _get_httpx_client,
 )
@@ -30,6 +31,51 @@ else:
     LiteLLMLoggingObj = Any
 
 DEFAULT_TIMEOUT = 600
+
+
+class AiohttpAdapter(HTTPClientAdapterAsync):
+    def __init__(self, session: "aiohttp.ClientSession"):
+        self.session = session
+
+    async def get(self, url: str, **kwargs) -> Any:
+        return await self.session.get(url, **kwargs)
+
+    async def post(self, url: str, **kwargs) -> Any:
+        return await self.session.post(url, **kwargs)
+
+    async def put(self, url: str, **kwargs) -> Any:
+        return await self.session.put(url, **kwargs)
+
+    async def patch(self, url: str, **kwargs) -> Any:
+        return await self.session.patch(url, **kwargs)
+
+    async def delete(self, url: str, **kwargs) -> Any:
+        return await self.session.delete(url, **kwargs)
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        # aiohttp doesn't have a direct equivalent of build_request like httpx
+        # We might need to store the parameters and send them later,
+        # or just return a dummy object if we can't easily implement it.
+        # For now, let's return a dictionary that we can use in send().
+        return {"method": method, "url": url, **kwargs}
+
+    async def send(self, request: Any, **kwargs) -> Any:
+        if isinstance(request, dict):
+            method = request.pop("method")
+            url = request.pop("url")
+            # Merge kwargs
+            request.update(kwargs)
+            return await self.session.request(method, url, **request)
+        else:
+            raise ValueError(
+                f"Unsupported request type for AiohttpAdapter: {type(request)}"
+            )
+
+    async def close(self) -> None:
+        await self.session.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.session, name)
 
 
 class BaseLLMAIOHTTPHandler:
@@ -171,7 +217,7 @@ class BaseLLMAIOHTTPHandler:
 
     async def _make_common_async_call(
         self,
-        async_client_session: Optional[ClientSession],
+        async_client_session: Optional[Union[ClientSession, HTTPClientAdapterAsync]],
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
@@ -187,13 +233,20 @@ class BaseLLMAIOHTTPHandler:
         )
 
         response: Optional[aiohttp.ClientResponse] = None
-        async_client_session = self._get_async_client_session(
+        session = self._get_async_client_session(
             dynamic_client_session=async_client_session
+            if isinstance(async_client_session, ClientSession)
+            else None
         )
+
+        if not isinstance(async_client_session, HTTPClientAdapterAsync):
+            adapter: HTTPClientAdapterAsync = AiohttpAdapter(session)
+        else:
+            adapter = async_client_session
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
-                response = await async_client_session.post(
+                response = await adapter.post(
                     url=api_base,
                     headers=headers,
                     json=data,
@@ -292,7 +345,7 @@ class BaseLLMAIOHTTPHandler:
         litellm_params: dict,
         encoding: Any,
         api_key: Optional[str] = None,
-        client: Optional[ClientSession] = None,
+        client: Optional[Union[ClientSession, HTTPClientAdapterAsync]] = None,
     ):
         _response = await self._make_common_async_call(
             async_client_session=client,
@@ -335,7 +388,9 @@ class BaseLLMAIOHTTPHandler:
         fake_stream: bool = False,
         api_key: Optional[str] = None,
         headers: Optional[dict] = {},
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler, ClientSession]] = None,
+        client: Optional[
+            Union[HTTPHandler, AsyncHTTPHandler, ClientSession, HTTPClientAdapterAsync]
+        ] = None,
     ):
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -514,7 +569,7 @@ class BaseLLMAIOHTTPHandler:
 
     async def async_image_variations(
         self,
-        client: Optional[ClientSession],
+        client: Optional[Union[ClientSession, HTTPClientAdapterAsync]],
         provider_config: BaseImageVariationConfig,
         api_base: str,
         headers: dict,
