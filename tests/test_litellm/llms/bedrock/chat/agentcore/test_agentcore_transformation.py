@@ -205,3 +205,50 @@ class TestAgentCoreStreamingToolFlow:
         assert "".join(content_parts) == "Let me check weather. Here are results."
 
         assert any(getattr(chunk, "usage", None) is not None for chunk in chunks)
+
+
+class TestAgentCoreStreamFallbackStop:
+    """Verify a synthetic stop chunk is emitted when the stream ends without a `message` event."""
+
+    @pytest.fixture
+    def config(self):
+        return AmazonAgentCoreConfig()
+
+    @staticmethod
+    def _build_no_message_sse() -> str:
+        """SSE payload that has content and metadata but no final `message` event."""
+        return (
+            'data: {"event":{"contentBlockDelta":{"delta":{"text":"partial output"}}}}\n'
+            'data: {"event":{"metadata":{"usage":{"inputTokens":5,"outputTokens":2,"totalTokens":7}}}}\n'
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_fallback_stop_on_missing_message(self, config):
+        """Async stream emits a fallback finish_reason='stop' when no message event arrives."""
+        response = _FakeAsyncTextResponse([self._build_no_message_sse()])
+
+        chunks = []
+        async for chunk in config._stream_agentcore_response(
+            response=response,
+            model="bedrock/agentcore/test-runtime",
+        ):
+            chunks.append(chunk)
+
+        assert len(chunks) == 3  # content + metadata + fallback stop
+        assert chunks[-1].choices[0].finish_reason == "stop"
+        assert chunks[-1].choices[0].delta.content is None
+
+    def test_sync_fallback_stop_on_missing_message(self, config):
+        """Sync stream emits a fallback finish_reason='stop' when no message event arrives."""
+        response = _FakeSyncTextResponse([self._build_no_message_sse()])
+
+        chunks = list(
+            config._stream_agentcore_response_sync(
+                response=response,
+                model="bedrock/agentcore/test-runtime",
+            )
+        )
+
+        assert len(chunks) == 3  # content + metadata + fallback stop
+        assert chunks[-1].choices[0].finish_reason == "stop"
+        assert chunks[-1].choices[0].delta.content is None

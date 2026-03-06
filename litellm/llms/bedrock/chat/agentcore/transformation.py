@@ -450,6 +450,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         """
         Internal sync generator that parses SSE and yields ModelResponse chunks.
         """
+        stop_emitted = False
         buffer = ""
         for text_chunk in response.iter_text():
             buffer += text_chunk
@@ -527,6 +528,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
                     # Process final message
                     if "message" in data_obj and isinstance(data_obj["message"], dict):
+                        stop_emitted = True
                         chunk = ModelResponseStream(
                             id=f"chatcmpl-{uuid.uuid4()}",
                             created=0,
@@ -545,6 +547,24 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 except json.JSONDecodeError:
                     verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
                     continue
+
+        # Defensive fallback: emit a stop chunk if the stream ended without
+        # a final `message` event (e.g. partial streams, connectivity drops).
+        if not stop_emitted:
+            fallback = ModelResponseStream(
+                id=f"chatcmpl-{uuid.uuid4()}",
+                created=0,
+                model=model,
+                object="chat.completion.chunk",
+            )
+            fallback.choices = [
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(),
+                )
+            ]
+            yield fallback
 
     def get_sync_custom_stream_wrapper(
         self,
@@ -610,6 +630,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         """
         Internal async generator that parses SSE and yields ModelResponse chunks.
         """
+        stop_emitted = False
         buffer = ""
         async for text_chunk in response.aiter_text():
             buffer += text_chunk
@@ -687,6 +708,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
                     # Process final message
                     if "message" in data_obj and isinstance(data_obj["message"], dict):
+                        stop_emitted = True
                         chunk = ModelResponseStream(
                             id=f"chatcmpl-{uuid.uuid4()}",
                             created=0,
@@ -705,6 +727,24 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 except json.JSONDecodeError:
                     verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
                     continue
+
+        # Defensive fallback: emit a stop chunk if the stream ended without
+        # a final `message` event (e.g. partial streams, connectivity drops).
+        if not stop_emitted:
+            fallback = ModelResponseStream(
+                id=f"chatcmpl-{uuid.uuid4()}",
+                created=0,
+                model=model,
+                object="chat.completion.chunk",
+            )
+            fallback.choices = [
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(),
+                )
+            ]
+            yield fallback
 
     async def get_async_custom_stream_wrapper(
         self,
