@@ -2747,23 +2747,27 @@ class SSOAuthenticationHandler:
         # but would produce a "Bearer None" Authorization header downstream.
         access_token_val = token_response.get("access_token")
         if not isinstance(access_token_val, str) or not access_token_val:
-            error = token_response.get("error", "unknown_error")
+            error = token_response.get("error")
             error_desc = token_response.get("error_description", "")
+            if error:
+                detail = f"{error} - {error_desc}" if error_desc else error
+            else:
+                detail = (
+                    "token endpoint returned HTTP 200 but no access_token "
+                    f"(response keys: {sorted(token_response.keys())})"
+                )
             verbose_proxy_logger.error(
-                "Token response missing or null access_token. error=%s description=%s",
-                error,
-                error_desc,
+                "Token response missing or null access_token. detail=%s", detail
             )
             raise ProxyException(
-                message=f"Token exchange error: {error} - {error_desc}",
+                message=f"Token exchange failed: {detail}",
                 type=ProxyErrorTypes.auth_error,
                 param="token_exchange",
                 code=status.HTTP_401_UNAUTHORIZED,
             )
 
         verbose_proxy_logger.debug(
-            "PKCE token exchange successful. access_token=%s id_token=%s",
-            bool(token_response.get("access_token")),
+            "PKCE token exchange successful. id_token_present=%s",
             bool(token_response.get("id_token")),
         )
         userinfo = await SSOAuthenticationHandler._get_pkce_userinfo(
@@ -2795,7 +2799,9 @@ class SSOAuthenticationHandler:
         Fetches user info from the userinfo endpoint.
         Falls back to decoding the id_token if the endpoint is unavailable.
         """
-        userinfo: Optional[dict] = None  # None means "request not yet attempted or failed"
+        # None = request not yet attempted, failed, or returned an empty dict (treated as failure
+        # so the id_token fallback can be attempted instead of returning a session with no claims).
+        userinfo: Optional[dict] = None
 
         if userinfo_endpoint:
             try:
