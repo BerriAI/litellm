@@ -6338,13 +6338,8 @@ def validate_environment(  # noqa: PLR0915
             ):
                 keys_in_environment = True
             else:
-                if "CLOUDFLARE_API_KEY" not in os.environ:
-                    missing_keys.append("CLOUDFLARE_API_KEY")
-                if (
-                    "CLOUDFLARE_ACCOUNT_ID" not in os.environ
-                    and "CLOUDFLARE_API_BASE" not in os.environ
-                ):
-                    missing_keys.append("CLOUDFLARE_API_BASE")
+                missing_keys.append("CLOUDFLARE_API_KEY")
+                missing_keys.append("CLOUDFLARE_API_BASE")
         elif custom_llm_provider == "novita":
             if "NOVITA_API_KEY" in os.environ:
                 keys_in_environment = True
