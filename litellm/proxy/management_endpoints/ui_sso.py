@@ -2914,17 +2914,22 @@ class SSOAuthenticationHandler:
         # But bearer credentials (access_token, id_token, refresh_token) must always come
         # from the token endpoint, not from userinfo (non-standard providers occasionally
         # include these fields in userinfo, which would otherwise shadow the real bearer token).
-        # Skip re-insertion when the token_response value is None (e.g. "id_token": null) —
-        # an absent key is a cleaner signal for "not present" than an explicit None and avoids
-        # diverging from the non-PKCE path where these fields are simply absent.
+        #
+        # Three-way merge semantics for each bearer-credential field:
+        #   1. token_response has a non-null value → use it (token endpoint is authoritative)
+        #   2. token_response explicitly sent null  → remove the key so callers get a clean
+        #      absence signal; the null from the token endpoint overrides userinfo too
+        #   3. field absent from token_response     → leave whatever userinfo provided as-is
+        #      (e.g. userinfo-provided id_token from a non-standard provider)
         merged = {**token_response, **userinfo}
         for field in _OAUTH_TOKEN_FIELDS:
             if token_response.get(field) is not None:
+                # Case 1: non-null in token_response — restore authoritative value.
                 merged[field] = token_response[field]
-            elif field in merged:
-                # Remove the key entirely if token_response had it as null/None so that
-                # callers can use `field in response` as a reliable presence check.
-                del merged[field]
+            elif field in token_response:
+                # Case 2: key exists but value is explicitly null — remove from merged.
+                merged.pop(field, None)
+            # Case 3: field absent from token_response — leave userinfo value as-is.
         return merged
 
     @staticmethod
