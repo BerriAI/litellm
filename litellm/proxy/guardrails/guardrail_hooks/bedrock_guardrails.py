@@ -699,11 +699,30 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     if self._should_raise_guardrail_blocked_exception(resp):
                         break
             except HTTPException:
-                # Merge and log accumulated responses from successful chunks before re-raising
+                # Check if any prior chunk was blocked by guardrail
                 if responses:
                     bedrock_guardrail_response, merged_json = (
                         self._merge_guardrail_responses(responses)
                     )
+                    # If any prior chunk had a guardrail block, honor it instead of HTTP error
+                    if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
+                        redacted_response = _redact_pii_matches(merged_json)
+                        self.add_standard_logging_guardrail_information_to_request_data(
+                            guardrail_provider=self.guardrail_provider,
+                            guardrail_json_response=merged_json,
+                            request_data=request_data or {},
+                            guardrail_status=self._determine_guardrail_status_from_json(
+                                json_response=merged_json,
+                                guardrail_response=bedrock_guardrail_response,
+                            ),
+                            start_time=start_time.timestamp(),
+                            end_time=datetime.now().timestamp(),
+                            duration=(datetime.now() - start_time).total_seconds(),
+                            event_type=event_type,
+                        )
+                        raise self._get_http_exception_for_blocked_guardrail(
+                            bedrock_guardrail_response
+                        )
                     verbose_proxy_logger.warning(
                         "Partial guardrail coverage: %d/%d chunks processed successfully. "
                         "Accumulated assessments: %s",

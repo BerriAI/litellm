@@ -91,7 +91,8 @@ class TestEnsureClientGenerated:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["prisma", "generate"], returncode=0, stdout="", stderr=""
         )
-        mock_sys.modules = {}
+        # Populate mock_sys.modules with fake prisma keys to ensure cleanup loop body executes
+        mock_sys.modules = {"prisma": MagicMock(), "prisma.engine": MagicMock()}
         with patch(
             "litellm.proxy.db.prisma_client.importlib.import_module",
             side_effect=[ImportError("missing prisma"), ImportError("still missing")],
