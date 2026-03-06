@@ -3638,7 +3638,10 @@ class TestPKCEFunctionality:
         with pytest.raises(ProxyException) as exc_info:
             with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
                 "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
-            ), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
+            ), patch.dict(
+                os.environ,
+                {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
+            ):
                 await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                     request=mock_request, generic_include_client_id=False
                 )
@@ -3701,7 +3704,6 @@ class TestPKCEFunctionality:
     async def test_delete_pkce_verifier_swallows_deletion_errors(self):
         """_delete_pkce_verifier must not raise when the cache delete fails
         (best-effort cleanup — a leftover verifier must not abort a successful SSO login)."""
-        import os
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
@@ -3741,7 +3743,10 @@ class TestPKCEFunctionality:
         with pytest.raises(ProxyException) as exc_info:
             with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
                 "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
-            ), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
+            ), patch.dict(
+                os.environ,
+                {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
+            ):
                 await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                     request=mock_request, generic_include_client_id=False
                 )

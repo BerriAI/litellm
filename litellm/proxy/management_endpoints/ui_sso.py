@@ -2561,39 +2561,45 @@ class SSOAuthenticationHandler:
             else:
                 # PKCE is enabled (already checked above) but verifier is missing.
                 # Most likely cause: callback landed on a different pod than the login
-                # request, and no shared Redis cache is configured.  Silently falling
-                # through to the non-PKCE path would send the request to the provider
-                # without code_verifier, producing a confusing provider-side error.
-                # Raise immediately with a diagnostic that points to the root cause.
+                # request, and no shared Redis cache is configured.
                 active_cache = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
-                verbose_proxy_logger.error(
-                    "PKCE is enabled but no usable code_verifier found for state '%s'. "
-                    "This usually means the authorization and callback were handled by different "
-                    "instances without a shared cache, or the cached value had an unrecognized format. "
-                    "Ensure Redis is configured. "
-                    "Cache type: %s. Raw cache data present (may be unrecognized format): %s",
-                    state,
-                    type(active_cache).__name__,
-                    cached_data is not None,
+                strict_cache_miss = (
+                    os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
                 )
-                redis_hint = (
-                    " Configure Redis and set REDIS_URL so all proxy instances share the PKCE verifier."
-                    if redis_usage_cache is None
-                    else ""
-                )
-                # Raise immediately — falling through to a non-PKCE flow would only
-                # produce a confusing provider-side error (provider requires code_verifier).
-                # Since PKCE support is new in this release, there is no prior behavior
-                # to preserve: the verifier was never actually used before this PR.
-                raise ProxyException(
-                    message=(
-                        f"PKCE verifier not found in cache for state '{state}'. "
-                        f"The login and callback requests were likely handled by different instances.{redis_hint}"
-                    ),
-                    type=ProxyErrorTypes.auth_error,
-                    param="PKCE_CACHE_MISS",
-                    code=status.HTTP_401_UNAUTHORIZED,
-                )
+                if strict_cache_miss:
+                    verbose_proxy_logger.error(
+                        "PKCE is enabled but no usable code_verifier found for state '%s'. "
+                        "This usually means the authorization and callback were handled by different "
+                        "instances without a shared cache, or the cached value had an unrecognized format. "
+                        "Ensure Redis is configured. "
+                        "Cache type: %s. Raw cache data present (may be unrecognized format): %s",
+                        state,
+                        type(active_cache).__name__,
+                        cached_data is not None,
+                    )
+                    redis_hint = (
+                        " Configure Redis and set REDIS_URL so all proxy instances share the PKCE verifier."
+                        if redis_usage_cache is None
+                        else ""
+                    )
+                    raise ProxyException(
+                        message=(
+                            f"PKCE verifier not found in cache for state '{state}'. "
+                            f"The login and callback requests were likely handled by different instances.{redis_hint}"
+                        ),
+                        type=ProxyErrorTypes.auth_error,
+                        param="PKCE_CACHE_MISS",
+                        code=status.HTTP_401_UNAUTHORIZED,
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        "PKCE is enabled but verifier not found in cache for state '%s' "
+                        "(cache type: %s, raw data present: %s). "
+                        "Continuing without code_verifier — set PKCE_STRICT_CACHE_MISS=true to fail fast instead.",
+                        state,
+                        type(active_cache).__name__,
+                        cached_data is not None,
+                    )
         return token_params
 
     @staticmethod
@@ -2847,8 +2853,8 @@ class SSOAuthenticationHandler:
                 )
 
         # Only fall back to id_token when the userinfo request failed (None).
-        # An empty dict ({}) is treated as a failure (userinfo is set to None above)
-        # so we also attempt the id_token fallback in that case.
+        # An empty dict ({}) is also treated as a failure (set to None above) since it
+        # contains no identity claims — id_token fallback is attempted in that case too.
         # Explicitly check for a non-empty string to avoid attempting JWT decode on
         # a blank or non-string id_token field from a misbehaving provider.
         if userinfo is None and isinstance(id_token, str) and id_token:
