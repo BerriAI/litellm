@@ -55,3 +55,28 @@ def test_map_openai_params_with_preview_api_version():
     assert config.map_openai_params(
         non_default_params, optional_params, model, drop_params, api_version
     )
+
+
+def test_azure_strips_output_config():
+    """Test that Azure OpenAI strips output_config parameter (Anthropic-specific).
+
+    Azure OpenAI doesn't support output_config, which is an Anthropic API parameter
+    for extended thinking/effort configuration. When requests are proxied through
+    LiteLLM from Anthropic-format clients (like Claude Code CLI), this parameter
+    should be stripped to avoid Azure API errors.
+
+    See: https://github.com/BerriAI/litellm/issues/22797
+    """
+    config = AzureOpenAIConfig()
+    request = config.transform_request(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "output_config": {"effort": "high"},
+            "temperature": 0.7,
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "output_config" not in request
+    assert request["temperature"] == 0.7

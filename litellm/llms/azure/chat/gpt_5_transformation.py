@@ -116,6 +116,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         headers: dict,
     ) -> dict:
         model = model.replace(self.GPT5_SERIES_ROUTE, "")
+        # Azure OpenAI doesn't support output_config parameter (Anthropic-specific), remove it if present
+        # See: https://github.com/BerriAI/litellm/issues/22797
+        optional_params.pop("output_config", None)
         return super().transform_request(
             model=model,
             messages=messages,

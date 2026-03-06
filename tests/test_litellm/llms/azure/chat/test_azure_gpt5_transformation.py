@@ -113,6 +113,30 @@ def test_azure_gpt5_codex_series_transform_request(config: AzureOpenAIGPT5Config
     assert request["model"] == "gpt-5-codex"
 
 
+def test_azure_gpt5_strips_output_config(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5 strips output_config parameter (Anthropic-specific).
+
+    Azure OpenAI doesn't support output_config, which is an Anthropic API parameter
+    for extended thinking/effort configuration. When requests are proxied through
+    LiteLLM from Anthropic-format clients (like Claude Code CLI), this parameter
+    should be stripped to avoid Azure API errors.
+
+    See: https://github.com/BerriAI/litellm/issues/22797
+    """
+    request = config.transform_request(
+        model="gpt-5.2",
+        messages=[],
+        optional_params={
+            "output_config": {"effort": "high"},
+            "max_completion_tokens": 100,
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "output_config" not in request
+    assert request["max_completion_tokens"] == 100
+
+
 # GPT-5.1 temperature handling tests for Azure
 def test_azure_gpt5_1_temperature_with_reasoning_effort_none(config: AzureOpenAIGPT5Config):
     """Test that Azure GPT-5.1 supports any temperature when reasoning_effort='none'.

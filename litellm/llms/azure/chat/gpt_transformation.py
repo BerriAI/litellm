@@ -255,6 +255,9 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        # Azure OpenAI doesn't support output_config parameter (Anthropic-specific), remove it if present
+        # See: https://github.com/BerriAI/litellm/issues/22797
+        optional_params.pop("output_config", None)
         messages = convert_to_azure_openai_messages(messages)
         return {
             "model": model,
