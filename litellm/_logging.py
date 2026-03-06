@@ -244,6 +244,12 @@ ALL_LOGGERS = [
     verbose_router_logger,
     verbose_proxy_logger,
 ]
+# NOTE: The root logger (``logging.getLogger()``) was intentionally removed
+# from this list to follow the Python library best practice of never
+# attaching handlers to loggers outside the library's own namespace.
+# Third-party integration loggers (e.g. langfuse) are still explicitly
+# handled in ``_get_loggers_to_initialize()`` below when they are
+# configured as callbacks, so JSON formatting is preserved for them.
 
 
 def _get_loggers_to_initialize():

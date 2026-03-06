@@ -1,15 +1,20 @@
 """
-Tests for Skills API operations across providers
+Tests for Skills API operations across providers.
+
+All tests use mocked HTTP responses so no real network calls are made,
+keeping this folder CI-safe and free of provider-credential requirements.
 """
 
+import io
 import os
 import sys
 import zipfile
-from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -21,246 +26,142 @@ from litellm.types.llms.anthropic_skills import (
     Skill,
 )
 
+# ---------------------------------------------------------------------------
+# Shared mock response payloads
+# ---------------------------------------------------------------------------
+
+MOCK_SKILL = {
+    "id": "skill_mock_001",
+    "created_at": "2025-01-01T00:00:00Z",
+    "display_title": "Mock Skill",
+    "latest_version": "v1",
+    "source": "custom",
+    "type": "skill",
+    "updated_at": "2025-01-01T00:00:00Z",
+}
+
+MOCK_LIST_RESPONSE = {
+    "data": [MOCK_SKILL],
+    "has_more": False,
+}
+
+MOCK_DELETE_RESPONSE = {
+    "id": "skill_mock_001",
+    "type": "skill_deleted",
+}
+
+
+def _mock_httpx_response(json_body: dict, status_code: int = 200) -> httpx.Response:
+    """Build a minimal ``httpx.Response`` that behaves like a real one."""
+    import json as _json
+
+    return httpx.Response(
+        status_code=status_code,
+        content=_json.dumps(json_body).encode(),
+        headers={"content-type": "application/json"},
+        request=httpx.Request("POST", "https://mock.test"),
+    )
+
 
 @contextmanager
 def create_skill_zip(skill_name: str):
     """
     Helper context manager to create a zip file for a skill.
-    
+
     Args:
         skill_name: Name of the skill directory in test_skills_data/
-        
+
     Yields:
         File handle to the zip file
-        
+
     The zip file is automatically cleaned up after use.
     """
     test_dir = Path(__file__).parent / "test_skills_data"
     skill_dir = test_dir / skill_name
-    
-    # Create a zip file containing the skill directory
+
     zip_path = test_dir / f"{skill_name}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
         zip_file.write(skill_dir, arcname=skill_name)
         zip_file.write(skill_dir / "SKILL.md", arcname=f"{skill_name}/SKILL.md")
-    
+
     try:
         with open(zip_path, "rb") as f:
             yield f
     finally:
-        # Clean up zip file
         if zip_path.exists():
             zip_path.unlink()
 
 
-class BaseSkillsAPITest(ABC):
-    """
-    Base test class for Skills API operations.
-    Tests create, list, get, and delete operations.
-    """
+class TestAnthropicSkillsAPI:
+    """Mock-based tests for the Anthropic Skills API translation layer."""
 
-    @abstractmethod
-    def get_custom_llm_provider(self) -> str:
-        """Return the provider name (e.g., 'anthropic')"""
-        pass
+    provider = "anthropic"
 
-    @abstractmethod
-    def get_api_key(self) -> Optional[str]:
-        """Return the API key for the provider"""
-        pass
+    # -- create --------------------------------------------------------
 
-    @abstractmethod
-    def get_api_base(self) -> Optional[str]:
-        """Return the API base URL for the provider"""
-        pass
+    @patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post")
+    def test_create_skill(self, mock_post):
+        mock_post.return_value = _mock_httpx_response(MOCK_SKILL)
 
-    def test_create_skill(self):
-        """
-        Test creating a skill.
-        
-        Note: This test creates a skill but does not clean it up,
-        as we want to verify it was created successfully.
-        The test_delete_skill test will handle cleanup.
-        """
-        import time
-        
-        custom_llm_provider = self.get_custom_llm_provider()
-        api_key = self.get_api_key()
-        api_base = self.get_api_base()
-
-        if not api_key:
-            pytest.skip(f"No API key provided for {custom_llm_provider}")
-
-        litellm.set_verbose = True
-        litellm._turn_on_debug()
-
-        # Use helper to create skill zip
         skill_name = "test-skill-litellm"
-        
-        # Use unique title to avoid conflicts with previous test runs
-        unique_title = f"Test Skill {int(time.time())}"
-        
-        # Upload the skill with the zip file
         with create_skill_zip(skill_name) as zip_file:
             response = litellm.create_skill(
-                display_title=unique_title,
+                display_title="Mock Skill",
                 files=[zip_file],
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                api_base=api_base,
+                custom_llm_provider=self.provider,
+                api_key="sk-mock-key",
             )
 
-        assert response is not None
         assert isinstance(response, Skill)
-        assert response.id is not None
-        print(f"Created skill: {response}")
-        print(f"Skill ID: {response.id}")
+        assert response.id == "skill_mock_001"
+        mock_post.assert_called_once()
 
-    def test_list_skills(self):
-        """
-        Test listing skills.
-        """
-        import os
-        custom_llm_provider = self.get_custom_llm_provider()
-        api_key = self.get_api_key()
-        api_base = self.get_api_base()
+    # -- list ----------------------------------------------------------
 
-        if not api_key:
-            pytest.skip(f"No API key provided for {custom_llm_provider}")
+    @patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.get")
+    def test_list_skills(self, mock_get):
+        mock_get.return_value = _mock_httpx_response(MOCK_LIST_RESPONSE)
 
-        # Enable debug logging
-        os.environ["LITELLM_LOG"] = "DEBUG"
-        litellm.set_verbose = True
-
-        print(f"\n=== Testing list_skills ===")
-        print("API Key: [REDACTED]")
-        print(f"API Base: {api_base}")
-        
         response = litellm.list_skills(
             limit=10,
-            custom_llm_provider=custom_llm_provider,
-            api_key=api_key,
-            api_base=api_base,
+            custom_llm_provider=self.provider,
+            api_key="sk-mock-key",
         )
 
-        assert response is not None
         assert isinstance(response, ListSkillsResponse)
-        assert hasattr(response, "data")
-        print(f"Listed skills: {response}")
+        assert len(response.data) == 1
+        assert response.data[0].id == "skill_mock_001"
+        mock_get.assert_called_once()
 
-    def test_get_skill(self):
-        """
-        Test getting a specific skill by ID.
-        """
-        custom_llm_provider = self.get_custom_llm_provider()
-        api_key = self.get_api_key()
-        api_base = self.get_api_base()
+    # -- get -----------------------------------------------------------
 
-        if not api_key:
-            pytest.skip(f"No API key provided for {custom_llm_provider}")
+    @patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.get")
+    def test_get_skill(self, mock_get):
+        mock_get.return_value = _mock_httpx_response(MOCK_SKILL)
 
-        litellm.set_verbose = True
-
-        # First list existing skills to see if any exist
-        list_response = litellm.list_skills(
-            limit=1,
-            custom_llm_provider=custom_llm_provider,
-            api_key=api_key,
-            api_base=api_base,
+        response = litellm.get_skill(
+            skill_id="skill_mock_001",
+            custom_llm_provider=self.provider,
+            api_key="sk-mock-key",
         )
-        
-        # Type assertion for linter
-        assert isinstance(list_response, ListSkillsResponse)
-        print(f"List response: {list_response}")
-        
-        # If there are existing skills, use the first one
-        if list_response.data and len(list_response.data) > 0:
-            skill_id = list_response.data[0].id
-            should_cleanup = False
-            print(f"Using existing skill: {skill_id}")
-        
 
-            # Now get the skill
-            response = litellm.get_skill(
-                skill_id=skill_id,
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                api_base=api_base,
-            )
+        assert isinstance(response, Skill)
+        assert response.id == "skill_mock_001"
+        mock_get.assert_called_once()
 
-            assert response is not None
-            assert isinstance(response, Skill)
-            assert response.id == skill_id
-            print(f"GET - Retrieved skill: {response}")
+    # -- delete --------------------------------------------------------
 
+    @patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.delete")
+    def test_delete_skill(self, mock_delete):
+        mock_delete.return_value = _mock_httpx_response(MOCK_DELETE_RESPONSE)
 
-
-    def test_delete_skill(self):
-        """
-        Test deleting a skill.
-        
-        Note: Anthropic requires deleting all skill versions before deleting the skill itself.
-        This test is currently skipped as it would require additional API calls to delete versions.
-        """
-        import time
-        
-        custom_llm_provider = self.get_custom_llm_provider()
-        api_key = self.get_api_key()
-        api_base = self.get_api_base()
-
-        if not api_key:
-            pytest.skip(f"No API key provided for {custom_llm_provider}")
-
-        pytest.skip("Anthropic requires deleting all skill versions first - skipping for now")
-
-        litellm.set_verbose = True
-
-        # Use helper to create skill zip
-        skill_name = "test-delete-skill"
-        
-        # Use unique title to avoid conflicts
-        unique_title = f"Test Delete Skill {int(time.time())}"
-        
-        # Create a skill specifically to delete
-        with create_skill_zip(skill_name) as zip_file:
-            created_skill = litellm.create_skill(
-                display_title=unique_title,
-                files=[zip_file],
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                api_base=api_base,
-            )
-        
-        # Type assertion for linter
-        assert isinstance(created_skill, Skill)
-        skill_id = created_skill.id
-        print(f"Created skill to delete: {skill_id}")
-
-        # Now delete the skill
         response = litellm.delete_skill(
-            skill_id=skill_id,
-            custom_llm_provider=custom_llm_provider,
-            api_key=api_key,
-            api_base=api_base,
+            skill_id="skill_mock_001",
+            custom_llm_provider=self.provider,
+            api_key="sk-mock-key",
         )
 
-        assert response is not None
         assert isinstance(response, DeleteSkillResponse)
         assert response.type == "skill_deleted"
-        print(f"Deleted skill response: {response}")
-
-
-class TestAnthropicSkillsAPI(BaseSkillsAPITest):
-    """
-    Test Anthropic Skills API implementation.
-    """
-
-    def get_custom_llm_provider(self) -> str:
-        return "anthropic"
-
-    def get_api_key(self) -> Optional[str]:
-        return os.environ.get("ANTHROPIC_API_KEY")
-
-    def get_api_base(self) -> Optional[str]:
-        return os.environ.get("ANTHROPIC_API_BASE")
+        mock_delete.assert_called_once()
 
