@@ -200,8 +200,8 @@ token: Optional[str] = (
 )
 telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
-drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
-modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+drop_params = os.getenv("LITELLM_DROP_PARAMS", "").lower() in ("1", "true", "yes", "on")
+modify_params = os.getenv("LITELLM_MODIFY_PARAMS", "").lower() in ("1", "true", "yes", "on")
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
