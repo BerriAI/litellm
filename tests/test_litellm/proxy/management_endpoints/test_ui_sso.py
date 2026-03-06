@@ -3663,6 +3663,7 @@ class TestPKCEFunctionality:
                 )
 
         assert "verifier not found" in exc_info.value.message.lower() or "cache" in exc_info.value.message.lower()
+        assert exc_info.value.code == 401
 
 
     @pytest.mark.asyncio

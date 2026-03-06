@@ -2840,7 +2840,7 @@ class SSOAuthenticationHandler:
             )
 
         try:
-            token_response: dict = response.json()
+            token_response_raw = response.json()
         except Exception as json_err:
             verbose_proxy_logger.error(
                 "Failed to parse token response as JSON: %s. Body: %s",
@@ -2853,6 +2853,25 @@ class SSOAuthenticationHandler:
                 param="token_exchange",
                 code=status.HTTP_401_UNAUTHORIZED,
             )
+
+        # Guard against HTTP 200 with body `null` — response.json() returns Python None
+        # in that case, and calling .get() on None raises AttributeError.
+        if not isinstance(token_response_raw, dict):
+            verbose_proxy_logger.error(
+                "Token endpoint returned non-dict JSON (type=%s). Body: %s",
+                type(token_response_raw).__name__,
+                response.text[:500],
+            )
+            raise ProxyException(
+                message=(
+                    f"Token endpoint returned unexpected response format "
+                    f"(expected JSON object, got {type(token_response_raw).__name__})"
+                ),
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+        token_response: dict = token_response_raw
 
         # Some providers return HTTP 200 with an error body (e.g. expired code, replay attack).
         # Also guard against JSON `null` for access_token — it passes key-existence checks
@@ -2920,7 +2939,7 @@ class SSOAuthenticationHandler:
         Fetches user info from the userinfo endpoint.
         Falls back to decoding the id_token if the endpoint is unavailable.
         """
-        # None = request not yet attempted, failed, or returned an empty dict (treated as failure
+        # None = request not yet attempted, failed, or returned empty/null (treated as failure
         # so the id_token fallback can be attempted instead of returning a session with no claims).
         userinfo: Optional[dict] = None
 
@@ -2937,17 +2956,19 @@ class SSOAuthenticationHandler:
                     )
                     if resp.status_code == 200:
                         try:
-                            userinfo = resp.json()
-                            if not userinfo:
-                                # An empty dict means the provider returned 200 but no
-                                # identity claims — the session would be anonymous/broken.
-                                # Treat this as a failure so we attempt the id_token fallback.
+                            userinfo_raw = resp.json()
+                            if not userinfo_raw:
+                                # JSON null (None) or empty dict ({}) — no identity claims.
+                                # Treat as failure so id_token fallback can be attempted.
                                 verbose_proxy_logger.warning(
-                                    "Userinfo endpoint returned an empty dict; "
-                                    "treating as failure and attempting id_token fallback. "
+                                    "Userinfo endpoint returned an empty or null response "
+                                    "(type=%s); treating as failure and attempting id_token fallback. "
                                     "Check your provider's userinfo endpoint configuration.",
+                                    type(userinfo_raw).__name__,
                                 )
                                 userinfo = None
+                            else:
+                                userinfo = userinfo_raw
                         except Exception as json_err:
                             verbose_proxy_logger.warning(
                                 "Userinfo endpoint returned non-JSON response (status 200): %s",
@@ -2964,8 +2985,8 @@ class SSOAuthenticationHandler:
                 )
 
         # Only fall back to id_token when the userinfo request failed (None).
-        # An empty dict ({}) is also treated as a failure (set to None above) since it
-        # contains no identity claims — id_token fallback is attempted in that case too.
+        # Empty dict ({}) and JSON null are both treated as failure (set to None above) since
+        # they contain no identity claims — id_token fallback is attempted in that case too.
         # Explicitly check for a non-empty string to avoid attempting JWT decode on
         # a blank or non-string id_token field from a misbehaving provider.
         if userinfo is None and isinstance(id_token, str) and id_token:
