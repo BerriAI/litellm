@@ -226,7 +226,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             const name = nameOf(server);
             const isConnected = selectedServers.includes(name);
             const color = getAvatarColor(name);
-            const isEvenRow = Math.floor(idx / 2) % 2 === 0;
             const isLeftCol = idx % 2 === 0;
 
             return (
