@@ -808,6 +808,13 @@ async def get_generic_sso_response(
                     param="code",
                     code=status.HTTP_400_BAD_REQUEST,
                 )
+            if not generic_client_id:
+                raise ProxyException(
+                    message="GENERIC_CLIENT_ID must be set when PKCE is enabled",
+                    type=ProxyErrorTypes.auth_error,
+                    param="GENERIC_CLIENT_ID",
+                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
             if not generic_token_endpoint:
                 raise ProxyException(
                     message="GENERIC_TOKEN_ENDPOINT must be set when PKCE is enabled",
@@ -815,7 +822,7 @@ async def get_generic_sso_response(
                     param="GENERIC_TOKEN_ENDPOINT",
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            # Both guards above raise, so authorization_code is a non-empty str here.
+            # All guards above raise, so authorization_code is a non-empty str here.
             # Use an explicit type guard rather than assert (assert is a no-op with -O).
             if not isinstance(authorization_code, str):
                 raise ProxyException(
@@ -2719,28 +2726,29 @@ class SSOAuthenticationHandler:
             if client_secret:
                 token_data["client_secret"] = client_secret
 
-        # Perform the POST inside async with; response is buffered by httpx so
-        # status_code, text, and json() are safe to access after __aexit__.
-        # Only the POST itself is wrapped in try/except — TLS teardown errors
-        # from __aexit__ propagate as-is and are NOT mis-labelled as "token
-        # endpoint request failed".
-        try:
-            async with httpx.AsyncClient() as http_client:
+        # The try/except is INSIDE the async with so it only covers the POST call.
+        # If TLS teardown in __aexit__ raises, it propagates after the try/except
+        # has already completed — it is NOT caught here and NOT mis-labelled as
+        # "Token endpoint request failed".  httpx buffers the full response body
+        # inside the context, so status_code / text / json() are safe to access
+        # outside the async with block.
+        async with httpx.AsyncClient() as http_client:
+            try:
                 response = await http_client.post(token_endpoint, **post_kwargs)
-        except Exception as exc:
-            # Catch network-level errors (SSL, DNS, TCP, timeout, etc.) and
-            # wrap them as a clean ProxyException rather than leaking raw httpx
-            # or OS exceptions to callers.
-            verbose_proxy_logger.error("PKCE token endpoint unreachable: %s", exc)
-            raise ProxyException(
-                message=f"Token endpoint request failed: {exc}",
-                type=ProxyErrorTypes.auth_error,
-                param="token_exchange",
-                code=status.HTTP_401_UNAUTHORIZED,
-            ) from exc
+            except Exception as exc:
+                # Catch network-level errors (SSL, DNS, TCP, timeout, etc.) and
+                # wrap them as a clean ProxyException rather than leaking raw
+                # httpx or OS exceptions to callers.
+                verbose_proxy_logger.error("PKCE token endpoint unreachable: %s", exc)
+                raise ProxyException(
+                    message=f"Token endpoint request failed: {exc}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="token_exchange",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ) from exc
 
-        # All response processing happens outside the async with block —
-        # httpx buffers the full response so status_code / text / json() are safe.
+        # Response processing outside the async with — httpx buffers the full
+        # response body so status_code / text / json() remain valid after __aexit__.
         if response.status_code != 200:
             verbose_proxy_logger.error(
                 "PKCE token exchange failed. status=%s body=%s",
