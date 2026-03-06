@@ -159,7 +159,7 @@ class SearchAPIConfig(BaseSearchConfig):
             domains = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
                 result_data["q"] = self._append_domain_filters(
-                    result_data["q"], domains
+                    str(result_data["q"]), domains
                 )
 
         if "country" in optional_params:

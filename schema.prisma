@@ -288,6 +288,8 @@ model LiteLLM_MCPServerTable {
   mcp_info     Json?          @default("{}")
   mcp_access_groups String[]
   allowed_tools String[]      @default([])
+  tool_name_to_display_name Json? @default("{}")
+  tool_name_to_description   Json? @default("{}")
   extra_headers String[]    @default([])
   static_headers Json?        @default("{}")
   // Health check status
@@ -303,6 +305,21 @@ model LiteLLM_MCPServerTable {
   registration_url   String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
+  is_byok               Boolean  @default(false)
+  byok_description      String[] @default([])
+  byok_api_key_help_url String?
+}
+
+// Per-user BYOK credentials for MCP servers
+model LiteLLM_MCPUserCredentials {
+  id             String   @id @default(uuid())
+  user_id        String
+  server_id      String
+  credential_b64 String
+  created_at     DateTime @default(now()) @map("created_at")
+  updated_at     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([user_id, server_id])
 }
 
 // Generate Tokens for Proxy
@@ -353,6 +370,7 @@ model LiteLLM_VerificationToken {
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+    jwt_key_mappings LiteLLM_JWTKeyMapping[]
 
     // SELECT COUNT(*) FROM (SELECT "public"."LiteLLM_VerificationToken"."token" FROM "public"."LiteLLM_VerificationToken" WHERE ("public"."LiteLLM_VerificationToken"."user_id" = $1 AND ("public"."LiteLLM_VerificationToken"."team_id" IS NULL OR "public"."LiteLLM_VerificationToken"."team_id" <> $2)) OFFSET $3 ) AS "sub"
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."user_id" = $1 OFFSET $2
@@ -363,6 +381,24 @@ model LiteLLM_VerificationToken {
 
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE (("public"."LiteLLM_VerificationToken"."expires" IS NULL OR "public"."LiteLLM_VerificationToken"."expires" > $1) AND "public"."LiteLLM_VerificationToken"."budget_reset_at" < $2) OFFSET $3
     @@index([budget_reset_at, expires])
+}
+
+model LiteLLM_JWTKeyMapping {
+    id                String   @id @default(uuid())
+    jwt_claim_name    String   // e.g. "sub", "email"
+    jwt_claim_value   String   // The claim value to match
+    token             String   // Hashed virtual key (FK)
+    description       String?
+    is_active         Boolean  @default(true)
+    created_at        DateTime @default(now())
+    created_by        String?
+    updated_at        DateTime @default(now()) @updatedAt
+    updated_by        String?
+
+    litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token])
+
+    @@unique([jwt_claim_name, jwt_claim_value])
+    @@index([jwt_claim_name, jwt_claim_value, is_active])
 }
 
 // Deprecated keys during grace period - allows old key to work until revoke_at
