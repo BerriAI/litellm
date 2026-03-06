@@ -145,10 +145,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content", "")
-            # Normalize: treat explicit content=None as "" for assistant role
-            # so missing-key and explicit-None produce identical Responses API input
-            if content is None and role == "assistant":
-                content = ""
             tool_calls = msg.get("tool_calls")
             tool_call_id = msg.get("tool_call_id")
 
@@ -1230,6 +1226,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                             )
                         ]
                     )
+                # Fallback: emit empty delta so the event is acknowledged, not silently dropped
+                return ModelResponseStream(
+                    choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)]
+                )
 
         elif event_type == "response.output_text.delta":
             # Content part added to output
