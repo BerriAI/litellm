@@ -20,7 +20,13 @@ function redactSensitiveValues(obj: Record<string, unknown>): Record<string, unk
   for (const [k, v] of Object.entries(obj)) {
     if (REDACTED_KEY_PATTERNS.test(k)) {
       result[k] = "[redacted]";
-    } else if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+    } else if (Array.isArray(v)) {
+      result[k] = v.map((item) =>
+        item !== null && typeof item === "object" && !Array.isArray(item)
+          ? redactSensitiveValues(item as Record<string, unknown>)
+          : item,
+      );
+    } else if (v !== null && typeof v === "object") {
       result[k] = redactSensitiveValues(v as Record<string, unknown>);
     } else {
       result[k] = v;
@@ -36,16 +42,16 @@ function formatTimestamp(ts: number): string {
   return `${hh}:${mm}`;
 }
 
-// Shared markdown code renderer matching ReasoningContent style
+// Shared markdown code renderer matching ReasoningContent style.
+// react-markdown v9 removed the `inline` prop; detect fenced blocks via language className.
 function MarkdownCodeRenderer({
   node,
-  inline,
   className,
   children,
   ...props
-}: React.ComponentPropsWithoutRef<"code"> & { inline?: boolean; node?: unknown }) {
+}: React.ComponentPropsWithoutRef<"code"> & { node?: unknown }) {
   const match = /language-(\w+)/.exec(className || "");
-  return !inline && match ? (
+  return match ? (
     <SyntaxHighlighter
       style={coy as Record<string, React.CSSProperties>}
       language={match[1]}
@@ -326,6 +332,8 @@ function CopyButton({ text }: { text: string }) {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      message.error("Failed to copy to clipboard");
     });
   };
 
@@ -526,8 +534,6 @@ interface Props {
 }
 
 const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage }) => {
-  const bottomRef = useRef<HTMLDivElement>(null);
-
   // Scrolling is managed by ChatPage.tsx (scroll lock during streaming,
   // scroll-to-bottom on new message). No auto-scroll here.
 
@@ -564,8 +570,6 @@ const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage })
         );
       })}
 
-      {/* Bottom sentinel for auto-scroll */}
-      <div ref={bottomRef} />
     </div>
   );
 };
