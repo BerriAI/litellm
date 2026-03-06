@@ -813,14 +813,14 @@ async def get_generic_sso_response(
                     message="GENERIC_CLIENT_ID must be set when PKCE is enabled",
                     type=ProxyErrorTypes.auth_error,
                     param="GENERIC_CLIENT_ID",
-                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    code=status.HTTP_401_UNAUTHORIZED,
                 )
             if not generic_token_endpoint:
                 raise ProxyException(
                     message="GENERIC_TOKEN_ENDPOINT must be set when PKCE is enabled",
                     type=ProxyErrorTypes.auth_error,
                     param="GENERIC_TOKEN_ENDPOINT",
-                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    code=status.HTTP_401_UNAUTHORIZED,
                 )
             # All guards above raise, so authorization_code is a non-empty str here.
             # Use an explicit type guard rather than assert (assert is a no-op with -O).
