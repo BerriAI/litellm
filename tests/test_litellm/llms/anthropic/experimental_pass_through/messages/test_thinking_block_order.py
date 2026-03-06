@@ -464,3 +464,91 @@ async def test_thinking_sse_format_async():
     assert events[1]["event"] == "content_block_start"
     assert events[1]["data"]["content_block"]["type"] == "thinking"
     assert events[1]["data"]["content_block"]["thinking"] == ""
+
+
+class MockImmediateFinishStream:
+    """Simulates a degenerate stream whose very first content chunk carries finish_reason."""
+
+    def __init__(self):
+        self.responses = [
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="done"),
+                        index=0,
+                        finish_reason="end_turn",
+                    )
+                ],
+            ),
+        ]
+        self.index = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.index >= len(self.responses):
+            raise StopIteration
+        response = self.responses[self.index]
+        self.index += 1
+        return response
+
+
+class AsyncMockImmediateFinishStream:
+    """Async version of MockImmediateFinishStream."""
+
+    def __init__(self):
+        self._sync = MockImmediateFinishStream()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._sync)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+def test_first_chunk_finish_reason_emits_content_block_stop_sync():
+    """Sync: when the very first content chunk has finish_reason, content_block_stop must precede message_delta."""
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=MockImmediateFinishStream(), model="claude-sonnet-4-5-20250514"
+    )
+    events = list(wrapper)
+    event_types = [e.get("type") for e in events]
+
+    assert "content_block_start" in event_types
+    assert "message_stop" in event_types
+
+    # If there's a message_delta, content_block_stop must come before it
+    if "message_delta" in event_types:
+        stop_idx = event_types.index("content_block_stop")
+        delta_idx = event_types.index("message_delta")
+        assert stop_idx < delta_idx, (
+            f"content_block_stop (idx {stop_idx}) must precede message_delta (idx {delta_idx}). "
+            f"Event sequence: {event_types}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_first_chunk_finish_reason_emits_content_block_stop_async():
+    """Async: when the very first content chunk has finish_reason, content_block_stop must precede message_delta."""
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=AsyncMockImmediateFinishStream(), model="claude-sonnet-4-5-20250514"
+    )
+    events = []
+    async for event in wrapper:
+        events.append(event)
+    event_types = [e.get("type") for e in events]
+
+    assert "content_block_start" in event_types
+    assert "message_stop" in event_types
+
+    if "message_delta" in event_types:
+        stop_idx = event_types.index("content_block_stop")
+        delta_idx = event_types.index("message_delta")
+        assert stop_idx < delta_idx, (
+            f"content_block_stop (idx {stop_idx}) must precede message_delta (idx {delta_idx}). "
+            f"Event sequence: {event_types}"
+        )

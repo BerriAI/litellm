@@ -137,6 +137,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         response=chunk,
                         current_content_block_index=self.current_content_block_index,
                     )
+                    # Guard: if first chunk carries finish_reason, processed_chunk
+                    # is a message_delta — emit content_block_stop before it.
+                    if processed_chunk.get("type") == "message_delta" and not self.sent_content_block_finish:
+                        self.chunk_queue.append(
+                            {"type": "content_block_stop", "index": self.current_content_block_index}
+                        )
+                        self.sent_content_block_finish = True
                     self.chunk_queue.append(processed_chunk)
                     return {
                         "type": "content_block_start",
@@ -264,6 +271,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         response=chunk,
                         current_content_block_index=self.current_content_block_index,
                     )
+                    # Guard: if first chunk carries finish_reason, processed_chunk
+                    # is a message_delta — emit content_block_stop before it.
+                    if processed_chunk.get("type") == "message_delta" and not self.sent_content_block_finish:
+                        self.chunk_queue.append(
+                            {"type": "content_block_stop", "index": self.current_content_block_index}
+                        )
+                        self.sent_content_block_finish = True
                     self.chunk_queue.append(processed_chunk)
                     return {
                         "type": "content_block_start",
