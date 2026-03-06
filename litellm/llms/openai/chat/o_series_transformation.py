@@ -24,6 +24,7 @@ from litellm.utils import (
     supports_system_messages,
 )
 
+from .gpt_5_transformation import _normalize_reasoning_effort_for_chat_completion
 from .gpt_transformation import OpenAIGPTConfig
 
 
@@ -104,6 +105,18 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ):
+        # Normalize reasoning_effort: chat completion API expects a string, not a dict
+        raw_reasoning_effort = (
+            non_default_params.get("reasoning_effort")
+            or optional_params.get("reasoning_effort")
+        )
+        normalized = _normalize_reasoning_effort_for_chat_completion(raw_reasoning_effort)
+        if raw_reasoning_effort is not None and normalized is not None:
+            if "reasoning_effort" in non_default_params:
+                non_default_params["reasoning_effort"] = normalized
+            if "reasoning_effort" in optional_params:
+                optional_params["reasoning_effort"] = normalized
+
         if "max_tokens" in non_default_params:
             optional_params["max_completion_tokens"] = non_default_params.pop(
                 "max_tokens"

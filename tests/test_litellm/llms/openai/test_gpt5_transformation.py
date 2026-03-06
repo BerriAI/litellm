@@ -324,6 +324,31 @@ def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
+def test_gpt5_normalizes_reasoning_effort_dict_to_string(config: OpenAIConfig):
+    """Chat completion API expects reasoning_effort as a string, not a dict.
+
+    Config/deployments may pass Responses API format: {'effort': 'high', 'summary': 'detailed'}.
+    """
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": "high", "summary": "detailed"}},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "high"
+
+
+def test_gpt5_normalizes_reasoning_effort_dict_from_optional_params(config: OpenAIConfig):
+    """reasoning_effort dict in optional_params (e.g. from model config) is normalized."""
+    params = config.map_openai_params(
+        non_default_params={},
+        optional_params={"reasoning_effort": {"effort": "medium", "summary": "detailed"}},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "medium"
+
+
 def test_gpt5_4_pro_rejects_non_default_temperature(config: OpenAIConfig):
     with pytest.raises(litellm.utils.UnsupportedParamsError):
         config.map_openai_params(
