@@ -1,11 +1,28 @@
 """Support for OpenAI gpt-5 model family."""
 
-from typing import Optional
+from typing import Optional, Union
 
 import litellm
 from litellm.utils import _supports_factory
 
 from .gpt_transformation import OpenAIGPTConfig
+
+
+def _normalize_reasoning_effort_for_chat_completion(
+    value: Union[str, dict, None],
+) -> Optional[str]:
+    """Convert reasoning_effort to the string format expected by OpenAI chat completion API.
+
+    The chat completion API expects a simple string: 'none', 'low', 'medium', 'high', or 'xhigh'.
+    Config/deployments may pass the Responses API format: {'effort': 'high', 'summary': 'detailed'}.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and "effort" in value:
+        return value["effort"]
+    return None
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
@@ -46,6 +63,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         """Check if the model is a gpt-5.2 variant (including pro)."""
         model_name = model.split("/")[-1]
         return model_name.startswith("gpt-5.2") or model_name.startswith("gpt-5.4")
+
+    @classmethod
+    def is_model_gpt_5_4_model(cls, model: str) -> bool:
+        """Check if the model is a gpt-5.4 variant (including pro)."""
+        model_name = model.split("/")[-1]
+        return model_name.startswith("gpt-5.4")
 
     @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
@@ -127,10 +150,20 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 drop_params=drop_params,
             )
 
-        reasoning_effort = (
+        # Normalize reasoning_effort: chat completion API expects a string, not a dict
+        # (e.g. {'effort': 'high', 'summary': 'detailed'} -> 'high')
+        raw_reasoning_effort = (
             non_default_params.get("reasoning_effort")
             or optional_params.get("reasoning_effort")
         )
+        normalized = _normalize_reasoning_effort_for_chat_completion(raw_reasoning_effort)
+        if raw_reasoning_effort is not None and normalized is not None:
+            if "reasoning_effort" in non_default_params:
+                non_default_params["reasoning_effort"] = normalized
+            if "reasoning_effort" in optional_params:
+                optional_params["reasoning_effort"] = normalized
+
+        reasoning_effort = normalized or raw_reasoning_effort
         if reasoning_effort is not None and reasoning_effort == "xhigh":
             if not self._supports_reasoning_effort_level(model, "xhigh"):
                 if litellm.drop_params or drop_params:
@@ -151,6 +184,17 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             optional_params["max_completion_tokens"] = non_default_params.pop(
                 "max_tokens"
             )
+
+        # gpt-5.4: function calls not supported when reasoning_effort != "none"
+        # Drop reasoning_effort when tools are present (small minority of volume)
+        if self.is_model_gpt_5_4_model(model):
+            has_tools = bool(
+                non_default_params.get("tools") or optional_params.get("tools")
+            )
+            if has_tools and reasoning_effort not in (None, "none"):
+                non_default_params.pop("reasoning_effort", None)
+                optional_params.pop("reasoning_effort", None)
+                reasoning_effort = None
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
         supports_none = self._supports_reasoning_effort_level(model, "none")

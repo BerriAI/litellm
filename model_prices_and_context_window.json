@@ -20632,6 +20632,7 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false
     },
@@ -20670,6 +20671,7 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false
     },
@@ -20707,6 +20709,7 @@
         "supports_system_messages": true,
         "supports_tool_choice": false,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false
     },
@@ -20746,9 +20749,9 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_none_reasoning_effort": true,
-        "supports_xhigh_reasoning_effort": true,
-        "supports_web_search": true
+        "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.2-2025-12-11": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -20786,9 +20789,9 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_none_reasoning_effort": true,
-        "supports_xhigh_reasoning_effort": true,
-        "supports_web_search": true
+        "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.2-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -20823,9 +20826,9 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false,
-        "supports_web_search": true
+        "supports_xhigh_reasoning_effort": false
     },
     "gpt-5.3-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -20860,9 +20863,9 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false,
-        "supports_web_search": true
+        "supports_xhigh_reasoning_effort": false
     },
     "gpt-5.2-pro": {
         "input_cost_per_token": 2.1e-05,
@@ -20932,16 +20935,22 @@
     },
     "gpt-5.4": {
         "cache_read_input_token_cost": 2.5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "cache_read_input_token_cost_priority": 5e-07,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 1e-06,
         "input_cost_per_token": 2.5e-06,
+        "input_cost_per_token_above_272k_tokens": 5e-06,
         "input_cost_per_token_priority": 5e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 1e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_above_272k_tokens": 2.25e-05,
         "output_cost_per_token_priority": 2.25e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 3.375e-05,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -20970,16 +20979,22 @@
     },
     "gpt-5.4-2026-03-05": {
         "cache_read_input_token_cost": 2.5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "cache_read_input_token_cost_priority": 5e-07,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 1e-06,
         "input_cost_per_token": 2.5e-06,
+        "input_cost_per_token_above_272k_tokens": 5e-06,
         "input_cost_per_token_priority": 5e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 1e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_above_272k_tokens": 2.25e-05,
         "output_cost_per_token_priority": 2.25e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 3.375e-05,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -21006,16 +21021,22 @@
     },
     "gpt-5.4-pro": {
         "cache_read_input_token_cost": 3e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 6e-06,
         "cache_read_input_token_cost_priority": 6e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 1.2e-05,
         "input_cost_per_token": 3e-05,
+        "input_cost_per_token_above_272k_tokens": 6e-05,
         "input_cost_per_token_priority": 6e-05,
+        "input_cost_per_token_above_272k_tokens_priority": 1.2e-04,
         "litellm_provider": "openai",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "output_cost_per_token": 1.8e-04,
+        "output_cost_per_token_above_272k_tokens": 2.7e-04,
         "output_cost_per_token_priority": 2.7e-04,
+        "output_cost_per_token_above_272k_tokens_priority": 4.05e-04,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -21045,16 +21066,22 @@
     },
     "gpt-5.4-pro-2026-03-05": {
         "cache_read_input_token_cost": 3e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 6e-06,
         "cache_read_input_token_cost_priority": 6e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 1.2e-05,
         "input_cost_per_token": 3e-05,
+        "input_cost_per_token_above_272k_tokens": 6e-05,
         "input_cost_per_token_priority": 6e-05,
+        "input_cost_per_token_above_272k_tokens_priority": 1.2e-04,
         "litellm_provider": "openai",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "output_cost_per_token": 1.8e-04,
+        "output_cost_per_token_above_272k_tokens": 2.7e-04,
         "output_cost_per_token_priority": 2.7e-04,
+        "output_cost_per_token_above_272k_tokens_priority": 4.05e-04,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
