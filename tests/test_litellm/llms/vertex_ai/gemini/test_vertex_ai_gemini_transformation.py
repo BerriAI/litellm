@@ -125,6 +125,54 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
+def test_vertex_ai_filters_cache_from_extra_body():
+    """Test that LiteLLM cache controls in extra_body are not forwarded to Vertex payloads."""
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "extra_body": {
+            "cache": {"use-cache": True, "ttl": 86400},
+            "labels": {"project": "test"},
+        }
+    }
+    litellm_params = {}
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params=litellm_params,
+        cached_content=None,
+    )
+
+    assert "cache" not in result
+    assert result.get("labels") == {"project": "test"}
+
+
+def test_gemini_filters_cache_from_extra_body():
+    """Test that LiteLLM cache controls in extra_body are not forwarded to Gemini payloads."""
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "extra_body": {
+            "cache": {"use-cache": True, "ttl": 86400},
+            "generationConfig": {"temperature": 0.2},
+        }
+    }
+    litellm_params = {}
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="gemini",
+        litellm_params=litellm_params,
+        cached_content=None,
+    )
+
+    assert "cache" not in result
+    assert result["generationConfig"]["temperature"] == 0.2
+
+
 
 def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
