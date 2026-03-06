@@ -1139,9 +1139,14 @@ def completion_cost(  # noqa: PLR0915
                 _metadata = _litellm_params.get("metadata", {}) or {}
                 _model_info = _metadata.get("model_info", {}) or {}
                 # Prefer input_cost_per_second; fall back to output_cost_per_second
-                _cost_per_second = _model_info.get(
-                    "input_cost_per_second"
-                ) or _model_info.get("output_cost_per_second")
+                # Use `is not None` guards to correctly handle explicit 0.0 costs
+                _input_cost_per_second = _model_info.get("input_cost_per_second")
+                _output_cost_per_second = _model_info.get("output_cost_per_second")
+                _cost_per_second = (
+                    _input_cost_per_second
+                    if _input_cost_per_second is not None
+                    else _output_cost_per_second
+                )
                 if _cost_per_second is not None:
                     custom_cost_per_second = _cost_per_second
 
