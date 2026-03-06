@@ -254,10 +254,11 @@ ALL_LOGGERS = [
 
 def _get_loggers_to_initialize():
     """
-    Get all litellm loggers that should be initialized with the JSON handler.
+    Get all loggers that should be initialized with the JSON handler.
 
-    Includes third-party integration loggers (like langfuse) if they are
-    configured as callbacks.
+    Returns litellm-namespaced loggers plus any third-party integration
+    loggers (like langfuse) that are configured as callbacks and need
+    JSON formatting applied.
     """
     import litellm
 
