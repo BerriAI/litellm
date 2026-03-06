@@ -104,6 +104,26 @@ class UISettings(BaseModel):
         description="If enabled, shows the Projects feature in the UI sidebar and the project field in key management.",
     )
 
+    disable_agents_for_internal_users: bool = Field(
+        default=False,
+        description="If true, internal users cannot access agent management endpoints or the Agents page in the UI.",
+    )
+
+    allow_agents_for_team_admins: bool = Field(
+        default=False,
+        description="If true, team admins are exempt from the agents disable restriction (only takes effect when disable_agents_for_internal_users is true).",
+    )
+
+    disable_vector_stores_for_internal_users: bool = Field(
+        default=False,
+        description="If true, internal users cannot access vector store management endpoints or the Vector Stores page in the UI.",
+    )
+
+    allow_vector_stores_for_team_admins: bool = Field(
+        default=False,
+        description="If true, team admins are exempt from the vector stores disable restriction (only takes effect when disable_vector_stores_for_internal_users is true).",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -119,7 +139,21 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
     "enable_projects_ui",
+    "disable_agents_for_internal_users",
+    "allow_agents_for_team_admins",
+    "disable_vector_stores_for_internal_users",
+    "allow_vector_stores_for_team_admins",
 }
+
+# Flags that must be synced from the persisted UISettings into
+# general_settings at runtime (on both read and write).
+_RUNTIME_GENERAL_SETTINGS_FLAGS = [
+    "forward_client_headers_to_llm_api",
+    "disable_agents_for_internal_users",
+    "allow_agents_for_team_admins",
+    "disable_vector_stores_for_internal_users",
+    "allow_vector_stores_for_team_admins",
+]
 
 
 class MCPSemanticFilterSettings(BaseModel):
@@ -976,14 +1010,13 @@ async def get_ui_settings():
         k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
     }
 
-    # Sync forward_client_headers_to_llm_api into general_settings so the proxy
-    # picks it up at runtime (covers server restart scenarios).
-    if "forward_client_headers_to_llm_api" in ui_settings:
+    # Sync runtime flags into general_settings so the proxy picks them up
+    # at runtime (covers server restart scenarios).
+    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
-        general_settings["forward_client_headers_to_llm_api"] = ui_settings[
-            "forward_client_headers_to_llm_api"
-        ]
+        general_settings.update(_flags_to_sync)
 
     # Build config-like object for schema helper
     config: Dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
@@ -1028,12 +1061,25 @@ async def update_ui_settings(
             },
         )
 
-    settings_dict = settings.model_dump(exclude_none=True)
+    # Only include fields the caller actually sent (not Pydantic defaults).
+    settings_dict = settings.model_dump(exclude_unset=True)
 
     # Enforce allowlist and drop anything unexpected
-    ui_settings = {
+    incoming = {
         k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS
     }
+
+    # Merge with existing persisted settings so a partial PATCH doesn't
+    # overwrite fields the caller didn't send.
+    existing: dict = {}
+    db_existing = await prisma_client.db.litellm_uisettings.find_unique(
+        where={"id": "ui_settings"}
+    )
+    if db_existing and db_existing.ui_settings:
+        raw = db_existing.ui_settings
+        existing = json.loads(raw) if isinstance(raw, str) else dict(raw)
+
+    ui_settings = {**existing, **incoming}
 
     await prisma_client.db.litellm_uisettings.upsert(
         where={"id": "ui_settings"},
@@ -1048,14 +1094,13 @@ async def update_ui_settings(
         },
     )
 
-    # Sync forward_client_headers_to_llm_api to general_settings so the proxy
-    # picks it up at runtime (general_settings is checked in pre-call utils).
-    if "forward_client_headers_to_llm_api" in ui_settings:
+    # Sync runtime flags to general_settings so the proxy picks them up
+    # at runtime (general_settings is checked in pre-call utils).
+    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
-        general_settings["forward_client_headers_to_llm_api"] = ui_settings[
-            "forward_client_headers_to_llm_api"
-        ]
+        general_settings.update(_flags_to_sync)
 
     return {
         "message": "UI settings updated successfully",
