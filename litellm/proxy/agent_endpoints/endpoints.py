@@ -14,19 +14,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (CommonProxyErrors, LitellmUserRoles,
+                                  UserAPIKeyAuth)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.types.agents import (
-    AgentConfig,
-    AgentMakePublicResponse,
-    AgentResponse,
-    MakeAgentsPublicRequest,
-    PatchAgentRequest,
-)
-from litellm.types.proxy.management_endpoints.common_daily_activity import (
-    SpendAnalyticsPaginatedResponse,
-)
+from litellm.proxy.management_endpoints.common_daily_activity import \
+    get_daily_activity
+from litellm.types.agents import (AgentConfig, AgentMakePublicResponse,
+                                  AgentResponse, MakeAgentsPublicRequest,
+                                  PatchAgentRequest)
+from litellm.types.proxy.management_endpoints.common_daily_activity import \
+    SpendAnalyticsPaginatedResponse
 
 router = APIRouter()
 
@@ -69,12 +66,18 @@ async def get_agents(
     Returns: List[AgentResponse]
 
     """
-    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-        AgentRequestHandler,
-    )
+    from litellm.proxy.agent_endpoints.agent_registry import \
+        global_agent_registry
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import \
+        AgentRequestHandler
 
     try:
+        from litellm.proxy.proxy_server import \
+            use_background_agent_health_checks
+
+        if not use_background_agent_health_checks:
+            await global_agent_registry.run_health_check()
+
         returned_agents: List[AgentResponse] = []
         
         # Admin users get all agents
@@ -82,7 +85,7 @@ async def get_agents(
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         ):
-            returned_agents = global_agent_registry.get_agent_list()
+            returned_agents = global_agent_registry.get_healthy_agent_list()
         else:
             # Get allowed agents from object_permission (key/team level)
             allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(
@@ -91,10 +94,10 @@ async def get_agents(
             
             # If no restrictions (empty list), return all agents
             if len(allowed_agent_ids) == 0:
-                returned_agents = global_agent_registry.get_agent_list()
+                returned_agents = global_agent_registry.get_healthy_agent_list()
             else:
                 # Filter agents by allowed IDs
-                all_agents = global_agent_registry.get_agent_list()
+                all_agents = global_agent_registry.get_healthy_agent_list()
                 returned_agents = [
                     agent for agent in all_agents
                     if agent.agent_id in allowed_agent_ids
@@ -125,9 +128,8 @@ async def get_agents(
 
 #### CRUD ENDPOINTS FOR AGENTS ####
 
-from litellm.proxy.agent_endpoints.agent_registry import (
-    global_agent_registry as AGENT_REGISTRY,
-)
+from litellm.proxy.agent_endpoints.agent_registry import \
+    global_agent_registry as AGENT_REGISTRY
 
 
 @router.post(
@@ -564,9 +566,8 @@ async def make_agent_public(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.agent_endpoints.agent_registry import (
-            global_agent_registry as AGENT_REGISTRY,
-        )
+        from litellm.proxy.agent_endpoints.agent_registry import \
+            global_agent_registry as AGENT_REGISTRY
         from litellm.proxy.proxy_server import proxy_config
 
         # Check if user has admin permissions
@@ -681,9 +682,8 @@ async def make_agents_public(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.agent_endpoints.agent_registry import (
-            global_agent_registry as AGENT_REGISTRY,
-        )
+        from litellm.proxy.agent_endpoints.agent_registry import \
+            global_agent_registry as AGENT_REGISTRY
         from litellm.proxy.proxy_server import proxy_config
 
         # Load existing config

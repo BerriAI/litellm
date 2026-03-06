@@ -284,6 +284,30 @@ $ litellm /path/to/config.yaml
  curl --location 'http://0.0.0.0:4000/health'
 ```
 
+### Background Agent Health Checks
+
+You can enable background health checks for A2A agents registered on the proxy. When enabled, a background loop periodically pings each agent's URL and tracks which agents are healthy. The `GET /v1/agents` endpoint then only returns agents that are currently reachable.
+
+If `background_agent_health_checks` is **not** enabled, the health check runs inline every time `GET /v1/agents` is called.
+
+**How it works:**
+- Sends an HTTP `HEAD` request to each agent's `url` (from `agent_card_params`)
+- Any response with status code < 500 (including `405 Method Not Allowed`) means the agent's server is live
+- Connection errors or timeouts mark the agent as unhealthy
+- Agents using the completion bridge (no URL, only `custom_llm_provider`) are always treated as healthy
+
+```yaml
+general_settings:
+  background_agent_health_checks: true  # enable background agent health checks
+  health_check_interval: 300            # shared interval for all background health checks (seconds)
+```
+
+```bash
+# Only healthy agents are returned
+curl -X GET "http://0.0.0.0:4000/v1/agents" \
+  -H "Authorization: Bearer sk-1234"
+```
+
 ### Disable Background Health Checks For Specific Models
 
 Use this if you want to disable background health checks for specific models.

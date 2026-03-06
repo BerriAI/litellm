@@ -132,6 +132,7 @@ general_settings:
   global_max_parallel_requests: 0 # the max parallel requests allowed on the proxy all up
   infer_model_from_keys: true
   background_health_checks: true
+  background_agent_health_checks: true # enable background health checks for A2A agents
   health_check_interval: 300
   alerting: ["slack", "email"]
   alerting_threshold: 0
@@ -228,6 +229,7 @@ router_settings:
 | global_max_parallel_requests | integer | The max parallel requests allowed on the proxy overall |
 | infer_model_from_keys | boolean | If true, infers the model from the provided keys |
 | background_health_checks | boolean | If true, enables background health checks. [Doc on health checks](health) |
+| background_agent_health_checks | boolean | If true, enables background health checks for A2A agents. When disabled, health checks run inline on `GET /v1/agents`. [Doc on health checks](health#background-agent-health-checks) |
 | health_check_interval | integer | The interval for health checks in seconds [Doc on health checks](health) |
 | alerting | array of strings | List of alerting methods [Doc on Slack Alerting](alerting) |
 | alerting_threshold | integer | The threshold for triggering alerts [Doc on Slack Alerting](alerting) |

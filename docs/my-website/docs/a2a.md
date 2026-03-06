@@ -257,6 +257,21 @@ LiteLLM follows the [A2A JSON-RPC 2.0 specification](https://github.com/google/A
 }
 ```
 
+## Agent Health Checks
+
+LiteLLM can automatically filter out agents whose backends are unreachable. The `GET /v1/agents` endpoint only returns agents that are currently healthy.
+
+- **Without background checks (default):** Health checks run inline every time `GET /v1/agents` is called.
+- **With background checks:** A background loop periodically pings agents so the endpoint responds instantly.
+
+```yaml
+general_settings:
+  background_agent_health_checks: true  # run health checks in the background
+  health_check_interval: 300            # interval in seconds (default: 300)
+```
+
+For more details, see [Background Agent Health Checks](./proxy/health#background-agent-health-checks).
+
 ## Agent Registry
 
 Want to create a central registry so your team can discover what agents are available within your company?

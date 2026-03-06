@@ -1,13 +1,12 @@
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.management_helpers.object_permission_utils import (
-    handle_update_object_permission_common,
-)
+from litellm.proxy.management_helpers.object_permission_utils import \
+    handle_update_object_permission_common
 from litellm.proxy.utils import PrismaClient
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
@@ -15,6 +14,7 @@ from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 class AgentRegistry:
     def __init__(self):
         self.agent_list: List[AgentResponse] = []
+        self.healthy_agent_ids: Optional[Set[str]] = None
 
     def reset_agent_list(self):
         self.agent_list = []
@@ -42,6 +42,43 @@ class AgentRegistry:
             if agent.agent_id in litellm.public_agent_groups:
                 public_agent_list.append(agent)
         return public_agent_list
+
+    async def run_health_check(self) -> None:
+        """Ping each agent's URL with a HEAD request and update healthy_agent_ids."""
+        from litellm.llms.custom_httpx.http_handler import \
+            get_async_httpx_client
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.A2A)
+        healthy: Set[str] = set()
+        for agent in self.agent_list:
+            url = agent.agent_card_params.get("url")
+            if not url:
+                # Completion-bridge agents (no URL) are always treated as healthy
+                if agent.litellm_params and agent.litellm_params.get(
+                    "custom_llm_provider"
+                ):
+                    healthy.add(agent.agent_id)
+                continue
+            try:
+                resp = await client.client.head(url, timeout=10.0)
+                if resp.status_code < 500:  # handle 405 Method Not Allowed
+                    healthy.add(agent.agent_id)
+            except Exception:
+                pass  # skip if unhealthy
+        self.healthy_agent_ids = healthy
+
+    def get_healthy_agent_list(
+        self, agent_names: Optional[List[str]] = None
+    ) -> List[AgentResponse]:
+        """Return only agents whose health check passed.
+
+        If no health data exists yet (healthy_agent_ids is None), returns all agents.
+        """
+        agents = self.get_agent_list(agent_names=agent_names)
+        if self.healthy_agent_ids is None:
+            return agents
+        return [a for a in agents if a.agent_id in self.healthy_agent_ids]
 
     def _create_agent_id(self, agent_config: AgentConfig) -> str:
         return hashlib.sha256(
@@ -149,9 +186,13 @@ class AgentRegistry:
             created_agent_dict = created_agent.model_dump()
             if created_agent.object_permission is not None:
                 try:
-                    created_agent_dict["object_permission"] = created_agent.object_permission.model_dump()
+                    created_agent_dict["object_permission"] = (
+                        created_agent.object_permission.model_dump()
+                    )
                 except Exception:
-                    created_agent_dict["object_permission"] = created_agent.object_permission.dict()
+                    created_agent_dict["object_permission"] = (
+                        created_agent.object_permission.dict()
+                    )
             return AgentResponse(**created_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error adding agent to DB: {str(e)}")
@@ -219,12 +260,10 @@ class AgentRegistry:
                 existing_object_permission_id = existing_agent.get(
                     "object_permission_id"
                 )
-                object_permission_id = (
-                    await handle_update_object_permission_common(
-                        agent_copy,
-                        existing_object_permission_id,
-                        prisma_client,
-                    )
+                object_permission_id = await handle_update_object_permission_common(
+                    agent_copy,
+                    existing_object_permission_id,
+                    prisma_client,
                 )
                 if object_permission_id is not None:
                     update_data["object_permission_id"] = object_permission_id
@@ -241,9 +280,13 @@ class AgentRegistry:
             patched_agent_dict = patched_agent.model_dump()
             if patched_agent.object_permission is not None:
                 try:
-                    patched_agent_dict["object_permission"] = patched_agent.object_permission.model_dump()
+                    patched_agent_dict["object_permission"] = (
+                        patched_agent.object_permission.model_dump()
+                    )
                 except Exception:
-                    patched_agent_dict["object_permission"] = patched_agent.object_permission.dict()
+                    patched_agent_dict["object_permission"] = (
+                        patched_agent.object_permission.dict()
+                    )
             return AgentResponse(**patched_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error patching agent in DB: {str(e)}")
@@ -298,12 +341,10 @@ class AgentRegistry:
                     else None
                 )
                 agent_copy = dict(agent)
-                object_permission_id = (
-                    await handle_update_object_permission_common(
-                        agent_copy,
-                        existing_object_permission_id,
-                        prisma_client,
-                    )
+                object_permission_id = await handle_update_object_permission_common(
+                    agent_copy,
+                    existing_object_permission_id,
+                    prisma_client,
                 )
                 if object_permission_id is not None:
                     update_data["object_permission_id"] = object_permission_id
@@ -318,9 +359,13 @@ class AgentRegistry:
             updated_agent_dict = updated_agent.model_dump()
             if updated_agent.object_permission is not None:
                 try:
-                    updated_agent_dict["object_permission"] = updated_agent.object_permission.model_dump()
+                    updated_agent_dict["object_permission"] = (
+                        updated_agent.object_permission.model_dump()
+                    )
                 except Exception:
-                    updated_agent_dict["object_permission"] = updated_agent.object_permission.dict()
+                    updated_agent_dict["object_permission"] = (
+                        updated_agent.object_permission.dict()
+                    )
             return AgentResponse(**updated_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error updating agent in DB: {str(e)}")
@@ -344,7 +389,9 @@ class AgentRegistry:
                 # object_permission is eagerly loaded via include above
                 if agent.object_permission is not None:
                     try:
-                        agent_dict["object_permission"] = agent.object_permission.model_dump()
+                        agent_dict["object_permission"] = (
+                            agent.object_permission.model_dump()
+                        )
                     except Exception:
                         agent_dict["object_permission"] = agent.object_permission.dict()
                 agents.append(agent_dict)
