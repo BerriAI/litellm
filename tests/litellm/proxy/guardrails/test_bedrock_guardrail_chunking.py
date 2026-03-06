@@ -102,6 +102,16 @@ class TestChunkContentItems:
         chunks = BedrockGuardrail._chunk_content_items(items)
         assert len(chunks) == 1
 
+    def test_zero_max_chars_raises(self):
+        """max_chars=0 must raise ValueError to prevent infinite loop."""
+        with pytest.raises(ValueError):
+            self._chunk([_make_item("a")], max_chars=0)
+
+    def test_negative_max_chars_raises(self):
+        """max_chars < 0 must raise ValueError to prevent infinite loop."""
+        with pytest.raises(ValueError):
+            self._chunk([_make_item("a")], max_chars=-1)
+
 
 # ---------------------------------------------------------------------------
 # _merge_guardrail_responses
@@ -159,6 +169,28 @@ class TestMergeGuardrailResponses:
         r2 = BedrockGuardrailResponse(action="NONE", outputs=[{"text": "y"}])
         merged, _ = self._merge([(r1, dict(r1)), (r2, dict(r2))])
         assert merged["outputs"] == [{"text": "x"}, {"text": "y"}]
+
+    def test_exception_marker_propagated_to_merged_json(self):
+        """AWS exception markers in chunk responses must survive merge."""
+        r1 = BedrockGuardrailResponse(action="NONE")
+        j1 = dict(r1)
+        r2 = BedrockGuardrailResponse(action="NONE")
+        j2 = dict(r2)
+        j2["Output"] = {"__type": "SomeException", "message": "error"}
+        _, merged_json = self._merge([(r1, j1), (r2, j2)])
+        assert "Output" in merged_json
+        assert "Exception" in merged_json["Output"]["__type"]
+
+    def test_exception_marker_lowercase_output_propagated(self):
+        """Lowercase 'output' exception markers must also be propagated."""
+        r1 = BedrockGuardrailResponse(action="NONE")
+        j1 = dict(r1)
+        j1["output"] = {"__type": "ThrottlingException"}
+        r2 = BedrockGuardrailResponse(action="NONE")
+        j2 = dict(r2)
+        _, merged_json = self._merge([(r1, j1), (r2, j2)])
+        assert "output" in merged_json
+        assert "Exception" in merged_json["output"]["__type"]
 
 
 # ---------------------------------------------------------------------------

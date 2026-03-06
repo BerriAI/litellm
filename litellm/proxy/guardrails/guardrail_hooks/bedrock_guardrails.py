@@ -429,6 +429,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         is split across chunks at the character boundary.
         """
 
+        if max_chars <= 0:
+            raise ValueError("max_chars must be a positive integer")
+
         chunks: List[List[BedrockContentItem]] = []
         current_chunk: List[BedrockContentItem] = []
         current_chars = 0
@@ -525,6 +528,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
 
         merged_json = dict(merged_response)
+
+        # Propagate AWS exception markers from individual chunk responses so
+        # that _determine_guardrail_status_from_json can detect them.
+        for _resp, _json_resp in responses:
+            for key in ("Output", "output"):
+                output_payload = _json_resp.get(key)
+                if isinstance(output_payload, dict):
+                    output_type = output_payload.get("__type", "")
+                    if isinstance(output_type, str) and "Exception" in output_type:
+                        merged_json[key] = output_payload
+                        break
+            else:
+                continue
+            break
+
         return merged_response, merged_json
 
     async def _make_single_bedrock_api_request(
@@ -810,35 +828,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self._should_raise_guardrail_blocked_exception(guardrail_response):
             return "guardrail_intervened"
         return "success"
-
-    def _get_bedrock_guardrail_response_status(
-        self, response: httpx.Response
-    ) -> GuardrailStatus:
-        """
-        Get the status of the bedrock guardrail response.
-
-        Returns:
-            "success": Content allowed through with no violations
-            "guardrail_intervened": Content blocked due to policy violations
-            "guardrail_failed_to_respond": Technical error or API failure
-        """
-        if response.status_code == 200:
-            if self._check_bedrock_response_for_exception(response):
-                return "guardrail_failed_to_respond"
-
-            # Check if the guardrail would block content
-            try:
-                _json_response = response.json()
-                bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
-                if self._should_raise_guardrail_blocked_exception(
-                    bedrock_guardrail_response
-                ):
-                    return "guardrail_intervened"
-            except Exception:
-                pass
-
-            return "success"
-        return "guardrail_failed_to_respond"
 
     def _parse_bedrock_guardrail_error_response(
         self, response: httpx.Response
