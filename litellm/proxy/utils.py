@@ -2401,17 +2401,20 @@ class PrismaClient:
                 "DailyTagSpend",
             ]
             required_view = "LiteLLM_VerificationTokenView"
-            expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             from litellm.proxy.db.db_schema import get_database_schema
 
             pg_schema = get_database_schema()
+            # Build parameterized placeholders for the IN clause ($2, $3, ...)
+            view_placeholders = ", ".join(
+                f"${i + 2}" for i in range(len(expected_views))
+            )
             ret = await self.db.query_raw(
                 f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
                     WHERE schemaname = $1 AND viewname IN (
-                        {expected_views_str}
+                        {view_placeholders}
                     )
                 )
                 SELECT
@@ -2420,6 +2423,7 @@ class PrismaClient:
                 FROM existing_views
                 """,
                 pg_schema,
+                *expected_views,
             )
             expected_total_views = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
