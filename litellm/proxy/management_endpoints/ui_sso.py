@@ -2557,11 +2557,11 @@ class SSOAuthenticationHandler:
                 # Raise immediately with a diagnostic that points to the root cause.
                 active_cache = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
                 verbose_proxy_logger.error(
-                    "PKCE is enabled but no code_verifier found in cache for state '%s'. "
+                    "PKCE is enabled but no usable code_verifier found for state '%s'. "
                     "This usually means the authorization and callback were handled by different "
-                    "instances without a shared cache. "
+                    "instances without a shared cache, or the cached value had an unrecognized format. "
                     "Ensure Redis is configured. "
-                    "Cache type: %s. Cache entry present: %s",
+                    "Cache type: %s. Raw cache data present (may be unrecognized format): %s",
                     state,
                     type(active_cache).__name__,
                     cached_data is not None,
@@ -2685,20 +2685,23 @@ class SSOAuthenticationHandler:
             if client_secret:
                 token_data["client_secret"] = client_secret
 
-        try:
-            async with httpx.AsyncClient() as http_client:
+        # Tighten the try/except to the POST call only, so httpx connection-pool
+        # teardown in __aexit__ (TLS close, etc.) does not get misclassified as a
+        # token-endpoint failure.
+        async with httpx.AsyncClient() as http_client:
+            try:
                 response = await http_client.post(token_endpoint, **post_kwargs)
-        except Exception as exc:
-            # Catch all network-level errors (SSL, DNS, TCP, timeout, etc.) and
-            # wrap them as a clean ProxyException rather than leaking raw httpx/OS
-            # exceptions to callers.
-            verbose_proxy_logger.error("PKCE token endpoint unreachable: %s", exc)
-            raise ProxyException(
-                message=f"Token endpoint request failed: {exc}",
-                type=ProxyErrorTypes.auth_error,
-                param="token_exchange",
-                code=status.HTTP_401_UNAUTHORIZED,
-            ) from exc
+            except Exception as exc:
+                # Catch all network-level errors (SSL, DNS, TCP, timeout, etc.) and
+                # wrap them as a clean ProxyException rather than leaking raw httpx/OS
+                # exceptions to callers.
+                verbose_proxy_logger.error("PKCE token endpoint unreachable: %s", exc)
+                raise ProxyException(
+                    message=f"Token endpoint request failed: {exc}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="token_exchange",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ) from exc
 
         if response.status_code != 200:
             verbose_proxy_logger.error(

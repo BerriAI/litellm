@@ -4805,3 +4805,24 @@ async def test_pkce_token_exchange_public_client_no_secret():
 
     assert result["access_token"] == "tok_public"
     assert result["sub"] == "pubuser"
+
+
+@pytest.mark.asyncio
+async def test_delete_pkce_verifier_swallows_deletion_errors():
+    """_delete_pkce_verifier must not raise when the cache delete fails
+    (best-effort cleanup — a leftover verifier must not abort a successful SSO login)."""
+    import os
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    failing_cache = MagicMock()
+    failing_cache.async_delete_cache = AsyncMock(side_effect=Exception("Redis down"))
+
+    # Should NOT raise even though the underlying cache delete fails
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+        "litellm.proxy.proxy_server.user_api_key_cache", failing_cache
+    ):
+        await SSOAuthenticationHandler._delete_pkce_verifier("pkce_verifier:test_state")
+
+    failing_cache.async_delete_cache.assert_called_once_with(key="pkce_verifier:test_state")
