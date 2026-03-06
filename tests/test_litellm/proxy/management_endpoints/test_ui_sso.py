@@ -3791,16 +3791,16 @@ class TestPKCEFunctionality:
         mock_request = MagicMock(spec=Request)
         mock_request.query_params = {"state": "missing_state_non_strict"}
 
-        # PKCE_STRICT_CACHE_MISS not set (default false) — should NOT raise
+        # PKCE_STRICT_CACHE_MISS explicitly set to false — should NOT raise.
+        # Use patch.dict with the key set to "false" rather than os.environ.pop()
+        # to avoid permanently mutating the test process environment.
         with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
             "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ), patch.dict(
             os.environ,
-            {"GENERIC_CLIENT_USE_PKCE": "true"},
+            {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "false"},
             clear=False,
         ):
-            # Remove PKCE_STRICT_CACHE_MISS if set in environment
-            os.environ.pop("PKCE_STRICT_CACHE_MISS", None)
             result = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                 request=mock_request, generic_include_client_id=False
             )
@@ -3863,15 +3863,16 @@ class TestPKCEFunctionality:
         mock_request = MagicMock(spec=Request)
         mock_request.query_params = {"state": "bad_format_non_strict"}
 
-        # Non-strict mode: should log a warning and continue, not raise
+        # Non-strict mode: should log a warning and continue, not raise.
+        # Use patch.dict with PKCE_STRICT_CACHE_MISS="false" to avoid permanently
+        # mutating the test process environment with os.environ.pop().
         with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
             "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ), patch.dict(
             os.environ,
-            {"GENERIC_CLIENT_USE_PKCE": "true"},
+            {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "false"},
             clear=False,
         ):
-            os.environ.pop("PKCE_STRICT_CACHE_MISS", None)
             result = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                 request=mock_request, generic_include_client_id=False
             )
