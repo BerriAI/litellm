@@ -6457,6 +6457,75 @@ class TestValidateKeyAliasFormat:
             assert "Invalid key_alias format" in str(exc.value.message)
 
 
+class TestUpperboundNullDurationValidation:
+    """Tests for upperbound validation when duration is explicitly null (never expires)."""
+
+    @pytest.mark.asyncio
+    async def test_explicit_null_duration_raises_when_upperbound_set(self):
+        """duration=null (never expires) should raise 400 when upperbound duration is set."""
+        import litellm
+        from litellm.types.proxy.management_endpoints.ui_sso import (
+            LiteLLM_UpperboundKeyGenerateParams,
+        )
+
+        original = litellm.upperbound_key_generate_params
+        try:
+            litellm.upperbound_key_generate_params = (
+                LiteLLM_UpperboundKeyGenerateParams(duration="30d")
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await _common_key_generation_helper(
+                    data=GenerateKeyRequest(user_id="user-1", duration=None),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+                    ),
+                    litellm_changed_by=None,
+                    team_table=None,
+                )
+            assert exc_info.value.status_code == 400
+            assert "never expires" in str(exc_info.value.detail).lower()
+        finally:
+            litellm.upperbound_key_generate_params = original
+
+    @pytest.mark.asyncio
+    async def test_omitted_duration_uses_upperbound_as_default(self):
+        """Duration not sent → upperbound is applied as default (no error)."""
+        import litellm
+        from litellm.types.proxy.management_endpoints.ui_sso import (
+            LiteLLM_UpperboundKeyGenerateParams,
+        )
+
+        original = litellm.upperbound_key_generate_params
+        try:
+            litellm.upperbound_key_generate_params = (
+                LiteLLM_UpperboundKeyGenerateParams(duration="30d")
+            )
+            with patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+                new_callable=AsyncMock,
+                return_value={
+                    "key": "sk-test",
+                    "expires": None,
+                    "user_id": "user-1",
+                },
+            ), patch("litellm.proxy.proxy_server.prisma_client"), patch(
+                "litellm.proxy.proxy_server.llm_router"
+            ), patch(
+                "litellm.proxy.proxy_server.premium_user", False
+            ):
+                # Should not raise — duration omitted, so upperbound fills in as default
+                await _common_key_generation_helper(
+                    data=GenerateKeyRequest(user_id="user-1"),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+                    ),
+                    litellm_changed_by=None,
+                    team_table=None,
+                )
+        finally:
+            litellm.upperbound_key_generate_params = original
+
+
 class TestCommonKeyGenerationHelperTeamDurationValidation:
     """Tests for team duration validation inside _common_key_generation_helper."""
 

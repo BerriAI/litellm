@@ -17,21 +17,27 @@ from unittest.mock import MagicMock
 
 from litellm.proxy._types import GenerateKeyRequest, LiteLLM_TeamTable
 
+_ENTERPRISE_SOURCE = os.path.normpath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..", "..", "..", "..",
+        "enterprise", "litellm_enterprise", "proxy",
+        "management_endpoints", "key_management_endpoints.py",
+    )
+)
+
+pytestmark = pytest.mark.skipif(
+    not os.path.exists(_ENTERPRISE_SOURCE),
+    reason=f"Enterprise source not available at {_ENTERPRISE_SOURCE}",
+)
+
 
 def _load_local_add_team_member_key_duration():
     """Load add_team_member_key_duration from the local enterprise source tree."""
-    local_path = os.path.normpath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..", "..", "..", "..",
-            "enterprise", "litellm_enterprise", "proxy",
-            "management_endpoints", "key_management_endpoints.py",
-        )
-    )
     module_name = "_local_enterprise_key_management_endpoints"
     # Remove cached version so we always reload from the local file
     sys.modules.pop(module_name, None)
-    spec = importlib.util.spec_from_file_location(module_name, local_path)
+    spec = importlib.util.spec_from_file_location(module_name, _ENTERPRISE_SOURCE)
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module.add_team_member_key_duration
@@ -109,10 +115,12 @@ class TestAddTeamMemberKeyDuration:
         assert result.duration is None
 
     def test_service_account_returns_unchanged(self):
-        """user_id=None (service account) → data is returned unchanged."""
+        """user_id=None (service account) → team duration is NOT applied."""
         fn = _load_local_add_team_member_key_duration()
 
         data = GenerateKeyRequest(user_id=None)
         result = fn(_make_team("30d"), data)
 
-        assert result.duration is None
+        # Verify the service-account guard prevented the team max from being applied
+        assert result.duration is None, "Service account should not inherit team duration"
+        assert result.duration != "30d"

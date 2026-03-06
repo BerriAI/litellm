@@ -512,6 +512,14 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             )
             if upperbound_value is not None:
                 if value is None:
+                    if key == "duration" and key in data.model_fields_set:
+                        # Explicitly null = never expires → exceeds any finite upperbound
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"{key} is over max limit set in config - user_value=null (never expires); max_value={upperbound_value}"
+                            },
+                        )
                     # Use the upperbound value if user didn't provide a value
                     setattr(data, key, upperbound_value)
                 else:
