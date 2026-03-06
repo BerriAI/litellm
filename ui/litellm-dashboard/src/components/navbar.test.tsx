@@ -6,6 +6,7 @@ import Navbar from "./navbar";
 // Mock the hooks and utilities
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
+  serverRootPath: "/",
 }));
 
 vi.mock("@/utils/proxyUtils", () => ({

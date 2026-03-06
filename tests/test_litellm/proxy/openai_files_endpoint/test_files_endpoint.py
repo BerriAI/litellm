@@ -1157,10 +1157,10 @@ def test_create_file_with_deep_nested_litellm_metadata(
     )
     
     # Verify success
-    assert response.status_code == 200
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}. Response: {response.text}"
     result = response.json()
     assert result["id"] == "file-test-456"
-    
+
     # Verify deeply nested metadata was correctly parsed
     assert "config" in captured_litellm_metadata
     assert "database" in captured_litellm_metadata["config"]
