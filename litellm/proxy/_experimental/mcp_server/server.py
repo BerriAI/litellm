@@ -2394,7 +2394,7 @@ if MCP_AVAILABLE:
                     f"Failed to send error response: {response_error}"
                 )
                 # If we can't send a proper response, re-raise the original error
-                raise
+                raise e from response_error
 
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
