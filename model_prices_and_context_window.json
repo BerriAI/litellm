@@ -12390,6 +12390,30 @@
             "/v1/images/generations"
         ]
     },
+    "modelslab/flux": {
+        "litellm_provider": "modelslab",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "modelslab/sdxl": {
+        "litellm_provider": "modelslab",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "modelslab/realistic-vision-v51": {
+        "litellm_provider": "modelslab",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "featherless_ai/featherless-ai/Qwerky-72B": {
         "litellm_provider": "featherless_ai",
         "max_input_tokens": 32768,

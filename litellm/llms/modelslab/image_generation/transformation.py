@@ -66,6 +66,7 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
         return [
             "n",
             "size",
+            "negative_prompt",
         ]
 
     def get_sensitive_request_fields(self) -> List[str]:
@@ -99,6 +100,8 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                 if k in supported_params:
                     if k == "n":
                         optional_params["samples"] = non_default_params[k]
+                    elif k == "negative_prompt":
+                        optional_params["negative_prompt"] = non_default_params[k]
                     elif k == "size":
                         size_str = str(non_default_params[k])
                         if "x" not in size_str:
@@ -433,12 +436,18 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                 api_key=resolved_key,
                 base_url=base_url,
             )
+            # Refresh status from polled response to avoid stale variable
+            status = response_data.get("status", "")
 
-        if status in ("success",) or response_data.get("status") == "success":
+        if status == "success":
             return self._build_image_response(response_data, model_response)
 
+        # Avoid leaking API key — only surface safe fields in the error message
         raise self.get_error_class(
-            error_message=f"Unexpected ModelsLab response: {response_data}",
+            error_message=(
+                f"Unexpected ModelsLab response: status={response_data.get('status')!r}, "
+                f"message={response_data.get('message')!r}"
+            ),
             status_code=raw_response.status_code,
             headers=raw_response.headers,
         )
@@ -505,12 +514,18 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                 api_key=resolved_key,
                 base_url=base_url,
             )
+            # Refresh status from polled response to avoid stale variable
+            status = response_data.get("status", "")
 
-        if status in ("success",) or response_data.get("status") == "success":
+        if status == "success":
             return self._build_image_response(response_data, model_response)
 
+        # Avoid leaking API key — only surface safe fields in the error message
         raise self.get_error_class(
-            error_message=f"Unexpected ModelsLab response: {response_data}",
+            error_message=(
+                f"Unexpected ModelsLab response: status={response_data.get('status')!r}, "
+                f"message={response_data.get('message')!r}"
+            ),
             status_code=raw_response.status_code,
             headers=raw_response.headers,
         )
