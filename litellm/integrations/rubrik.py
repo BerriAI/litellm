@@ -124,7 +124,10 @@ class RubrikLogger(CustomBatchLogger):
         _batch_size = os.getenv("RUBRIK_BATCH_SIZE", None)
 
         if _batch_size:
-            self.batch_size = int(_batch_size)
+            try:
+                self.batch_size = int(_batch_size)
+            except ValueError:
+                verbose_logger.warning(f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default")
 
         _webhook_url = os.getenv("RUBRIK_WEBHOOK_URL")
 
@@ -149,6 +152,10 @@ class RubrikLogger(CustomBatchLogger):
             asyncio.create_task(self.periodic_flush())
         except RuntimeError:
             verbose_logger.debug("No running event loop for periodic flush - will start when proxy runs")
+
+    async def aclose(self) -> None:
+        """Close the dedicated tool-blocking HTTP client."""
+        await self.tool_blocking_client.aclose()
 
     async def async_log_success_event(
         self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
@@ -223,11 +230,8 @@ class RubrikLogger(CustomBatchLogger):
             return
 
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self.async_send_batch())
-            else:
-                loop.run_until_complete(self.async_send_batch())
+            asyncio.get_running_loop()
+            asyncio.create_task(self.async_send_batch())
         except RuntimeError:
             asyncio.run(self.async_send_batch())
 
@@ -403,7 +407,7 @@ class RubrikLogger(CustomBatchLogger):
 
             # Track content block index before buffering starts
             if not is_buffering and event_type in _CONTENT_BLOCK_EVENTS:
-                current_content_index = chunk.get("index", -1) - 1
+                current_content_index = chunk.get("index", 0)
 
             if is_tool_chunk:
                 is_buffering = True

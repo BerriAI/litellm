@@ -253,6 +253,21 @@ class TestInitialization:
                 h = RubrikLogger()
                 assert h.sampling_rate == 1.0
 
+    def test_batch_size_invalid_ignored(self):
+        """Test that invalid RUBRIK_BATCH_SIZE falls back to default."""
+        with patch("asyncio.create_task", Mock()):
+            with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host", "RUBRIK_BATCH_SIZE": "abc"}):
+                h = RubrikLogger()
+                # Should keep the default from CustomBatchLogger, not crash
+                assert isinstance(h.batch_size, int)
+
+    def test_batch_size_valid(self):
+        """Test that valid RUBRIK_BATCH_SIZE is applied."""
+        with patch("asyncio.create_task", Mock()):
+            with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host", "RUBRIK_BATCH_SIZE": "256"}):
+                h = RubrikLogger()
+                assert h.batch_size == 256
+
 
 @pytest.mark.asyncio
 class TestCheckAndModifyResponse:
