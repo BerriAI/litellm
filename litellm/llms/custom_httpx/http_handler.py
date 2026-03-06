@@ -17,128 +17,8 @@ from typing import (
     runtime_checkable,
 )
 
-import httpx
-
-
-@runtime_checkable
-class HTTPClientAdapterSync(Protocol):
-    def get(self, url: str, **kwargs) -> Any:
-        ...
-
-    def post(self, url: str, **kwargs) -> Any:
-        ...
-
-    def put(self, url: str, **kwargs) -> Any:
-        ...
-
-    def patch(self, url: str, **kwargs) -> Any:
-        ...
-
-    def delete(self, url: str, **kwargs) -> Any:
-        ...
-
-    def build_request(self, method: str, url: str, **kwargs) -> Any:
-        ...
-
-    def send(self, request: Any, **kwargs) -> Any:
-        ...
-
-    def close(self) -> None:
-        ...
-
-
-@runtime_checkable
-class HTTPClientAdapterAsync(Protocol):
-    async def get(self, url: str, **kwargs) -> Any:
-        ...
-
-    async def post(self, url: str, **kwargs) -> Any:
-        ...
-
-    async def put(self, url: str, **kwargs) -> Any:
-        ...
-
-    async def patch(self, url: str, **kwargs) -> Any:
-        ...
-
-    async def delete(self, url: str, **kwargs) -> Any:
-        ...
-
-    def build_request(self, method: str, url: str, **kwargs) -> Any:
-        ...
-
-    async def send(self, request: Any, **kwargs) -> Any:
-        ...
-
-    async def close(self) -> None:
-        ...
-
-
-class HTTPXAdapter(HTTPClientAdapterSync):
-    def __init__(self, client: httpx.Client):
-        self.client = client
-
-    def get(self, url: str, **kwargs) -> Any:
-        return self.client.get(url, **kwargs)
-
-    def post(self, url: str, **kwargs) -> Any:
-        return self.client.post(url, **kwargs)
-
-    def put(self, url: str, **kwargs) -> Any:
-        return self.client.put(url, **kwargs)
-
-    def patch(self, url: str, **kwargs) -> Any:
-        return self.client.patch(url, **kwargs)
-
-    def delete(self, url: str, **kwargs) -> Any:
-        return self.client.delete(url, **kwargs)
-
-    def build_request(self, method: str, url: str, **kwargs) -> Any:
-        return self.client.build_request(method, url, **kwargs)
-
-    def send(self, request: Any, **kwargs) -> Any:
-        return self.client.send(request, **kwargs)
-
-    def close(self) -> None:
-        self.client.close()
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.client, name)
-
-
-class HTTPXAsyncAdapter(HTTPClientAdapterAsync):
-    def __init__(self, client: httpx.AsyncClient):
-        self.client = client
-
-    async def get(self, url: str, **kwargs) -> Any:
-        return await self.client.get(url, **kwargs)
-
-    async def post(self, url: str, **kwargs) -> Any:
-        return await self.client.post(url, **kwargs)
-
-    async def put(self, url: str, **kwargs) -> Any:
-        return await self.client.put(url, **kwargs)
-
-    async def patch(self, url: str, **kwargs) -> Any:
-        return await self.client.patch(url, **kwargs)
-
-    async def delete(self, url: str, **kwargs) -> Any:
-        return await self.client.delete(url, **kwargs)
-
-    def build_request(self, method: str, url: str, **kwargs) -> Any:
-        return self.client.build_request(method, url, **kwargs)
-
-    async def send(self, request: Any, **kwargs) -> Any:
-        return await self.client.send(request, **kwargs)
-
-    async def close(self) -> None:
-        await self.client.aclose()
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.client, name)
-
-
 import certifi
+import httpx
 from aiohttp import ClientSession, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
@@ -172,6 +52,193 @@ try:
     from litellm._version import version
 except Exception:
     version = "0.0.0"
+
+
+@runtime_checkable
+class HTTPResponse(Protocol):
+    @property
+    def status_code(self) -> int:
+        ...
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        ...
+
+    @property
+    def text(self) -> str:
+        ...
+
+    @property
+    def ok(self) -> bool:
+        ...
+
+    @property
+    def content(self) -> bytes:
+        ...
+
+    def raise_for_status(self) -> None:
+        ...
+
+    async def aread(self) -> bytes:
+        ...
+
+    def read(self) -> bytes:
+        ...
+
+
+@runtime_checkable
+class HTTPClientAdapterSync(Protocol):
+    def get(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def post(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def put(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def patch(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def delete(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        ...
+
+    def send(self, request: Any, **kwargs) -> HTTPResponse:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+@runtime_checkable
+class HTTPClientAdapterAsync(Protocol):
+    async def get(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    async def post(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    async def put(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    async def patch(self, url: str, **kwargs) -> Any:
+        ...
+
+    async def delete(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        ...
+
+    async def send(self, request: Any, **kwargs) -> HTTPResponse:
+        ...
+
+    async def close(self) -> None:
+        ...
+
+
+class HTTPXResponseWrapper(HTTPResponse):
+    def __init__(self, response: httpx.Response):
+        self._response = response
+
+    @property
+    def status_code(self) -> int:
+        return self._response.status_code
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        return self._response.headers
+
+    @property
+    def text(self) -> str:
+        return self._response.text
+
+    @property
+    def ok(self) -> bool:
+        return self._response.is_success
+
+    @property
+    def content(self) -> bytes:
+        return self._response.content
+
+    def raise_for_status(self) -> None:
+        self._response.raise_for_status()
+
+    async def aread(self) -> bytes:
+        return await self._response.aread()
+
+    def read(self) -> bytes:
+        return self._response.read()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._response, name)
+
+
+class HTTPXAdapter(HTTPClientAdapterSync):
+    def __init__(self, client: httpx.Client):
+        self.client = client
+
+    def get(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(self.client.get(url, **kwargs))
+
+    def post(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(self.client.post(url, **kwargs))
+
+    def put(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(self.client.put(url, **kwargs))
+
+    def patch(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(self.client.patch(url, **kwargs))
+
+    def delete(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(self.client.delete(url, **kwargs))
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        return self.client.build_request(method, url, **kwargs)
+
+    def send(self, request: Any, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(self.client.send(request, **kwargs))
+
+    def close(self) -> None:
+        self.client.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.client, name)
+
+
+class HTTPXAsyncAdapter(HTTPClientAdapterAsync):
+    def __init__(self, client: httpx.AsyncClient):
+        self.client = client
+
+    async def get(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(await self.client.get(url, **kwargs))
+
+    async def post(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(await self.client.post(url, **kwargs))
+
+    async def put(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(await self.client.put(url, **kwargs))
+
+    async def patch(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(await self.client.patch(url, **kwargs))
+
+    async def delete(self, url: str, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(await self.client.delete(url, **kwargs))
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        return self.client.build_request(method, url, **kwargs)
+
+    async def send(self, request: Any, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(await self.client.send(request, **kwargs))
+
+    async def close(self) -> None:
+        await self.client.aclose()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.client, name)
 
 
 def get_default_headers() -> dict:

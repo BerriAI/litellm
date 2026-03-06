@@ -484,3 +484,16 @@ class TestBaseLLMAIOHTTPHandler:
 
         # Assert
         mock_adapter.post.assert_called_once()
+
+    def test_aiohttp_handler_adapter_caching(self):
+        """
+        Test that BaseLLMAIOHTTPHandler caches the adapter for the same session.
+        """
+        mock_session = MagicMock(spec=aiohttp.ClientSession)
+        handler = BaseLLMAIOHTTPHandler(client_session=mock_session)
+
+        adapter1 = handler._get_adapter(async_client_session=mock_session)
+        adapter2 = handler._get_adapter(async_client_session=mock_session)
+
+        assert adapter1 is adapter2
+        assert adapter1 is handler._adapter
