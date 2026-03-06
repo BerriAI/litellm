@@ -431,3 +431,50 @@ class TestVoyageContextualEmbeddings:
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+
+# Tests for Voyage 4 Large text embedding (standard /v1/embeddings endpoint)
+class TestVoyage4LargeTextEmbedding:
+    """Test suite for voyage-4-large text embedding (non-multimodal, non-contextual)."""
+
+    def test_voyage_4_large_uses_standard_embedding_config(self):
+        """voyage-4-large must use VoyageEmbeddingConfig (standard /v1/embeddings), not multimodal or contextual."""
+        from litellm.utils import ProviderConfigManager
+        from litellm.types.utils import LlmProviders
+
+        config = ProviderConfigManager.get_provider_embedding_config(
+            "voyage-4-large", LlmProviders.VOYAGE
+        )
+        assert config is not None
+        assert type(config).__name__ == "VoyageEmbeddingConfig"
+
+    def test_voyage_4_large_embedding_url(self):
+        """voyage-4-large must use the standard Voyage embeddings URL."""
+        from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+
+        config = VoyageEmbeddingConfig()
+        url = config.get_complete_url(
+            None, None, "voyage-4-large", {}, {}
+        )
+        assert url == "https://api.voyageai.com/v1/embeddings"
+
+    def test_voyage_4_large_request_transformation(self):
+        """voyage-4-large request body must use 'input' (singular) and pass model through."""
+        from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+
+        config = VoyageEmbeddingConfig()
+        transformed = config.transform_embedding_request(
+            "voyage/voyage-4-large", ["Hello world"], {}, {}
+        )
+        assert "input" in transformed
+        assert transformed["input"] == ["Hello world"]
+        assert transformed["model"] == "voyage/voyage-4-large"
+
+    def test_voyage_4_large_supported_params(self):
+        """voyage-4-large must support encoding_format and dimensions."""
+        from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+
+        config = VoyageEmbeddingConfig()
+        params = config.get_supported_openai_params("voyage-4-large")
+        assert "encoding_format" in params
+        assert "dimensions" in params
