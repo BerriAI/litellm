@@ -22,7 +22,7 @@ def flatten_double_wrapped_embedding_input(
         isinstance(input_data, list)
         and isinstance(input_data[0], list)
         and all(
-            isinstance(sublist, list) and all(isinstance(s, str) for s in sublist)
+            isinstance(sublist, list) and len(sublist) > 0 and all(isinstance(s, str) for s in sublist)
             for sublist in input_data
         )
     ):

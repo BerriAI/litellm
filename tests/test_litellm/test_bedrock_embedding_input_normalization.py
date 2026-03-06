@@ -90,6 +90,11 @@ class TestTitanG1TransformRequest:
         req = cfg._transform_request(input=[["Hello, world!"]], inference_params={})
         assert req["inputText"] == "Hello, world!"
 
+    def test_list_multiple_strings_takes_first(self):
+        cfg = AmazonTitanG1Config()
+        req = cfg._transform_request(input=["first", "second"], inference_params={})
+        assert req["inputText"] == "first"
+
     def test_empty_list_returns_empty_string(self):
         cfg = AmazonTitanG1Config()
         req = cfg._transform_request(input=[], inference_params={})
@@ -168,3 +173,8 @@ class TestProxyEmbeddingInputNormalization:
         """[] stays as-is."""
         result = flatten_double_wrapped_embedding_input([])
         assert result == []
+
+    def test_empty_inner_sublists_not_flattened(self):
+        """[[], ["hello"]] — empty sublists should NOT be flattened."""
+        result = flatten_double_wrapped_embedding_input([[], ["hello"]])
+        assert result == [[], ["hello"]]

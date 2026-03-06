@@ -227,6 +227,9 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.embedding_utils import (
+    flatten_double_wrapped_embedding_input,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -6862,6 +6865,11 @@ async def embeddings(  # noqa: PLR0915
     try:
         # Use shared request body reading helper (same as chat/completions)
         data = await _read_request_body(request=request)
+
+        ### FLATTEN DOUBLE-WRAPPED STRING INPUT (Layer 1 defense) ###
+        # Normalize [[str, ...]] → [str, ...] before any further processing
+        if "input" in data and isinstance(data["input"], list):
+            data["input"] = flatten_double_wrapped_embedding_input(data["input"])
 
         ### HANDLE TOKEN ARRAY INPUT DECODING ###
         # This must happen BEFORE base_process_llm_request() since it modifies the input
