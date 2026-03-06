@@ -509,11 +509,11 @@ class LLMCachingHandler:
                 api_item = embedding_response.data[idx]
                 # api_item can be either a dict or an object (e.g., Embedding).
                 if isinstance(api_item, dict):
-                    api_item_copy = dict(api_item)
+                    api_item_copy = copy.deepcopy(api_item)
                     api_item_copy["index"] = len(final_data_list)
                     final_data_list.append(api_item_copy)
                 else:
-                    api_item_copy = copy.copy(api_item)
+                    api_item_copy = copy.deepcopy(api_item)
                     api_item_copy.index = len(final_data_list)
                     final_data_list.append(api_item_copy)
                 idx += 1

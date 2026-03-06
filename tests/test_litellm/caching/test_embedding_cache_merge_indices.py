@@ -129,5 +129,6 @@ def test_embedding_cache_merge_preserves_global_indices_on_miss_merge():
     )
 
     assert len(response_with_dicts.data) == 2
-    assert response_with_dicts.data[0]["index"] == 0
+    # data[0] is an Embedding object (from cache), data[1] is a dict (from API)
+    assert response_with_dicts.data[0].index == 0
     assert response_with_dicts.data[1]["index"] == 1
