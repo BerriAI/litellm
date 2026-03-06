@@ -1914,14 +1914,14 @@ def client(original_function):  # noqa: PLR0915
                         result=result, start_time=start_time, end_time=end_time
                     )
                 )
-            # Sync callbacks (e.g. langfuse, s3) must fire unconditionally —
-            # the fallbacks guard above only prevents double-firing of async
-            # callbacks (issue #7477), not sync ones.
-            logging_obj.handle_sync_success_callbacks_for_async_calls(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            # Sync callbacks must also be guarded to prevent double-firing
+            # when using completion_with_fallbacks (issue #7477).
+            if not is_completion_with_fallbacks:
+                logging_obj.handle_sync_success_callbacks_for_async_calls(
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
