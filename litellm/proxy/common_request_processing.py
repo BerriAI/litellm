@@ -920,6 +920,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=response,
+                request_headers=dict(request.headers),
             )
             if callback_headers:
                 custom_headers.update(callback_headers)
@@ -1028,6 +1029,7 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             user_api_key_dict=user_api_key_dict,
             response=response,
+            request_headers=dict(request.headers),
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
@@ -1196,6 +1198,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=None,
+                request_headers=self.data.get("proxy_server_request", {}).get("headers", {}),
             )
             if callback_headers:
                 headers.update(callback_headers)
