@@ -1,15 +1,15 @@
-import json
 import os
 import sys
 import types
-from types import SimpleNamespace
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+
 from litellm._uuid import uuid
 from litellm.proxy.management_endpoints import (
     mcp_management_endpoints as mgmt_endpoints,
@@ -204,25 +204,28 @@ class TestListMCPServers:
                 transport="http",
             ),
         ]
-        mock_manager.get_all_allowed_mcp_servers = AsyncMock(
-            return_value=mock_servers
-        )
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=mock_servers)
 
         for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-            return_value=True,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-            AsyncMock(return_value=[mock_user_auth]),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
         ):
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -269,12 +272,15 @@ class TestListMCPServers:
             return_value=mock_servers
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
-            return_value="view_all",
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
         ):
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
                 fetch_all_mcp_servers,
@@ -284,6 +290,79 @@ class TestListMCPServers:
 
             assert len(result) == 2
             assert {server.server_id for server in result} == {"server-1", "server-2"}
+
+    @pytest.mark.asyncio
+    async def test_list_mcp_servers_view_all_mode_virtual_key_is_sanitized(self):
+        """Issue #20325: virtual keys should get a safe discovery view."""
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="test_user_id",
+            api_key="test_api_key",
+            allowed_routes=["mcp_routes"],
+        )
+
+        mock_servers = [
+            generate_mock_mcp_server_db_record(server_id="server-1", alias="One"),
+            generate_mock_mcp_server_db_record(server_id="server-2", alias="Two"),
+        ]
+        for idx, server in enumerate(mock_servers):
+            server.credentials = {"auth_value": f"secret_{idx}"}
+            server.env = {"API_KEY": "super-secret"}
+            server.static_headers = {"Authorization": "Bearer super-secret"}
+            server.mcp_access_groups = ["group-a"]
+            server.teams = [{"team_id": "team-1", "team_alias": "Team 1"}]
+            server.command = "bash"
+            server.args = ["-lc", "echo hi"]
+            server.extra_headers = ["Authorization"]
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(
+            return_value=mock_servers
+        )
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=mock_servers)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
+
+            # Ensure we did not bypass filtering via view_all for restricted virtual keys.
+            mock_manager.get_all_mcp_servers_unfiltered.assert_not_called()
+
+            assert len(result) == 2
+            assert {server.server_id for server in result} == {"server-1", "server-2"}
+
+            for server in result:
+                assert server.credentials is None
+                assert server.url is None
+                assert server.static_headers is None
+                assert server.env == {}
+                assert server.command is None
+                assert server.args == []
+                assert server.extra_headers == []
+                assert server.allowed_tools == []
+                assert server.mcp_access_groups == []
+                assert server.teams == []
 
     @pytest.mark.asyncio
     async def test_list_mcp_servers_combined_config_and_db(self):
@@ -374,25 +453,28 @@ class TestListMCPServers:
                 transport="http",
             ),
         ]
-        mock_manager.get_all_allowed_mcp_servers = AsyncMock(
-            return_value=mock_servers
-        )
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=mock_servers)
 
         for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-            return_value=True,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-            AsyncMock(return_value=[mock_user_auth]),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
         ):
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -494,25 +576,28 @@ class TestListMCPServers:
                 url="https://actions.zapier.com/mcp/sse",
             ),
         ]
-        mock_manager.get_all_allowed_mcp_servers = AsyncMock(
-            return_value=mock_servers
-        )
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=mock_servers)
 
         for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-            return_value=False,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-            AsyncMock(return_value=[mock_user_auth]),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=False,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
         ):
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -540,6 +625,71 @@ class TestListMCPServers:
                     assert server.alias == "Allowed Zapier MCP"
                     assert server.url == "https://actions.zapier.com/mcp/sse"
 
+    @pytest.mark.asyncio
+    async def test_admin_user_with_object_permission_respects_mcp_servers(self):
+        """
+        Test that admin users with explicit object_permission.mcp_servers
+        only see the servers specified in object_permission.
+
+        Scenario: Admin user has object_permission.mcp_servers set to specific servers
+        Expected: Only those servers are returned, not all servers in the registry
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        # Create mock object permission with specific servers
+        mock_object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="test-obj-perm-id",
+            mcp_servers=["server-1", "server-2"],  # Only these two servers
+            mcp_access_groups=[],
+            mcp_tool_permissions={},
+            vector_stores=[],
+            agents=[],
+            agent_access_groups=[],
+        )
+
+        # Create admin user with object permission
+        mock_user_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin_user_id",
+            api_key="admin_api_key",
+            object_permission=mock_object_permission,
+            object_permission_id="test-obj-perm-id",
+        )
+
+        # Mock servers that the user should see
+        server_1 = generate_mock_mcp_server_db_record(
+            server_id="server-1", alias="Server 1", url="https://server1.example.com"
+        )
+        server_2 = generate_mock_mcp_server_db_record(
+            server_id="server-2", alias="Server 2", url="https://server2.example.com"
+        )
+
+        # Mock manager
+        mock_manager = MagicMock()
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(
+            return_value=[server_1, server_2]
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+            AsyncMock(return_value=[mock_user_auth]),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
+
+            # Verify results - should only return the 2 servers in object_permission
+            assert len(result) == 2
+            server_ids = {server.server_id for server in result}
+            assert server_ids == {"server-1", "server-2"}
+
+            # Verify credentials are redacted
+            assert all(server.credentials is None for server in result)
 
     @pytest.mark.asyncio
     async def test_fetch_single_mcp_server_redacts_credentials(self):
@@ -562,18 +712,23 @@ class TestListMCPServers:
             user_role=LitellmUserRoles.PROXY_ADMIN
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(return_value=mock_server),
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
-            AsyncMock(return_value=mock_health_result),
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-            return_value=True,
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=mock_health_result),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
         ):
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
                 fetch_mcp_server,
@@ -610,18 +765,23 @@ class TestListMCPServers:
             user_role=LitellmUserRoles.PROXY_ADMIN
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(return_value=mock_server),
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
-            AsyncMock(return_value=mock_health_result),
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-            return_value=True,
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=mock_health_result),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
         ):
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
                 fetch_mcp_server,
@@ -763,16 +923,20 @@ class TestTemporaryMCPSessionEndpoints:
         mock_manager.get_mcp_server_by_id.return_value = inherited_server
         mock_manager.build_mcp_server_from_table = AsyncMock(return_value=built_server)
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
-            MagicMock(),
-        ) as validate_mock, patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._cache_temporary_mcp_server",
-            MagicMock(),
-        ) as cache_mock:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ) as validate_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._cache_temporary_mcp_server",
+                MagicMock(),
+            ) as cache_mock,
+        ):
             response = await add_session_mcp_server(
                 payload=payload,
                 user_api_key_dict=user_auth,
@@ -832,13 +996,16 @@ class TestTemporaryMCPSessionEndpoints:
         server = generate_mock_mcp_server_config_record(server_id="server-1")
         authorize_response = MagicMock()
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
-            return_value=server,
-        ) as get_server, patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.authorize_with_server",
-            AsyncMock(return_value=authorize_response),
-        ) as authorize_mock:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ) as get_server,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.authorize_with_server",
+                AsyncMock(return_value=authorize_response),
+            ) as authorize_mock,
+        ):
             result = await mcp_authorize(
                 request=request,
                 server_id="server-1",
@@ -875,13 +1042,16 @@ class TestTemporaryMCPSessionEndpoints:
         server = generate_mock_mcp_server_config_record(server_id="server-1")
         exchange_response = {"access_token": "token"}
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
-            return_value=server,
-        ) as get_server, patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.exchange_token_with_server",
-            AsyncMock(return_value=exchange_response),
-        ) as exchange_mock:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ) as get_server,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.exchange_token_with_server",
+                AsyncMock(return_value=exchange_response),
+            ) as exchange_mock,
+        ):
             result = await mcp_token(
                 request=request,
                 server_id="server-1",
@@ -922,16 +1092,20 @@ class TestTemporaryMCPSessionEndpoints:
             "token_endpoint_auth_method": "client_secret_basic",
         }
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
-            return_value=server,
-        ) as get_server, patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._read_request_body",
-            AsyncMock(return_value=request_body),
-        ) as read_body, patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.register_client_with_server",
-            AsyncMock(return_value=register_response),
-        ) as register_mock:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ) as get_server,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._read_request_body",
+                AsyncMock(return_value=request_body),
+            ) as read_body,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.register_client_with_server",
+                AsyncMock(return_value=register_response),
+            ) as register_mock,
+        ):
             result = await mcp_register(request=request, server_id="server-1")
 
         assert result is register_response
@@ -947,6 +1121,7 @@ class TestTemporaryMCPSessionEndpoints:
             fallback_client_id="server-1",
         )
 
+
 class TestUpdateMCPServer:
     """Test suite for update MCP server functionality"""
 
@@ -954,7 +1129,7 @@ class TestUpdateMCPServer:
     async def test_update_mcp_server_respects_extra_headers(self):
         """
         Test that updating an MCP server with extra_headers properly saves the field.
-        
+
         This test ensures that extra_headers field in UpdateMCPServerRequest
         is properly handled and persisted when updating an MCP server.
         """
@@ -999,21 +1174,27 @@ class TestUpdateMCPServer:
         )
 
         # Mock the update_mcp_server function to capture the call
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
-            MagicMock(),
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
-            AsyncMock(return_value=updated_server),
-        ) as update_mock, patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
-            AsyncMock(),
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.reload_servers_from_database",
-            AsyncMock(),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+                AsyncMock(return_value=updated_server),
+            ) as update_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
+                AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.reload_servers_from_database",
+                AsyncMock(),
+            ),
         ):
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -1030,7 +1211,10 @@ class TestUpdateMCPServer:
             # First arg is prisma_client, second is the payload (UpdateMCPServerRequest)
             called_payload = call_args[0][1]
             assert called_payload.server_id == "test-server-1"
-            assert called_payload.extra_headers == ["X-Custom-Header", "X-Another-Header"]
+            assert called_payload.extra_headers == [
+                "X-Custom-Header",
+                "X-Another-Header",
+            ]
             assert called_payload.alias == "Updated Test Server"
 
             # Verify the result includes extra_headers
@@ -1081,12 +1265,15 @@ class TestHealthCheckServers:
             return_value=[mock_health_result_1, mock_health_result_2]
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-            AsyncMock(return_value=[mock_user_auth]),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
         ):
             result = await health_check_servers(
                 server_ids=None,
@@ -1130,10 +1317,17 @@ class TestMCPRegistryEndpoint:
 
         mock_manager = MagicMock()
         mock_manager.get_registry.return_value = {mock_server.server_id: mock_server}
+        # The registry endpoint uses get_filtered_registry (filters by client IP)
+        mock_manager.get_filtered_registry.return_value = {
+            mock_server.server_id: mock_server
+        }
 
-        with patch_proxy_general_settings({"enable_mcp_registry": True}), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
+        with (
+            patch_proxy_general_settings({"enable_mcp_registry": True}),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
         ):
             response = client.get("/v1/mcp/registry.json")
 
@@ -1180,12 +1374,15 @@ class TestMCPRegistryEndpoint:
             return_value=[mock_health_result]
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-            AsyncMock(return_value=[mock_user_auth]),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
         ):
             result = await health_check_servers(
                 server_ids=["server-1"],
@@ -1243,12 +1440,15 @@ class TestManagementPayloadValidation:
             return_value=[health_result_one, health_result_two]
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
-            return_value="view_all",
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
         ):
             result = await health_check_servers(
                 server_ids=None,
@@ -1293,12 +1493,15 @@ class TestManagementPayloadValidation:
             return_value=[mock_health_result]  # Only server-1 is returned (accessible)
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-            AsyncMock(return_value=[mock_user_auth]),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
         ):
             result = await health_check_servers(
                 server_ids=["server-1", "server-unauthorized"],

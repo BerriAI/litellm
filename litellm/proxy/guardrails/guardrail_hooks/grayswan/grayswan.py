@@ -9,7 +9,8 @@ from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
-    ModifyResponseException
+    ModifyResponseException,
+    log_guardrail_information,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -108,7 +109,9 @@ class GraySwanGuardrail(CustomGuardrail):
         self.categories = categories
         self.policy_id = policy_id
         self.fail_open = True if fail_open is None else bool(fail_open)
-        self.guardrail_timeout = 30.0 if guardrail_timeout is None else float(guardrail_timeout)
+        self.guardrail_timeout = (
+            30.0 if guardrail_timeout is None else float(guardrail_timeout)
+        )
 
         # Streaming configuration
         self.streaming_end_of_stream_only = streaming_end_of_stream_only
@@ -155,6 +158,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Unified Guardrail Interface (works with ALL endpoints automatically)
     # ------------------------------------------------------------------
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -208,7 +212,9 @@ class GraySwanGuardrail(CustomGuardrail):
         messages = [{"role": role, "content": text} for text in texts]
 
         # Get dynamic params from request metadata
-        dynamic_body = self.get_guardrail_dynamic_request_body_params(request_data) or {}
+        dynamic_body = (
+            self.get_guardrail_dynamic_request_body_params(request_data) or {}
+        )
         if dynamic_body:
             verbose_proxy_logger.debug(
                 "Gray Swan Guardrail: dynamic extra_body=%s", safe_dumps(dynamic_body)
@@ -271,12 +277,12 @@ class GraySwanGuardrail(CustomGuardrail):
     async def run_grayswan_guardrail(self, payload: dict) -> Dict[str, Any]:
         """
         Run the GraySwan guardrail on a payload.
-        
+
         This is a legacy method for testing purposes.
-        
+
         Args:
             payload: The payload to scan
-            
+
         Returns:
             Dict containing the GraySwan API response
         """
@@ -293,11 +299,11 @@ class GraySwanGuardrail(CustomGuardrail):
     ) -> None:
         """
         Legacy method for processing GraySwan API responses.
-        
+
         This method is maintained for backward compatibility with existing tests.
         It handles the test scenarios where responses need to be processed with
         knowledge of the request context (pre/during/post call hooks).
-        
+
         Args:
             response_json: Response from GraySwan API
             data: Optional request data (for passthrough exceptions)
@@ -365,7 +371,10 @@ class GraySwanGuardrail(CustomGuardrail):
             )
 
             # If hook_type is provided and in pre/during call, raise exception
-            if hook_type in [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call]:
+            if hook_type in [
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.during_call,
+            ]:
                 # Raise ModifyResponseException to short-circuit LLM call
                 if data is None:
                     data = {}
@@ -540,7 +549,9 @@ class GraySwanGuardrail(CustomGuardrail):
         if isinstance(litellm_metadata, dict) and litellm_metadata:
             cleaned_litellm_metadata = dict(litellm_metadata)
             # cleaned_litellm_metadata.pop("user_api_key_auth", None)
-            sanitized = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
+            sanitized = safe_json_loads(
+                safe_dumps(cleaned_litellm_metadata), default={}
+            )
             if isinstance(sanitized, dict) and sanitized:
                 payload["litellm_metadata"] = sanitized
 
@@ -566,7 +577,9 @@ class GraySwanGuardrail(CustomGuardrail):
             detection_info = detection_info[0]
 
         # Extract fields from detection_info dict
-        detection_dict: dict = detection_info if isinstance(detection_info, dict) else {}
+        detection_dict: dict = (
+            detection_info if isinstance(detection_info, dict) else {}
+        )
         violation_score = detection_dict.get("violation_score", 0.0)
         violated_rules = detection_dict.get("violated_rules", [])
         mutation = detection_dict.get("mutation", False)
@@ -582,7 +595,9 @@ class GraySwanGuardrail(CustomGuardrail):
         if violated_rules:
             formatted_rules = self._format_violated_rules(violated_rules)
             if formatted_rules:
-                message_parts.append(f"It was violating the rule(s): {formatted_rules}.")
+                message_parts.append(
+                    f"It was violating the rule(s): {formatted_rules}."
+                )
 
         if mutation:
             message_parts.append(
@@ -590,9 +605,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
 
         if ipi:
-            message_parts.append(
-                "Indirect Prompt Injection was DETECTED."
-            )
+            message_parts.append("Indirect Prompt Injection was DETECTED.")
 
         return "\n".join(message_parts)
 

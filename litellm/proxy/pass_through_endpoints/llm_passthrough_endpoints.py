@@ -28,6 +28,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
+    _safe_get_request_headers,
     _safe_set_request_parsed_body,
     get_form_data,
     get_request_body,
@@ -60,7 +61,7 @@ def create_request_copy(request: Request):
     return {
         "method": request.method,
         "url": str(request.url),
-        "headers": dict(request.headers),
+        "headers": _safe_get_request_headers(request).copy(),
         "cookies": request.cookies,
         "query_params": dict(request.query_params),
     }
@@ -329,7 +330,7 @@ async def vllm_proxy_route(
                 method=request.method,
                 endpoint=endpoint,
                 request_query_params=request.query_params,
-                request_headers=dict(request.headers),
+                request_headers=_safe_get_request_headers(request),
                 stream=request_body.get("stream", False),
                 content=None,
                 data=None,
@@ -642,10 +643,10 @@ def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
     by finding the action in the endpoint and extracting everything between "model" and the action.
 
     Args:
-        endpoint: The endpoint path (e.g., "/model/aws/anthropic/model-name/invoke")
+        endpoint: The endpoint path (e.g., "/model/aws/anthropic/model-name/invoke" or "v2/model/model-name/invoke")
 
     Returns:
-        The extracted model name (e.g., "aws/anthropic/model-name")
+        The extracted model name (e.g., "aws/anthropic/model-name" or "model-name")
 
     Raises:
         ValueError: If model cannot be extracted from endpoint
@@ -657,7 +658,34 @@ def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
             # Format: model/application-inference-profile/{profile-id}/{action}
             return "/".join(endpoint_parts[1:3])
 
-        # Format: model/{modelId}/{action}
+        # Format: model/{modelId}/{action} or v2/model/{modelId}/{action}
+        # Find the index of "model" in the endpoint parts
+        model_index = None
+        for idx, part in enumerate(endpoint_parts):
+            if part == "model":
+                model_index = idx
+                break
+
+        # If "model" keyword not found, try to extract model from the endpoint
+        # by finding the action and taking everything before it
+        if model_index is None:
+            # Find the index of the action in the endpoint parts
+            action_index = None
+            for idx, part in enumerate(endpoint_parts):
+                if part in BEDROCK_ENDPOINT_ACTIONS:
+                    action_index = idx
+                    break
+
+            if action_index is not None and action_index > 1:
+                # Join all parts before the action (excluding empty strings)
+                model_parts = [p for p in endpoint_parts[1:action_index] if p]
+                if model_parts:
+                    return "/".join(model_parts)
+
+            raise ValueError(
+                f"'model' keyword not found and unable to extract model from endpoint. Expected format: /model/{{modelId}}/{{action}}. Got: {endpoint}"
+            )
+
         # Find the index of the action in the endpoint parts
         action_index = None
         for idx, part in enumerate(endpoint_parts):
@@ -665,13 +693,22 @@ def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
                 action_index = idx
                 break
 
-        if action_index is not None and action_index > 1:
-            # Join all parts between "model" and the action
-            return "/".join(endpoint_parts[1:action_index])
+        if action_index is not None and action_index > model_index + 1:
+            # Join all parts between "model" and the action (excluding "model" itself)
+            return "/".join(endpoint_parts[model_index + 1:action_index])
 
         # Fallback to taking everything after "model" if no action found
-        return "/".join(endpoint_parts[1:])
+        model_parts = [p for p in endpoint_parts[model_index + 1:] if p]
+        if model_parts:
+            return "/".join(model_parts)
 
+        raise ValueError(
+            f"No model ID found after 'model' keyword. Expected format: /model/{{modelId}}/{{action}}. Got: {endpoint}"
+        )
+
+    except ValueError:
+        # Re-raise ValueError as-is
+        raise
     except Exception as e:
         raise ValueError(
             f"Model missing from endpoint. Expected format: /model/{{modelId}}/{{action}}. Got: {endpoint}"
@@ -1271,7 +1308,7 @@ async def azure_proxy_route(
                     method=request.method,
                     endpoint=endpoint,
                     request_query_params=request.query_params,
-                    request_headers=dict(request.headers),
+                    request_headers=_safe_get_request_headers(request),
                     stream=request_body.get("stream", False),
                     content=None,
                     data=None,
@@ -1469,7 +1506,7 @@ def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
     Returns:
         dict: Headers dictionary with only allowed headers
     """
-    incoming_headers = dict(request.headers) or {}
+    incoming_headers = _safe_get_request_headers(request)
     headers = {}
     for header_name in ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS:
         if header_name in incoming_headers:
@@ -1585,7 +1622,7 @@ async def _prepare_vertex_auth_headers(
     if (
         vertex_credentials is None or vertex_credentials.vertex_project is None
     ) and router_credentials is None:
-        headers = dict(request.headers) or {}
+        headers = _safe_get_request_headers(request).copy()
         headers_passed_through = True
         verbose_proxy_logger.debug(
             "default_vertex_config  not set, incoming request headers %s", headers
@@ -2047,6 +2084,93 @@ class BaseOpenAIPassThroughHandler:
             )
 
         return joined_path_str
+
+
+@router.api_route(
+    "/cursor/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Cursor Pass-through", "pass-through"],
+)
+async def cursor_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Pass-through endpoint for the Cursor Cloud Agents API.
+
+    Supports all Cursor Cloud Agents endpoints:
+    - GET    /v0/agents         — List agents
+    - POST   /v0/agents         — Launch an agent
+    - GET    /v0/agents/{id}    — Agent status
+    - GET    /v0/agents/{id}/conversation — Agent conversation
+    - POST   /v0/agents/{id}/followup    — Add follow-up
+    - POST   /v0/agents/{id}/stop        — Stop an agent
+    - DELETE /v0/agents/{id}    — Delete an agent
+    - GET    /v0/me             — API key info
+    - GET    /v0/models         — List models
+    - GET    /v0/repositories   — List GitHub repositories
+
+    Uses Basic Authentication (base64-encoded `API_KEY:`).
+
+    Credential lookup order:
+    1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)
+    2. litellm.credential_list (credentials added via UI)
+    3. CURSOR_API_KEY environment variable
+    """
+    import base64
+
+    base_target_url = os.getenv("CURSOR_API_BASE") or "https://api.cursor.com"
+
+    cursor_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="cursor",
+        region_name=None,
+    )
+
+    if cursor_api_key is None:
+        for credential in litellm.credential_list:
+            if (
+                credential.credential_info
+                and credential.credential_info.get("custom_llm_provider") == "cursor"
+            ):
+                cursor_api_key = credential.credential_values.get("api_key")
+                credential_api_base = credential.credential_values.get("api_base")
+                if credential_api_base:
+                    base_target_url = credential_api_base
+                break
+
+    if cursor_api_key is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Cursor API key not found. Add Cursor credentials via the UI (Models + Endpoints → LLM Credentials) or set CURSOR_API_KEY environment variable.",
+        )
+
+    encoded_endpoint = httpx.URL(endpoint).path
+
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+
+    auth_value = base64.b64encode(
+        f"{cursor_api_key}:".encode("utf-8")
+    ).decode("ascii")
+
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={"Authorization": f"Basic {auth_value}"},
+        custom_llm_provider="cursor",
+    )
+    received_value = await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+    )
+
+    return received_value
 
 
 async def vertex_ai_live_websocket_passthrough(

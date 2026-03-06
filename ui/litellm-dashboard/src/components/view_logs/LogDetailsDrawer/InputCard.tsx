@@ -31,7 +31,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
   const historyMessages = nonSystemMessages.slice(0, -1);
 
   const handleCopy = () => {
-    const content = JSON.stringify(messages, null, 2);
+    const content = lastMessage?.content || '';
     navigator.clipboard.writeText(content);
     message.success('Input copied');
   };

@@ -84,6 +84,31 @@ service:
 separateHealthApp: false
 separateHealthPort: 8081
 
+# Probe tuning for proxy container
+livenessProbe:
+  path: /health/liveliness
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 1
+  successThreshold: 1
+  failureThreshold: 3
+
+readinessProbe:
+  path: /health/readiness
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 1
+  successThreshold: 1
+  failureThreshold: 3
+
+startupProbe:
+  path: /health/readiness
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 1
+  successThreshold: 1
+  failureThreshold: 30
+
 ingress:
   enabled: false
   className: "nginx"

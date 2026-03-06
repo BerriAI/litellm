@@ -107,6 +107,7 @@ from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CustomPricingLiteLLMParams,
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
@@ -147,6 +148,7 @@ from litellm.utils import (
     token_counter,
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
+    validate_and_fix_thinking_param,
     validate_chat_completion_tool_choice,
     validate_openai_optional_params,
 )
@@ -159,6 +161,7 @@ from .litellm_core_utils.fallback_utils import (
     completion_with_fallbacks,
 )
 from .litellm_core_utils.prompt_templates.common_utils import (
+    add_system_prompt_to_messages,
     get_completion_messages,
     update_messages_with_model_file_ids,
 )
@@ -416,6 +419,8 @@ async def acompletion(  # noqa: PLR0915
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
+    # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
+    enable_json_schema_validation: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -560,6 +565,7 @@ async def acompletion(  # noqa: PLR0915
         "thinking": thinking,
         "web_search_options": web_search_options,
         "shared_session": shared_session,
+        "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -599,7 +605,7 @@ async def acompletion(  # noqa: PLR0915
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
-            
+
         init_response = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
@@ -939,7 +945,7 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
-        
+
         if web_search_options is not None and custom_llm_provider == "xai":
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
@@ -994,6 +1000,32 @@ def _drop_input_examples_from_tools(
     return cleaned_tools
 
 
+def _build_custom_pricing_entry(
+    custom_llm_provider: str,
+    kwargs: dict,
+    model_info: Optional[dict] = None,
+) -> dict:
+    """Build a complete model cost entry from kwargs and model_info.
+
+    Collects all CustomPricingLiteLLMParams fields present in kwargs and
+    merges metadata from model_info (mode, supports_prompt_caching, max_tokens)
+    so that register_model() receives the full pricing configuration.
+    """
+    entry: dict = {"litellm_provider": custom_llm_provider}
+
+    for field_name in CustomPricingLiteLLMParams.model_fields:
+        value = kwargs.get(field_name)
+        if value is not None:
+            entry[field_name] = value
+
+    if model_info and isinstance(model_info, dict):
+        for key in ("mode", "supports_prompt_caching", "max_tokens"):
+            if key in model_info and model_info[key] is not None:
+                entry.setdefault(key, model_info[key])
+
+    return entry
+
+
 @tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
@@ -1045,6 +1077,8 @@ def completion(  # type: ignore # noqa: PLR0915
     thinking: Optional[AnthropicThinkingParam] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
+    # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
+    enable_json_schema_validation: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -1102,15 +1136,15 @@ def completion(  # type: ignore # noqa: PLR0915
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
+    # normalize camelCase thinking keys (e.g. budgetTokens -> budget_tokens)
+    thinking = validate_and_fix_thinking_param(thinking=thinking)
 
     ######### unpacking kwargs #####################
     args = locals()
 
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
-        from litellm.responses.mcp.chat_completions_handler import (
-            acompletion_with_mcp,
-        )
+        from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
         )
@@ -1165,6 +1199,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 thinking=thinking,
                 web_search_options=web_search_options,
                 shared_session=shared_session,
+                enable_json_schema_validation=enable_json_schema_validation,
                 **kwargs,
             )
     api_base = kwargs.get("api_base", None)
@@ -1245,6 +1280,7 @@ def completion(  # type: ignore # noqa: PLR0915
     ### PROMPT MANAGEMENT ###
     prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
     prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+    litellm_system_prompt = kwargs.get("litellm_system_prompt", None)
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
     messages = get_completion_messages(
         messages=messages,
@@ -1274,6 +1310,14 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_variables=prompt_variables,
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
+        )
+
+    ### LITELLM SYSTEM PROMPT ###
+    if litellm_system_prompt:
+        messages = add_system_prompt_to_messages(
+            messages=messages,
+            system_prompt=litellm_system_prompt,
+            merge_with_first_system=True,
         )
 
     try:
@@ -1340,27 +1384,16 @@ def completion(  # type: ignore # noqa: PLR0915
             timeout = float(timeout)  # type: ignore
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-        if input_cost_per_token is not None and output_cost_per_token is not None:
+        if (
+            input_cost_per_token is not None and output_cost_per_token is not None
+        ) or input_cost_per_second is not None:
             litellm.register_model(
                 {
-                    f"{custom_llm_provider}/{model}": {
-                        "input_cost_per_token": input_cost_per_token,
-                        "output_cost_per_token": output_cost_per_token,
-                        "litellm_provider": custom_llm_provider,
-                    }
-                }
-            )
-        elif (
-            input_cost_per_second is not None
-        ):  # time based pricing just needs cost in place
-            output_cost_per_second = output_cost_per_second
-            litellm.register_model(
-                {
-                    f"{custom_llm_provider}/{model}": {
-                        "input_cost_per_second": input_cost_per_second,
-                        "output_cost_per_second": output_cost_per_second,
-                        "litellm_provider": custom_llm_provider,
-                    }
+                    f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
+                        custom_llm_provider=custom_llm_provider,
+                        kwargs=kwargs,
+                        model_info=model_info,
+                    )
                 }
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
@@ -1558,7 +1591,9 @@ def completion(  # type: ignore # noqa: PLR0915
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         model_info, model = responses_api_bridge_check(
-            model=model, custom_llm_provider=custom_llm_provider, web_search_options=web_search_options
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            web_search_options=web_search_options,
         )
 
         if model_info.get("mode") == "responses":
@@ -2206,20 +2241,48 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
+        elif custom_llm_provider == "bedrock_mantle":
+            api_base = api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
+            api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
+            headers = headers or litellm.headers
+            config = litellm.BedrockMantleChatConfig.get_config()
+            for k, v in config.items():
+                if k not in optional_params:
+                    optional_params[k] = v
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
         elif custom_llm_provider == "a2a":
             # A2A (Agent-to-Agent) Protocol
             # Resolve agent configuration from registry if model format is "a2a/<agent-name>"
-            api_base, api_key, headers = litellm.A2AConfig.resolve_agent_config_from_registry(
-                model=model,
-                api_base=api_base,
-                api_key=api_key,
-                headers=headers,
-                optional_params=optional_params,
+            api_base, api_key, headers = (
+                litellm.A2AConfig.resolve_agent_config_from_registry(
+                    model=model,
+                    api_base=api_base,
+                    api_key=api_key,
+                    headers=headers,
+                    optional_params=optional_params,
+                )
             )
-            
+
             # Fall back to environment variables and defaults
             api_base = api_base or litellm.api_base or get_secret_str("A2A_API_BASE")
-            
+
             if api_base is None:
                 raise Exception(
                     "api_base is required for A2A provider. "
@@ -2506,10 +2569,10 @@ def completion(  # type: ignore # noqa: PLR0915
 
             # Add GitHub Copilot headers (same as /responses endpoint does)
             if custom_llm_provider == "github_copilot":
+                from litellm.llms.github_copilot.authenticator import Authenticator
                 from litellm.llms.github_copilot.common_utils import (
                     get_copilot_default_headers,
                 )
-                from litellm.llms.github_copilot.authenticator import Authenticator
 
                 copilot_auth = Authenticator()
                 copilot_api_key = copilot_auth.get_api_key()
@@ -4629,7 +4692,6 @@ def embedding(  # noqa: PLR0915
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
     input_cost_per_second = kwargs.get("input_cost_per_second", None)
-    output_cost_per_second = kwargs.get("output_cost_per_second", None)
     openai_params = [
         "user",
         "dimensions",
@@ -4665,35 +4727,30 @@ def embedding(  # noqa: PLR0915
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
+    allowed_openai_params: Optional[List[str]] = kwargs.get(
+        "allowed_openai_params", None
+    )
     optional_params = get_optional_params_embeddings(
         model=model,
         user=user,
         dimensions=dimensions,
         encoding_format=encoding_format,
         custom_llm_provider=custom_llm_provider,
+        allowed_openai_params=allowed_openai_params,
         **non_default_params,
     )
 
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-    if input_cost_per_token is not None and output_cost_per_token is not None:
+    if (
+        input_cost_per_token is not None and output_cost_per_token is not None
+    ) or input_cost_per_second is not None:
         litellm.register_model(
             {
-                f"{custom_llm_provider}/{model}": {
-                    "input_cost_per_token": input_cost_per_token,
-                    "output_cost_per_token": output_cost_per_token,
-                    "litellm_provider": custom_llm_provider,
-                }
-            }
-        )
-    if input_cost_per_second is not None:  # time based pricing just needs cost in place
-        output_cost_per_second = output_cost_per_second or 0.0
-        litellm.register_model(
-            {
-                f"{custom_llm_provider}/{model}": {
-                    "input_cost_per_second": input_cost_per_second,
-                    "output_cost_per_second": output_cost_per_second,
-                    "litellm_provider": custom_llm_provider,
-                }
+                f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=kwargs,
+                    model_info=kwargs.get("model_info"),
+                )
             }
         )
 
@@ -4783,7 +4840,10 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
-            or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
+            or (
+                model in litellm.open_ai_embedding_models
+                and custom_llm_provider is None
+            )
         ):
             api_base = (
                 api_base
@@ -5605,6 +5665,21 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
             )
+        elif custom_llm_provider == "perplexity":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
+            )
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
@@ -6222,18 +6297,20 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
                 f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
             )
 
-        # Calculate and add duration if response is missing it
+        # Store duration in _hidden_params for cost calculation without
+        # exposing it in the response body. Adding duration to the response
+        # tricks the OpenAI SDK's "best match deserialization" into thinking
+        # a plain Transcription is a TranscriptionVerbose/Diarized type.
         if (
             response is not None
             and not isinstance(response, Coroutine)
             and file is not None
         ):
-            # Check if response is missing duration
             existing_duration = getattr(response, "duration", None)
             if existing_duration is None:
                 calculated_duration = calculate_request_duration(file)
                 if calculated_duration is not None:
-                    setattr(response, "duration", calculated_duration)
+                    response._hidden_params["audio_transcription_duration"] = calculated_duration
 
         return response
     except Exception as e:
@@ -6449,14 +6526,14 @@ def transcription(
             shared_session=shared_session,
         )
 
-    # Calculate and add duration if response is missing it
+    # Store duration in _hidden_params for cost calculation without
+    # exposing it in the response body (see sync path comment above).
     if response is not None and not isinstance(response, Coroutine):
-        # Check if response is missing duration
         existing_duration = getattr(response, "duration", None)
         if existing_duration is None:
             calculated_duration = calculate_request_duration(file)
             if calculated_duration is not None:
-                setattr(response, "duration", calculated_duration)
+                response._hidden_params["audio_transcription_duration"] = calculated_duration
 
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
@@ -7230,6 +7307,79 @@ def stream_chunk_builder(  # noqa: PLR0915
         # Initialize the response dictionary
         response = processor.build_base_response(chunks)
 
+        # Fast path for the common text-only streaming case:
+        # avoid repeated multi-pass list scans over chunks.
+        simple_content_parts: List[str] = []
+        is_simple_text_stream = True
+        for chunk in chunks:
+            if len(chunk["choices"]) == 0:
+                continue
+
+            choice = chunk["choices"][0]
+            delta_obj = (
+                choice.get("delta", {})
+                if isinstance(choice, dict)
+                else getattr(choice, "delta", {})
+            )
+            if isinstance(delta_obj, dict):
+                delta = delta_obj
+            elif hasattr(delta_obj, "model_dump"):
+                delta = cast(Dict[str, Any], delta_obj.model_dump())
+            else:
+                delta = {}
+
+            if (
+                delta.get("tool_calls") is not None
+                or delta.get("function_call") is not None
+                or delta.get("reasoning_content") is not None
+                or delta.get("thinking_blocks") is not None
+                or delta.get("annotations") is not None
+                or delta.get("audio") is not None
+                or delta.get("images") is not None
+                or delta.get("provider_specific_fields") is not None
+            ):
+                is_simple_text_stream = False
+                break
+
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                simple_content_parts.append(content)
+
+        if is_simple_text_stream:
+            if simple_content_parts:
+                response["choices"][0]["message"]["content"] = "".join(
+                    simple_content_parts
+                )
+            completion_output = get_content_from_model_response(response)
+            usage = processor.calculate_usage(
+                chunks=chunks,
+                model=model,
+                completion_output=completion_output,
+                messages=messages,
+                reasoning_tokens=0,
+            )
+            setattr(response, "usage", usage)
+
+            # Propagate provider_specific_fields from chunk hidden params when present.
+            for chunk in reversed(chunks):
+                if isinstance(chunk, dict):
+                    hidden = chunk.get("_hidden_params")
+                else:
+                    hidden = getattr(chunk, "_hidden_params", None)
+                if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
+                    response._hidden_params.setdefault(
+                        "provider_specific_fields", {}
+                    ).update(hidden["provider_specific_fields"])
+                    break
+
+            if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+                setattr(
+                    usage,
+                    "cost",
+                    logging_obj._response_cost_calculator(result=response),
+                )
+            return response
+
         tool_call_chunks = [
             chunk
             for chunk in chunks
@@ -7383,6 +7533,19 @@ def stream_chunk_builder(  # noqa: PLR0915
 
         setattr(response, "usage", usage)
 
+        # Propagate provider_specific_fields from the last chunk (contains provider
+        # metadata like traffic_type set during streaming)
+        for chunk in reversed(chunks):
+            if isinstance(chunk, dict):
+                hidden = chunk.get("_hidden_params")
+            else:
+                hidden = getattr(chunk, "_hidden_params", None)
+            if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
+                response._hidden_params.setdefault(
+                    "provider_specific_fields", {}
+                ).update(hidden["provider_specific_fields"])
+                break
+
         # Add cost to usage object if include_cost_in_streaming_usage is True
         if litellm.include_cost_in_streaming_usage and logging_obj is not None:
             setattr(
@@ -7426,6 +7589,7 @@ def __getattr__(name: str) -> Any:
         # before loading tiktoken, ensuring the local cache is used
         # instead of downloading from the internet
         from litellm._lazy_imports import _get_default_encoding
+
         _encoding = _get_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
         import sys

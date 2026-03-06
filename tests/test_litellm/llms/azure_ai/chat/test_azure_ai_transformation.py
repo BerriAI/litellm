@@ -45,6 +45,58 @@ def test_azure_ai_validate_environment():
     assert headers["Content-Type"] == "application/json"
 
 
+def test_azure_ai_validate_environment_with_api_key():
+    """
+    Test that when api_key is provided, it is set in the api-key header
+    for Azure Foundry endpoints (.services.ai.azure.com).
+    """
+    config = AzureAIStudioConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="Kimi-K2.5",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://my-endpoint.services.ai.azure.com",
+    )
+    assert headers["api-key"] == "test-api-key"
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_azure_ai_validate_environment_with_azure_ad_token():
+    """
+    Test that when no api_key is provided but Azure AD credentials are available,
+    the Authorization header is set with a Bearer token.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20759
+    """
+    import litellm
+
+    config = AzureAIStudioConfig()
+    with patch(
+        "litellm.llms.azure.common_utils.get_azure_ad_token",
+        return_value="fake-azure-ad-token",
+    ), patch(
+        "litellm.llms.azure.common_utils.get_secret_str",
+        return_value=None,
+    ), patch.object(litellm, "api_key", None), patch.object(
+        litellm, "azure_key", None
+    ):
+        headers = config.validate_environment(
+            headers={},
+            model="Kimi-K2.5",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base="https://my-endpoint.services.ai.azure.com",
+        )
+    assert headers.get("Authorization") == "Bearer fake-azure-ad-token"
+    assert "api-key" not in headers
+    assert headers["Content-Type"] == "application/json"
+
+
 def test_azure_ai_grok_stop_parameter_handling():
     """
     Test that Grok models properly handle stop parameter filtering in Azure AI Studio.

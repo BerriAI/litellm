@@ -23,12 +23,14 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     decode_model_from_file_id,
+    encode_batch_response_ids,
     encode_file_id_with_model,
     get_batch_from_database,
     get_credentials_for_model,
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
+    resolve_input_file_id_to_unified,
     update_batch_in_database,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
@@ -117,6 +119,32 @@ async def create_batch(  # noqa: PLR0915
             or "openai"
         )
         _create_batch_data = LiteLLMBatchCreateRequest(**data)
+
+        # Apply team-level batch output expiry enforcement
+        team_metadata = user_api_key_dict.team_metadata or {}
+        enforced_batch_expiry = team_metadata.get(
+            "enforced_batch_output_expires_after"
+        )
+        if enforced_batch_expiry is not None:
+            if "anchor" not in enforced_batch_expiry or "seconds" not in enforced_batch_expiry:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Server configuration error: team metadata field 'enforced_batch_output_expires_after' is malformed - must contain 'anchor' and 'seconds' keys. Contact your team or proxy admin to fix this setting.",
+                    },
+                )
+            if enforced_batch_expiry["anchor"] != "created_at":
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": f"Server configuration error: team metadata field 'enforced_batch_output_expires_after' has invalid anchor '{enforced_batch_expiry['anchor']}' - must be 'created_at'. Contact your team or proxy admin to fix this setting.",
+                    },
+                )
+            _create_batch_data["output_expires_after"] = {
+                "anchor": "created_at",
+                "seconds": int(enforced_batch_expiry["seconds"]),
+            }
+
         input_file_id = _create_batch_data.get("input_file_id", None)
         unified_file_id: Union[str, Literal[False]] = False
         
@@ -150,7 +178,9 @@ async def create_batch(  # noqa: PLR0915
             if response and hasattr(response, "id") and response.id:
                 original_batch_id = response.id
                 encoded_batch_id = encode_file_id_with_model(
-                    file_id=original_batch_id, model=model_from_file_id
+                    file_id=original_batch_id,
+                    model=model_from_file_id,
+                    id_type="batch",
                 )
                 response.id = encoded_batch_id
                 
@@ -239,7 +269,9 @@ async def create_batch(  # noqa: PLR0915
                     custom_llm_provider=credentials["custom_llm_provider"],
                     **_create_batch_data  # type: ignore
                 )
-                
+
+                encode_batch_response_ids(response, model=model_param)
+
                 verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
@@ -305,7 +337,7 @@ async def create_batch(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
 )
-async def retrieve_batch(
+async def retrieve_batch( # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -377,6 +409,11 @@ async def retrieve_batch(
             response = await proxy_logging_obj.post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
+
+            # async_post_call_success_hook replaces batch.id and output_file_id with unified IDs
+            # but not input_file_id. Resolve raw provider ID to unified ID.
+            if unified_batch_id:
+                await resolve_input_file_id_to_unified(response, prisma_client)
             
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
@@ -432,8 +469,9 @@ async def retrieve_batch(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 **data  # type: ignore
             )
-            
-            
+
+            encode_batch_response_ids(response, model=model_from_id)
+
             verbose_proxy_logger.debug(
                 f"Retrieved batch using model: {model_from_id}, original_id: {original_batch_id}"
             )
@@ -478,6 +516,11 @@ async def retrieve_batch(
         response = await proxy_logging_obj.post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response
         )
+
+        # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
+        # Resolve raw provider input_file_id to unified ID.
+        if unified_batch_id:
+            await resolve_input_file_id_to_unified(response, prisma_client)
 
         ### ALERTING ###
         asyncio.create_task(
@@ -620,7 +663,13 @@ async def list_batches(
                 limit=limit,
                 **data  # type: ignore
             )
-            
+
+            # Encode batch IDs in the list response so clients can use
+            # them for retrieve/cancel/file downloads through the proxy.
+            if response and hasattr(response, "data") and response.data:
+                for batch in response.data:
+                    encode_batch_response_ids(batch, model=model_param)
+
             verbose_proxy_logger.debug(f"Listed batches using model: {model_param}")
         
         # SCENARIO 2 (alternative): target_model_names based routing
@@ -796,7 +845,9 @@ async def cancel_batch(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 **data  # type: ignore
             )
-            
+
+            encode_batch_response_ids(response, model=model_from_id)
+
             verbose_proxy_logger.debug(
                 f"Cancelled batch using model: {model_from_id}, original_id: {original_batch_id}"
             )

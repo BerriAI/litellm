@@ -18,17 +18,19 @@ vi.mock("@/utils/roles", () => ({
   isAdminRole: vi.fn(),
 }));
 
-vi.mock("./SearchToolView", () => ({
-  SearchToolView: ({ searchTool, onBack }: { searchTool: SearchTool; onBack: () => void }) => (
+vi.mock("./SearchToolView", () => {
+  const SearchToolView = ({ searchTool, onBack }: { searchTool: SearchTool; onBack: () => void }) => (
     <div data-testid="search-tool-view">
       <div>Search Tool View: {searchTool.search_tool_name}</div>
       <button onClick={onBack}>Back</button>
     </div>
-  ),
-}));
+  );
+  SearchToolView.displayName = "SearchToolView";
+  return { SearchToolView };
+});
 
-vi.mock("./CreateSearchTools", () => ({
-  default: ({
+vi.mock("./CreateSearchTools", () => {
+  const CreateSearchTools = ({
     isModalVisible,
     setModalVisible,
   }: {
@@ -39,11 +41,13 @@ vi.mock("./CreateSearchTools", () => ({
       <div data-testid="create-search-tool-modal">
         <button onClick={() => setModalVisible(false)}>Close Create Modal</button>
       </div>
-    ) : null,
-}));
+    ) : null;
+  CreateSearchTools.displayName = "CreateSearchTools";
+  return { default: CreateSearchTools };
+});
 
-vi.mock("../common_components/DeleteResourceModal", () => ({
-  default: ({
+vi.mock("../common_components/DeleteResourceModal", () => {
+  const DeleteResourceModal = ({
     isOpen,
     onOk,
     onCancel,
@@ -57,8 +61,10 @@ vi.mock("../common_components/DeleteResourceModal", () => ({
         <button onClick={onOk}>Confirm Delete</button>
         <button onClick={onCancel}>Cancel Delete</button>
       </div>
-    ) : null,
-}));
+    ) : null;
+  DeleteResourceModal.displayName = "DeleteResourceModal";
+  return { default: DeleteResourceModal };
+});
 
 const mockSearchTools: SearchTool[] = [
   {
@@ -102,9 +108,11 @@ const createWrapper = () => {
       },
     },
   });
-  return ({ children }: { children: React.ReactNode }) => (
+  const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
+  Wrapper.displayName = "TestWrapper";
+  return Wrapper;
 };
 
 describe("SearchTools", () => {

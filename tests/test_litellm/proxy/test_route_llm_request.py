@@ -137,62 +137,103 @@ async def test_route_request_no_model_required_with_router_settings_and_no_route
 
 
 @pytest.mark.asyncio
-async def test_route_request_with_invalid_router_params():
+async def test_route_request_with_router_settings_override():
     """
-    Test that route_request filters out invalid Router init params from 'user_config'.
-    This covers the fix for https://github.com/BerriAI/litellm/issues/19693
+    Test that route_request handles router_settings_override by merging settings into kwargs
+    instead of creating a new Router (which is expensive and was the old behavior).
     """
-    import litellm
-    from litellm.router import Router
-    from unittest.mock import AsyncMock
-
-    # Mock data with user_config containing invalid keys (simulating DB entry)
+    # Mock data with router_settings_override containing per-request settings
     data = {
         "model": "gpt-3.5-turbo",
-        "user_config": {
-            "model_list": [
-                {
-                    "model_name": "gpt-3.5-turbo",
-                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test"},
-                }
-            ],
-            "model_alias_map": {"alias": "real_model"},  # INVALID PARAM
-            "invalid_garbage_key": "crash_me",  # INVALID PARAM
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "fallbacks": [{"gpt-3.5-turbo": ["gpt-4"]}],
+            "num_retries": 5,
+            "timeout": 30,
+            "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
+            # These settings should be ignored (not in per_request_settings list)
+            "routing_strategy": "least-busy",
+            "model_group_alias": {"alias": "real_model"},
         },
     }
 
-    # We expect Router(**config) to succeed because of the filtering.
-    # If filtering fails, this will raise TypeError and fail the test.
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    # Verify the router method was called with merged settings
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
+    assert call_kwargs["num_retries"] == 5
+    assert call_kwargs["timeout"] == 30
+    assert call_kwargs["model_group_retry_policy"] == {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}}
+    # Verify unsupported settings were NOT merged
+    assert "routing_strategy" not in call_kwargs
+    assert "model_group_alias" not in call_kwargs
+    # Verify router_settings_override was removed from data
+    assert "router_settings_override" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override_no_router():
+    """
+    Test that router_settings_override works when no router is provided,
+    falling back to litellm module directly.
+    """
+    import litellm
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "fallbacks": [{"gpt-3.5-turbo": ["gpt-4"]}],
+            "num_retries": 3,
+        },
+    }
+
+    # Use MagicMock explicitly to avoid auto-AsyncMock behavior in Python 3.12+
+    mock_completion = MagicMock(return_value="success")
+    original_acompletion = litellm.acompletion
+    litellm.acompletion = mock_completion
+
     try:
-        # route_request calls getattr(user_router, route_type)(**data)
-        # We'll mock the internal call to avoid making real network requests
-        with pytest.MonkeyPatch.context() as m:
-            # Mock the method that gets called on the router instance
-            # We don't easily have access to the instance created INSIDE existing route_request
-            # So we will wrap litellm.Router to spy on it or verify it doesn't crash
+        response = await route_request(data, None, None, "acompletion")
 
-            original_router_init = litellm.Router.__init__
+        assert response == "success"
+        # Verify litellm.acompletion was called with merged settings
+        call_kwargs = mock_completion.call_args[1]
+        assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
+        assert call_kwargs["num_retries"] == 3
+    finally:
+        litellm.acompletion = original_acompletion
 
-            def safe_router_init(self, **kwargs):
-                # Verify that invalid keys are NOT present in kwargs
-                assert "model_alias_map" not in kwargs
-                assert "invalid_garbage_key" not in kwargs
-                # Call original init (which would raise TypeError if invalid keys were present)
-                original_router_init(self, **kwargs)
 
-            m.setattr(litellm.Router, "__init__", safe_router_init)
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override_preserves_existing():
+    """
+    Test that router_settings_override does not override settings already in the request.
+    Request-level settings take precedence over key/team settings.
+    """
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "num_retries": 10,  # Request-level setting
+        "router_settings_override": {
+            "num_retries": 3,  # Key/team setting - should NOT override
+            "timeout": 30,  # Key/team setting - should be applied
+        },
+    }
 
-            # Use 'acompletion' as the route_type
-            # We also need to mock the completion method to avoid real calls
-            m.setattr(Router, "acompletion", AsyncMock(return_value="success"))
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
 
-            response = await route_request(data, None, None, "acompletion")
-            assert response == "success"
+    response = await route_request(data, llm_router, None, "acompletion")
 
-    except TypeError as e:
-        pytest.fail(
-            f"route_request raised TypeError, implying invalid params were passed to Router: {e}"
-        )
-    except Exception:
-        # Other exceptions might happen (e.g. valid config issues) but we care about TypeError here
-        pass
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    # Request-level num_retries should take precedence
+    assert call_kwargs["num_retries"] == 10
+    # Key/team timeout should be applied since not in request
+    assert call_kwargs["timeout"] == 30

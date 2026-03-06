@@ -46,15 +46,24 @@ def mock_env():
         yield os.environ
 
 
-@patch("litellm.secret_managers.main.oidc_cache")
-@patch("litellm.secret_managers.main._get_oidc_http_handler")
-@patch("httpx.Client")  # Prevent any real HTTP connections
-def test_oidc_google_success(mock_httpx_client, mock_get_http_handler, mock_oidc_cache):
-    mock_oidc_cache.get_cache.return_value = None
-    mock_handler = MockHTTPHandler(timeout=600.0)
-    mock_get_http_handler.return_value = mock_handler
+def test_oidc_google_success():
+    """Test Google OIDC token fetch with mocked handler (no real network calls)."""
     secret_name = "oidc/google/[invalid url, do not cite]"
-    result = get_secret(secret_name)
+    mock_handler = MockHTTPHandler(timeout=600.0)
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
+    mock_oidc_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            with patch(
+                "litellm.secret_managers.main.HTTPHandler",
+                side_effect=lambda timeout=None: mock_handler,
+            ):
+                result = get_secret(secret_name)
 
     assert result == "mocked_token"
     assert mock_handler.last_params == {"audience": "[invalid url, do not cite]"}
@@ -63,32 +72,49 @@ def test_oidc_google_success(mock_httpx_client, mock_get_http_handler, mock_oidc
     )
 
 
-@patch("litellm.secret_managers.main.oidc_cache")
-@patch("litellm.secret_managers.main._get_oidc_http_handler")
-def test_oidc_google_cached(mock_get_http_handler, mock_oidc_cache):
+def test_oidc_google_cached():
+    """Test Google OIDC uses cache and does not call HTTP (no real network calls)."""
+    secret_name = "oidc/google/[invalid url, do not cite]"
+    mock_get_http_handler = Mock()
+    mock_oidc_cache = Mock()
     mock_oidc_cache.get_cache.return_value = "cached_token"
 
-    secret_name = "oidc/google/[invalid url, do not cite]"
-    result = get_secret(secret_name)
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            with patch(
+                "litellm.secret_managers.main.HTTPHandler",
+                Mock(side_effect=AssertionError("HTTPHandler should not be used")),
+            ):
+                result = get_secret(secret_name)
 
     assert result == "cached_token", f"Expected cached token, got {result}"
     mock_oidc_cache.get_cache.assert_called_with(key=secret_name)
-    # Verify HTTP handler was never called since we had a cached token
     mock_get_http_handler.assert_not_called()
 
 
-@patch("litellm.secret_managers.main.oidc_cache")
-@patch("litellm.secret_managers.main._get_oidc_http_handler")
-def test_oidc_google_failure(mock_get_http_handler, mock_oidc_cache):
+def test_oidc_google_failure():
+    """Test Google OIDC raises when provider returns error (no real network calls)."""
+    secret_name = "oidc/google/https://example.com/api"
     mock_handler = MockHTTPHandler(timeout=600.0)
     mock_handler.status_code = 400
-    mock_get_http_handler.return_value = mock_handler
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
     mock_oidc_cache.get_cache.return_value = None
-    
-    secret_name = "oidc/google/https://example.com/api"
 
-    with pytest.raises(ValueError, match="Google OIDC provider failed"):
-        get_secret(secret_name)
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            with patch(
+                "litellm.secret_managers.main.HTTPHandler",
+                side_effect=lambda timeout=None: mock_handler,
+            ):
+                with pytest.raises(ValueError, match="Google OIDC provider failed"):
+                    get_secret(secret_name)
 
 
 def test_oidc_circleci_success(monkeypatch):
@@ -151,20 +177,18 @@ def test_oidc_azure_file_success(mock_env, tmp_path):
 
 
 @patch("litellm.secret_managers.main.get_azure_ad_token_provider")
-@patch.dict(os.environ, {}, clear=False)  # Ensure AZURE_FEDERATED_TOKEN_FILE is not set
-def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider):
-    # Ensure the env var is not set so it falls through to Azure AD token provider
-    if "AZURE_FEDERATED_TOKEN_FILE" in os.environ:
-        del os.environ["AZURE_FEDERATED_TOKEN_FILE"]
-    
+def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider, monkeypatch):
+    # Force-unset so we always hit the Azure AD token provider path (CI may set AZURE_FEDERATED_TOKEN_FILE)
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+
     # Mock the token provider function that gets returned and called
     mock_token_provider = Mock(return_value="azure_ad_token")
     mock_get_azure_ad_token_provider.return_value = mock_token_provider
-    
+
     # Also mock the Azure Identity SDK to prevent any real Azure calls
     with patch("azure.identity.get_bearer_token_provider") as mock_bearer:
         mock_bearer.return_value = mock_token_provider
-        
+
         secret_name = "oidc/azure/api://azure-audience"
         result = get_secret(secret_name)
 

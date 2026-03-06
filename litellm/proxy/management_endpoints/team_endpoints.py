@@ -72,12 +72,13 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
+    _team_member_has_permission,
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
 )
-from litellm.proxy.management_endpoints.tag_management_endpoints import (
-    get_daily_activity,
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity_aggregated,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -706,6 +707,7 @@ async def new_team(  # noqa: PLR0915
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+    - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -1267,6 +1269,7 @@ async def update_team(   # noqa: PLR0915
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+    - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
@@ -3095,12 +3098,7 @@ async def list_available_teams(
         ),
     )
     if available_teams is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "No available teams for user to join. See how to set available teams here: https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
-            },
-        )
+        return []
 
     # filter out teams that the user is already a member of
     user_info = await prisma_client.db.litellm_usertable.find_unique(
@@ -3892,10 +3890,14 @@ async def get_team_daily_activity(
     page: int = 1,
     page_size: int = 10,
     exclude_team_ids: Optional[str] = None,
+    timezone: Optional[int] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get daily activity for specific teams or all teams.
+
+    Uses SQL GROUP BY to aggregate all matching rows without pagination,
+    ensuring accurate total spend regardless of data volume.
 
     Args:
         team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
@@ -3903,11 +3905,12 @@ async def get_team_daily_activity(
         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
         model (Optional[str]): Filter by model name.
         api_key (Optional[str]): Filter by API key.
-        page (int): Page number for pagination.
-        page_size (int): Number of items per page.
+        page (int): Deprecated, kept for backward compatibility. All results are returned in a single page.
+        page_size (int): Deprecated, kept for backward compatibility.
         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+        timezone (Optional[int]): Timezone offset in minutes from UTC (e.g., 480 for PST).
     Returns:
-        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
+        SpendAnalyticsPaginatedResponse: Response containing daily activity data with per-team breakdown.
     """
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -3974,22 +3977,29 @@ async def get_team_daily_activity(
         t.team_id: {"team_alias": t.team_alias} for t in team_aliases
     }
 
-    # Check if user is team admin for any requested teams
+    # Check if user is team admin or has /team/daily/activity permission
     # If not, filter by user's API keys
     user_api_keys: Optional[List[str]] = None
     if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
-        # Check if user is team admin for any of the teams
-        is_team_admin_for_any = False
+        # Check if user is team admin or has usage view permission for any team
+        has_full_team_view = False
         for team_alias in team_aliases:
             team_obj = LiteLLM_TeamTable(**team_alias.model_dump())
             if _is_user_team_admin(
                 user_api_key_dict=user_api_key_dict, team_obj=team_obj
             ):
-                is_team_admin_for_any = True
+                has_full_team_view = True
+                break
+            if _team_member_has_permission(
+                user_api_key_dict=user_api_key_dict,
+                team_obj=team_obj,
+                permission="/team/daily/activity",
+            ):
+                has_full_team_view = True
                 break
 
-        # If user is not a team admin for any team, filter by their API keys
-        if not is_team_admin_for_any:
+        # If user does not have full team view, filter by their API keys
+        if not has_full_team_view:
             # Get all API keys for this user
             user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
                 where={"user_id": user_api_key_dict.user_id}
@@ -4004,17 +4014,17 @@ async def get_team_daily_activity(
     if final_api_key_filter is None and user_api_keys is not None:
         final_api_key_filter = user_api_keys
 
-    return await get_daily_activity(
+    return await get_daily_activity_aggregated(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
         entity_id=team_ids_list,
         entity_metadata_field=team_alias_metadata,
-        exclude_entity_ids=exclude_team_ids_list,
         start_date=start_date,
         end_date=end_date,
         model=model,
         api_key=final_api_key_filter,
-        page=page,
-        page_size=page_size,
+        exclude_entity_ids=exclude_team_ids_list,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
     )

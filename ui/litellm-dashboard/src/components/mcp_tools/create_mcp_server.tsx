@@ -1,9 +1,10 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input } from "antd";
+import { Modal, Tooltip, Form, Select, Input, Switch } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
-import { AUTH_TYPE, MCPServer, MCPServerCostInfo } from "./types";
+import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
+import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -24,6 +25,8 @@ interface CreateMCPServerProps {
   isModalVisible: boolean;
   setModalVisible: (visible: boolean) => void;
   availableAccessGroups: string[];
+  prefillData?: DiscoverableMCPServer | null;
+  onBackToDiscovery?: () => void;
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
@@ -37,21 +40,29 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   isModalVisible,
   setModalVisible,
   availableAccessGroups,
+  prefillData,
+  onBackToDiscovery,
 }) => {
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [formValues, setFormValues] = useState<Record<string, any>>({});
-  const [pendingRestoredValues, setPendingRestoredValues] = useState<{ values: Record<string, any>; transport?: string } | null>(null);
+  const [pendingRestoredValues, setPendingRestoredValues] = useState<{
+    values: Record<string, any>;
+    transport?: string;
+  } | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [tools, setTools] = useState<any[]>([]);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
+  const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [transportType, setTransportType] = useState<string>("");
   const [searchValue, setSearchValue] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
   const persistCreateUiState = () => {
     if (typeof window === "undefined") {
@@ -123,6 +134,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     },
     onTokenReceived: (token) => {
       setOauthAccessToken(token?.access_token ?? null);
+
+      if (token?.access_token) {
+        const credentials = {
+          access_token: token.access_token,
+          ...(token.refresh_token && { refresh_token: token.refresh_token }),
+          ...(token.expires_in && { expires_in: token.expires_in }),
+          ...(token.scope && { scope: token.scope }),
+        };
+
+        form.setFieldsValue({ credentials });
+
+        NotificationsManager.success(
+          "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
+        );
+      }
     },
     onBeforeRedirect: persistCreateUiState,
   });
@@ -181,6 +207,50 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setPendingRestoredValues(null);
   }, [pendingRestoredValues, form, transportType]);
 
+  // Pre-fill form from discovery selection
+  React.useEffect(() => {
+    if (!isModalVisible || !prefillData) {
+      return;
+    }
+    // Sanitize server name: strip vendor prefix, replace hyphens with underscores
+    const sanitizedName = (prefillData.name || "")
+      .replace(/[^a-zA-Z0-9_]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "");
+
+    const transport = prefillData.transport || "";
+    setTransportType(transport);
+
+    const prefillValues: Record<string, any> = {
+      server_name: sanitizedName,
+      alias: sanitizedName,
+      description: prefillData.description || "",
+      transport: transport,
+    };
+
+    if (transport === "stdio") {
+      const stdioObj: Record<string, any> = {};
+      if (prefillData.command) stdioObj.command = prefillData.command;
+      if (prefillData.args && prefillData.args.length > 0) stdioObj.args = prefillData.args;
+      if (prefillData.env_vars && prefillData.env_vars.length > 0) {
+        const envObj: Record<string, string> = {};
+        for (const v of prefillData.env_vars) {
+          envObj[v.name] = v.description ? `<${v.description}>` : "";
+        }
+        stdioObj.env = envObj;
+      }
+      if (Object.keys(stdioObj).length > 0) {
+        prefillValues.stdio_config = JSON.stringify(stdioObj, null, 2);
+      }
+    } else if (prefillData.url) {
+      prefillValues.url = prefillData.url;
+    }
+
+    form.setFieldsValue(prefillValues);
+    setFormValues(prefillValues);
+    setAliasManuallyEdited(false);
+  }, [isModalVisible, prefillData, form]);
+
   const handleCreate = async (values: Record<string, any>) => {
     setIsLoading(true);
     try {
@@ -189,6 +259,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
+        available_on_public_internet: availableOnPublicInternetRaw,
         ...restValues
       } = values;
 
@@ -265,6 +336,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         }
       }
 
+      // Map "openapi" transport to "http" for the backend
+      if (restValues.transport === TRANSPORT.OPENAPI) {
+        restValues.transport = "http";
+      }
+
       // Prepare the payload with cost configuration and allowed tools
       const payload: Record<string, any> = {
         ...restValues,
@@ -279,12 +355,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
+        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
         allow_all_keys: Boolean(allowAllKeysRaw),
+        available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         static_headers: staticHeaders,
       };
 
       payload.static_headers = staticHeaders;
-      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
+      const includeCredentials =
+        restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
@@ -325,9 +405,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setTransportType(value);
     // Clear fields that are not relevant for the selected transport
     if (value === "stdio") {
-      form.setFieldsValue({ url: undefined, auth_type: undefined, credentials: undefined });
+      form.setFieldsValue({ url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined });
+    } else if (value === TRANSPORT.OPENAPI) {
+      form.setFieldsValue({ url: undefined, command: undefined, args: undefined, env: undefined });
     } else {
-      form.setFieldsValue({ command: undefined, args: undefined, env: undefined });
+      form.setFieldsValue({ spec_path: undefined, command: undefined, args: undefined, env: undefined });
     }
   };
 
@@ -387,7 +469,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   return (
     <Modal
       title={
-        <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+        <div className="flex items-center pb-4 border-b border-gray-100" style={{ gap: 12 }}>
+          {onBackToDiscovery && (
+            <button
+              onClick={onBackToDiscovery}
+              className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none"
+              style={{ flexShrink: 0 }}
+            >
+              &#8592;
+            </button>
+          )}
           <img
             src={mcpLogoImg}
             alt="MCP Logo"
@@ -395,7 +486,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             style={{
               height: "20px",
               width: "20px",
-              marginRight: "8px",
               objectFit: "contain",
             }}
           />
@@ -425,7 +515,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   MCP Server Name
-                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Hyphens '-' are not allowed; use underscores '_' instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
+                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
@@ -446,21 +536,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   Alias
-                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name with spaces replaced by underscores.">
+                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
               }
               name="alias"
-              rules={[
-                { required: false },
-                {
-                  validator: (_, value) =>
-                    value && value.includes("-")
-                      ? Promise.reject("Alias cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                      : Promise.resolve(),
-                },
-              ]}
+              rules={[{ required: false }, { validator: (_, value) => validateMCPServerName(value) }]}
             >
               <TextInput
                 placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
@@ -475,7 +557,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               rules={[
                 {
                   required: false,
-                  message: "Please enter a server description!!!!!!!!!",
+                  message: "Please enter a server description",
                 },
               ]}
             >
@@ -497,14 +579,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 onChange={handleTransportChange}
                 value={transportType}
               >
-                <Select.Option value="http">HTTP</Select.Option>
+                <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
                 <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                 <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
+                <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
               </Select>
             </Form.Item>
 
             {/* URL field - only show for HTTP and SSE */}
-            {transportType !== "stdio" && (
+            {(transportType === "http" || transportType === "sse") && (
               <Form.Item
                 label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
                 name="url"
@@ -520,8 +603,112 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {/* Authentication - only show for HTTP and SSE */}
-            {transportType !== "stdio" && (
+            {/* OpenAPI Spec URL - only show for OpenAPI transport */}
+            {transportType === TRANSPORT.OPENAPI && (
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    OpenAPI Spec URL
+                    <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="spec_path"
+                rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
+              >
+                <Input
+                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+            )}
+
+            {/* BYOK toggle - only for OpenAPI */}
+            {transportType === TRANSPORT.OPENAPI && (
+              <>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                      BYOK (Bring Your Own Key)
+                      <Tooltip title="When enabled, each user provides their own API key for this service. Keys are stored per-user and never shared.">
+                        <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="is_byok"
+                  valuePropName="checked"
+                >
+                  <Switch />
+                </Form.Item>
+
+                <Form.Item noStyle shouldUpdate={(prev, cur) => prev.is_byok !== cur.is_byok || prev.auth_type !== cur.auth_type}>
+                  {({ getFieldValue }) =>
+                    getFieldValue("is_byok") ? (
+                      <>
+                        {/* Auth format hint */}
+                        {getFieldValue("auth_type") && getFieldValue("auth_type") !== "none" && (
+                          <div className="mb-4 p-3 bg-blue-50 rounded-lg text-sm text-blue-700 flex items-start gap-2">
+                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
+                            <span>
+                              User keys will be sent as:{" "}
+                              <code className="font-mono bg-blue-100 px-1 rounded">
+                                {getFieldValue("auth_type") === "bearer_token" && "Authorization: Bearer {key}"}
+                                {getFieldValue("auth_type") === "api_key" && "x-api-key: {key}"}
+                                {getFieldValue("auth_type") === "basic" && "Authorization: Basic {key}"}
+                                {getFieldValue("auth_type") === "authorization" && "Authorization: {key}"}
+                              </code>
+                              {!getFieldValue("auth_type") && "Set Authentication Type below to specify the format."}
+                            </span>
+                          </div>
+                        )}
+                        {!getFieldValue("auth_type") && (
+                          <div className="mb-4 p-3 bg-yellow-50 rounded-lg text-sm text-yellow-700 flex items-start gap-2">
+                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
+                            <span>Set the <strong>Authentication Type</strong> below to specify how user keys are sent (e.g., Bearer Token, API Key header).</span>
+                          </div>
+                        )}
+                        <Form.Item
+                          label={
+                            <span className="text-sm font-medium text-gray-700">
+                              Access Description
+                              <Tooltip title="List of permissions shown to users in the connection modal (e.g. 'Create and manage Jira issues')">
+                                <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                              </Tooltip>
+                            </span>
+                          }
+                          name="byok_description"
+                        >
+                          <Select
+                            mode="tags"
+                            placeholder="Add access description items (press Enter after each)"
+                            className="w-full"
+                            tokenSeparators={[","]}
+                          />
+                        </Form.Item>
+
+                        <Form.Item
+                          label={
+                            <span className="text-sm font-medium text-gray-700">
+                              API Key Help URL
+                              <Tooltip title="Optional link shown to users to help them find their API key">
+                                <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                              </Tooltip>
+                            </span>
+                          }
+                          name="byok_api_key_help_url"
+                        >
+                          <Input placeholder="https://docs.example.com/api-keys" />
+                        </Form.Item>
+                      </>
+                    ) : null
+                  }
+                </Form.Item>
+              </>
+            )}
+
+            {/* Authentication - show for HTTP, SSE, and OpenAPI */}
+            {transportType !== "stdio" && transportType !== "" && (
               <Form.Item
                 label={<span className="text-sm font-medium text-gray-700">Authentication</span>}
                 name="auth_type"
@@ -537,7 +724,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {transportType !== "stdio" && shouldShowAuthValueField && (
+            {transportType !== "stdio" && transportType !== "" && shouldShowAuthValueField && (
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
@@ -548,7 +735,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   </span>
                 }
                 name={["credentials", "auth_value"]}
-                rules={[{ required: true, message: "Please enter the authentication value" }]}
+                rules={[
+                  {
+                    validator: (_, value) =>
+                      value && typeof value === "string" && value.trim() === ""
+                        ? Promise.reject(new Error("Authentication value cannot be empty whitespace"))
+                        : Promise.resolve(),
+                  },
+                ]}
               >
                 <TextInput
                   type="password"
@@ -558,132 +752,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {transportType !== "stdio" && isOAuthAuthType && (
-              <>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Client ID (optional)
-                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "client_id"]}
-                >
-                  <TextInput
-                    type="password"
-                    placeholder="Enter OAuth client ID"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Client Secret (optional)
-                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "client_secret"]}
-                >
-                  <TextInput
-                    type="password"
-                    placeholder="Enter OAuth client secret"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Scopes (optional)
-                      <Tooltip title="Optional scopes requested during token exchange. Separate multiple scopes with enter or commas.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "scopes"]}
-                >
-                  <Select
-                    mode="tags"
-                    tokenSeparators={[","]}
-                    placeholder="Add scopes"
-                    className="rounded-lg"
-                    size="large"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Authorization URL Override (optional)
-                      <Tooltip title="Optional override for the authorization endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="authorization_url"
-                >
-                  <TextInput
-                    placeholder="https://example.com/oauth/authorize"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Token URL Override (optional)
-                      <Tooltip title="Optional override for the token endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="token_url"
-                >
-                  <TextInput
-                    placeholder="https://example.com/oauth/token"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Registration URL Override (optional)
-                      <Tooltip title="Optional orverride for the dynamic client registration endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="registration_url"
-                >
-                  <TextInput
-                    placeholder="https://example.com/oauth/register"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">
-                    Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.
-                  </p>
-                  <Button
-                    variant="secondary"
-                    onClick={startOAuthFlow}
-                    disabled={oauthStatus === "authorizing" || oauthStatus === "exchanging"}
-                  >
-                    {oauthStatus === "authorizing"
-                      ? "Waiting for authorization..."
-                      : oauthStatus === "exchanging"
-                        ? "Exchanging authorization code..."
-                        : "Authorize & Fetch Token"}
-                  </Button>
-                  {oauthError && <p className="text-sm text-red-500">{oauthError}</p>}
-                  {oauthStatus === "success" && oauthTokenResponse?.access_token && (
-                    <p className="text-sm text-green-600">
-                      Token fetched. Expires in {oauthTokenResponse.expires_in ?? "?"} seconds.
-                    </p>
-                  )}
-                </div>
-              </>
+            {transportType !== "stdio" && transportType !== "" && isOAuthAuthType && (
+              <OAuthFormFields
+                isM2M={isM2MFlow}
+                initialFlowType={OAUTH_FLOW.INTERACTIVE}
+                oauthFlow={{
+                  startOAuthFlow,
+                  status: oauthStatus,
+                  error: oauthError,
+                  tokenResponse: oauthTokenResponse,
+                }}
+              />
             )}
 
             {/* Stdio Configuration - only show for stdio transport */}
@@ -720,6 +799,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               allowedTools={allowedTools}
               existingAllowedTools={null}
               onAllowedToolsChange={setAllowedTools}
+              toolNameToDisplayName={toolNameToDisplayName}
+              toolNameToDescription={toolNameToDescription}
+              onToolNameToDisplayNameChange={setToolNameToDisplayName}
+              onToolNameToDescriptionChange={setToolNameToDescription}
             />
           </div>
 

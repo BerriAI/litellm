@@ -2,7 +2,10 @@
 This module is used to generate MCP tools from OpenAPI specs.
 """
 
+import asyncio
+import contextvars
 import json
+import os
 from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
 from urllib.parse import quote
@@ -19,6 +22,13 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 # Store the base URL and headers globally
 BASE_URL = ""
 HEADERS: Dict[str, str] = {}
+
+# Per-request auth header override for BYOK servers.
+# Set this ContextVar before calling a local tool handler to inject the user's
+# stored credential into the HTTP request made by the tool function closure.
+_request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_request_auth_header", default=None
+)
 
 
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
@@ -45,12 +55,40 @@ def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
 
 
 def load_openapi_spec(filepath: str) -> Dict[str, Any]:
-    """Load OpenAPI specification from JSON file."""
-    with open(filepath, "r") as f:
+    """
+    Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
+    """
+    try:
+        # If we're already inside an event loop, prefer the async function.
+        asyncio.get_running_loop()
+        raise RuntimeError(
+            "load_openapi_spec() was called from within a running event loop. "
+            "Use 'await load_openapi_spec_async(...)' instead."
+        )
+    except RuntimeError as e:
+        # "no running event loop" is fine; other RuntimeErrors we re-raise
+        if "no running event loop" not in str(e).lower():
+            raise
+    return asyncio.run(load_openapi_spec_async(filepath))
+
+async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
+    if filepath.startswith("http://") or filepath.startswith("https://"):
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        # NOTE: do not close shared client if get_async_httpx_client returns a shared singleton.
+        # If it returns a new client each time, consider wrapping it in an async context manager.
+        r = await client.get(filepath)
+        r.raise_for_status()
+        return r.json()
+
+    # fallback: local file
+    # Local filesystem path
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
+    with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def get_base_url(spec: Dict[str, Any]) -> str:
+def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
@@ -60,6 +98,20 @@ def get_base_url(spec: Dict[str, Any]) -> str:
         scheme = spec.get("schemes", ["https"])[0]
         base_path = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
+    
+    # Fallback: derive base URL from spec_path if it's a URL
+    if spec_path and (spec_path.startswith("http://") or spec_path.startswith("https://")):
+        for suffix in ["/openapi.json", "/openapi.yaml", "/swagger.json", "/swagger.yaml"]:
+            if spec_path.endswith(suffix):
+                base_url = spec_path[:-len(suffix)]
+                verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+                return base_url
+        
+        if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
+            base_url = "/".join(spec_path.split("/")[:-1])
+            verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+            return base_url
+    
     return ""
 
 
@@ -72,6 +124,8 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
     # OpenAPI 3.x and 2.x parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             if param.get("in") == "path":
                 path_params.append(param_name)
@@ -95,6 +149,8 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     # Process parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             param_schema = param.get("schema", {})
             param_type = param_schema.get("type", "string")
@@ -167,6 +223,15 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
+        # Allow per-request auth override (e.g. BYOK credential set via ContextVar).
+        # The ContextVar holds the full Authorization header value, including the
+        # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
+        # server.py based on the server's configured auth_type.
+        effective_headers = dict(headers)
+        override_auth = _request_auth_header.get()
+        if override_auth:
+            effective_headers["Authorization"] = override_auth
+
         # Build URL from base_url and path
         url = base_url + path
 
@@ -219,20 +284,20 @@ def create_tool_function(
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
         if original_method == "get":
-            response = await client.get(url, params=params, headers=headers)
+            response = await client.get(url, params=params, headers=effective_headers)
         elif original_method == "post":
             response = await client.post(
-                url, params=params, json=json_body, headers=headers
+                url, params=params, json=json_body, headers=effective_headers
             )
         elif original_method == "put":
             response = await client.put(
-                url, params=params, json=json_body, headers=headers
+                url, params=params, json=json_body, headers=effective_headers
             )
         elif original_method == "delete":
-            response = await client.delete(url, params=params, headers=headers)
+            response = await client.delete(url, params=params, headers=effective_headers)
         elif original_method == "patch":
             response = await client.patch(
-                url, params=params, json=json_body, headers=headers
+                url, params=params, json=json_body, headers=effective_headers
             )
         else:
             return f"Unsupported HTTP method: {original_method}"

@@ -2,13 +2,17 @@
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
 
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 
 
 class TestOpenAIGPTConfig:
@@ -73,6 +77,17 @@ class TestOpenAIGPTConfig:
         for param in base_expected_params:
             assert param in supported_params, f"Expected '{param}' in supported params"
 
+    def test_prompt_cache_key_supported(self):
+        """Test that 'prompt_cache_key' is in supported params for OpenAI chat completion models.
+
+        OpenAI's Chat Completions API supports prompt_cache_key for cache routing optimization.
+        """
+        supported_params = self.config.get_supported_openai_params("gpt-4.1-nano")
+        assert "prompt_cache_key" in supported_params
+
+        supported_params = self.config.get_supported_openai_params("gpt-4.1")
+        assert "prompt_cache_key" in supported_params
+
 
 class TestGetOptionalParamsIntegration:
     """Integration tests using litellm.get_optional_params()"""
@@ -123,3 +138,189 @@ class TestGetOptionalParamsIntegration:
         # Both should include user
         assert regular_params.get("user") == "my-end-user"
         assert responses_params.get("user") == "my-end-user"
+
+
+class TestOpenAIChatCompletionStreamingHandler:
+    """Tests for OpenAIChatCompletionStreamingHandler.chunk_parser()"""
+
+    def test_chunk_parser_preserves_usage(self):
+        """
+        Test that chunk_parser preserves the usage field from streaming chunks.
+
+        """
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        usage_chunk = {
+            "id": "gen-123",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": ""},
+                    "finish_reason": None,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 13797,
+                "completion_tokens": 350,
+                "total_tokens": 14147,
+            },
+        }
+
+        result = handler.chunk_parser(usage_chunk)
+
+        assert result.usage is not None
+        assert result.usage.prompt_tokens == 13797
+        assert result.usage.completion_tokens == 350
+        assert result.usage.total_tokens == 14147
+
+    def test_chunk_parser_without_usage(self):
+        """Test that chunk_parser works normally for chunks without usage."""
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        chunk = {
+            "id": "gen-123",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "Hello"},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+
+        assert result.id == "gen-123"
+        assert result.choices[0].delta.content == "Hello"
+        assert not hasattr(result, "usage") or result.usage is None
+
+    def test_chunk_parser_maps_reasoning_to_reasoning_content(self):
+        """
+        Test that chunk_parser maps 'reasoning' field to 'reasoning_content'.
+
+        Some OpenAI-compatible providers (e.g., GLM-5, hosted_vllm) return
+        delta.reasoning, but LiteLLM expects delta.reasoning_content.
+
+        Regression test for: Streaming responses with delta.reasoning field
+        coming back empty when using openai/ or hosted_vllm/ providers.
+        """
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        # Simulate a chunk with reasoning field (as returned by GLM-5)
+        chunk = {
+            "id": "chatcmpl-8e3d624de9b12528",
+            "object": "chat.completion.chunk",
+            "created": 1771411455,
+            "model": "glm-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "reasoning": "The capital of France",
+                        "role": None,
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        # Parse the chunk
+        parsed_chunk = handler.chunk_parser(chunk)
+
+        # Verify that reasoning was mapped to reasoning_content
+        assert parsed_chunk.choices[0].delta.reasoning_content == "The capital of France"
+        # Verify that the original 'reasoning' field was removed
+        assert not hasattr(parsed_chunk.choices[0].delta, "reasoning")
+
+    def test_chunk_parser_reasoning_field_not_present(self):
+        """
+        Test that chunks without reasoning field still work correctly.
+        """
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        # Simulate a chunk without reasoning field
+        chunk = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1769511767,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "delta": {
+                        "content": "Regular content",
+                        "role": "assistant",
+                    },
+                    "finish_reason": None,
+                    "index": 0,
+                }
+            ],
+        }
+
+        # Parse the chunk
+        parsed_chunk = handler.chunk_parser(chunk)
+
+        # Verify that content is present
+        assert parsed_chunk.choices[0].delta.content == "Regular content"
+        assert parsed_chunk.choices[0].delta.role == "assistant"
+        # Verify that reasoning_content is not set (it should be deleted by Delta.__init__)
+        assert not hasattr(parsed_chunk.choices[0].delta, "reasoning_content")
+
+
+class TestPromptCacheKeyIntegration:
+    """Tests for prompt_cache_key support"""
+
+    def test_prompt_cache_key_in_optional_params(self):
+        """Test that 'prompt_cache_key' flows through get_optional_params for OpenAI models."""
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="gpt-4.1-nano",
+            custom_llm_provider="openai",
+            prompt_cache_key="test-cache-key-123",
+        )
+        assert optional_params.get("prompt_cache_key") == "test-cache-key-123"
+
+
+class TestPromptCacheParams:
+    """Tests for prompt_cache_key and prompt_cache_retention support."""
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def test_prompt_cache_key_in_supported_params(self):
+        """Test that prompt_cache_key is in supported params for OpenAI models."""
+        supported_params = self.config.get_supported_openai_params("gpt-4o")
+        assert "prompt_cache_key" in supported_params
+
+    def test_prompt_cache_retention_in_supported_params(self):
+        """Test that prompt_cache_retention is in supported params for OpenAI models."""
+        supported_params = self.config.get_supported_openai_params("gpt-4o")
+        assert "prompt_cache_retention" in supported_params
+
+    def test_prompt_cache_params_passed_through(self):
+        """Test that prompt_cache_key and prompt_cache_retention are passed through by map_openai_params."""
+        optional_params = self.config.map_openai_params(
+            non_default_params={
+                "prompt_cache_key": "my-cache-key",
+                "prompt_cache_retention": "24h",
+            },
+            optional_params={},
+            model="gpt-4o",
+            drop_params=False,
+        )
+        assert optional_params.get("prompt_cache_key") == "my-cache-key"
+        assert optional_params.get("prompt_cache_retention") == "24h"

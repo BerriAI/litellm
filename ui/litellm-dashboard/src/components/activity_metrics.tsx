@@ -148,7 +148,6 @@ const ModelSection = ({
             categories={["metrics.successful_requests", "metrics.failed_requests"]}
             colors={["green", "red"]}
             valueFormatter={valueFormatter}
-            stack
             customTooltip={CustomTooltip}
             showLegend={false}
           />

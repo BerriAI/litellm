@@ -120,13 +120,27 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         (kwargs.get("metadata", {}) or {}).get("user_api_key_auth")
     )
 
-    # Process MCP tools
+    # Extract MCP auth headers before fetching tools (needed for dynamic auth)
+    (
+        mcp_auth_header,
+        mcp_server_auth_headers,
+        oauth2_headers,
+        raw_headers,
+    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+        secret_fields=kwargs.get("secret_fields"),
+        tools=tools,
+    )
+
+    # Process MCP tools (pass auth headers for dynamic auth)
     (
         deduplicated_mcp_tools,
         tool_server_map,
     ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        litellm_trace_id=kwargs.get("litellm_trace_id"),
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
     )
 
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
@@ -140,17 +154,6 @@ async def acompletion_with_mcp(  # noqa: PLR0915
     # Determine if we should auto-execute tools
     should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
-    )
-
-    # Extract MCP auth headers
-    (
-        mcp_auth_header,
-        mcp_server_auth_headers,
-        oauth2_headers,
-        raw_headers,
-    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
-        secret_fields=kwargs.get("secret_fields"),
-        tools=tools,
     )
 
     # Prepare call parameters
@@ -235,7 +238,10 @@ async def acompletion_with_mcp(  # noqa: PLR0915
 
             def _add_mcp_list_tools_to_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
                 """Add mcp_list_tools to the first chunk."""
-                from litellm.types.utils import StreamingChoices, add_provider_specific_fields
+                from litellm.types.utils import (
+                    StreamingChoices,
+                    add_provider_specific_fields,
+                )
                 
                 if not self.openai_tools:
                     return chunk
@@ -258,7 +264,10 @@ async def acompletion_with_mcp(  # noqa: PLR0915
 
             def _add_mcp_tool_metadata_to_final_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
                 """Add mcp_tool_calls and mcp_call_results to the final chunk."""
-                from litellm.types.utils import StreamingChoices, add_provider_specific_fields
+                from litellm.types.utils import (
+                    StreamingChoices,
+                    add_provider_specific_fields,
+                )
                 
                 if hasattr(chunk, "choices") and chunk.choices:
                     for choice in chunk.choices:
