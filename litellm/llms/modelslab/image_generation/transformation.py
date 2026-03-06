@@ -230,7 +230,11 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                     f"Generation ID: {generation_id}"
                 )
 
-            # Retry logic for transient HTTP errors
+            # Retry logic for transient HTTP errors.
+            # Note: _get_httpx_client() returns an HTTPHandler whose .post() raises
+            # httpx.HTTPStatusError internally (via raise_for_status) before returning
+            # the response object.  We therefore inspect e.response rather than a
+            # local `response` variable which would never be assigned on error.
             last_error = None
             response = None
             for attempt in range(MAX_RETRIES):
@@ -244,9 +248,10 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                     break  # Success, exit retry loop
                 except httpx.HTTPStatusError as e:
                     last_error = e
-                    if response is not None and response.status_code in TRANSIENT_HTTP_STATUSES and attempt < MAX_RETRIES - 1:
+                    status_code = e.response.status_code if e.response is not None else 0
+                    if status_code in TRANSIENT_HTTP_STATUSES and attempt < MAX_RETRIES - 1:
                         verbose_logger.warning(
-                            f"ModelsLab: poll got {response.status_code}, retrying ({attempt + 1}/{MAX_RETRIES})..."
+                            f"ModelsLab: poll got {status_code}, retrying ({attempt + 1}/{MAX_RETRIES})..."
                         )
                         time.sleep(RETRY_DELAY)
                         continue
@@ -304,12 +309,32 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
                     f"Generation ID: {generation_id}"
                 )
 
-            response = await client.post(
-                url=fetch_url,
-                json={"key": api_key},
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
+            # Mirror _poll_sync retry logic for transient HTTP errors.
+            last_error = None
+            response = None
+            for attempt in range(MAX_RETRIES):
+                try:
+                    response = await client.post(
+                        url=fetch_url,
+                        json={"key": api_key},
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response.raise_for_status()
+                    break  # Success, exit retry loop
+                except httpx.HTTPStatusError as e:
+                    last_error = e
+                    status_code = e.response.status_code if e.response is not None else 0
+                    if status_code in TRANSIENT_HTTP_STATUSES and attempt < MAX_RETRIES - 1:
+                        verbose_logger.warning(
+                            f"ModelsLab: async poll got {status_code}, retrying ({attempt + 1}/{MAX_RETRIES})..."
+                        )
+                        await asyncio.sleep(RETRY_DELAY)
+                        continue
+                    raise
+
+            if response is None:
+                raise last_error or ValueError("Failed to get async response from ModelsLab fetch endpoint")
+
             data = response.json()
             status = data.get("status", "")
 
