@@ -289,8 +289,9 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
         Returns same response schema as text2img.
         """
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        import litellm
 
-        client = get_async_httpx_client()
+        client = get_async_httpx_client(llm_provider=litellm.LlmProviders.MODELSLAB)
         start_time = time.time()
         fetch_url = f"{base_url.rstrip('/')}/{self.FETCH_ENDPOINT}/{generation_id}"
 
