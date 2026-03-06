@@ -692,17 +692,15 @@ def convert_anyof_null_to_nullable(schema, depth=0):
     """ Converts null objects within anyOf by removing them and adding nullable to all remaining objects """
     anyof = schema.get("anyOf", None)
     if anyof is not None:
-        contains_null = False
-        for atype in list(anyof):
-            if isinstance(atype, dict) and atype.get("type") == "null":
-                # remove null type
-                anyof.remove(atype)
-                contains_null = True
-            elif isinstance(atype, dict) and _is_any_type_schema(atype):
-                # Empty schema {} inside anyOf means "any JSON type".
-                # Intentionally not coerced — Gemini treats it as
-                # TYPE_UNSPECIFIED (any type).
-                continue
+        contains_null = any(
+            isinstance(atype, dict) and atype.get("type") == "null"
+            for atype in anyof
+        )
+        # Build a new list excluding null types instead of mutating during iteration
+        anyof[:] = [
+            atype for atype in anyof
+            if not (isinstance(atype, dict) and atype.get("type") == "null")
+        ]
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
