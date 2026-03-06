@@ -124,6 +124,8 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
     # OpenAPI 3.x and 2.x parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             if param.get("in") == "path":
                 path_params.append(param_name)
@@ -147,6 +149,8 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     # Process parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             param_schema = param.get("schema", {})
             param_type = param_schema.get("type", "string")
