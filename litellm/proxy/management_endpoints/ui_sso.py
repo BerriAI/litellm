@@ -2592,7 +2592,10 @@ class SSOAuthenticationHandler:
                         "Future storage will use dict format."
                     )
                 else:
-                    verbose_proxy_logger.error(
+                    # Defer the detailed ERROR log to the strict-mode branch below
+                    # (which includes state and a diagnostic message).  Log at DEBUG
+                    # here to avoid duplicate ERROR entries in the same request.
+                    verbose_proxy_logger.debug(
                         "Unexpected PKCE verifier cache format (type=%s); skipping.",
                         type(cached_data).__name__,
                     )

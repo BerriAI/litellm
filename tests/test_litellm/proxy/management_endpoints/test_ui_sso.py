@@ -3546,6 +3546,7 @@ class TestPKCEFunctionality:
                 )
 
         assert "invalid_grant" in exc_info.value.message
+        assert str(exc_info.value.code) == "401"
 
 
     @pytest.mark.asyncio
@@ -3631,6 +3632,7 @@ class TestPKCEFunctionality:
                 )
 
         assert "unavailable" in exc_info.value.message.lower()
+        assert str(exc_info.value.code) == "401"
 
 
     @pytest.mark.asyncio
@@ -3775,6 +3777,7 @@ class TestPKCEFunctionality:
                 )
 
         assert "cache" in exc_info.value.message.lower() or "verifier" in exc_info.value.message.lower() or "format" in exc_info.value.message.lower()
+        assert str(exc_info.value.code) == "401"
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_non_strict_logs_warning_and_continues(self):
@@ -3844,7 +3847,8 @@ class TestPKCEFunctionality:
                     additional_headers={},
                 )
 
-        assert "401" in exc_info.value.message or "token" in exc_info.value.message.lower()
+        assert "token" in exc_info.value.message.lower()
+        assert str(exc_info.value.code) == "401"
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_unexpected_format_non_strict_logs_warning(self):
