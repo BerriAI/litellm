@@ -2543,6 +2543,15 @@ class SSOAuthenticationHandler:
         query_params = dict(request.query_params)
         state = query_params.get("state")
 
+        if os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true" and not state:
+            verbose_proxy_logger.warning(
+                "PKCE is enabled (GENERIC_CLIENT_USE_PKCE=true) but no 'state' parameter "
+                "was found in the callback. The PKCE verifier cannot be retrieved without "
+                "a state value — the token exchange will proceed without code_verifier, "
+                "which the provider may reject. Ensure your OAuth provider returns 'state' "
+                "in the callback redirect."
+            )
+
         if state and os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true":
             from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
@@ -2553,12 +2562,25 @@ class SSOAuthenticationHandler:
                 cached_data = await user_api_key_cache.async_get_cache(key=cache_key)
 
             code_verifier = None
+            # Track why code_verifier is absent for accurate strict-mode diagnostics.
+            _empty_value_in_dict = False  # dict format correct but value is empty/null
 
             if cached_data:
                 # Extract code_verifier from dict (stored as dict for JSON serialization)
                 if isinstance(cached_data, dict) and "code_verifier" in cached_data:
                     code_verifier = cached_data["code_verifier"]
-                    verbose_proxy_logger.debug("PKCE code_verifier retrieved from cache")
+                    if not code_verifier:
+                        # Dict format is correct but value is empty or null.  This is
+                        # a distinct case from an unrecognized format — the entry exists
+                        # but was stored with an empty/null verifier (data integrity issue).
+                        _empty_value_in_dict = True
+                        verbose_proxy_logger.warning(
+                            "PKCE verifier dict for state '%s' has an empty/null code_verifier "
+                            "value — may indicate a storage bug. Treating as a cache miss.",
+                            state,
+                        )
+                    else:
+                        verbose_proxy_logger.debug("PKCE code_verifier retrieved from cache")
                 elif isinstance(cached_data, str):
                     # Handle legacy format (plain string) for backward compatibility
                     code_verifier = cached_data
@@ -2588,9 +2610,20 @@ class SSOAuthenticationHandler:
                     os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
                 )
                 if strict_cache_miss:
-                    # Distinguish corrupt-format entries from genuine cache misses
-                    # so operators can investigate the correct root cause.
-                    if cached_data is not None:
+                    # Distinguish empty-value dicts, corrupt-format entries, and genuine
+                    # cache misses so operators can investigate the correct root cause.
+                    if _empty_value_in_dict:
+                        # Dict format was correct but code_verifier was empty/null.
+                        raise ProxyException(
+                            message=(
+                                f"PKCE verifier for state '{state}' was found in cache but "
+                                f"has an empty or null code_verifier value — possible storage bug."
+                            ),
+                            type=ProxyErrorTypes.auth_error,
+                            param="PKCE_CACHE_MISS",
+                            code=status.HTTP_401_UNAUTHORIZED,
+                        )
+                    elif cached_data is not None:
                         # Cache had data but in an unrecognised format (e.g. corrupt Redis value).
                         verbose_proxy_logger.error(
                             "PKCE verifier for state '%s' has an unrecognized format (type=%s); "
