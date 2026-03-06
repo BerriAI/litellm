@@ -178,12 +178,9 @@ class RubrikLogger(CustomBatchLogger):
                 try:
                     if system_prompt_msg_list:
                         system_scaffold = {"role": "system", "content": system_prompt_msg_list}
-                        if type(standard_logging_payload["messages"]) is list:
+                        if isinstance(standard_logging_payload["messages"], list):
                             standard_logging_payload["messages"].insert(0, system_scaffold)  # type: ignore[union-attr]
-                        elif (
-                            type(standard_logging_payload["messages"]) is dict
-                            or type(standard_logging_payload["messages"]) is str
-                        ):
+                        elif isinstance(standard_logging_payload["messages"], (dict, str)):
                             standard_logging_payload["messages"] = [
                                 standard_logging_payload["messages"],
                                 system_scaffold,
@@ -394,6 +391,11 @@ class RubrikLogger(CustomBatchLogger):
             # 3) Once all tool calls are complete, validate and emit.
             if is_finished and chunk_template is not None:
                 yield await self._create_openai_allowed_tools_chunk(chunk_template, accumulated_tool_calls)
+                return
+
+        # Stream ended without a finish chunk — yield accumulated calls unblocked (fail-open)
+        if accumulated_tool_calls and chunk_template is not None:
+            yield await self._create_openai_allowed_tools_chunk(chunk_template, accumulated_tool_calls)
 
     async def _handle_anthropic_streaming(self, response: Any) -> AsyncGenerator[bytes, None]:
         """
@@ -411,7 +413,7 @@ class RubrikLogger(CustomBatchLogger):
         accumulated_tools: Dict[str, AnthropicToolCallData] = {}
         buffered_chunks: List[Dict[str, Any]] = []
         is_buffering = False
-        current_content_index = 0
+        current_content_index = -1
 
         async for chunk in parsed_stream:
             event_type = chunk.get("type")
@@ -790,6 +792,9 @@ class RubrikLogger(CustomBatchLogger):
 # Module-level handler instance for use with litellm_settings.callbacks
 try:
     rubrik_handler = RubrikLogger()
-except (ValueError, RuntimeError):
-    # RUBRIK_WEBHOOK_URL not set or no event loop - instance will be created when configured
+except (ValueError, RuntimeError) as e:
+    verbose_logger.warning(
+        f"Rubrik handler not initialised ({e}). "
+        "Set RUBRIK_WEBHOOK_URL to enable the plugin."
+    )
     rubrik_handler = None  # type: ignore[assignment]

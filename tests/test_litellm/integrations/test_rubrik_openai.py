@@ -839,16 +839,20 @@ class TestAsyncPostCallStreamingIteratorHook:
 
         sample_data_path = Path(__file__).parent / "rubrik_test_sample_data" / "openai_streaming_text_response"
 
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock()
+        handler.tool_blocking_client = mock_client
+
         chunks = []
         async for chunk in handler.async_post_call_streaming_iterator_hook(
             user_api_key_dict={},
             response=create_sse_stream_from_file(sample_data_path),
-            request_data={},
+            request_data=create_openai_request_data(),
         ):
             chunks.append(chunk)
 
         assert len(chunks) == 25
-        assert request_data == {}  # Blocking service should not be called for text-only streams
+        mock_client.post.assert_not_called()  # Blocking service should not be called for text-only streams
 
         text_chunks = [c for c in chunks if c.choices[0].delta.content is not None]
         assert len(text_chunks) > 0
