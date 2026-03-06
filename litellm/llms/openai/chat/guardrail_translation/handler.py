@@ -310,14 +310,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_to_check:
             # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {**(request_data or {}), "response": response}
+            effective_request_data: dict = {**(request_data or {}), "response": response}
 
             # Add user API key metadata with prefixed keys
             user_metadata = self.transform_user_api_key_dict_to_metadata(
                 user_api_key_dict
             )
             if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+                effective_request_data["litellm_metadata"] = user_metadata
 
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -330,7 +330,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
-                request_data=request_data,
+                request_data=effective_request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )
@@ -440,14 +440,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 3: Apply guardrail to all combined texts in batch
         if texts_to_check:
             # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {**(request_data or {}), "responses": responses_so_far}
+            effective_request_data: dict = {**(request_data or {}), "responses": responses_so_far}
 
             # Add user API key metadata with prefixed keys
             user_metadata = self.transform_user_api_key_dict_to_metadata(
                 user_api_key_dict
             )
             if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+                effective_request_data["litellm_metadata"] = user_metadata
 
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -461,7 +461,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["model"] = responses_so_far[0].model
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
-                request_data=request_data,
+                request_data=effective_request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )

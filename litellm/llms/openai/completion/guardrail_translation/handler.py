@@ -157,14 +157,14 @@ class OpenAITextCompletionHandler(BaseTranslation):
         # Apply guardrails in batch
         if texts_to_check:
             # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {**(request_data or {}), "response": response}
+            effective_request_data: dict = {**(request_data or {}), "response": response}
 
             # Add user API key metadata with prefixed keys
             user_metadata = self.transform_user_api_key_dict_to_metadata(
                 user_api_key_dict
             )
             if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+                effective_request_data["litellm_metadata"] = user_metadata
 
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             # Include model information from the response if available
@@ -172,7 +172,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
                 inputs["model"] = response.model
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
-                request_data=request_data,
+                request_data=effective_request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )

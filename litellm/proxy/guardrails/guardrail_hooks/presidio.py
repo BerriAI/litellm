@@ -1152,7 +1152,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 text_parts: List[str] = []
                 # Each entry: (raw_event_bytes, is_text_delta)
                 event_slots: List[tuple] = []
-                last_text_delta_index: int = 0
+                # Lock onto the first text content block index to avoid merging
+                # text from distinct content blocks (e.g. thinking + reply).
+                first_text_delta_index: Optional[int] = None
 
                 for raw_event in raw_events:
                     lines = raw_event.split(b"\n")
@@ -1174,9 +1176,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         and isinstance(delta, dict)
                         and delta.get("type") == "text_delta"
                     ):
-                        text_parts.append(delta.get("text", ""))
-                        last_text_delta_index = payload.get("index", 0)
-                        event_slots.append((raw_event, True))
+                        event_index = payload.get("index", 0)
+                        if first_text_delta_index is None:
+                            first_text_delta_index = event_index  # lock onto first text block
+                        if event_index == first_text_delta_index:
+                            text_parts.append(delta.get("text", ""))
+                            event_slots.append((raw_event, True))
+                        else:
+                            # Different content block — pass through unchanged
+                            event_slots.append((raw_event, False))
                     else:
                         event_slots.append((raw_event, False))
 
@@ -1186,10 +1194,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 unmasked_text = self._unmask_pii_text(combined_text, pii_tokens)
 
                 # Build the merged text_delta event, preserving the original
-                # `index` value from the last text_delta (not hardcoded 0).
+                # `index` value from the first text_delta (not hardcoded 0).
                 text_delta_payload = {
                     "type": "content_block_delta",
-                    "index": last_text_delta_index,
+                    "index": first_text_delta_index if first_text_delta_index is not None else 0,
                     "delta": {"type": "text_delta", "text": unmasked_text},
                 }
                 text_delta_event = (
@@ -1211,8 +1219,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     else:
                         merged_events.append(raw_event)
 
-                rebuilt = b"\n\n".join(merged_events) + b"\n\n"
-                yield rebuilt  # type: ignore[misc]
+                for event in merged_events:
+                    yield event + b"\n\n"  # type: ignore[misc]
                 return
 
             if not remaining_chunks:
