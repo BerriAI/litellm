@@ -108,14 +108,16 @@ class ModelsLabVideoConfig(BaseVideoConfig):
         """
         Validate environment. ModelsLab uses key-in-body — only Content-Type goes in headers.
         """
-        # Priority: explicit api_key arg > litellm_params.api_key > litellm.api_key > env var
+        # Priority: explicit api_key arg > litellm_params.api_key > MODELSLAB_API_KEY > litellm.api_key
+        # Provider-specific env var takes precedence over litellm.api_key (which is commonly
+        # set to an OpenAI key globally and should not be forwarded to ModelsLab).
         if litellm_params and litellm_params.api_key:
             api_key = api_key or litellm_params.api_key
 
         api_key = (
             api_key
-            or litellm.api_key
             or get_secret_str("MODELSLAB_API_KEY")
+            or litellm.api_key
         )
 
         if not api_key:
@@ -269,6 +271,14 @@ class ModelsLabVideoConfig(BaseVideoConfig):
                     message=f"ModelsLab poll request failed: {e.response.text}",
                     headers=dict(e.response.headers),
                 ) from e
+            except httpx.RequestError as e:
+                # Wrap network-level errors (timeout, DNS failure, connection reset)
+                # so they flow through LiteLLM's standard error pipeline
+                raise BaseLLMException(
+                    status_code=503,
+                    message=f"ModelsLab poll network error: {e}",
+                    headers={},
+                ) from e
             data = resp.json()
             status = data.get("status", "")
             if status in ("success", "error"):
@@ -305,6 +315,13 @@ class ModelsLabVideoConfig(BaseVideoConfig):
                     status_code=e.response.status_code,
                     message=f"ModelsLab poll request failed: {e.response.text}",
                     headers=dict(e.response.headers),
+                ) from e
+            except httpx.RequestError as e:
+                # Wrap network-level errors so they flow through LiteLLM's error pipeline
+                raise BaseLLMException(
+                    status_code=503,
+                    message=f"ModelsLab async poll network error: {e}",
+                    headers={},
                 ) from e
             data = resp.json()
             status = data.get("status", "")
