@@ -462,7 +462,8 @@ class TestRoundTrip:
         assert msg.thinking_blocks is not None
         assert msg.thinking_blocks[0]["encrypted_content"] == "new_enc_blob"
         assert msg.thinking_blocks[0]["id"] == "rs_rt2"
-        assert msg.thinking_blocks[0]["_response_message_id"] == "msg_rt2"
+        assert msg.provider_specific_fields is not None
+        assert msg.provider_specific_fields["_response_message_id"] == "msg_rt2"
         assert msg.reasoning_content == "New reasoning"
 
 
@@ -481,6 +482,30 @@ class TestReasoningItemSummaryField:
         result = LiteLLMResponsesTransformationHandler._extract_reasoning_input_items_from_thinking_blocks(msg)
         assert result[0]["summary"] == []
 
+    def test_response_reasoning_item_with_summary_none(self) -> None:
+        """ResponseReasoningItem with summary=None must not raise TypeError."""
+        from openai.types.responses import ResponseOutputMessage, ResponseReasoningItem
+
+        reasoning = MagicMock(spec=ResponseReasoningItem)
+        reasoning.summary = None
+        reasoning.encrypted_content = None
+        reasoning.id = "rs_null"
+
+        output_msg = MagicMock(spec=ResponseOutputMessage)
+        output_msg.role = "assistant"
+        output_msg.id = "msg_null"
+        content = MagicMock()
+        content.text = "answer"
+        content.annotations = None
+        output_msg.content = [content]
+
+        choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+            [reasoning, output_msg]
+        )
+        assert len(choices) == 1
+        # reasoning_content should be empty since summary was None
+        assert choices[0].message.reasoning_content == ""
+
 
 class TestAssistantMessageStatusAndId:
     """Tests for status and id on assistant messages in responses API input."""
@@ -488,6 +513,26 @@ class TestAssistantMessageStatusAndId:
     @pytest.fixture()
     def handler(self) -> LiteLLMResponsesTransformationHandler:
         return LiteLLMResponsesTransformationHandler()
+
+    def test_assistant_content_none_normalized_to_empty_string(
+        self, handler: LiteLLMResponsesTransformationHandler
+    ) -> None:
+        """Explicit content=None and missing content key produce same output for assistant."""
+        msg_missing = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "thinking_blocks": [
+                {"type": "thinking", "thinking": "", "encrypted_content": "enc", "id": "rs_1"},
+            ]},
+        ]
+        msg_explicit_none = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": None, "thinking_blocks": [
+                {"type": "thinking", "thinking": "", "encrypted_content": "enc", "id": "rs_1"},
+            ]},
+        ]
+        items_missing, _ = handler.convert_chat_completion_messages_to_responses_api(msg_missing)
+        items_none, _ = handler.convert_chat_completion_messages_to_responses_api(msg_explicit_none)
+        assert items_missing == items_none
 
     def test_assistant_message_has_status_completed(
         self, handler: LiteLLMResponsesTransformationHandler
@@ -513,7 +558,7 @@ class TestAssistantMessageStatusAndId:
     def test_assistant_message_gets_id_from_thinking_blocks(
         self, handler: LiteLLMResponsesTransformationHandler
     ) -> None:
-        """When thinking_blocks carry _response_message_id, it goes on the assistant message."""
+        """When provider_specific_fields carry _response_message_id, it goes on the assistant message."""
         messages = [
             {"role": "user", "content": "Hi"},
             {
@@ -525,9 +570,11 @@ class TestAssistantMessageStatusAndId:
                         "thinking": "",
                         "encrypted_content": "enc",
                         "id": "rs_1",
-                        "_response_message_id": "msg_42",
                     },
                 ],
+                "provider_specific_fields": {
+                    "_response_message_id": "msg_42",
+                },
             },
             {"role": "user", "content": "Follow-up"},
         ]
@@ -549,10 +596,10 @@ class TestAssistantMessageStatusAndId:
 
 
 class TestResponseMessageIdTagging:
-    """Tests for _response_message_id tagging on thinking_blocks from response output."""
+    """Tests for _response_message_id in provider_specific_fields from response output."""
 
     def test_thinking_blocks_tagged_with_message_id(self) -> None:
-        """thinking_blocks from response should carry _response_message_id."""
+        """Response should store _response_message_id in provider_specific_fields."""
         from openai.types.responses import ResponseOutputMessage, ResponseReasoningItem
 
         reasoning = MagicMock(spec=ResponseReasoningItem)
@@ -573,7 +620,10 @@ class TestResponseMessageIdTagging:
         )
         tb = choices[0].message.thinking_blocks
         assert tb is not None
-        assert tb[0]["_response_message_id"] == "msg_x1"
+        assert "_response_message_id" not in tb[0]
+        psf = choices[0].message.provider_specific_fields
+        assert psf is not None
+        assert psf["_response_message_id"] == "msg_x1"
 
     def test_thinking_blocks_no_tag_without_message_id(self) -> None:
         """If output message has no id, no _response_message_id should be set."""
@@ -598,3 +648,5 @@ class TestResponseMessageIdTagging:
         tb = choices[0].message.thinking_blocks
         assert tb is not None
         assert "_response_message_id" not in tb[0]
+        psf = choices[0].message.provider_specific_fields
+        assert psf is None

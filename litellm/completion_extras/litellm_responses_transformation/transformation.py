@@ -145,6 +145,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content", "")
+            # Normalize: treat explicit content=None as "" for assistant role
+            # so missing-key and explicit-None produce identical Responses API input
+            if content is None and role == "assistant":
+                content = ""
             tool_calls = msg.get("tool_calls")
             tool_call_id = msg.get("tool_call_id")
 
@@ -276,15 +280,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _get_response_message_id_from_thinking_blocks(
         msg: Dict[str, Any],
     ) -> Optional[str]:
-        """Extract the Responses API message id stored by thinking_blocks round-trip."""
-        thinking_blocks = msg.get("thinking_blocks")
-        if not thinking_blocks or not isinstance(thinking_blocks, list):
-            return None
-        for block in thinking_blocks:
-            if isinstance(block, dict):
-                msg_id = block.get("_response_message_id")
-                if msg_id:
-                    return msg_id
+        """Extract the Responses API message id stored in provider_specific_fields."""
+        psf = msg.get("provider_specific_fields")
+        if isinstance(psf, dict):
+            msg_id = psf.get("_response_message_id")
+            if msg_id:
+                return msg_id
         return None
 
     def _map_optional_params_to_responses_api_request(
@@ -487,7 +488,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
                 item_text = "".join(
-                    getattr(s, "text", "") for s in item.summary
+                    getattr(s, "text", "") for s in (item.summary or [])
                 )
                 if reasoning_content is None:
                     reasoning_content = item_text
@@ -513,15 +514,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if not item.content:
                     # Content-less assistant message: still emit thinking_blocks
                     if thinking_blocks or reasoning_content:
-                        # Tag thinking_blocks with the message id for round-trip
+                        psf: Optional[Dict[str, Any]] = None
                         if thinking_blocks and getattr(item, "id", None):
-                            for tb in thinking_blocks:
-                                tb["_response_message_id"] = item.id
+                            psf = {"_response_message_id": item.id}
                         msg = Message(
                             role=item.role,
                             content="",
                             reasoning_content=reasoning_content,
                             thinking_blocks=thinking_blocks,
+                            provider_specific_fields=psf,
                         )
                         choices.append(
                             Choices(
@@ -541,16 +542,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
                         raw_annotations
                     )
-                    # Tag thinking_blocks with the message id for round-trip
+                    psf = None
                     if thinking_blocks and getattr(item, "id", None):
-                        for tb in thinking_blocks:
-                            tb["_response_message_id"] = item.id
+                        psf = {"_response_message_id": item.id}
                     msg = Message(
                         role=item.role,
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
                         annotations=annotations,
+                        provider_specific_fields=psf,
                     )
 
                     choices.append(
