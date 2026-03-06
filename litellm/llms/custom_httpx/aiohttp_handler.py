@@ -46,6 +46,7 @@ DEFAULT_TIMEOUT = 600
 class AiohttpResponseWrapper(HTTPResponse):
     def __init__(self, response: aiohttp.ClientResponse):
         self._response = response
+        self._body: Optional[bytes] = None
 
     @property
     def status_code(self) -> int:
@@ -57,11 +58,13 @@ class AiohttpResponseWrapper(HTTPResponse):
 
     @property
     def text(self) -> str:
-        # aiohttp .text is a coroutine, but Protocol expects a property
-        # This is a bit of a mismatch.
-        # For simplicity in this handler, we'll return a placeholder or handle it in the adapter.
-        # Actually, let's make the Protocol methods consistent.
-        return ""  # Placeholder, should use .aread() for async
+        if self._body is not None:
+            return self._body.decode("utf-8", errors="replace")
+        # If body hasn't been read yet, we can't return it sync in aiohttp
+        # But we can check if aiohttp already has it internally
+        if hasattr(self._response, "_body") and self._response._body is not None:
+            return self._response._body.decode("utf-8", errors="replace")
+        return ""
 
     @property
     def ok(self) -> bool:
@@ -69,16 +72,24 @@ class AiohttpResponseWrapper(HTTPResponse):
 
     @property
     def content(self) -> bytes:
-        return b""  # Placeholder
+        if self._body is not None:
+            return self._body
+        if hasattr(self._response, "_body") and self._response._body is not None:
+            return self._response._body
+        return b""
 
     def raise_for_status(self) -> None:
         self._response.raise_for_status()
 
     async def aread(self) -> bytes:
-        return await self._response.read()
+        self._body = await self._response.read()
+        return self._body
 
     def read(self) -> bytes:
-        # Not easily supported sync in aiohttp
+        if self._body is not None:
+            return self._body
+        if hasattr(self._response, "_body") and self._response._body is not None:
+            return self._response._body
         return b""
 
     def __getattr__(self, name: str) -> Any:
@@ -90,19 +101,39 @@ class AiohttpAdapter(HTTPClientAdapterAsync):
         self.session = session
 
     async def get(self, url: str, **kwargs) -> HTTPResponse:
-        return AiohttpResponseWrapper(await self.session.get(url, **kwargs))
+        stream = kwargs.get("stream", False)
+        response = AiohttpResponseWrapper(await self.session.get(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
 
     async def post(self, url: str, **kwargs) -> HTTPResponse:
-        return AiohttpResponseWrapper(await self.session.post(url, **kwargs))
+        stream = kwargs.get("stream", False)
+        response = AiohttpResponseWrapper(await self.session.post(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
 
     async def put(self, url: str, **kwargs) -> HTTPResponse:
-        return AiohttpResponseWrapper(await self.session.put(url, **kwargs))
+        stream = kwargs.get("stream", False)
+        response = AiohttpResponseWrapper(await self.session.put(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
 
     async def patch(self, url: str, **kwargs) -> HTTPResponse:
-        return AiohttpResponseWrapper(await self.session.patch(url, **kwargs))
+        stream = kwargs.get("stream", False)
+        response = AiohttpResponseWrapper(await self.session.patch(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
 
     async def delete(self, url: str, **kwargs) -> HTTPResponse:
-        return AiohttpResponseWrapper(await self.session.delete(url, **kwargs))
+        stream = kwargs.get("stream", False)
+        response = AiohttpResponseWrapper(await self.session.delete(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
 
     def build_request(self, method: str, url: str, **kwargs) -> Any:
         # aiohttp doesn't have a direct equivalent of build_request like httpx
@@ -118,9 +149,13 @@ class AiohttpAdapter(HTTPClientAdapterAsync):
             url = request_copy.pop("url")
             # Merge kwargs
             request_copy.update(kwargs)
-            return AiohttpResponseWrapper(
+            stream = kwargs.get("stream", False)
+            response = AiohttpResponseWrapper(
                 await self.session.request(method, url, **request_copy)
             )
+            if not stream:
+                await response.aread()
+            return response
         else:
             raise ValueError(
                 f"Unsupported request type for AiohttpAdapter: {type(request)}"

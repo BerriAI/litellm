@@ -198,6 +198,7 @@ max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 retry = True
+use_http_client_adapters = bool(os.getenv("LITELLM_USE_HTTP_CLIENT_ADAPTERS", False))
 ### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None

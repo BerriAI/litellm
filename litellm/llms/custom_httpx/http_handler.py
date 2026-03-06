@@ -124,7 +124,7 @@ class HTTPClientAdapterAsync(Protocol):
     async def put(self, url: str, **kwargs) -> HTTPResponse:
         ...
 
-    async def patch(self, url: str, **kwargs) -> Any:
+    async def patch(self, url: str, **kwargs) -> HTTPResponse:
         ...
 
     async def delete(self, url: str, **kwargs) -> HTTPResponse:
@@ -540,12 +540,19 @@ class AsyncHTTPHandler:
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
-        client: Optional[HTTPClientAdapterAsync] = None,
+        client: Optional[Union[httpx.AsyncClient, HTTPClientAdapterAsync]] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         if client is not None:
-            self.client = client
+            if litellm.use_http_client_adapters and isinstance(
+                client, httpx.AsyncClient
+            ):
+                self.client: Union[httpx.AsyncClient, HTTPClientAdapterAsync] = (
+                    HTTPXAsyncAdapter(client)
+                )
+            else:
+                self.client = client
         else:
             self.client = self.create_client(
                 timeout=timeout,
@@ -561,7 +568,7 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> HTTPClientAdapterAsync:
+    ) -> Union[httpx.AsyncClient, HTTPClientAdapterAsync]:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration(ssl_verify)
 
@@ -591,18 +598,24 @@ class AsyncHTTPHandler:
             headers=default_headers,
             follow_redirects=True,
         )
-        return HTTPXAsyncAdapter(client)
+
+        if litellm.use_http_client_adapters:
+            return HTTPXAsyncAdapter(client)
+        return client
 
     async def close(self):
         # Close the client when you're done with it
-        await self.client.close()
+        if hasattr(self.client, "aclose"):
+            await self.client.aclose()
+        else:
+            await self.client.close()
 
     async def __aenter__(self):
         return self.client
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         # close the client when exiting
-        await self.client.close()
+        await self.close()
 
     async def get(
         self,
@@ -1142,9 +1155,15 @@ class HTTPHandler:
                 headers=default_headers,
                 follow_redirects=True,
             )
-            self.client: HTTPClientAdapterSync = HTTPXAdapter(httpx_client)
+
+            if litellm.use_http_client_adapters:
+                self.client: Union[httpx.Client, HTTPClientAdapterSync] = HTTPXAdapter(
+                    httpx_client
+                )
+            else:
+                self.client = httpx_client
         else:
-            if isinstance(client, httpx.Client):
+            if litellm.use_http_client_adapters and isinstance(client, httpx.Client):
                 self.client = HTTPXAdapter(client)
             else:
                 self.client = client
