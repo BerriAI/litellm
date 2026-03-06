@@ -30,7 +30,6 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     get_daily_activity_aggregated,
 )
-from litellm.proxy.auth.auth_checks import get_team_object
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
@@ -819,23 +818,28 @@ async def _is_team_admin_for_user(
 ) -> bool:
     """
     Check if the caller is a team admin for any team that the target user belongs to.
-    """
-    from litellm.proxy.proxy_server import user_api_key_cache
 
-    for team_id in target_user_teams:
-        try:
-            team_obj = await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                check_db_only=True,
-            )
-            if _is_user_team_admin(
-                user_api_key_dict=user_api_key_dict, team_obj=team_obj
-            ):
-                return True
-        except Exception:
-            continue
+    Batch-fetches all teams in a single query to avoid N+1 DB calls.
+    """
+    if not target_user_teams:
+        return False
+
+    try:
+        team_rows = await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": target_user_teams}}
+        )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "_is_team_admin_for_user: failed to fetch teams for user"
+        )
+        return False
+
+    for row in team_rows:
+        team_obj = LiteLLM_TeamTable(**row.model_dump())
+        if _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=team_obj
+        ):
+            return True
     return False
 
 

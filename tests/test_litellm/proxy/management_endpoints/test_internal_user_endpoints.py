@@ -1577,7 +1577,6 @@ async def test_user_info_v2_team_admin_can_query_team_member(mocker):
     )
 
     mock_prisma_client.get_data = mocker.AsyncMock(return_value=mock_target_user)
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Caller (user-A) is admin of team-1
     mock_team = LiteLLM_TeamTable(
@@ -1587,13 +1586,11 @@ async def test_user_info_v2_team_admin_can_query_team_member(mocker):
             Member(user_id="user-B", role="user"),
         ],
     )
-
-    mock_get_team_object = mocker.AsyncMock(return_value=mock_team)
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
-        mock_get_team_object,
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[mock_team]
     )
-    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
     mock_user_api_key_dict = UserAPIKeyAuth(
@@ -1635,7 +1632,6 @@ async def test_user_info_v2_team_member_cannot_query_other_team_member(mocker):
     )
 
     mock_prisma_client.get_data = mocker.AsyncMock(return_value=mock_target_user)
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Caller (user-A) is a regular member, NOT admin
     mock_team = LiteLLM_TeamTable(
@@ -1645,13 +1641,11 @@ async def test_user_info_v2_team_member_cannot_query_other_team_member(mocker):
             Member(user_id="user-B", role="user"),
         ],
     )
-
-    mock_get_team_object = mocker.AsyncMock(return_value=mock_team)
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
-        mock_get_team_object,
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[mock_team]
     )
-    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
     mock_user_api_key_dict = UserAPIKeyAuth(
