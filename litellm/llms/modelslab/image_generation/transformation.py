@@ -179,9 +179,12 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
         api_key = litellm_params.get("api_key") or get_secret_str("MODELSLAB_API_KEY")
 
         # Strip provider prefix from model name (e.g. "modelslab/flux" → "flux")
+        # Fall back to "flux" if user passes just "modelslab" with no model suffix
         model_id = model
         if "/" in model_id:
             model_id = model_id.split("/", 1)[1]
+        if not model_id or model_id.lower() == "modelslab":
+            model_id = "flux"
 
         # Put optional_params first, then critical fields to prevent override
         request_body: dict = {
@@ -239,13 +242,14 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
             response = None
             for attempt in range(MAX_RETRIES):
                 try:
+                    # HTTPHandler.post() calls raise_for_status() internally, so any
+                    # non-2xx status arrives here as httpx.HTTPStatusError (not a return).
                     response = client.post(
                         url=fetch_url,
                         json={"key": api_key},
                         headers={"Content-Type": "application/json"},
                     )
-                    response.raise_for_status()
-                    break  # Success, exit retry loop
+                    break  # 2xx — success, exit retry loop
                 except httpx.HTTPStatusError as e:
                     last_error = e
                     status_code = e.response.status_code if e.response is not None else 0
@@ -314,13 +318,13 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
             response = None
             for attempt in range(MAX_RETRIES):
                 try:
+                    # AsyncHTTPHandler.post() raises internally on non-2xx — no separate raise_for_status needed
                     response = await client.post(
                         url=fetch_url,
                         json={"key": api_key},
                         headers={"Content-Type": "application/json"},
                     )
-                    response.raise_for_status()
-                    break  # Success, exit retry loop
+                    break  # 2xx — success, exit retry loop
                 except httpx.HTTPStatusError as e:
                     last_error = e
                     status_code = e.response.status_code if e.response is not None else 0
@@ -362,7 +366,10 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
-        for url in response_data.get("output", []):
+        # Use `or []` to guard against explicit null in the API response
+        # (`get("output", [])` only substitutes the default when the key is absent,
+        # not when its value is None/null)
+        for url in (response_data.get("output") or []):
             model_response.data.append(ImageObject(url=url))
 
         return model_response
