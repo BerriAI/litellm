@@ -1110,8 +1110,8 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     user_role: Literal["user", "admin"] = "user"
 
 
-def _validate_initial_budget_reset_at(value: Optional[datetime]) -> Optional[datetime]:
-    """Shared validator: ensure initial_budget_reset_at is not in the past."""
+def _assert_initial_budget_reset_at_valid(value: Optional[datetime]) -> None:
+    """Assert that initial_budget_reset_at is not in the past. Raises ValueError if invalid."""
     if value is not None:
         reset_at = value
         if reset_at.tzinfo is None:
@@ -1122,7 +1122,6 @@ def _validate_initial_budget_reset_at(value: Optional[datetime]) -> Optional[dat
                 f"initial_budget_reset_at cannot be in the past. "
                 f"Provided: {reset_at.isoformat()}, Current time: {current_time.isoformat()}"
             )
-    return value
 
 
 class NewUserRequest(GenerateRequestBase):
@@ -1148,7 +1147,7 @@ class NewUserRequest(GenerateRequestBase):
 
     @model_validator(mode="after")
     def validate_initial_budget_reset_at(self) -> "NewUserRequest":
-        _validate_initial_budget_reset_at(self.initial_budget_reset_at)
+        _assert_initial_budget_reset_at_valid(self.initial_budget_reset_at)
         return self
 
 
@@ -1191,7 +1190,7 @@ class UpdateUserRequestNoUserIDorEmail(
 
     @model_validator(mode="after")
     def validate_initial_budget_reset_at(self) -> "UpdateUserRequestNoUserIDorEmail":
-        _validate_initial_budget_reset_at(self.initial_budget_reset_at)
+        _assert_initial_budget_reset_at_valid(self.initial_budget_reset_at)
         return self
 
 

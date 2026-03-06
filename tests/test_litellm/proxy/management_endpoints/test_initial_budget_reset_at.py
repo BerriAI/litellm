@@ -68,9 +68,15 @@ class TestUserCreationWithBudgetResetAt:
             max_budget=100.0,
         )
 
+        mock_license_check = MagicMock()
+        mock_license_check.is_over_limit.return_value = False
+
         with patch(
             "litellm.proxy.proxy_server.prisma_client",
             mock_prisma_client,
+        ), patch(
+            "litellm.proxy.proxy_server._license_check",
+            mock_license_check,
         ):
             result = await new_user(
                 data=user_request,
