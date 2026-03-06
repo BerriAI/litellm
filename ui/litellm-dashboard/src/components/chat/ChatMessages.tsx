@@ -4,6 +4,7 @@ import { ToolOutlined, CopyOutlined, CheckOutlined, EditOutlined } from "@ant-de
 import { Collapse, Tooltip } from "antd";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReasoningContent from "../playground/chat_ui/ReasoningContent";
@@ -301,6 +302,7 @@ function AssistantBubble({
         }}
       >
         <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
           components={{
             code: MarkdownCodeRenderer as React.ComponentType<React.ComponentPropsWithoutRef<"code">>,
           }}
