@@ -172,12 +172,12 @@ class PassThroughEndpointHandler(BaseTranslation):
         if not text_to_check:
             return response
 
-        # Create a request_data dict with response info and user API key metadata
-        request_data: dict = (
-            {"response": response}
-            if not isinstance(response, dict)
-            else response.copy()
-        )
+        # Merge caller's request_data (contains pii_tokens from input masking)
+        # with response info and user API key metadata
+        request_data: dict = {
+            **(request_data or {}),
+            **({"response": response} if not isinstance(response, dict) else response),
+        }
 
         # Add user API key metadata with prefixed keys
         user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
