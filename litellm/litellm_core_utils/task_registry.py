@@ -37,6 +37,7 @@ class TaskRegistry:
 
     def __init__(self, max_pending_warning: int = 1000) -> None:
         self._tasks: set = set()
+        self._directly_awaited: set = set()
         self._lock = threading.Lock()
         self._max_pending_warning: int = max_pending_warning
         self._warned: bool = False
@@ -59,6 +60,11 @@ class TaskRegistry:
         if threshold < 0:
             raise ValueError("threshold must be >= 0")
         self._max_pending_warning = threshold
+
+    def mark_awaited(self, task: asyncio.Task) -> None:
+        """Mark a task as directly awaited, suppressing the failure debug log."""
+        with self._lock:
+            self._directly_awaited.add(task)
 
     def create_task(
         self,
@@ -97,10 +103,12 @@ class TaskRegistry:
         """Callback when a task completes — remove from registry."""
         with self._lock:
             self._tasks.discard(task)
+            was_awaited = task in self._directly_awaited
+            self._directly_awaited.discard(task)
             count = len(self._tasks)
             if self._warned and count <= self._max_pending_warning // 2:
                 self._warned = False
-        if not task.cancelled() and task.exception() is not None:
+        if not was_awaited and not task.cancelled() and task.exception() is not None:
             logger.debug(
                 "Background task %s failed: %s",
                 task.get_name(),
@@ -161,6 +169,7 @@ class TaskRegistry:
             with self._lock:
                 for t in pending:
                     self._tasks.discard(t)
+                    self._directly_awaited.discard(t)
 
 
 def tracked_create_task(
