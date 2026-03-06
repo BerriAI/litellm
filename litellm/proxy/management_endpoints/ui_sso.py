@@ -2685,9 +2685,10 @@ class SSOAuthenticationHandler:
             if client_secret:
                 token_data["client_secret"] = client_secret
 
-        # Tighten the try/except to the POST call only, so httpx connection-pool
-        # teardown in __aexit__ (TLS close, etc.) does not get misclassified as a
-        # token-endpoint failure.
+        # Keep all response processing inside the async with block so that the
+        # response object (which httpx buffers) is always accessed while the client
+        # is still alive.  Network errors on the POST are caught tightly here; TLS
+        # teardown errors from __aexit__ are NOT classified as token failures.
         async with httpx.AsyncClient() as http_client:
             try:
                 response = await http_client.post(token_endpoint, **post_kwargs)
@@ -2703,33 +2704,33 @@ class SSOAuthenticationHandler:
                     code=status.HTTP_401_UNAUTHORIZED,
                 ) from exc
 
-        if response.status_code != 200:
-            verbose_proxy_logger.error(
-                "PKCE token exchange failed. status=%s body=%s",
-                response.status_code,
-                response.text[:500],
-            )
-            raise ProxyException(
-                message=f"Token exchange failed: {response.status_code} - {response.text[:500]}",
-                type=ProxyErrorTypes.auth_error,
-                param="token_exchange",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
+            if response.status_code != 200:
+                verbose_proxy_logger.error(
+                    "PKCE token exchange failed. status=%s body=%s",
+                    response.status_code,
+                    response.text[:500],
+                )
+                raise ProxyException(
+                    message=f"Token exchange failed: {response.status_code} - {response.text[:500]}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="token_exchange",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
 
-        try:
-            token_response: dict = response.json()
-        except Exception as json_err:
-            verbose_proxy_logger.error(
-                "Failed to parse token response as JSON: %s. Body: %s",
-                json_err,
-                response.text[:500],
-            )
-            raise ProxyException(
-                message=f"Token endpoint returned invalid JSON: {json_err}",
-                type=ProxyErrorTypes.auth_error,
-                param="token_exchange",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
+            try:
+                token_response: dict = response.json()
+            except Exception as json_err:
+                verbose_proxy_logger.error(
+                    "Failed to parse token response as JSON: %s. Body: %s",
+                    json_err,
+                    response.text[:500],
+                )
+                raise ProxyException(
+                    message=f"Token endpoint returned invalid JSON: {json_err}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="token_exchange",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
 
         # Some providers return HTTP 200 with an error body (e.g. expired code, replay attack).
         # Also guard against JSON `null` for access_token — it passes key-existence checks

@@ -4826,3 +4826,34 @@ async def test_delete_pkce_verifier_swallows_deletion_errors():
         await SSOAuthenticationHandler._delete_pkce_verifier("pkce_verifier:test_state")
 
     failing_cache.async_delete_cache.assert_called_once_with(key="pkce_verifier:test_state")
+
+
+@pytest.mark.asyncio
+async def test_pkce_cache_miss_unexpected_format_raises_proxy_exception():
+    """When cached data exists but has an unrecognized format (not a dict with
+    code_verifier, not a plain string), prepare_token_exchange_parameters raises
+    ProxyException rather than silently falling through to a non-PKCE flow."""
+    import os
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from starlette.requests import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    # Cache returns an integer — unexpected format
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=12345)
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.query_params = {"state": "bad_format_state"}
+
+    with pytest.raises(ProxyException) as exc_info:
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+        ), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
+            await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=mock_request, generic_include_client_id=False
+            )
+
+    assert "cache" in exc_info.value.message.lower() or "verifier" in exc_info.value.message.lower()
