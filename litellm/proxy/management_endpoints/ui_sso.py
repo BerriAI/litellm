@@ -2765,6 +2765,12 @@ class SSOAuthenticationHandler:
                     if resp.status_code == 200:
                         try:
                             userinfo = resp.json()
+                            if not userinfo:
+                                verbose_proxy_logger.warning(
+                                    "Userinfo endpoint returned an empty response ({}). "
+                                    "The session will have no identity claims. "
+                                    "Check your provider's userinfo endpoint configuration.",
+                                )
                         except Exception as json_err:
                             verbose_proxy_logger.warning(
                                 "Userinfo endpoint returned non-JSON response (status 200): %s",
