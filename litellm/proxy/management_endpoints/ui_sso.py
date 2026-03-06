@@ -2549,17 +2549,36 @@ class SSOAuthenticationHandler:
                 # if the exchange fails partway through).
                 token_params["_pkce_cache_key"] = cache_key
             else:
-                # PKCE is enabled (already checked above) but verifier is missing — likely a cross-instance cache miss.
+                # PKCE is enabled (already checked above) but verifier is missing.
+                # Most likely cause: callback landed on a different pod than the login
+                # request, and no shared Redis cache is configured.  Silently falling
+                # through to the non-PKCE path would send the request to the provider
+                # without code_verifier, producing a confusing provider-side error.
+                # Raise immediately with a diagnostic that points to the root cause.
                 active_cache = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
                 verbose_proxy_logger.error(
                     "PKCE is enabled but no code_verifier found in cache for state '%s'. "
                     "This usually means the authorization and callback were handled by different "
                     "instances without a shared cache. "
-                    "Ensure Redis is configured and GENERIC_CLIENT_USE_PKCE=true. "
+                    "Ensure Redis is configured. "
                     "Cache type: %s. Cache entry present: %s",
                     state,
                     type(active_cache).__name__,
                     cached_data is not None,
+                )
+                redis_hint = (
+                    " Configure Redis and set REDIS_URL so all proxy instances share the PKCE verifier."
+                    if redis_usage_cache is None
+                    else ""
+                )
+                raise ProxyException(
+                    message=(
+                        f"PKCE verifier not found in cache for state '{state}'. "
+                        f"The login and callback requests were likely handled by different instances.{redis_hint}"
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="PKCE_CACHE_MISS",
+                    code=status.HTTP_401_UNAUTHORIZED,
                 )
         return token_params
 
@@ -2707,11 +2726,14 @@ class SSOAuthenticationHandler:
             )
 
         # Some providers return HTTP 200 with an error body (e.g. expired code, replay attack).
-        if "access_token" not in token_response:
+        # Also guard against JSON `null` for access_token — it passes key-existence checks
+        # but would produce a "Bearer None" Authorization header downstream.
+        access_token_val = token_response.get("access_token")
+        if not isinstance(access_token_val, str) or not access_token_val:
             error = token_response.get("error", "unknown_error")
             error_desc = token_response.get("error_description", "")
             verbose_proxy_logger.error(
-                "Token response missing access_token. error=%s description=%s",
+                "Token response missing or null access_token. error=%s description=%s",
                 error,
                 error_desc,
             )
@@ -2767,7 +2789,7 @@ class SSOAuthenticationHandler:
                             userinfo = resp.json()
                             if not userinfo:
                                 verbose_proxy_logger.warning(
-                                    "Userinfo endpoint returned an empty response ({}). "
+                                    "Userinfo endpoint returned an empty dict. "
                                     "The session will have no identity claims. "
                                     "Check your provider's userinfo endpoint configuration.",
                                 )
