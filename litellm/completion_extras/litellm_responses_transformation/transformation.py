@@ -246,7 +246,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+                if "reasoning" not in responses_api_request:
+                    responses_api_request["reasoning"] = self._map_reasoning_effort(value)
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
 
