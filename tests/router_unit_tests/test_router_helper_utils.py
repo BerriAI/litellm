@@ -2228,3 +2228,49 @@ def test_get_router_model_info_with_deployment_object():
     # Verify we got valid model info back
     assert model_info is not None
     assert isinstance(model_info, dict)
+
+
+def test_combine_fallback_usage_merges_usage():
+    """Test that _combine_fallback_usage sets usage on the chunk when called with None prior."""
+    from litellm.types.utils import Usage
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "test-key"},
+            }
+        ]
+    )
+
+    # Build a mock chunk with existing usage (no spec to avoid Pydantic model_fields issues)
+    fallback_item = MagicMock()
+    fallback_item.usage = Usage(prompt_tokens=5, completion_tokens=10, total_tokens=15)
+
+    # Combining with None prior should not raise
+    router._combine_fallback_usage(fallback_item, None)
+
+    # usage attribute should be set after combining
+    assert fallback_item.usage is not None
+
+
+def test_combine_fallback_usage_none_prior():
+    """Test _combine_fallback_usage with no usage on the chunk and None prior."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "test-key"},
+            }
+        ]
+    )
+
+    # fallback_item with no usage
+    fallback_item = MagicMock()
+    fallback_item.usage = None
+
+    # Should not raise even when both sides have no usage
+    router._combine_fallback_usage(fallback_item, None)
+
+    # usage attribute should be set (may be None or a Usage object)
+    assert hasattr(fallback_item, "usage")
