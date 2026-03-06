@@ -852,6 +852,9 @@ async def get_generic_sso_response(
             # Strip bearer credentials from received_response after conversion.
             # received_response may appear in restricted-group error messages —
             # do not expose tokens to callers.
+            # Note: response_convertor always sets received_response via nonlocal, so it is
+            # non-None here at runtime.  The guard satisfies Pyright's type narrowing since
+            # it cannot track nonlocal mutations inside closures.
             if received_response is not None:
                 received_response = {
                     k: v for k, v in received_response.items() if k not in _OAUTH_TOKEN_FIELDS
@@ -2585,30 +2588,49 @@ class SSOAuthenticationHandler:
                     os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
                 )
                 if strict_cache_miss:
-                    verbose_proxy_logger.error(
-                        "PKCE is enabled but no usable code_verifier found for state '%s'. "
-                        "This usually means the authorization and callback were handled by different "
-                        "instances without a shared cache, or the cached value had an unrecognized format. "
-                        "Ensure Redis is configured. "
-                        "Cache type: %s. Raw cache data present (may be unrecognized format): %s",
-                        state,
-                        type(active_cache).__name__,
-                        cached_data is not None,
-                    )
-                    redis_hint = (
-                        " Configure Redis and set REDIS_URL so all proxy instances share the PKCE verifier."
-                        if redis_usage_cache is None
-                        else ""
-                    )
-                    raise ProxyException(
-                        message=(
-                            f"PKCE verifier not found in cache for state '{state}'. "
-                            f"The login and callback requests were likely handled by different instances.{redis_hint}"
-                        ),
-                        type=ProxyErrorTypes.auth_error,
-                        param="PKCE_CACHE_MISS",
-                        code=status.HTTP_401_UNAUTHORIZED,
-                    )
+                    # Distinguish corrupt-format entries from genuine cache misses
+                    # so operators can investigate the correct root cause.
+                    if cached_data is not None:
+                        # Cache had data but in an unrecognised format (e.g. corrupt Redis value).
+                        verbose_proxy_logger.error(
+                            "PKCE verifier for state '%s' has an unrecognized format (type=%s); "
+                            "treating as a cache miss. Investigate the cached value — it may be "
+                            "a corrupt or stale entry.",
+                            state,
+                            type(cached_data).__name__,
+                        )
+                        raise ProxyException(
+                            message=(
+                                f"PKCE verifier for state '{state}' has an unrecognized format "
+                                f"(type={type(cached_data).__name__}). The cached entry may be corrupt."
+                            ),
+                            type=ProxyErrorTypes.auth_error,
+                            param="PKCE_CACHE_MISS",
+                            code=status.HTTP_401_UNAUTHORIZED,
+                        )
+                    else:
+                        # Genuine cache miss — verifier was never stored or already expired.
+                        verbose_proxy_logger.error(
+                            "PKCE is enabled but no verifier found in cache for state '%s'. "
+                            "The authorization and callback were likely handled by different "
+                            "instances without a shared cache. Cache type: %s.",
+                            state,
+                            type(active_cache).__name__,
+                        )
+                        redis_hint = (
+                            " Configure Redis and set REDIS_URL so all proxy instances share the PKCE verifier."
+                            if redis_usage_cache is None
+                            else ""
+                        )
+                        raise ProxyException(
+                            message=(
+                                f"PKCE verifier not found in cache for state '{state}'. "
+                                f"The login and callback requests were likely handled by different instances.{redis_hint}"
+                            ),
+                            type=ProxyErrorTypes.auth_error,
+                            param="PKCE_CACHE_MISS",
+                            code=status.HTTP_401_UNAUTHORIZED,
+                        )
                 else:
                     verbose_proxy_logger.warning(
                         "PKCE is enabled but verifier not found in cache for state '%s' "

@@ -3637,13 +3637,13 @@ class TestPKCEFunctionality:
         mock_request = MagicMock(spec=Request)
         mock_request.query_params = {"state": "missing_state_123"}
 
-        with pytest.raises(ProxyException) as exc_info:
-            with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
-                "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
-            ), patch.dict(
-                os.environ,
-                {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
-            ):
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+        ), patch.dict(
+            os.environ,
+            {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
+        ):
+            with pytest.raises(ProxyException) as exc_info:
                 await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                     request=mock_request, generic_include_client_id=False
                 )
@@ -3742,18 +3742,18 @@ class TestPKCEFunctionality:
         mock_request = MagicMock(spec=Request)
         mock_request.query_params = {"state": "bad_format_state"}
 
-        with pytest.raises(ProxyException) as exc_info:
-            with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
-                "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
-            ), patch.dict(
-                os.environ,
-                {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
-            ):
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+        ), patch.dict(
+            os.environ,
+            {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
+        ):
+            with pytest.raises(ProxyException) as exc_info:
                 await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                     request=mock_request, generic_include_client_id=False
                 )
 
-        assert "cache" in exc_info.value.message.lower() or "verifier" in exc_info.value.message.lower()
+        assert "cache" in exc_info.value.message.lower() or "verifier" in exc_info.value.message.lower() or "format" in exc_info.value.message.lower()
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_non_strict_logs_warning_and_continues(self):
