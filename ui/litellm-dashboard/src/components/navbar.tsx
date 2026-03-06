@@ -1,6 +1,6 @@
 import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, serverRootPath } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
@@ -130,7 +130,7 @@ const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center space-x-5 ml-auto">
             {/* Chat CTA — always visible, opens in new tab */}
             <a
-              href="/chat"
+              href={`${serverRootPath && serverRootPath !== "/" ? serverRootPath : ""}/ui/chat`}
               target="_blank"
               rel="noopener noreferrer"
               style={{
