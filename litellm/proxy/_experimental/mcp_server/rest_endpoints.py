@@ -671,16 +671,35 @@ if MCP_AVAILABLE:
         try:
             spec = await load_openapi_spec_async(spec_path)
             paths = spec.get("paths", {})
+            components = spec.get("components", {})
             tools: List[dict] = []
             for path, path_item in paths.items():
                 for method in ("get", "post", "put", "patch", "delete"):
                     operation = path_item.get(method)
                     if operation is None:
                         continue
+
+                    # Resolve $ref params and merge path-level params (same logic as
+                    # _register_openapi_tools) so large specs like GitHub's work correctly.
+                    def _resolve_ref(p: dict) -> dict:
+                        ref = p.get("$ref", "")
+                        if ref.startswith("#/components/parameters/"):
+                            param_name = ref.split("/")[-1]
+                            return components.get("parameters", {}).get(param_name, p)
+                        return p
+
+                    path_level = [_resolve_ref(p) for p in path_item.get("parameters", [])]
+                    op_level = [_resolve_ref(p) for p in operation.get("parameters", [])]
+                    op_keys = {(p.get("name"), p.get("in")) for p in op_level}
+                    merged = [p for p in path_level if (p.get("name"), p.get("in")) not in op_keys] + op_level
+
+                    resolved_op = dict(operation)
+                    resolved_op["parameters"] = merged
+
                     op_id = operation.get("operationId", f"{method}_{path}")
                     summary = operation.get("summary", "")
                     description = operation.get("description", summary)
-                    input_schema = build_input_schema(operation)
+                    input_schema = build_input_schema(resolved_op)
                     tools.append(
                         {
                             "name": op_id,
