@@ -1260,7 +1260,7 @@ class TestAvideoListProviderFallback:
     """Regression test for https://github.com/BerriAI/litellm/issues/22130.
 
     avideo_list must not raise BadRequestError when custom_llm_provider is
-    omitted.  It should fall back to DEFAULT_VIDEO_ENDPOINT_MODEL instead of
+    omitted. It should fall back to DEFAULT_VIDEO_ENDPOINT_MODEL instead of
     passing model="" to get_llm_provider.
     """
 
@@ -1288,6 +1288,25 @@ class TestAvideoListProviderFallback:
             mock_get_provider.assert_called_once_with(
                 model=DEFAULT_VIDEO_ENDPOINT_MODEL,
                 api_base=None,
+            )
+
+
+class TestAvideoGenerationApiBase:
+    """Regression test: avideo_generation must forward api_base from **kwargs
+    to get_llm_provider, not silently drop it via local_vars."""
+
+    @pytest.mark.asyncio
+    async def test_api_base_forwarded_to_get_llm_provider(self):
+        """api_base passed via kwargs must reach get_llm_provider."""
+        from litellm.videos.main import avideo_generation
+
+        with patch("litellm.videos.main.video_generation") as mock_vg, \
+             patch("litellm.videos.main.litellm.get_llm_provider", return_value=("openai/sora-2", "openai", None, None)) as mock_get_provider:
+            mock_vg.return_value = MagicMock()
+            await avideo_generation(prompt="test", api_base="https://custom.endpoint/v1")
+            mock_get_provider.assert_called_once_with(
+                model="sora-2",
+                api_base="https://custom.endpoint/v1",
             )
 
 

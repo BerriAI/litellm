@@ -70,6 +70,8 @@ async def avideo_generation(
 
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
+            # api_base is not a named parameter of avideo_generation, so it
+            # lives inside **kwargs; using local_vars would always yield None.
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model or DEFAULT_VIDEO_ENDPOINT_MODEL, api_base=kwargs.get("api_base", None)
             )
