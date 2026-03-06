@@ -2543,7 +2543,9 @@ class SSOAuthenticationHandler:
         query_params = dict(request.query_params)
         state = query_params.get("state")
 
-        if os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true" and not state:
+        use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+
+        if use_pkce and not state:
             verbose_proxy_logger.warning(
                 "PKCE is enabled (GENERIC_CLIENT_USE_PKCE=true) but no 'state' parameter "
                 "was found in the callback. The PKCE verifier cannot be retrieved without "
@@ -2552,7 +2554,7 @@ class SSOAuthenticationHandler:
                 "in the callback redirect."
             )
 
-        if state and os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true":
+        if state and use_pkce:
             from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
             cache_key = f"pkce_verifier:{state}"
@@ -2969,7 +2971,7 @@ class SSOAuthenticationHandler:
             except Exception as decode_err:
                 verbose_proxy_logger.error("Failed to decode id_token: %s", decode_err)
                 raise ProxyException(
-                    message="Failed to get user info from both userinfo endpoint and id_token",
+                    message=f"Failed to decode id_token JWT: {decode_err}",
                     type=ProxyErrorTypes.auth_error,
                     param="userinfo",
                     code=status.HTTP_401_UNAUTHORIZED,

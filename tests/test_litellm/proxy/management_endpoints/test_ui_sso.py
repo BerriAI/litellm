@@ -3383,18 +3383,19 @@ class TestPKCEFunctionality:
         mock_redis = MagicMock()
         mock_in_memory = MagicMock()
 
-        with patch("litellm.proxy.proxy_server.redis_usage_cache", mock_redis):
-            with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory):
-                mock_request = MagicMock(spec=Request)
-                mock_request.query_params = {}
-                token_params = (
-                    await SSOAuthenticationHandler.prepare_token_exchange_parameters(
-                        request=mock_request, generic_include_client_id=False
-                    )
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", mock_redis), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory
+        ), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}, clear=False):
+            mock_request = MagicMock(spec=Request)
+            mock_request.query_params = {}
+            token_params = (
+                await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                    request=mock_request, generic_include_client_id=False
                 )
-                assert "code_verifier" not in token_params
-                mock_redis.async_get_cache.assert_not_called()
-                mock_in_memory.async_get_cache.assert_not_called()
+            )
+            assert "code_verifier" not in token_params
+            mock_redis.async_get_cache.assert_not_called()
+            mock_in_memory.async_get_cache.assert_not_called()
 
 
     @pytest.mark.asyncio
