@@ -210,10 +210,12 @@ class SarvamAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        base_url = api_base or self.SARVAM_API_BASE
-        base_url = base_url.rstrip("/")
-        if base_url.endswith("/v1"):
-            base_url = base_url[:-3]
+        if api_base:
+            base_url = api_base.rstrip("/")
+            if base_url.endswith("/v1"):
+                base_url = base_url[:-3]
+        else:
+            base_url = self.SARVAM_API_BASE
 
         return f"{base_url}/speech-to-text"
 
