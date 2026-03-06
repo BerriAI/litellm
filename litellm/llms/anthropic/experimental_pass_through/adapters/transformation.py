@@ -296,8 +296,20 @@ class LiteLLMAnthropicMessagesAdapter:
     def translatable_anthropic_params(self) -> List:
         """
         Which anthropic params, we need to translate to the openai format.
+        Params in this list are either translated or dropped when targeting OpenAI.
+        Anthropic-only params like output_config are included here to be dropped
+        (OpenAI does not support them).
         """
-        return ["messages", "metadata", "system", "tool_choice", "tools", "thinking", "output_format"]
+        return [
+            "messages",
+            "metadata",
+            "system",
+            "tool_choice",
+            "tools",
+            "thinking",
+            "output_format",
+            "output_config",  # Anthropic-only; drop when targeting OpenAI
+        ]
 
     def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
         """

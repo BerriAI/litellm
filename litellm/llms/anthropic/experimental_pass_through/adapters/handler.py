@@ -163,7 +163,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 "include_usage": True,
             }
 
-        excluded_keys = {"anthropic_messages"}
+        excluded_keys = {
+            "anthropic_messages",
+            "output_config",  # Anthropic-only; OpenAI does not support it
+        }
         extra_kwargs = extra_kwargs or {}
         for key, value in extra_kwargs.items():
             if (
