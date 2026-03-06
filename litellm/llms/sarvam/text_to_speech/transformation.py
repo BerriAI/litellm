@@ -101,7 +101,9 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
                     speaker = candidate.strip().lower()
                     break
         elif voice is not None:
-            speaker = str(voice).strip().lower()
+            stripped = str(voice).strip().lower()
+            if stripped:
+                speaker = stripped
 
         if speaker is None:
             speaker = self._get_default_speaker(model)
