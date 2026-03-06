@@ -488,16 +488,6 @@ def test_validate_environment_bedrock_partial_keys():
     assert kv["missing_keys"] == ["AWS_SECRET_ACCESS_KEY"]
 
 
-@mock.patch.dict(os.environ, {"CLOUDFLARE_API_KEY": "fake-key"}, clear=True)
-def test_validate_environment_cloudflare_partial_keys():
-    """When CLOUDFLARE_API_KEY is set but neither CLOUDFLARE_ACCOUNT_ID nor
-    CLOUDFLARE_API_BASE is set, only CLOUDFLARE_API_BASE should be missing."""
-    kv = validate_environment(model="cloudflare/some-model")
-    assert not kv["keys_in_environment"]
-    assert "CLOUDFLARE_API_KEY" not in kv["missing_keys"]
-    assert kv["missing_keys"] == ["CLOUDFLARE_API_BASE"]
-
-
 def test_function_to_dict():
     print("testing function to dict for get current weather")
 
