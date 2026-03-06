@@ -4672,6 +4672,10 @@ def add_provider_specific_params_to_optional_params(
         in ["openai", "azure", "text-completion-openai"]
         + litellm.openai_compatible_providers
     ):
+        litellm_internal_passthrough_blocklist = {
+            "vector_store_id",
+            "vector_store_ids",
+        }
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         if (
             _should_drop_param(
@@ -4681,7 +4685,11 @@ def add_provider_specific_params_to_optional_params(
         ):
             extra_body = passed_params.pop("extra_body", None) or {}
             for k in passed_params.keys():
-                if k not in openai_params and passed_params[k] is not None:
+                if (
+                    k not in openai_params
+                    and k not in litellm_internal_passthrough_blocklist
+                    and passed_params[k] is not None
+                ):
                     extra_body[k] = passed_params[k]
             if not isinstance(optional_params.get("extra_body"), dict):
                 optional_params["extra_body"] = {}

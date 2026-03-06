@@ -3422,6 +3422,43 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("prompt_cache_key") == "test_key"
         assert result.get("custom_param") == "value"
 
+    def test_openai_compatible_params_do_not_forward_vector_store_ids(self):
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "temperature": 0.3,
+            "vector_store_ids": ["vs_123"],
+            "vector_store_id": "vs_legacy",
+            "custom_param": "keep_me",
+        }
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="azure",
+            openai_params=["temperature", "model"],
+            additional_drop_params=None,
+        )
+
+        assert "extra_body" in result
+        assert result["extra_body"].get("custom_param") == "keep_me"
+        assert "vector_store_ids" not in result["extra_body"]
+        assert "vector_store_id" not in result["extra_body"]
+
+    def test_get_optional_params_azure_gpt5_drops_vector_store_ids_from_extra_body(self):
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="gpt-5.2",
+            custom_llm_provider="azure",
+            temperature=1,
+            vector_store_ids=["vs_123"],
+        )
+
+        assert "extra_body" in optional_params
+        assert "vector_store_ids" not in optional_params["extra_body"]
+
 
 class TestDropParamsWithPromptCacheKey:
     """
