@@ -42,6 +42,12 @@ function getGreeting(): string {
 
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
+// Build the chat UI URL respecting server root path (e.g. /litellm/ui/chat)
+function getChatUrl(id?: string): string {
+  const root = serverRootPath && serverRootPath !== "/" ? serverRootPath.replace(/\/+$/, "") : "";
+  return id ? `${root}/ui/chat?id=${id}` : `${root}/ui/chat`;
+}
+
 // Build the dashboard root URL
 function getDashboardUrl(): string {
   const base = process.env.NEXT_PUBLIC_BASE_URL ?? "";
@@ -129,7 +135,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       let convId = activeConversationId;
       if (!convId) {
         convId = createConversation(selectedModel);
-        router.push(`/chat?id=${convId}`);
+        router.push(getChatUrl(convId));
       }
 
       appendMessage(convId, { role: "user", content: trimmed });
@@ -378,7 +384,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
         {/* Sidebar nav buttons */}
         <div style={{ padding: "0 8px 4px", flexShrink: 0 }}>
-          {sidebarNavItem(<EditOutlined />, "New chat", () => router.push("/chat"))}
+          {sidebarNavItem(<EditOutlined />, "New chat", () => router.push(getChatUrl()))}
           {sidebarNavItem(<SearchOutlined />, "Search chats", () => setSidebarView("chats"))}
         </div>
 
@@ -427,9 +433,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             <ConversationList
               conversations={conversations}
               activeConversationId={activeConversationId}
-              onSelect={(id) => router.push(`/chat?id=${id}`)}
+              onSelect={(id) => router.push(getChatUrl(id))}
               onDelete={deleteConversation}
-              onNewChat={() => router.push("/chat")}
+              onNewChat={() => router.push(getChatUrl())}
               onRename={renameConversation}
             />
           </div>
