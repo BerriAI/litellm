@@ -79,15 +79,60 @@ class TestBedrockConverseBetaHeaderStripping:
         assert "anthropic-beta" not in captured_request_headers
 
     def test_case_insensitive_beta_stripped(self):
-        """anthropic-beta removal must be case-insensitive per HTTP spec."""
-        headers = {
-            "Content-Type": "application/json",
-            "Anthropic-Beta": "context-1m-2025-08-07",
-        }
-        for key in [k for k in headers if k.lower() == "anthropic-beta"]:
-            del headers[key]
+        """anthropic-beta removal must be case-insensitive per HTTP spec.
 
-        assert all(k.lower() != "anthropic-beta" for k in headers)
+        Exercises the real handler code path with a mixed-case header key.
+        """
+        handler = BedrockConverseLLM()
+
+        captured_request_headers = {}
+        spy_called = False
+
+        original_get_request_headers = handler.get_request_headers
+
+        def spy_get_request_headers(**kwargs):
+            nonlocal spy_called
+            spy_called = True
+            captured_request_headers.update(kwargs.get("headers", {}))
+            return original_get_request_headers(**kwargs)
+
+        with patch.object(handler, "get_request_headers", side_effect=spy_get_request_headers):
+            with patch("litellm.llms.bedrock.chat.converse_handler.HTTPHandler") as mock_http:
+                mock_http_instance = MagicMock()
+                mock_http.return_value = mock_http_instance
+                mock_http_instance.post.return_value = MagicMock(
+                    status_code=200,
+                    text=json.dumps({"output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}}, "stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}}),
+                    headers={},
+                    json=lambda: {"output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}}, "stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}},
+                )
+
+                try:
+                    handler.completion(
+                        model="anthropic.claude-sonnet-4-20250514-v1:0",
+                        messages=[{"role": "user", "content": "test"}],
+                        api_base=None,
+                        custom_prompt_dict={},
+                        model_response=MagicMock(),
+                        encoding=None,
+                        logging_obj=MagicMock(pre_call=MagicMock()),
+                        optional_params={"stream": False},
+                        acompletion=False,
+                        timeout=30,
+                        litellm_params={
+                            "api_base": "https://bedrock.us-east-1.amazonaws.com",
+                            "model": "bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+                            "aws_region_name": "us-east-1",
+                        },
+                        extra_headers={
+                            "Anthropic-Beta": "context-1m-2025-08-07",
+                        },
+                    )
+                except Exception:
+                    pass
+
+        assert spy_called, "get_request_headers spy was never invoked — test is vacuous"
+        assert all(k.lower() != "anthropic-beta" for k in captured_request_headers)
 
 
 
