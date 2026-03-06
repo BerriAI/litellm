@@ -154,6 +154,7 @@ const sidebars = {
           items: [
             "tutorials/claude_responses_api",
             "tutorials/claude_code_max_subscription",
+            "tutorials/claude_code_byok",
             "tutorials/claude_code_customer_tracking",
             "tutorials/claude_code_prompt_cache_routing",
             "tutorials/claude_code_websearch",
