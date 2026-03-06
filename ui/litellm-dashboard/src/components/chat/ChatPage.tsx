@@ -22,7 +22,8 @@ import MCPConnectPicker from "./MCPConnectPicker";
 import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
-import { serverRootPath } from "@/components/networking";
+import { serverRootPath, getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
 
 interface ChatPageProps {
   accessToken: string;
@@ -65,6 +66,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const router = useRouter();
   const searchParams = useSearchParams();
   const activeConversationId = searchParams.get("id");
+  const { logoUrl } = useTheme();
+  const logoSrc = logoUrl || `${getProxyBaseUrl()}/get_image`;
 
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [models, setModels] = useState<string[]>([]);
@@ -357,11 +360,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           {!sidebarCollapsed && (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <img
-                src="/assets/logos/litellm_logo.jpg"
+                src={logoSrc}
                 alt="LiteLLM"
-                width={26}
-                height={26}
-                style={{ borderRadius: 6, objectFit: "cover", flexShrink: 0 }}
+                style={{ height: 28, maxWidth: 120, objectFit: "contain", flexShrink: 0 }}
               />
               <span style={{ fontWeight: 700, fontSize: 15, color: "#111827", letterSpacing: "-0.01em" }}>
                 LiteLLM
