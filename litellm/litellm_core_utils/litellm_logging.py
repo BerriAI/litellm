@@ -4877,6 +4877,11 @@ class StandardLoggingPayloadSetup:
                 try:
                     _value = int(_value)
                 except (ValueError, TypeError):
+                    verbose_logger.debug(
+                        "Skipping non-numeric value %r for int-typed header field %s",
+                        _value,
+                        key,
+                    )
                     continue
             else:
                 _value = str(_value)

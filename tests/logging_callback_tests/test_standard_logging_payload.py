@@ -215,6 +215,23 @@ def test_get_additional_headers_numeric_request_id_stays_string():
     assert isinstance(result["llm_provider_request_id"], str)
 
 
+def test_get_additional_headers_non_numeric_int_field_skipped():
+    """Non-numeric values for int-typed fields are gracefully skipped (not silently lost)."""
+    additional_headers = {
+        "x-ratelimit-limit-requests": "not-a-number",
+        "x-ratelimit-remaining-requests": "1999",
+        "llm_provider-x-request-id": "req_ok",
+    }
+    result = StandardLoggingPayloadSetup.get_additional_headers(additional_headers)
+    assert result is not None
+    # The non-numeric value is skipped
+    assert "x_ratelimit_limit_requests" not in result
+    # Valid int field is still present
+    assert result["x_ratelimit_remaining_requests"] == 1999
+    # String field unaffected
+    assert result["llm_provider_x_request_id"] == "req_ok"
+
+
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
     for field in StandardLoggingMetadata.__annotations__.keys():
         assert field in standard_logging_metadata
