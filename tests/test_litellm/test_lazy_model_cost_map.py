@@ -58,7 +58,7 @@ class TestLazyModelCostMap:
         import litellm
 
         litellm._model_cost_remote_loaded = True
-        with patch("litellm.get_model_cost_map") as mock_get:
+        with patch("litellm._get_model_cost_map_with_source") as mock_get:
             litellm._ensure_remote_model_cost()
             mock_get.assert_not_called()
 
