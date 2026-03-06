@@ -123,9 +123,10 @@ class TestCanadianImmigrationDoc:
         pattern = get_compiled_pattern("ca_immigration_doc")
         assert pattern.search("1234-5678-90") is not None
 
-    def test_uci_compact(self):
+    def test_uci_compact_rejected(self):
+        """Compact 10-digit UCI without separators should NOT match (too broad)"""
         pattern = get_compiled_pattern("ca_immigration_doc")
-        assert pattern.search("1234567890") is not None
+        assert pattern.search("1234567890") is None
 
     def test_imm_in_sentence(self):
         pattern = get_compiled_pattern("ca_immigration_doc")

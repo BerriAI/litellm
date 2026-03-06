@@ -119,7 +119,7 @@ class TestUofTPolicyE2E:
     @pytest.mark.asyncio
     async def test_utorid_quercus_context_masked(self):
         guardrail = self.setup_uoft_guardrail()
-        text = "Quercus login: kcheng42"
+        text = "Quercus login kcheng42"
         result = await guardrail.apply_guardrail(
             inputs={"texts": [text]},
             request_data={},
@@ -132,7 +132,7 @@ class TestUofTPolicyE2E:
     @pytest.mark.asyncio
     async def test_utorid_acorn_context_masked(self):
         guardrail = self.setup_uoft_guardrail()
-        text = "Log in to ACORN with li5"
+        text = "ACORN login li5"
         result = await guardrail.apply_guardrail(
             inputs={"texts": [text]},
             request_data={},
@@ -185,9 +185,9 @@ class TestUofTPolicyE2E:
         assert "9876543210987654" not in output
 
     @pytest.mark.asyncio
-    async def test_student_card_masked(self):
+    async def test_university_card_masked(self):
         guardrail = self.setup_uoft_guardrail()
-        text = "Lost my student card 1111222233334444 yesterday"
+        text = "Lost my university card 1111222233334444 yesterday"
         result = await guardrail.apply_guardrail(
             inputs={"texts": [text]},
             request_data={},
@@ -196,6 +196,19 @@ class TestUofTPolicyE2E:
         output = result.get("texts", [])[0]
         assert "[UOFT_TCARD_REDACTED]" in output
         assert "1111222233334444" not in output
+
+    @pytest.mark.asyncio
+    async def test_student_card_no_longer_triggers_tcard(self):
+        """Generic 'student card' keyword should NOT trigger TCard (avoids credit card collision)"""
+        guardrail = self.setup_uoft_guardrail()
+        text = "My student card number is 4111111111111111"
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data={},
+            input_type="request",
+        )
+        output = result.get("texts", [])[0]
+        assert "UOFT_TCARD_REDACTED" not in output
 
     @pytest.mark.asyncio
     async def test_tcard_clean_passes(self):

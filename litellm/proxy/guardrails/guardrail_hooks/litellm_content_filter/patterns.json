@@ -547,11 +547,11 @@
     {
       "name": "ca_sin",
       "display_name": "SIN (Canadian Social Insurance Number)",
-      "pattern": "\\b\\d{3}[\\-\\s]\\d{3}[\\-\\s]\\d{3}\\b",
+      "pattern": "\\b[1-9]\\d{2}[\\-\\s]\\d{3}[\\-\\s]\\d{3}\\b",
       "category": "Canadian PII Patterns",
-      "description": "Detects Canadian Social Insurance Numbers (9-digit federal identifier, dashed or spaced format)",
+      "description": "Detects Canadian Social Insurance Numbers (9-digit federal identifier, dashed or spaced format, first digit 1-9)",
       "keyword_pattern": "\\b(?:social\\s*insurance\\s*number|numéro\\s*d'assurance\\s*sociale|social\\s*insurance|SIN|NAS)\\b",
-      "allow_word_numbers": true
+      "allow_word_numbers": false
     },
     {
       "name": "ca_ohip",
@@ -574,7 +574,7 @@
     {
       "name": "ca_immigration_doc",
       "display_name": "Immigration Document (Canada IRCC)",
-      "pattern": "\\b(?:\\d{4}[\\-\\s]?\\d{4}[\\-\\s]?\\d{2}|[TUFW]\\d{8,10}|IMM[\\-\\s]?\\d{4,5})\\b",
+      "pattern": "\\b(?:\\d{4}[\\-\\s]\\d{4}[\\-\\s]\\d{2}|[TUFW]\\d{8,10}|IMM[\\-\\s]?\\d{4,5})\\b",
       "category": "Canadian PII Patterns",
       "description": "Detects Canadian immigration document numbers including UCI (10-digit), work/study permits, and IMM document references",
       "keyword_pattern": "\\b(?:unique\\s*client\\s*identifier|study\\s*permit\\s*number|work\\s*permit\\s*number|study\\s*permit|work\\s*permit|UCI|immigration|IRCC|permanent\\s*resident|PR\\s*card|permis\\s*d'études|permis\\s*de\\s*travail|landed\\s*immigrant|temporary\\s*resident)\\b",
@@ -613,7 +613,7 @@
       "pattern": "\\b[a-z]{2,6}\\d{1,4}\\b",
       "category": "Canadian Institutional Identifiers (FIPPA)",
       "description": "Detects University of Toronto UTORid login identifiers (e.g. smithj12). Context keywords are essential due to the generic format.",
-      "keyword_pattern": "\\b(?:utorid|utoid|utor\\s*id|acorn|quercus|uoft\\s*login|university\\s*of\\s*toronto\\s*login|portal\\s*login|weblogin|shibboleth)\\b",
+      "keyword_pattern": "\\b(?:utorid|utoid|utor\\s*id|uoft\\s*login|university\\s*of\\s*toronto\\s*login|acorn\\s*login|acorn\\s*portal|quercus\\s*login|quercus\\s*course|portal\\s*login|weblogin|shibboleth)\\b",
       "allow_word_numbers": false
     },
     {
@@ -622,7 +622,7 @@
       "pattern": "\\b\\d{16}\\b",
       "category": "Canadian Institutional Identifiers (FIPPA)",
       "description": "Detects University of Toronto TCard campus ID card numbers (16-digit). Context keywords are critical to distinguish from payment card numbers.",
-      "keyword_pattern": "\\b(?:tcard\\s*number|t-card\\s*number|campus\\s*card\\s*number|campus\\s*id\\s*number|library\\s*card\\s*number|student\\s*card\\s*number|id\\s*card\\s*number|tcard|t-card|campus\\s*card|campus\\s*id|library\\s*card|student\\s*card|id\\s*card|university\\s*card)\\b",
+      "keyword_pattern": "\\b(?:tcard\\s*number|t-card\\s*number|tcard|t-card|campus\\s*card|campus\\s*id|university\\s*card)\\b",
       "allow_word_numbers": false
     }
   ]

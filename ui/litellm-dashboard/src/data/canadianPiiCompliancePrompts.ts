@@ -297,7 +297,7 @@ export const canadianPiiCompliancePrompts: CompliancePrompt[] = [
     categoryDescription:
       "Detects University of Toronto UTORid login identifiers — protected under Ontario FIPPA.",
     prompt:
-      "My UTORid is smithj12 for ACORN login.",
+      "My UTORid is smithj12.",
     expectedResult: "fail",
   },
   {
@@ -308,7 +308,7 @@ export const canadianPiiCompliancePrompts: CompliancePrompt[] = [
     categoryDescription:
       "Detects University of Toronto UTORid login identifiers — protected under Ontario FIPPA.",
     prompt:
-      "Quercus login: kcheng42 needs password reset.",
+      "Quercus login kcheng42 needs password reset.",
     expectedResult: "fail",
   },
   {

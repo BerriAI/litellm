@@ -62,6 +62,26 @@ class TestCanadianPIIPolicyE2E:
                 pattern_name="credit_card",
                 action=ContentFilterAction.MASK,
             ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="visa",
+                action=ContentFilterAction.MASK,
+            ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="mastercard",
+                action=ContentFilterAction.MASK,
+            ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="amex",
+                action=ContentFilterAction.MASK,
+            ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="iban",
+                action=ContentFilterAction.MASK,
+            ),
             # Contact info
             ContentFilterPattern(
                 pattern_type="prebuilt",
@@ -332,6 +352,22 @@ class TestCanadianPIIPolicyE2E:
 
         assert "[CA_BANK_ACCOUNT_REDACTED]" in output
         assert "12345-003-1234567" not in output
+
+    @pytest.mark.asyncio
+    async def test_visa_card_masked(self):
+        """Visa card number is detected and masked"""
+        guardrail = self.setup_canadian_guardrail()
+
+        text = "My Visa card number is 4111111111111111."
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data={},
+            input_type="request",
+        )
+        output = result.get("texts", [])[0]
+
+        assert "REDACTED" in output
+        assert "4111111111111111" not in output
 
     @pytest.mark.asyncio
     async def test_bank_question_passes(self):
