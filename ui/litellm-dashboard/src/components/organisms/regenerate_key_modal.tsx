@@ -240,6 +240,8 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
                     if (checked) {
                       form.setFieldValue("duration", null);
                       setRegenerateFormData((prev: any) => ({ ...prev, duration: null }));
+                    } else {
+                      form.setFieldValue("duration", undefined);
                     }
                   }}
                 >

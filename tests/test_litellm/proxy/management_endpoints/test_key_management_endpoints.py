@@ -6602,6 +6602,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
 
         mock_key = MagicMock(spec=LiteLLM_VerificationToken)
         mock_key.team_id = "team-123"
+        mock_key.user_id = "user-123"
         mock_prisma = AsyncMock()
         mock_cache = MagicMock()
         # Should not raise
@@ -6622,6 +6623,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
 
         mock_key = MagicMock(spec=LiteLLM_VerificationToken)
         mock_key.team_id = "team-123"
+        mock_key.user_id = "user-123"
         # No duration kwarg at all → not in model_fields_set
         data = RegenerateKeyRequest()
         mock_prisma = AsyncMock()
@@ -6644,6 +6646,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
 
         mock_key = MagicMock(spec=LiteLLM_VerificationToken)
         mock_key.team_id = "team-123"
+        mock_key.user_id = "user-123"
         # Explicitly set duration=None → "duration" IS in model_fields_set
         data = RegenerateKeyRequest(duration=None)
         assert "duration" in data.model_fields_set
@@ -6678,6 +6681,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
 
         mock_key = MagicMock(spec=LiteLLM_VerificationToken)
         mock_key.team_id = "team-123"
+        mock_key.user_id = "user-123"
         data = RegenerateKeyRequest(duration="999d")
 
         mock_team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
@@ -6708,10 +6712,33 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
 
         mock_key = MagicMock(spec=LiteLLM_VerificationToken)
         mock_key.team_id = None
+        mock_key.user_id = "user-123"
         data = RegenerateKeyRequest(duration="10d")
         mock_prisma = AsyncMock()
         mock_cache = MagicMock()
         # Should not raise
+        await _validate_regenerate_key_duration_against_team(
+            data=data,
+            key_in_db=mock_key,
+            prisma_client=mock_prisma,
+            user_api_key_cache=mock_cache,
+        )
+
+    @pytest.mark.asyncio
+    async def test_service_account_key_skips_validation(self):
+        """Service account keys (user_id=None) are exempt from team duration limits."""
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_regenerate_key_duration_against_team,
+        )
+        from litellm.proxy._types import RegenerateKeyRequest
+
+        mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+        mock_key.team_id = "team-123"
+        mock_key.user_id = None  # service account key has no user_id
+        data = RegenerateKeyRequest(duration="999d")
+        mock_prisma = AsyncMock()
+        mock_cache = MagicMock()
+        # Should not raise even though "999d" would exceed a finite team max
         await _validate_regenerate_key_duration_against_team(
             data=data,
             key_in_db=mock_key,
@@ -6728,6 +6755,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
 
         mock_key = MagicMock(spec=LiteLLM_VerificationToken)
         mock_key.team_id = "team-123"
+        mock_key.user_id = "user-123"
         data = RegenerateKeyRequest(duration="3d")
 
         mock_team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
@@ -6758,6 +6786,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
 
         mock_key = MagicMock(spec=LiteLLM_VerificationToken)
         mock_key.team_id = "team-123"
+        mock_key.user_id = "user-123"
         data = RegenerateKeyRequest(duration="10d")
 
         mock_team = MagicMock(spec=LiteLLM_TeamTableCachedObj)
@@ -6790,6 +6819,7 @@ class TestValidateRegenerateKeyDurationAgainstTeam:
 
         mock_key = MagicMock(spec=LiteLLM_VerificationToken)
         mock_key.team_id = "team-123"
+        mock_key.user_id = "user-123"
         data = RegenerateKeyRequest(duration=None)  # null = never expires = infinite
 
         mock_team = MagicMock(spec=LiteLLM_TeamTableCachedObj)

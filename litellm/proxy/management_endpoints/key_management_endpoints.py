@@ -3408,6 +3408,11 @@ async def _validate_regenerate_key_duration_against_team(
     if data is None:
         return
 
+    # Service account keys are exempt from team member duration limits,
+    # mirroring the enterprise add_team_member_key_duration guard.
+    if getattr(key_in_db, "user_id", None) is None:
+        return
+
     # Determine the user's requested duration in seconds.
     # Distinguish "duration not sent" (leave unchanged) from "duration: null" (never expires).
     if data.duration is None:
@@ -3427,7 +3432,6 @@ async def _validate_regenerate_key_duration_against_team(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
-            check_db_only=True,
         )
     except Exception as e:
         verbose_proxy_logger.warning(
