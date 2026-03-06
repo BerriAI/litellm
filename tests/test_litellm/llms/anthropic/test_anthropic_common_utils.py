@@ -503,3 +503,126 @@ class TestProxyOAuthHeaderForwarding:
         psh = data["provider_specific_header"]
         assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
         assert psh["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
+
+    def test_clean_headers_forwards_x_api_key_when_authenticated_with_litellm_key(self):
+        """clean_headers should forward x-api-key when user authenticated with x-litellm-api-key and forward_llm_provider_auth_headers=True."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"x-litellm-api-key", b"sk-litellm-proxy-key"),
+                (b"x-api-key", b"sk-ant-api03-client-key"),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        cleaned = clean_headers(
+            raw_headers,
+            forward_llm_provider_auth_headers=True,
+            authenticated_with_header="x-litellm-api-key",
+        )
+
+        # x-api-key should be forwarded (it's a provider key, not used for auth)
+        assert "x-api-key" in cleaned
+        assert cleaned["x-api-key"] == "sk-ant-api03-client-key"
+        # x-litellm-api-key should be excluded (special header)
+        assert "x-litellm-api-key" not in cleaned
+        assert cleaned["content-type"] == "application/json"
+
+    def test_clean_headers_excludes_x_api_key_when_used_for_auth(self):
+        """clean_headers should exclude x-api-key when it was used for LiteLLM authentication."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"x-api-key", b"sk-litellm-proxy-key"),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        cleaned = clean_headers(raw_headers, authenticated_with_header="x-api-key")
+
+        # x-api-key should be excluded (was used for LiteLLM auth)
+        assert "x-api-key" not in cleaned
+        assert cleaned["content-type"] == "application/json"
+
+    def test_clean_headers_forwards_x_api_key_when_authenticated_with_authorization(
+        self,
+    ):
+        """clean_headers should forward x-api-key when user authenticated with Authorization header and forward_llm_provider_auth_headers=True."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"authorization", b"Bearer sk-litellm-proxy-key"),
+                (b"x-api-key", b"sk-ant-api03-client-key"),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        cleaned = clean_headers(
+            raw_headers,
+            forward_llm_provider_auth_headers=True,
+            authenticated_with_header="authorization",
+        )
+
+        # x-api-key should be forwarded (it's a provider key, not used for auth)
+        assert "x-api-key" in cleaned
+        assert cleaned["x-api-key"] == "sk-ant-api03-client-key"
+        # authorization should be excluded (was used for auth, not OAuth)
+        assert "authorization" not in cleaned
+        assert cleaned["content-type"] == "application/json"
+
+    def test_clean_headers_x_api_key_without_authenticated_header_param(self):
+        """clean_headers should exclude x-api-key when authenticated_with_header is None."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"x-api-key", b"sk-ant-api03-key"),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        cleaned = clean_headers(raw_headers, authenticated_with_header=None)
+
+        # x-api-key should be excluded (no authenticated_with_header means we can't determine)
+        assert "x-api-key" not in cleaned
+        assert cleaned["content-type"] == "application/json"
+
+    def test_clean_headers_forwards_x_api_key_with_forward_flag_and_litellm_auth(
+        self,
+    ):
+        """clean_headers should forward x-api-key when both forward_llm_provider_auth_headers=True
+        and authenticated_with_header indicates different header was used for auth."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"x-litellm-api-key", b"sk-litellm-proxy-key"),
+                (b"x-api-key", b"sk-ant-api03-client-key"),
+                (b"x-goog-api-key", b"google-key-123"),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        cleaned = clean_headers(
+            raw_headers,
+            forward_llm_provider_auth_headers=True,
+            authenticated_with_header="x-litellm-api-key",
+        )
+
+        # x-api-key should be forwarded (provider key, not used for auth)
+        assert "x-api-key" in cleaned
+        assert cleaned["x-api-key"] == "sk-ant-api03-client-key"
+        # x-goog-api-key should also be forwarded (forward flag is True)
+        assert "x-goog-api-key" in cleaned
+        assert cleaned["x-goog-api-key"] == "google-key-123"
+        # x-litellm-api-key should be excluded (special header)
+        assert "x-litellm-api-key" not in cleaned
+        assert cleaned["content-type"] == "application/json"
