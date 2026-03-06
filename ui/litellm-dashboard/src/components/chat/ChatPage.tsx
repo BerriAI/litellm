@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
-import { Select, Tooltip, Skeleton, Popover, message } from "antd";
+import { Tooltip, Skeleton, Popover, message } from "antd";
 import {
   SettingOutlined,
   PlusOutlined,
@@ -13,7 +13,11 @@ import {
   AppstoreOutlined,
   ArrowLeftOutlined,
   DownOutlined,
+  CloseOutlined,
+  CheckOutlined,
 } from "@ant-design/icons";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useChatHistory } from "./useChatHistory";
 import ConversationList from "./ConversationList";
@@ -23,6 +27,7 @@ import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
 import { serverRootPath, getProxyBaseUrl } from "@/components/networking";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 
 interface ChatPageProps {
   accessToken: string;
@@ -32,6 +37,8 @@ interface ChatPageProps {
 }
 
 const SUGGESTIONS = ["Write", "Learn", "Code", "Brainstorm"];
+const MAX_COMPARISON_MODELS = 3;
+const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_models";
 
 function getGreeting(): string {
   const h = new Date().getHours();
@@ -39,8 +46,6 @@ function getGreeting(): string {
   if (h >= 12 && h < 17) return "Good afternoon";
   return "Good evening";
 }
-
-const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
 // Build the chat UI URL respecting server root path (e.g. /litellm/ui/chat)
 function getChatUrl(id?: string): string {
@@ -61,15 +66,76 @@ function getDashboardUrl(): string {
   return uiPath;
 }
 
+// Extract provider from model name for logo lookup.
+// Handles prefixed models ("groq/llama-3"), and detects well-known providers by keyword.
+function getProviderFromModelName(modelName: string): string {
+  if (!modelName) return "";
+  const lower = modelName.toLowerCase();
+  const slash = lower.indexOf("/");
+  if (slash > 0) return lower.slice(0, slash);
+  // Keyword matching — order matters (more specific first)
+  if (lower.includes("claude")) return "anthropic";
+  if (lower.includes("gemini")) return "gemini";
+  if (lower.includes("gpt") || lower.includes("chatgpt") || /^o[0-9]/.test(lower)) return "openai";
+  if (lower.includes("mistral") || lower.includes("codestral")) return "mistral";
+  if (lower.includes("llama")) return "meta_llama";
+  if (lower.includes("deepseek")) return "deepseek";
+  if (lower.includes("grok")) return "xai";
+  if (lower.includes("command")) return "cohere";
+  if (lower.includes("nova") || lower.includes("titan")) return "bedrock";
+  return "";
+}
+
+interface ComparisonExchange {
+  userMessage: string;
+  responses: Record<string, string>; // model → accumulated response text
+}
+
+// Module-level async helper — each model gets its own independent Promise so they all run in parallel.
+async function streamToModel(
+  model: string,
+  messages: Array<{ role: "user" | "assistant"; content: string }>,
+  accessToken: string,
+  mcpServers: string[],
+  signal: AbortSignal,
+  onChunk: (model: string, chunk: string) => void,
+  onDone: (model: string) => void,
+): Promise<void> {
+  try {
+    await makeOpenAIChatCompletionRequest(
+      messages,
+      (chunk: string) => onChunk(model, chunk),
+      model,
+      accessToken,
+      undefined, // tags
+      signal,
+      undefined, // onReasoningContent
+      undefined, undefined, undefined, undefined, undefined, undefined, // positions 8-13
+      mcpServers.length > 0 ? mcpServers : undefined, // position 14: selectedMCPServers
+    );
+  } catch (err: unknown) {
+    // Surface real errors in the response card; ignore user-triggered aborts
+    if (!(err instanceof Error && err.name === "AbortError")) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onChunk(model, `\n\n_Error: ${msg}_`);
+    }
+  } finally {
+    onDone(model);
+  }
+}
+
 const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, userEmail }) => {
   const router = useRouter();
   const searchParams = useSearchParams();
   const activeConversationId = searchParams.get("id");
   const logoSrc = `${getProxyBaseUrl()}/get_image`;
 
-  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(true);
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
+  const [modelSearchText, setModelSearchText] = useState("");
+
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -77,6 +143,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarView, setSidebarView] = useState<"chats" | "apps">("chats");
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
+
+  // Comparison mode state (active when selectedModels.length > 1)
+  // Each exchange holds the user message + per-model responses so we can do multi-turn comparison.
+  const [comparisonExchanges, setComparisonExchanges] = useState<ComparisonExchange[]>([]);
+  const [comparisonStreamingSet, setComparisonStreamingSet] = useState<Set<string>>(new Set());
+  const comparisonAbortControllersRef = useRef<Record<string, AbortController>>({});
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -105,12 +177,24 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       .then((data) => {
         const names = (data || []).map((m: { model_group?: string }) => m.model_group ?? "").filter(Boolean);
         setModels(names);
-        const saved = localStorage.getItem(LOCALSTORAGE_MODEL_KEY);
-        if (saved && names.includes(saved)) {
-          setSelectedModel(saved);
-        } else if (names.length > 0) {
-          setSelectedModel(names[0]);
-          localStorage.setItem(LOCALSTORAGE_MODEL_KEY, names[0]);
+        try {
+          const saved = localStorage.getItem(LOCALSTORAGE_MODEL_KEY);
+          if (saved) {
+            const parsed: unknown = JSON.parse(saved);
+            if (Array.isArray(parsed)) {
+              const valid = (parsed as string[]).filter((m) => names.includes(m));
+              if (valid.length > 0) {
+                setSelectedModels(valid);
+                return;
+              }
+            }
+          }
+        } catch {
+          // ignore parse errors
+        }
+        if (names.length > 0) {
+          setSelectedModels([names[0]]);
+          localStorage.setItem(LOCALSTORAGE_MODEL_KEY, JSON.stringify([names[0]]));
         }
       })
       .catch(() => message.error("Could not load models"))
@@ -118,24 +202,37 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   }, [accessToken]);
 
   useEffect(() => {
-    if (staleId) router.replace("/chat");
+    if (staleId) router.replace(getChatUrl());
   }, [staleId, router]);
 
+  const toggleModel = useCallback((model: string) => {
+    setSelectedModels((prev) => {
+      let next: string[];
+      if (prev.includes(model)) {
+        next = prev.filter((m) => m !== model);
+      } else if (prev.length >= MAX_COMPARISON_MODELS) {
+        return prev;
+      } else {
+        next = [...prev, model];
+      }
+      localStorage.setItem(LOCALSTORAGE_MODEL_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
-  const handleModelChange = (val: string) => {
-    setSelectedModel(val);
-    localStorage.setItem(LOCALSTORAGE_MODEL_KEY, val);
-  };
+  const isComparisonMode = selectedModels.length > 1;
+  const isAnyStreaming = isStreaming || comparisonStreamingSet.size > 0;
 
   const handleSend = useCallback(
     async (text: string, historyOverride?: Array<{ role: "user" | "assistant"; content: string }>) => {
       const trimmed = text.trim();
-      if (!trimmed || !selectedModel || isStreaming) return;
+      if (!trimmed || selectedModels.length === 0 || isStreaming) return;
+      const model = selectedModels[0];
       setInputText("");
 
       let convId = activeConversationId;
       if (!convId) {
-        convId = createConversation(selectedModel);
+        convId = createConversation(model);
         router.push(getChatUrl(convId));
       }
 
@@ -165,7 +262,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             accumulatedContent += chunk;
             updateLastAssistantMessage(convId!, { content: accumulatedContent });
           },
-          selectedModel,
+          model,
           accessToken,
           undefined,
           abortControllerRef.current.signal,
@@ -191,12 +288,63 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         abortControllerRef.current = null;
       }
     },
-    [activeConversationId, activeConversation, selectedModel, selectedMCPServers, accessToken,
+    [activeConversationId, activeConversation, selectedModels, selectedMCPServers, accessToken,
       createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming],
+  );
+
+  const handleSendComparison = useCallback(
+    (text: string, currentExchanges: ComparisonExchange[]) => {
+      const trimmed = text.trim();
+      if (!trimmed || selectedModels.length === 0 || isAnyStreaming) return;
+      setInputText("");
+
+      // Append a new exchange with empty responses
+      const newExchange: ComparisonExchange = { userMessage: trimmed, responses: {} };
+      const newExchangeIdx = currentExchanges.length;
+      setComparisonExchanges((prev) => [...prev, newExchange]);
+      setComparisonStreamingSet(new Set(selectedModels));
+
+      const controllers: Record<string, AbortController> = {};
+      selectedModels.forEach((m) => { controllers[m] = new AbortController(); });
+      comparisonAbortControllersRef.current = controllers;
+
+      // Launch all model streams simultaneously — Promise.allSettled ensures they run in parallel
+      // (streamToModel handles its own errors internally so these promises won't reject)
+      void Promise.allSettled(
+        selectedModels.map((model) => {
+          // Build per-model history: each model's past responses become its own context
+          const history: Array<{ role: "user" | "assistant"; content: string }> = [];
+          for (const ex of currentExchanges) {
+            history.push({ role: "user", content: ex.userMessage });
+            history.push({ role: "assistant", content: ex.responses[model] ?? "" });
+          }
+          history.push({ role: "user", content: trimmed });
+
+          return streamToModel(
+            model,
+            history,
+            accessToken,
+            selectedMCPServers,
+            controllers[model].signal,
+            (m, chunk) => setComparisonExchanges((prev) => {
+              const updated = [...prev];
+              const ex = { ...updated[newExchangeIdx] };
+              ex.responses = { ...ex.responses, [m]: (ex.responses[m] ?? "") + chunk };
+              updated[newExchangeIdx] = ex;
+              return updated;
+            }),
+            (m) => setComparisonStreamingSet((prev) => { const next = new Set(prev); next.delete(m); return next; }),
+          );
+        }),
+      );
+    },
+    [selectedModels, accessToken, selectedMCPServers, isAnyStreaming],
   );
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
+    Object.values(comparisonAbortControllersRef.current).forEach((c) => c.abort());
+    comparisonAbortControllersRef.current = {};
   }, []);
 
   const handleEditAndResend = useCallback(
@@ -215,10 +363,21 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     [activeConversationId, isStreaming, activeConversation, truncateAfterMessage, handleSend],
   );
 
+  const handleSubmit = useCallback(
+    (text: string) => {
+      if (isComparisonMode) {
+        handleSendComparison(text, comparisonExchanges);
+      } else {
+        handleSend(text);
+      }
+    },
+    [isComparisonMode, handleSend, handleSendComparison, comparisonExchanges],
+  );
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend(inputText);
+      handleSubmit(inputText);
     }
   };
 
@@ -275,12 +434,99 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     }
   }, [activeConversation?.messages]);
 
-  const showBlankState = !activeConversation || activeConversation.messages.length === 0;
+  const showBlankState = !isComparisonMode
+    ? (!activeConversation || activeConversation.messages.length === 0)
+    : comparisonExchanges.length === 0;
   const displayName = userEmail?.split("@")[0] ?? userId ?? "";
   const greeting = displayName ? `${getGreeting()}, ${displayName}` : getGreeting();
   const dashboardUrl = getDashboardUrl();
 
-  // ---- Sidebar nav item renderer (inline, not a function-in-function) ----
+  // Filtered models: selected ones float to the top, then alphabetical
+  const filteredModels = (modelSearchText
+    ? models.filter((m) => m.toLowerCase().includes(modelSearchText.toLowerCase()))
+    : models
+  ).sort((a, b) => {
+    const aSelected = selectedModels.includes(a);
+    const bSelected = selectedModels.includes(b);
+    if (aSelected && !bSelected) return -1;
+    if (!aSelected && bSelected) return 1;
+    return 0;
+  });
+
+  // ---- Model selector popover content ----
+  const modelSelectorContent = (
+    <div style={{ width: 280, maxHeight: 400, display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "8px 8px 4px" }}>
+        <input
+          autoFocus
+          value={modelSearchText}
+          onChange={(e) => setModelSearchText(e.target.value)}
+          placeholder="Search models..."
+          style={{
+            width: "100%",
+            padding: "6px 10px",
+            border: "1px solid #d1d5db",
+            borderRadius: 6,
+            fontSize: 13,
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+      </div>
+      {selectedModels.length >= MAX_COMPARISON_MODELS && (
+        <div style={{ padding: "4px 12px", fontSize: 12, color: "#6b7280" }}>
+          Max {MAX_COMPARISON_MODELS} models selected — deselect one to change.
+        </div>
+      )}
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {filteredModels.map((m) => {
+          const checked = selectedModels.includes(m);
+          const disabled = !checked && selectedModels.length >= MAX_COMPARISON_MODELS;
+          const provider = getProviderFromModelName(m);
+          const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
+          return (
+            <button
+              key={m}
+              disabled={disabled}
+              onClick={() => toggleModel(m)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                width: "100%",
+                padding: "7px 12px",
+                background: checked ? "#eff6ff" : "transparent",
+                border: "none",
+                cursor: disabled ? "not-allowed" : "pointer",
+                textAlign: "left",
+                opacity: disabled ? 0.45 : 1,
+                borderRadius: 4,
+              }}
+            >
+              <span style={{
+                width: 16, height: 16, borderRadius: 3, border: `1.5px solid ${checked ? "#1677ff" : "#d1d5db"}`,
+                background: checked ? "#1677ff" : "#fff",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                flexShrink: 0, transition: "all 0.1s",
+              }}>
+                {checked && <CheckOutlined style={{ fontSize: 10, color: "#fff" }} />}
+              </span>
+              {logo ? (
+                <img src={logo} alt="" style={{ width: 16, height: 16, objectFit: "contain", flexShrink: 0 }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+              ) : (
+                <span style={{ width: 16, flexShrink: 0 }} />
+              )}
+              <span style={{ fontSize: 13, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {m}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  // ---- Sidebar nav item renderer ----
   const sidebarNavItem = (
     icon: React.ReactNode,
     label: string,
@@ -323,6 +569,178 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         )}
       </button>
     </Tooltip>
+  );
+
+  // ---- Model selector trigger button ----
+  const modelSelectorTrigger = isLoadingModels ? (
+    <Skeleton.Input active style={{ width: 160, height: 28 }} />
+  ) : (
+    <Popover
+      open={modelSelectorOpen}
+      onOpenChange={(open) => { setModelSelectorOpen(open); if (!open) setModelSearchText(""); }}
+      content={modelSelectorContent}
+      trigger="click"
+      placement="bottomLeft"
+    >
+      <button
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "5px 10px",
+          borderRadius: 7,
+          border: "1px solid transparent",
+          cursor: "pointer",
+          background: "transparent",
+          color: "#111827",
+          fontSize: 14,
+          fontWeight: 500,
+          maxWidth: 480,
+          overflow: "hidden",
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f5f5f5"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+      >
+        {selectedModels.length === 0 ? (
+          <span style={{ color: "#9ca3af" }}>Select model</span>
+        ) : selectedModels.length === 1 ? (
+          <>
+            {(() => {
+              const provider = getProviderFromModelName(selectedModels[0]);
+              const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
+              return logo ? <img src={logo} alt="" style={{ width: 18, height: 18, objectFit: "contain", flexShrink: 0 }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} /> : null;
+            })()}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 240 }}>
+              {selectedModels[0]}
+            </span>
+          </>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "nowrap", overflow: "hidden" }}>
+            {selectedModels.map((m) => {
+              const provider = getProviderFromModelName(m);
+              const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
+              return (
+                <span key={m} style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  padding: "2px 8px", background: "#f0f4ff", borderRadius: 10,
+                  fontSize: 12, color: "#1677ff", fontWeight: 500, flexShrink: 0,
+                }}>
+                  {logo && <img src={logo} alt="" style={{ width: 13, height: 13, objectFit: "contain" }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />}
+                  <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m}</span>
+                </span>
+              );
+            })}
+          </div>
+        )}
+        <DownOutlined style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginLeft: 2 }} />
+      </button>
+    </Popover>
+  );
+
+  // ---- Shared input bar ----
+  const inputBar = (inConversation: boolean) => (
+    <div style={{
+      background: "#fff",
+      borderRadius: 12,
+      border: "1px solid #e5e7eb",
+      boxShadow: "0 1px 6px rgba(0,0,0,0.06)",
+      overflow: "hidden",
+    }}>
+      <textarea
+        ref={textareaRef}
+        value={inputText}
+        onChange={(e) => setInputText(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={inConversation ? "Send a message..." : "How can I help you today?"}
+        style={{
+          width: "100%",
+          minHeight: inConversation ? 52 : 80,
+          padding: inConversation ? "16px 20px 8px" : "20px 20px 8px",
+          border: "none",
+          outline: "none",
+          resize: "none",
+          fontSize: 15,
+          color: "#111827",
+          background: "transparent",
+          fontFamily: "inherit",
+          boxSizing: "border-box",
+        }}
+      />
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: inConversation ? "4px 12px 10px" : "8px 12px 12px",
+        borderTop: "1px solid #f3f4f6",
+      }}>
+        <Popover
+          open={mcpPopoverOpen}
+          onOpenChange={setMcpPopoverOpen}
+          content={
+            <MCPConnectPicker
+              accessToken={accessToken}
+              selectedServers={selectedMCPServers}
+              onChange={setSelectedMCPServers}
+            />
+          }
+          trigger="click"
+          placement="topLeft"
+        >
+          <button style={{
+            background: "none", border: "1px solid #d1d5db",
+            borderRadius: 6, padding: "5px 10px",
+            cursor: "pointer", fontSize: 14, color: "#6b7280",
+            display: "flex", alignItems: "center", gap: 4,
+          }}>
+            <PlusOutlined />
+            {selectedMCPServers.length > 0 && (
+              <span style={{ fontSize: 12, color: "#1677ff", fontWeight: 500 }}>
+                {selectedMCPServers.length}
+              </span>
+            )}
+          </button>
+        </Popover>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {!isComparisonMode && (
+            <span style={{ fontSize: 12, color: "#9ca3af", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {inConversation
+                ? (selectedMCPServers.length > 0 ? `${selectedMCPServers.length} tool${selectedMCPServers.length > 1 ? "s" : ""} connected` : "")
+                : (selectedModels[0] || "No model")}
+            </span>
+          )}
+          {isAnyStreaming ? (
+            <button onClick={handleStop} style={{
+              background: "none", border: "1.5px solid #d1d5db", borderRadius: "50%",
+              width: 32, height: 32, cursor: "pointer", color: "#374151",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              flexShrink: 0, transition: "border-color 0.15s",
+            }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#9ca3af"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#d1d5db"; }}
+            >
+              <div style={{ width: 10, height: 10, background: "#374151", borderRadius: 2 }} />
+            </button>
+          ) : (
+            <button
+              onClick={() => handleSubmit(inputText)}
+              disabled={!inputText.trim() || isLoadingModels || selectedModels.length === 0}
+              style={{
+                background: inputText.trim() && selectedModels.length > 0 ? "#1677ff" : "#f3f4f6",
+                border: "none", borderRadius: 7,
+                padding: "7px 16px",
+                cursor: inputText.trim() && selectedModels.length > 0 ? "pointer" : "not-allowed",
+                color: inputText.trim() && selectedModels.length > 0 ? "#fff" : "#9ca3af",
+                fontSize: 14, fontWeight: 500,
+                transition: "background 0.15s",
+              }}
+            >
+              Send
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 
   return (
@@ -445,7 +863,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       {/* ===== MAIN AREA ===== */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
 
-        {/* Top bar — clean, minimal like ChatGPT */}
+        {/* Top bar */}
         <div style={{
           display: "flex",
           alignItems: "center",
@@ -457,28 +875,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           height: 48,
         }}>
           {/* Left: model selector */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {isLoadingModels ? (
-              <Skeleton.Input active style={{ width: 160, height: 28 }} />
-            ) : (
-              <Select
-                value={selectedModel || undefined}
-                onChange={handleModelChange}
-                showSearch
-                placeholder="Select model"
-                style={{ width: 220 }}
-                size="middle"
-                variant="borderless"
-                options={models.map((m) => ({
-                  value: m,
-                  label: m.length > 35 ? m.slice(0, 35) + "…" : m,
-                }))}
-              />
-            )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+            {modelSelectorTrigger}
           </div>
 
           {/* Right: settings */}
-          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
             <Tooltip title="Settings">
               <button style={{
                 background: "none", border: "none", cursor: "pointer",
@@ -508,6 +910,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
         {/* Content area */}
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", background: "#fff" }}>
+
           {/* ---- Apps page view ---- */}
           {sidebarView === "apps" ? (
             <div style={{ flex: 1, minHeight: 0, overflow: "auto", maxWidth: 800, margin: "0 auto", width: "100%", padding: "32px 24px" }}>
@@ -517,6 +920,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                 onChange={setSelectedMCPServers}
               />
             </div>
+
           ) : showBlankState ? (
             /* ---- Blank state ---- */
             <div style={{
@@ -537,146 +941,178 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                 letterSpacing: "-0.01em",
                 textAlign: "center",
               }}>
-                {greeting}
+                {isComparisonMode
+                  ? `Compare ${selectedModels.length} models`
+                  : greeting}
               </h1>
 
+              {isComparisonMode && (
+                <p style={{ margin: "-16px 0 24px", fontSize: 14, color: "#6b7280", textAlign: "center" }}>
+                  Send a message to see responses side-by-side
+                </p>
+              )}
+
               {/* Input card */}
-              <div style={{
-                width: "100%",
-                maxWidth: 680,
-                background: "#fff",
-                borderRadius: 12,
-                border: "1px solid #e5e7eb",
-                boxShadow: "0 1px 6px rgba(0,0,0,0.06)",
-                overflow: "hidden",
-              }}>
-                <textarea
-                  ref={textareaRef}
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="How can I help you today?"
-                  style={{
-                    width: "100%",
-                    minHeight: 80,
-                    padding: "20px 20px 8px",
-                    border: "none",
-                    outline: "none",
-                    resize: "none",
-                    fontSize: 15,
-                    color: "#111827",
-                    background: "transparent",
-                    fontFamily: "inherit",
-                    boxSizing: "border-box",
-                  }}
-                />
-                <div style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "8px 12px 12px",
-                  borderTop: "1px solid #f3f4f6",
-                }}>
-                  <Popover
-                    open={mcpPopoverOpen}
-                    onOpenChange={setMcpPopoverOpen}
-                    content={
-                      <MCPConnectPicker
-                        accessToken={accessToken}
-                        selectedServers={selectedMCPServers}
-                        onChange={setSelectedMCPServers}
-                      />
-                    }
-                    trigger="click"
-                    placement="topLeft"
-                  >
-                    <Tooltip title="Attach tools">
-                      <button style={{
-                        background: "none", border: "1px solid #d1d5db",
-                        borderRadius: 6, padding: "5px 10px",
-                        cursor: "pointer", fontSize: 14, color: "#6b7280",
-                        display: "flex", alignItems: "center", gap: 4,
-                      }}>
-                        <PlusOutlined />
-                        {selectedMCPServers.length > 0 && (
-                          <span style={{ fontSize: 12, color: "#1677ff", fontWeight: 500 }}>
-                            {selectedMCPServers.length}
-                          </span>
-                        )}
-                      </button>
-                    </Tooltip>
-                  </Popover>
+              <div style={{ width: "100%", maxWidth: 680 }}>
+                {inputBar(false)}
+              </div>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 12, color: "#9ca3af", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {selectedModel || "No model"}
-                    </span>
-                    {isStreaming ? (
-                      <button onClick={handleStop} style={{
-                        background: "none", border: "1.5px solid #d1d5db", borderRadius: "50%",
-                        width: 32, height: 32, cursor: "pointer", color: "#374151",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        flexShrink: 0,
-                      }}>
-                        <div style={{ width: 10, height: 10, background: "#374151", borderRadius: 2 }} />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleSend(inputText)}
-                        disabled={!inputText.trim() || isLoadingModels || !selectedModel}
-                        style={{
-                          background: inputText.trim() && selectedModel ? "#1677ff" : "#f3f4f6",
-                          border: "none", borderRadius: 7,
-                          padding: "7px 16px", cursor: inputText.trim() && selectedModel ? "pointer" : "not-allowed",
-                          color: inputText.trim() && selectedModel ? "#fff" : "#9ca3af",
-                          fontSize: 14, fontWeight: 500,
-                          transition: "background 0.15s",
-                        }}
-                      >
-                        Send
-                      </button>
-                    )}
-                  </div>
+              {/* Suggestion chips — only in single-model mode */}
+              {!isComparisonMode && (
+                <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", justifyContent: "center" }}>
+                  {SUGGESTIONS.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setInputText(s + ": ")}
+                      style={{
+                        background: "#f9fafb",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 20,
+                        padding: "7px 16px",
+                        fontSize: 14,
+                        color: "#374151",
+                        cursor: "pointer",
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6";
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.background = "#f9fafb";
+                      }}
+                    >
+                      {s}
+                    </button>
+                  ))}
                 </div>
-              </div>
-
-              {/* Suggestion chips */}
-              <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", justifyContent: "center" }}>
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setInputText(s + ": ")}
-                    style={{
-                      background: "#f9fafb",
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 20,
-                      padding: "7px 16px",
-                      fontSize: 14,
-                      color: "#374151",
-                      cursor: "pointer",
-                    }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6";
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.background = "#f9fafb";
-                    }}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
+              )}
 
             </div>
           ) : (
-            /* ---- Active conversation ---- */
-            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", maxWidth: 760, margin: "0 auto", width: "100%", padding: "0 24px", position: "relative" }}>
+            /* ---- Active conversation (single-model or comparison) ---- */
+            <div style={{
+              flex: 1, minHeight: 0, display: "flex", flexDirection: "column",
+              maxWidth: isComparisonMode ? (selectedModels.length >= 3 ? 1200 : 960) : 760,
+              margin: "0 auto", width: "100%", padding: "0 24px", position: "relative",
+            }}>
               <div ref={messagesScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", paddingTop: 24, overflowAnchor: "none" }}>
-                <ChatMessages
-                  messages={activeConversation.messages}
-                  isStreaming={isStreaming}
-                  onEditMessage={handleEditAndResend}
-                />
+                {isComparisonMode ? (
+                  /* Comparison: multi-turn exchanges, each with user bubble + side-by-side response cards */
+                  <div style={{ paddingBottom: 8 }}>
+                    {comparisonExchanges.map((exchange, exchangeIdx) => {
+                      const isLastExchange = exchangeIdx === comparisonExchanges.length - 1;
+                      return (
+                        <div key={exchangeIdx} style={{ marginBottom: 32 }}>
+                          {/* User message bubble */}
+                          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
+                            <div style={{
+                              background: "#f3f4f6",
+                              borderRadius: 16,
+                              padding: "10px 16px",
+                              maxWidth: "75%",
+                              fontSize: 14,
+                              color: "#111827",
+                              lineHeight: 1.5,
+                            }}>
+                              {exchange.userMessage}
+                            </div>
+                          </div>
+
+                          {/* Response cards side-by-side */}
+                          <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+                            {selectedModels.map((model, idx) => {
+                              const provider = getProviderFromModelName(model);
+                              const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
+                              const responseText = exchange.responses[model] ?? "";
+                              const isModelStreaming = isLastExchange && comparisonStreamingSet.has(model);
+                              return (
+                                <div key={model} style={{
+                                  flex: 1,
+                                  border: "1px solid #e5e7eb",
+                                  borderRadius: 12,
+                                  overflow: "hidden",
+                                  minWidth: 0,
+                                }}>
+                                  {/* Card header — only show on first exchange */}
+                                  {exchangeIdx === 0 && (
+                                    <div style={{
+                                      padding: "10px 14px",
+                                      borderBottom: "1px solid #f0f0f0",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 8,
+                                      background: "#fafafa",
+                                    }}>
+                                      {logo ? (
+                                        <img
+                                          src={logo}
+                                          alt=""
+                                          style={{ width: 18, height: 18, objectFit: "contain", flexShrink: 0 }}
+                                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                                        />
+                                      ) : (
+                                        <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#e5e7eb", flexShrink: 0 }} />
+                                      )}
+                                      <span style={{ fontWeight: 600, fontSize: 12, color: "#374151" }}>
+                                        Response {idx + 1}
+                                      </span>
+                                      <span style={{
+                                        fontSize: 11, color: "#9ca3af",
+                                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                        flex: 1, minWidth: 0,
+                                      }}>
+                                        {model}
+                                      </span>
+                                    </div>
+                                  )}
+                                  {/* Card body */}
+                                  <div style={{ padding: "14px 16px", minHeight: 60, position: "relative" }}>
+                                    {isModelStreaming && (
+                                      <span style={{
+                                        position: "absolute", top: 10, right: 12,
+                                        fontSize: 9, color: "#1677ff",
+                                      }}>●</span>
+                                    )}
+                                    {responseText ? (
+                                      <ReactMarkdown
+                                        remarkPlugins={[remarkGfm]}
+                                        components={{
+                                          p: ({ children }) => <p style={{ margin: "0 0 10px", lineHeight: 1.6, fontSize: 14, color: "#111827" }}>{children}</p>,
+                                          code: ({ className, children }) => {
+                                            const isBlock = /language-(\w+)/.exec(className || "");
+                                            if (isBlock) {
+                                              return (
+                                                <pre style={{ background: "#f8f9fa", padding: "10px 12px", borderRadius: 6, overflow: "auto", fontSize: 13, margin: "8px 0" }}>
+                                                  <code>{children}</code>
+                                                </pre>
+                                              );
+                                            }
+                                            return <code style={{ background: "#f3f4f6", padding: "2px 5px", borderRadius: 3, fontSize: 13 }}>{children}</code>;
+                                          },
+                                        }}
+                                      >
+                                        {responseText}
+                                      </ReactMarkdown>
+                                    ) : isModelStreaming ? (
+                                      <span style={{ color: "#9ca3af", fontSize: 14 }}>Generating…</span>
+                                    ) : (
+                                      <span style={{ color: "#9ca3af", fontSize: 14 }}>—</span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <ChatMessages
+                    messages={activeConversation!.messages}
+                    isStreaming={isStreaming}
+                    onEditMessage={handleEditAndResend}
+                  />
+                )}
               </div>
               {showScrollButton && (
                 <button
@@ -720,102 +1156,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
               {/* Input bar (in conversation) */}
               <div style={{ padding: "12px 0 24px" }}>
-                <div style={{
-                  background: "#fff",
-                  borderRadius: 12,
-                  border: "1px solid #e5e7eb",
-                  boxShadow: "0 1px 6px rgba(0,0,0,0.06)",
-                  overflow: "hidden",
-                }}>
-                  <textarea
-                    ref={textareaRef}
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Send a message..."
-                    style={{
-                      width: "100%",
-                      minHeight: 52,
-                      padding: "16px 20px 8px",
-                      border: "none",
-                      outline: "none",
-                      resize: "none",
-                      fontSize: 15,
-                      color: "#111827",
-                      background: "transparent",
-                      fontFamily: "inherit",
-                      boxSizing: "border-box",
-                    }}
-                  />
-                  <div style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: "4px 12px 10px",
-                    borderTop: "1px solid #f3f4f6",
-                  }}>
-                    <Popover
-                      open={mcpPopoverOpen}
-                      onOpenChange={setMcpPopoverOpen}
-                      content={
-                        <MCPConnectPicker
-                          accessToken={accessToken}
-                          selectedServers={selectedMCPServers}
-                          onChange={setSelectedMCPServers}
-                        />
-                      }
-                      trigger="click"
-                      placement="topLeft"
-                    >
-                      <button style={{
-                        background: "none", border: "1px solid #d1d5db",
-                        borderRadius: 6, padding: "5px 10px",
-                        cursor: "pointer", fontSize: 14, color: "#6b7280",
-                        display: "flex", alignItems: "center", gap: 4,
-                      }}>
-                        <PlusOutlined />
-                        {selectedMCPServers.length > 0 && (
-                          <span style={{ fontSize: 12, color: "#1677ff", fontWeight: 500 }}>
-                            {selectedMCPServers.length}
-                          </span>
-                        )}
-                      </button>
-                    </Popover>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 12, color: "#9ca3af" }}>
-                        {selectedMCPServers.length > 0 ? `${selectedMCPServers.length} tool${selectedMCPServers.length > 1 ? "s" : ""} connected` : ""}
-                      </span>
-                      {isStreaming ? (
-                        <button onClick={handleStop} style={{
-                          background: "none", border: "1.5px solid #d1d5db", borderRadius: "50%",
-                          width: 32, height: 32, cursor: "pointer", color: "#374151",
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                          flexShrink: 0, transition: "border-color 0.15s",
-                        }}
-                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#9ca3af"; }}
-                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#d1d5db"; }}
-                        >
-                          <div style={{ width: 10, height: 10, background: "#374151", borderRadius: 2 }} />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleSend(inputText)}
-                          disabled={!inputText.trim() || isLoadingModels || !selectedModel}
-                          style={{
-                            background: inputText.trim() && selectedModel ? "#1677ff" : "#f3f4f6",
-                            border: "none", borderRadius: 7,
-                            padding: "7px 16px", cursor: inputText.trim() && selectedModel ? "pointer" : "not-allowed",
-                            color: inputText.trim() && selectedModel ? "#fff" : "#9ca3af",
-                            fontSize: 14, fontWeight: 500,
-                            transition: "background 0.15s",
-                          }}
-                        >
-                          Send
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                {inputBar(true)}
               </div>
             </div>
           )}
