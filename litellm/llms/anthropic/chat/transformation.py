@@ -249,7 +249,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         The SDK approach:
         1. Remove unsupported constraints from schema
         2. Add constraint info to description (e.g., "Must be at least 100")
-        3. Add additionalProperties: false to object schemas (when not already set)
+        3. Force additionalProperties: false on all object schemas
         4. Filter string formats to supported list only
         5. Validate responses against original schema (with all constraints)
 
