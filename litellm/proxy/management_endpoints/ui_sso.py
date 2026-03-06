@@ -795,17 +795,19 @@ async def get_generic_sso_response(
         code_verifier = token_exchange_params.pop("code_verifier", None)
         pkce_cache_key = token_exchange_params.pop("_pkce_cache_key", None)
 
-        # Get authorization code from query params
+        # Get authorization code from query params (only used in the PKCE path below;
+        # the non-PKCE path delegates to verify_and_process which handles OAuth error
+        # callbacks — user-denied, CSRF mismatch — internally).
         authorization_code = request.query_params.get("code")
-        if not authorization_code:
-            raise ProxyException(
-                message="Missing authorization code in callback",
-                type=ProxyErrorTypes.auth_error,
-                param="code",
-                code=status.HTTP_400_BAD_REQUEST,
-            )
 
         if code_verifier:
+            if not authorization_code:
+                raise ProxyException(
+                    message="Missing authorization code in callback",
+                    type=ProxyErrorTypes.auth_error,
+                    param="code",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
             if not generic_token_endpoint:
                 raise ProxyException(
                     message="GENERIC_TOKEN_ENDPOINT must be set when PKCE is enabled",
@@ -813,6 +815,8 @@ async def get_generic_sso_response(
                     param="GENERIC_TOKEN_ENDPOINT",
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
+            # Both guards above raise, so narrowing holds at this point.
+            assert isinstance(authorization_code, str)  # appease static type checker
             combined_response = await SSOAuthenticationHandler._pkce_token_exchange(
                 authorization_code=authorization_code,
                 code_verifier=code_verifier,
