@@ -2837,7 +2837,13 @@ class ProxyConfig:
                 elif key == "max_internal_user_budget":
                     litellm.max_internal_user_budget = float(value)  # type: ignore
                 elif key == "max_cli_session_budget":
-                    litellm.max_cli_session_budget = float(value)  # type: ignore
+                    try:
+                        litellm.max_cli_session_budget = float(value)  # type: ignore
+                    except (TypeError, ValueError) as e:
+                        raise ValueError(
+                            f"Invalid value for 'max_cli_session_budget': {value!r}. "
+                            "Expected a numeric value (e.g., 0.25)."
+                        ) from e
                 elif key == "default_max_internal_user_budget":
                     litellm.default_max_internal_user_budget = float(value)
                     if litellm.max_internal_user_budget is None:
