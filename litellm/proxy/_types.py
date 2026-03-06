@@ -80,6 +80,8 @@ class SupportedDBObjectType(str, enum.Enum):
     TOOLS = "tools"
     CONFIG_OVERRIDES = "config_overrides"
 
+    CONFIG_OVERRIDES = "config_overrides"
+
     def __str__(self):
         return str(self.value)
 
