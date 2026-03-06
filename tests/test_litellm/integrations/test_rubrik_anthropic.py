@@ -643,7 +643,7 @@ class TestAnthropicStreaming:
             async for chunk in handler.async_post_call_streaming_iterator_hook(
                 user_api_key_dict={},
                 response=self._create_sse_stream_from_file(sample_data_path),
-                request_data={},
+                request_data=create_anthropic_request_data(),
             ):
                 chunks.append(await self._decode_sse(chunk))
 

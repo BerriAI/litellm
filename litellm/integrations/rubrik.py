@@ -612,7 +612,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if len(allowed_tools) == len(all_tool_calls):
             return allowed_tools, None
 
-        return allowed_tools, f"\n\n{blocking_explanation}"
+        return allowed_tools, f"\n\n{blocking_explanation}" if blocking_explanation else None
 
     async def _create_openai_allowed_tools_chunk(
         self,
@@ -799,7 +799,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 # Module-level handler instance for use with litellm_settings.callbacks
 try:
     rubrik_handler = RubrikLogger()
-except Exception as e:
+except (ValueError, RuntimeError) as e:
     verbose_logger.warning(
         f"Rubrik handler not initialised ({e}). "
         "Set RUBRIK_WEBHOOK_URL to enable the plugin."
