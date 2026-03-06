@@ -523,6 +523,8 @@ def _ensure_remote_model_cost() -> None:
             # Update the singleton so get_model_cost_map_source_info() reflects reality
             _cost_map_source_info.source = result.source
             _cost_map_source_info.fallback_reason = result.fallback_reason
+            _cost_map_source_info.url = _model_cost_url
+            _cost_map_source_info.is_env_forced = False
             _model_cost_remote_loaded = True
             _model_cost_last_failure_monotonic = 0.0
         except Exception as e:

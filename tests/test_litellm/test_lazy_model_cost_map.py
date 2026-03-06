@@ -17,6 +17,8 @@ def isolate_model_cost_state():
     original_last_failure = litellm._model_cost_last_failure_monotonic
     original_cost_dict = dict(litellm.model_cost)  # shallow copy
     original_source = _cost_map_source_info.source
+    original_url = _cost_map_source_info.url
+    original_is_env_forced = _cost_map_source_info.is_env_forced
     original_fallback_reason = _cost_map_source_info.fallback_reason
     
     # Save all provider model sets that add_known_models might modify
@@ -35,6 +37,8 @@ def isolate_model_cost_state():
     litellm.model_cost.clear()
     litellm.model_cost.update(original_cost_dict)
     _cost_map_source_info.source = original_source
+    _cost_map_source_info.url = original_url
+    _cost_map_source_info.is_env_forced = original_is_env_forced
     _cost_map_source_info.fallback_reason = original_fallback_reason
     
     # Restore all provider model sets
@@ -95,10 +99,16 @@ class TestLazyModelCostMap:
         import litellm
 
         litellm._model_cost_remote_loaded = False
-        with patch("litellm.get_model_cost_map") as mock_get:
-            litellm.add_known_models()
-            mock_get.assert_not_called()
-            assert litellm._model_cost_remote_loaded is False
+        # Inject a sentinel model to verify add_known_models reads from model_cost
+        litellm.model_cost["_test_sentinel_model"] = {"litellm_provider": "openai"}
+        litellm.add_known_models()
+        assert "_test_sentinel_model" in litellm.open_ai_chat_completion_models, (
+            "add_known_models() should populate provider sets from current model_cost"
+        )
+        assert litellm._model_cost_remote_loaded is False
+        # Cleanup
+        litellm.open_ai_chat_completion_models.discard("_test_sentinel_model")
+        litellm.model_cost.pop("_test_sentinel_model", None)
 
     def test_silent_local_fallback_does_not_set_flag(self, isolate_model_cost_state):
         """If _get_model_cost_map_with_source returns local source,
@@ -160,7 +170,7 @@ class TestLazyModelCostMap:
                 cost_per_token(model="gpt-4o", prompt_tokens=10, completion_tokens=5)
             except Exception:
                 pass  # model lookup may fail in test env
-            mock_ensure.assert_called()
+            mock_ensure.assert_called_once()
 
     def test_completion_cost_triggers_remote_fetch(self, isolate_model_cost_state):
         """completion_cost() should trigger _ensure_remote_model_cost on first use."""
@@ -172,7 +182,7 @@ class TestLazyModelCostMap:
                 litellm.completion_cost(model="gpt-4o", prompt="test", completion="test")
             except Exception:
                 pass
-            mock_ensure.assert_called()
+            mock_ensure.assert_called()  # called at least once (may be >1 via internal cost helpers)
 
     def test_concurrent_ensure_fetches_only_once(self, isolate_model_cost_state):
         """Only one thread should perform the remote fetch even under contention."""
