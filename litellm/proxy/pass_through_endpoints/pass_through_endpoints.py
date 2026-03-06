@@ -1137,7 +1137,14 @@ def create_pass_through_route(
                     "litellm.adapters was %s, coercing to list",
                     type(litellm.adapters).__name__,
                 )
-                litellm.adapters = list(litellm.adapters)
+                try:
+                    litellm.adapters = list(litellm.adapters)
+                except TypeError:
+                    verbose_proxy_logger.error(
+                        "litellm.adapters is not iterable (%s), resetting to empty list",
+                        type(litellm.adapters).__name__,
+                    )
+                    litellm.adapters = []
 
             litellm.adapters.append({"id": adapter_id, "adapter": adapter})
             _seen_adapter_targets[_target_key] = adapter_id
