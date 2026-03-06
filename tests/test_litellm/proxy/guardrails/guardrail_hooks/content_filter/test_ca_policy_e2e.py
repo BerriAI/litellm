@@ -1,9 +1,10 @@
 """
 End-to-end tests for Canadian PII Protection (PIPEDA) policy template.
 
-Tests the complete policy with all Canadian PII patterns — validates that
-PII-containing prompts are detected/masked and that clean prompts pass through.
-These tests mirror the canadianPiiCompliancePrompts.ts dataset.
+Tests the federal/provincial PII patterns (SIN, OHIP, driver's licence, passport,
+immigration docs, bank account, postal code) — validates that PII-containing prompts
+are detected/masked and that clean prompts pass through.
+University of Toronto institutional identifiers are tested separately in test_uoft_policy_e2e.py.
 """
 
 import pytest

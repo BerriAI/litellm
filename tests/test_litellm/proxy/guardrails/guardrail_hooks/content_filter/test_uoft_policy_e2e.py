@@ -114,7 +114,7 @@ class TestUofTPolicyE2E:
         )
         output = result.get("texts", [])[0]
         assert "[UOFT_UTORID_REDACTED]" in output
-        assert "smithj12" not in result
+        assert "smithj12" not in output
 
     @pytest.mark.asyncio
     async def test_utorid_quercus_context_masked(self):
