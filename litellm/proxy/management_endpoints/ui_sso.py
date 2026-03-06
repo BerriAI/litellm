@@ -2647,23 +2647,30 @@ class SSOAuthenticationHandler:
                         )
                     else:
                         # Genuine cache miss — verifier was never stored or already expired.
+                        # Distinguish the likely cause: cross-instance routing (Redis configured
+                        # but callback landed on a pod that never stored the verifier) vs.
+                        # single-instance issues (TTL expiry, pod restart, or PKCE flow never
+                        # started) when only in-memory cache is available.
+                        if redis_usage_cache is not None:
+                            cause = (
+                                "The authorization and callback were likely handled by different "
+                                "instances — the verifier was stored on one pod but not found on another."
+                            )
+                        else:
+                            cause = (
+                                "The verifier may have expired (TTL), been lost on a pod restart, "
+                                "or the PKCE authorization step was never completed. "
+                                "Configure Redis so all proxy instances share the PKCE verifier."
+                            )
                         verbose_proxy_logger.error(
                             "PKCE is enabled but no verifier found in cache for state '%s'. "
-                            "The authorization and callback were likely handled by different "
-                            "instances without a shared cache. Cache type: %s.",
+                            "%s Cache type: %s.",
                             state,
+                            cause,
                             type(active_cache).__name__,
                         )
-                        redis_hint = (
-                            " Configure Redis and set REDIS_URL so all proxy instances share the PKCE verifier."
-                            if redis_usage_cache is None
-                            else ""
-                        )
                         raise ProxyException(
-                            message=(
-                                f"PKCE verifier not found in cache for state '{state}'. "
-                                f"The login and callback requests were likely handled by different instances.{redis_hint}"
-                            ),
+                            message=f"PKCE verifier not found in cache for state '{state}'. {cause}",
                             type=ProxyErrorTypes.auth_error,
                             param="PKCE_CACHE_MISS",
                             code=status.HTTP_401_UNAUTHORIZED,
@@ -2875,6 +2882,8 @@ class SSOAuthenticationHandler:
             "PKCE token exchange successful. id_token_present=%s",
             bool(token_response.get("id_token")),
         )
+        # Bearer credentials (access_token, id_token, refresh_token) are always sourced
+        # from token_response — not from userinfo — in the merge step below.
         userinfo = await SSOAuthenticationHandler._get_pkce_userinfo(
             access_token=token_response["access_token"],
             id_token=token_response.get("id_token"),
