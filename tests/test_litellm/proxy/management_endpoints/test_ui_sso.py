@@ -3424,13 +3424,20 @@ class TestPKCEFunctionality:
             assert kwargs.get("data", {}).get("code_verifier") == "verifier_abc"
             return mock_response
 
+        # Use separate mock clients for token exchange and userinfo —
+        # each httpx.AsyncClient() call gets its own independent mock.
+        mock_token_client = AsyncMock()
+        mock_token_client.__aenter__ = AsyncMock(return_value=mock_token_client)
+        mock_token_client.__aexit__ = AsyncMock(return_value=False)
+        mock_token_client.post = AsyncMock(side_effect=fake_post)
+
+        mock_userinfo_client = AsyncMock()
+        mock_userinfo_client.__aenter__ = AsyncMock(return_value=mock_userinfo_client)
+        mock_userinfo_client.__aexit__ = AsyncMock(return_value=False)
+        mock_userinfo_client.get = AsyncMock(return_value=mock_userinfo_response)
+
         with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.post = AsyncMock(side_effect=fake_post)
-            mock_client.get = AsyncMock(return_value=mock_userinfo_response)
-            mock_client_cls.return_value = mock_client
+            mock_client_cls.side_effect = [mock_token_client, mock_userinfo_client]
 
             result = await SSOAuthenticationHandler._pkce_token_exchange(
                 authorization_code="auth_code_123",
@@ -3447,7 +3454,7 @@ class TestPKCEFunctionality:
         assert result["access_token"] == "tok_abc"
         assert result["email"] == "user@example.com"
         # Verify userinfo GET used the correct Bearer token header
-        get_call = mock_client.get.call_args
+        get_call = mock_userinfo_client.get.call_args
         assert get_call is not None
         assert get_call.kwargs["headers"]["Authorization"] == "Bearer tok_abc"
 
@@ -3474,16 +3481,22 @@ class TestPKCEFunctionality:
             mock.json.return_value = token_resp
             return mock
 
+        mock_userinfo = MagicMock()
+        mock_userinfo.status_code = 200
+        mock_userinfo.json.return_value = userinfo_resp
+
+        mock_token_client = AsyncMock()
+        mock_token_client.__aenter__ = AsyncMock(return_value=mock_token_client)
+        mock_token_client.__aexit__ = AsyncMock(return_value=False)
+        mock_token_client.post = AsyncMock(side_effect=fake_post)
+
+        mock_userinfo_client = AsyncMock()
+        mock_userinfo_client.__aenter__ = AsyncMock(return_value=mock_userinfo_client)
+        mock_userinfo_client.__aexit__ = AsyncMock(return_value=False)
+        mock_userinfo_client.get = AsyncMock(return_value=mock_userinfo)
+
         with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.post = AsyncMock(side_effect=fake_post)
-            mock_userinfo = MagicMock()
-            mock_userinfo.status_code = 200
-            mock_userinfo.json.return_value = userinfo_resp
-            mock_client.get = AsyncMock(return_value=mock_userinfo)
-            mock_client_cls.return_value = mock_client
+            mock_client_cls.side_effect = [mock_token_client, mock_userinfo_client]
 
             result = await SSOAuthenticationHandler._pkce_token_exchange(
                 authorization_code="auth_code_456",
@@ -3675,16 +3688,22 @@ class TestPKCEFunctionality:
             mock.json.return_value = token_resp
             return mock
 
+        mock_userinfo = MagicMock()
+        mock_userinfo.status_code = 200
+        mock_userinfo.json.return_value = userinfo_resp
+
+        mock_token_client = AsyncMock()
+        mock_token_client.__aenter__ = AsyncMock(return_value=mock_token_client)
+        mock_token_client.__aexit__ = AsyncMock(return_value=False)
+        mock_token_client.post = AsyncMock(side_effect=fake_post)
+
+        mock_userinfo_client = AsyncMock()
+        mock_userinfo_client.__aenter__ = AsyncMock(return_value=mock_userinfo_client)
+        mock_userinfo_client.__aexit__ = AsyncMock(return_value=False)
+        mock_userinfo_client.get = AsyncMock(return_value=mock_userinfo)
+
         with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.post = AsyncMock(side_effect=fake_post)
-            mock_userinfo = MagicMock()
-            mock_userinfo.status_code = 200
-            mock_userinfo.json.return_value = userinfo_resp
-            mock_client.get = AsyncMock(return_value=mock_userinfo)
-            mock_client_cls.return_value = mock_client
+            mock_client_cls.side_effect = [mock_token_client, mock_userinfo_client]
 
             result = await SSOAuthenticationHandler._pkce_token_exchange(
                 authorization_code="auth_pub",

@@ -2748,12 +2748,14 @@ class SSOAuthenticationHandler:
             if client_secret:
                 token_data["client_secret"] = client_secret
 
-        # The try/except is INSIDE the async with so it only covers the POST call.
-        # If TLS teardown in __aexit__ raises, it propagates after the try/except
-        # has already completed — it is NOT caught here and NOT mis-labelled as
-        # "Token endpoint request failed".  httpx buffers the full response body
-        # inside the context, so status_code / text / json() are safe to access
-        # outside the async with block.
+        # Initialize response to None — guards against an UnboundLocalError in the
+        # unlikely case where httpx.AsyncClient() construction itself raises before
+        # the POST is attempted.  The try/except is INSIDE the async with so that
+        # TLS teardown exceptions from __aexit__ propagate as-is and are NOT
+        # mis-labelled as "Token endpoint request failed".  httpx buffers the full
+        # response body before __aexit__, so status_code / text / json() remain
+        # valid after the context exits.
+        response = None
         async with httpx.AsyncClient() as http_client:
             try:
                 response = await http_client.post(token_endpoint, **post_kwargs)
@@ -2768,6 +2770,15 @@ class SSOAuthenticationHandler:
                     param="token_exchange",
                     code=status.HTTP_401_UNAUTHORIZED,
                 ) from exc
+
+        if response is None:
+            # Should never happen in practice — construction failure is unexpected.
+            raise ProxyException(
+                message="Token endpoint request did not return a response",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
 
         # Response processing outside the async with — httpx buffers the full
         # response body so status_code / text / json() remain valid after __aexit__.
@@ -2914,6 +2925,14 @@ class SSOAuthenticationHandler:
         if userinfo is None and isinstance(id_token, str) and id_token:
             try:
                 userinfo = jwt.decode(id_token, options={"verify_signature": False})
+                if not userinfo:
+                    # jwt.decode returned an empty dict (payload-free JWT or provider bug).
+                    # Treat this the same as a missing userinfo — the session would have no
+                    # identity claims, which is equivalent to a broken session.
+                    verbose_proxy_logger.warning(
+                        "id_token decoded to an empty payload — treating as failure."
+                    )
+                    userinfo = None
             except Exception as decode_err:
                 verbose_proxy_logger.error("Failed to decode id_token: %s", decode_err)
                 raise ProxyException(
