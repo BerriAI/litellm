@@ -15,9 +15,15 @@ from litellm.proxy._types import ProxyException
 def _base_scope(path: str = "/mcp"):
     return {
         "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
         "method": "POST",
         "path": path,
         "headers": [(b"content-type", b"application/json")],
+        "query_string": b"",
+        "root_path": "",
+        "server": ("localhost", 8000),
+        "client": ("127.0.0.1", 0),
     }
 
 
