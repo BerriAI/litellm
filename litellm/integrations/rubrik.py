@@ -407,7 +407,7 @@ class RubrikLogger(CustomBatchLogger):
 
             # Track content block index before buffering starts
             if not is_buffering and event_type in _CONTENT_BLOCK_EVENTS:
-                current_content_index = chunk.get("index", 0)
+                current_content_index = chunk.get("index", current_content_index)
 
             if is_tool_chunk:
                 is_buffering = True
