@@ -543,6 +543,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                             )
                         ]
                         yield chunk
+                        return
 
                 except json.JSONDecodeError:
                     verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
@@ -723,6 +724,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                             )
                         ]
                         yield chunk
+                        return
 
                 except json.JSONDecodeError:
                     verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
