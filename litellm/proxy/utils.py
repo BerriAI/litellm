@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import hashlib
+import inspect
 import json
 import os
 import smtplib
@@ -1988,7 +1989,8 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
 
                 if _callback is not None and isinstance(_callback, CustomLogger):
-                    try:
+                    sig = inspect.signature(_callback.async_post_call_response_headers_hook)
+                    if "litellm_call_info" in sig.parameters:
                         result = await _callback.async_post_call_response_headers_hook(
                             data=data,
                             user_api_key_dict=user_api_key_dict,
@@ -1996,7 +1998,7 @@ class ProxyLogging:
                             request_headers=request_headers,
                             litellm_call_info=litellm_call_info,
                         )
-                    except TypeError:
+                    else:
                         # Backwards compat: callback doesn't accept litellm_call_info
                         result = await _callback.async_post_call_response_headers_hook(
                             data=data,
@@ -2024,8 +2026,8 @@ class ProxyLogging:
 
         # model_info: check both metadata keys (chat uses "metadata", responses uses "litellm_metadata")
         model_info = (
-            data.get("metadata", {}).get("model_info")
-            or data.get("litellm_metadata", {}).get("model_info")
+            (data.get("metadata") or {}).get("model_info")
+            or (data.get("litellm_metadata") or {}).get("model_info")
             or {}
         )
 
