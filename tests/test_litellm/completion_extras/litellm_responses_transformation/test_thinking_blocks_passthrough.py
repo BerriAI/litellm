@@ -534,6 +534,34 @@ class TestAssistantMessageStatusAndId:
         items_none, _ = handler.convert_chat_completion_messages_to_responses_api(msg_explicit_none)
         assert items_missing == items_none
 
+    def test_thinking_blocks_preserved_when_content_none_no_tool_calls(
+        self, handler: LiteLLMResponsesTransformationHandler
+    ) -> None:
+        """thinking_blocks must not be silently dropped when content=None and no tool_calls."""
+        messages = [
+            {"role": "user", "content": "Think about this"},
+            {
+                "role": "assistant",
+                "content": None,
+                "thinking_blocks": [
+                    {
+                        "type": "thinking",
+                        "thinking": "deep thought",
+                        "encrypted_content": "enc_data",
+                        "id": "rs_think_1",
+                    },
+                ],
+            },
+        ]
+        items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+        reasoning_items = [i for i in items if i.get("type") == "reasoning"]
+        assert len(reasoning_items) == 1, (
+            "thinking_blocks should produce a reasoning item even when content is None"
+        )
+        assert reasoning_items[0]["id"] == "rs_think_1"
+        encrypted = reasoning_items[0].get("encrypted_content")
+        assert encrypted == "enc_data"
+
     def test_assistant_message_has_status_completed(
         self, handler: LiteLLMResponsesTransformationHandler
     ) -> None:
