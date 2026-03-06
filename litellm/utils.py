@@ -2663,9 +2663,8 @@ def supports_multimodal_embedding(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
     """
-    Check if the given model supports Voyage-style multimodal embedding
-    (/v1/multimodalembeddings). Driven by supports_multimodal_embedding in
-    model_prices_and_context_window.json.
+    Check if the given model supports multimodal embeddings, as indicated by the
+    supports_multimodal_embedding flag in model_prices_and_context_window.json.
     """
     return _supports_factory(
         model=model,

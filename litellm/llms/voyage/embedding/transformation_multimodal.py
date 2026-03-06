@@ -134,6 +134,11 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             if isinstance(first, dict) and "content" in first:
                 return cast(List[dict], input)  # already Voyage-native format
             if isinstance(first, str):
+                if not all(isinstance(item, str) for item in input):
+                    raise ValueError(
+                        "Voyage multimodal embeddings require all list items to be "
+                        "strings when the first item is a string."
+                    )
                 return [
                     {"content": [{"type": "text", "text": item}]}
                     for item in input
