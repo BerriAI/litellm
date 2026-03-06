@@ -196,6 +196,44 @@ class TestAzureModelRouterFlatCost:
         )
         print(f"Total prompt cost: ${prompt_cost:.6f}")
 
+    def test_router_flat_cost_when_response_has_actual_model(self):
+        """
+        Test that router flat cost is added when request was via router but response
+        contains the actual model (e.g., gpt-5-nano).
+
+        This is the key fix: Azure returns the actual model in the response, but we
+        must still add the router flat cost because the request was made via model router.
+        """
+        usage = Usage(
+            prompt_tokens=10000,
+            completion_tokens=5000,
+            total_tokens=15000,
+        )
+
+        # Response model is the actual model Azure used (not a router name)
+        response_model = "gpt-5-nano-2025-08-07"
+        # Request model is the router - user called azure_ai/model_router/model-router
+        request_model = "azure_ai/model_router/model-router"
+
+        prompt_cost, completion_cost = cost_per_token(
+            model=response_model,
+            usage=usage,
+            request_model=request_model,
+        )
+
+        # Expected: model cost (from gpt-5-nano) + router flat cost
+        expected_flat_cost = (
+            usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+        )
+        assert expected_flat_cost == pytest.approx(0.0014, rel=1e-9)
+
+        # Total cost should be model cost + flat cost
+        total_cost = prompt_cost + completion_cost
+        assert total_cost >= expected_flat_cost
+
+        # Prompt cost should include both model prompt cost and router flat cost
+        assert prompt_cost >= expected_flat_cost
+
 
 class TestAzureModelRouterCostBreakdown:
     """Test that Azure Model Router flat cost is tracked in cost breakdown."""
