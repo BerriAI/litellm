@@ -152,6 +152,9 @@ class LoggingWorker:
 
             while self._epoch == my_epoch:
                 await my_sem.acquire()
+                if self._epoch != my_epoch:
+                    my_sem.release()
+                    break
                 try:
                     task = await my_queue.get()
                     # Track each spawned coroutine so we can cancel on shutdown.
