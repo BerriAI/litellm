@@ -480,3 +480,85 @@ class TestVoyage4LargeTextEmbedding:
         params = config.get_supported_openai_params("voyage-4-large")
         assert "encoding_format" in params
         assert "dimensions" in params
+
+
+# Tests for Voyage multimodal embeddings (voyage-multimodal-3, voyage-multimodal-3.5)
+class TestVoyageMultimodalEmbeddings:
+    """Test suite for Voyage multimodal embedding models (VoyageMultimodalEmbeddingConfig)."""
+
+    def test_multimodal_embedding_model_detection(self):
+        """voyage-multimodal-3 and voyage-multimodal-3.5 must be detected as multimodal."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-multimodal-3") is True
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-multimodal-3.5") is True
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-3-lite") is False
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-4-large") is False
+
+    def test_multimodal_embedding_uses_multimodal_config(self):
+        """voyage-multimodal-3 and voyage-multimodal-3.5 must use VoyageMultimodalEmbeddingConfig."""
+        from litellm.utils import ProviderConfigManager
+        from litellm.types.utils import LlmProviders
+
+        for model in ("voyage-multimodal-3", "voyage-multimodal-3.5"):
+            config = ProviderConfigManager.get_provider_embedding_config(
+                model, LlmProviders.VOYAGE
+            )
+            assert config is not None
+            assert type(config).__name__ == "VoyageMultimodalEmbeddingConfig"
+
+    def test_multimodal_embedding_url(self):
+        """Multimodal models must use /v1/multimodalembeddings URL."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        url = config.get_complete_url(None, None, "voyage-multimodal-3.5", {}, {})
+        assert url == "https://api.voyageai.com/v1/multimodalembeddings"
+
+    def test_multimodal_embedding_request_transformation(self):
+        """Request must use 'inputs' (plural), model stripped; Voyage-native content passed through."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        native_input = [
+            {"content": [{"type": "text", "text": "Hello"}, {"type": "image_url", "image_url": "https://example.com/img.jpg"}]}
+        ]
+        transformed = config.transform_embedding_request(
+            "voyage-multimodal-3.5", native_input, {}, {}
+        )
+        assert "inputs" in transformed
+        assert transformed["inputs"] == native_input
+        assert transformed["model"] == "voyage-multimodal-3.5"
+
+    def test_multimodal_embedding_text_input_normalized(self):
+        """OpenAI-style list of strings must be normalized to Voyage content format."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        transformed = config.transform_embedding_request(
+            "voyage-multimodal-3", ["Hello", "world"], {}, {}
+        )
+        assert transformed["inputs"] == [
+            {"content": [{"type": "text", "text": "Hello"}]},
+            {"content": [{"type": "text", "text": "world"}]},
+        ]
+        assert transformed["model"] == "voyage-multimodal-3"
+
+    def test_multimodal_embedding_supported_params(self):
+        """Multimodal models must support input_type and truncation."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        params = config.get_supported_openai_params("voyage-multimodal-3.5")
+        assert "input_type" in params
+        assert "truncation" in params

@@ -254,6 +254,10 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "predibase":
         return litellm.PredibaseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "voyage":
+        if litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embedding(model):
+            return litellm.VoyageMultimodalEmbeddingConfig().get_supported_openai_params(
+                model=model
+            )
         return litellm.VoyageEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "infinity":
         return litellm.InfinityEmbeddingConfig().get_supported_openai_params(
