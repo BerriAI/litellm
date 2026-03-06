@@ -3825,6 +3825,42 @@ class TestPKCEFunctionality:
 
         assert "401" in exc_info.value.message or "token" in exc_info.value.message.lower()
 
+    @pytest.mark.asyncio
+    async def test_pkce_cache_miss_unexpected_format_non_strict_logs_warning(self):
+        """When cached data has an unexpected format (e.g. integer from corrupt Redis)
+        in non-strict mode, prepare_token_exchange_parameters logs a warning and
+        returns params without code_verifier rather than raising."""
+        import os
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from starlette.requests import Request
+
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Cache returns an integer — unexpected format
+        mock_cache = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=12345)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {"state": "bad_format_non_strict"}
+
+        # Non-strict mode: should log a warning and continue, not raise
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+        ), patch.dict(
+            os.environ,
+            {"GENERIC_CLIENT_USE_PKCE": "true"},
+            clear=False,
+        ):
+            os.environ.pop("PKCE_STRICT_CACHE_MISS", None)
+            result = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=mock_request, generic_include_client_id=False
+            )
+
+        # No raise in non-strict mode; verifier simply absent from params
+        assert "code_verifier" not in result
+        assert "_pkce_cache_key" not in result
+
 
 # Tests for SSO user team assignment bug (Issue: SSO Users Not Added to Entra-Synced Teams on First Login)
 class TestAddMissingTeamMember:
