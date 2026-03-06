@@ -3820,9 +3820,10 @@ class TestPKCEFunctionality:
         assert str(exc_info.value.code) == "401"
 
     @pytest.mark.asyncio
-    async def test_pkce_cache_miss_non_strict_logs_warning_and_continues(self):
+    async def test_pkce_cache_miss_non_strict_logs_warning_and_continues(self, caplog):
         """Default (non-strict) cache-miss behavior: logs a warning and returns params
         without code_verifier rather than raising, to preserve backward compatibility."""
+        import logging
         import os
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3839,7 +3840,9 @@ class TestPKCEFunctionality:
         # PKCE_STRICT_CACHE_MISS explicitly set to false — should NOT raise.
         # Use patch.dict with the key set to "false" rather than os.environ.pop()
         # to avoid permanently mutating the test process environment.
-        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+        with caplog.at_level(logging.WARNING), patch(
+            "litellm.proxy.proxy_server.redis_usage_cache", None
+        ), patch(
             "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ), patch.dict(
             os.environ,
@@ -3855,6 +3858,12 @@ class TestPKCEFunctionality:
         assert "_pkce_cache_key" not in result
         # Non-strict mode emits a warning rather than raising
         mock_cache.async_get_cache.assert_called_once()
+        # Verify the warning was actually logged
+        assert any(
+            "verifier not found" in r.message.lower() or "code_verifier" in r.message.lower()
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        ), f"Expected a cache-miss warning. Records: {[r.message for r in caplog.records]}"
 
     @pytest.mark.asyncio
     async def test_pkce_token_exchange_non200_raises_proxy_exception(self):
@@ -3893,10 +3902,11 @@ class TestPKCEFunctionality:
         assert str(exc_info.value.code) == "401"
 
     @pytest.mark.asyncio
-    async def test_pkce_cache_miss_unexpected_format_non_strict_logs_warning(self):
+    async def test_pkce_cache_miss_unexpected_format_non_strict_logs_warning(self, caplog):
         """When cached data has an unexpected format (e.g. integer from corrupt Redis)
         in non-strict mode, prepare_token_exchange_parameters logs a warning and
         returns params without code_verifier rather than raising."""
+        import logging
         import os
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3914,7 +3924,9 @@ class TestPKCEFunctionality:
         # Non-strict mode: should log a warning and continue, not raise.
         # Use patch.dict with PKCE_STRICT_CACHE_MISS="false" to avoid permanently
         # mutating the test process environment with os.environ.pop().
-        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+        with caplog.at_level(logging.WARNING), patch(
+            "litellm.proxy.proxy_server.redis_usage_cache", None
+        ), patch(
             "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ), patch.dict(
             os.environ,
@@ -3930,6 +3942,12 @@ class TestPKCEFunctionality:
         assert "_pkce_cache_key" not in result
         # Cache was queried (the unexpected format was retrieved and logged at WARNING)
         mock_cache.async_get_cache.assert_called_once()
+        # Verify a warning was logged about the unexpected format or cache miss
+        assert any(
+            "verifier" in r.message.lower() or "format" in r.message.lower() or "cache" in r.message.lower()
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        ), f"Expected a format/cache warning. Records: {[r.message for r in caplog.records]}"
 
     @pytest.mark.asyncio
     async def test_pkce_legacy_string_cache_format_backward_compat(self):
