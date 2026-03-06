@@ -6806,11 +6806,9 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
-<<<<<<< HEAD
 
     # Verify generate_key_helper_fn was called
 
->>>>>>> cf14f0c821 (change logic to match Kriish's input)
     mock_generate_key.assert_awaited_once()
     call_kwargs = mock_generate_key.call_args.kwargs
 
@@ -6889,5 +6887,3 @@ async def test_key_does_not_override_explicit_budget_duration():
     # The budget tier should NOT have been looked up since budget_duration was explicit
     mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
 
-        litellm.enable_key_alias_format_validation = False
-=======

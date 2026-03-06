@@ -491,6 +491,23 @@ def _sample_compact_context_management_payload():
     }
 
 
+def _sample_mixed_context_management_payload():
+    """Anthropic-format context management with both compact and non-compact edits."""
+    return {
+        "edits": [
+            {
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 150000},
+            },
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+            },
+        ]
+    }
+
+
 def _sample_openai_context_management_payload():
     """OpenAI-format context management (list of entries)."""
     return [{"type": "compaction", "compact_threshold": 200000}]
@@ -602,3 +619,25 @@ def test_transform_request_openai_format_end_to_end():
     # Beta header must be present
     beta_list = result.get("anthropic_beta", [])
     assert "compact-2026-01-12" in beta_list
+
+
+def test_transform_request_adds_both_beta_headers_for_mixed_edits():
+    """Both headers must be injected when compact AND non-compact edits coexist."""
+    config = AmazonAnthropicClaudeConfig()
+    result = config.transform_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 256,
+            "context_management": _sample_mixed_context_management_payload(),
+        },
+        litellm_params={},
+        headers={},
+    )
+    beta_list = result.get("anthropic_beta", [])
+    assert "compact-2026-01-12" in beta_list, (
+        f"compact-2026-01-12 should be in anthropic_beta, got: {beta_list}"
+    )
+    assert "context-management-2025-06-27" in beta_list, (
+        f"context-management-2025-06-27 should be in anthropic_beta, got: {beta_list}"
+    )
