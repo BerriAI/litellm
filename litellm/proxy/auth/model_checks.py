@@ -319,7 +319,7 @@ def _get_wildcard_models(
                 )
                 expanded_for_model.extend(wildcard_models)
 
-            if not expanded_for_model:
+            if not expanded_for_model and not return_wildcard_routes:
                 verbose_proxy_logger.warning(
                     "Wildcard pattern '%s' removed from /models response "
                     "but could not be expanded to any concrete models. "
