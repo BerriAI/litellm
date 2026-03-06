@@ -75,6 +75,14 @@ def validate_standard_logging_payload(payload: dict, schema: dict = None) -> lis
     return errors
 
 
+async def wait_for_flush(mock_post: AsyncMock, timeout: float = 5.0):
+    """Poll until mock_post is called or timeout expires."""
+    for _ in range(int(timeout / 0.1)):
+        if mock_post.called:
+            return
+        await asyncio.sleep(0.1)
+
+
 def extract_pubsub_payload(mock_post: AsyncMock) -> dict:
     """
     Extract and decode the Pub/Sub payload from a mocked httpx post call.
@@ -389,7 +397,7 @@ async def test_pubsub_openai_chat_completion_messages_is_array(_mock_premium):
             mock_response="hi",
         )
 
-        await asyncio.sleep(3)
+        await wait_for_flush(mock_post)
 
         mock_post.assert_called_once()
         payload = extract_pubsub_payload(mock_post)
@@ -441,7 +449,7 @@ async def test_pubsub_openai_embedding_response_cost_exists(_mock_premium):
             mock_response=[0.1, 0.2, 0.3],
         )
 
-        await asyncio.sleep(3)
+        await wait_for_flush(mock_post)
 
         mock_post.assert_called_once()
         payload = extract_pubsub_payload(mock_post)
@@ -478,8 +486,7 @@ async def test_pubsub_openai_embedding_response_cost_exists(_mock_premium):
 # Root cause: anthropic_passthrough_logging_handler.py:69 hardcodes messages=[]
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-@patch("litellm.proxy.utils._premium_user_check")
-async def test_pubsub_anthropic_passthrough_tokens_and_response(_mock_premium):
+async def test_pubsub_anthropic_passthrough_tokens_and_response():
     """
     Validates that the Pub/Sub payload for a Claude passthrough request contains:
     - prompt_tokens > 0
@@ -576,7 +583,9 @@ async def test_pubsub_anthropic_passthrough_tokens_and_response(_mock_premium):
     assert isinstance(kwargs.get("messages"), list), (
         f"kwargs['messages'] should be a list from request_body, got {type(kwargs.get('messages'))}"
     )
-    assert kwargs["messages"][0]["content"] == "Hi there!"
+    msg = kwargs["messages"][0]
+    assert "role" in msg and "content" in msg, f"Message should have 'role' and 'content', got keys: {list(msg.keys())}"
+    assert msg["content"] == "Hi there!"
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +697,8 @@ async def test_pubsub_vertex_meta_passthrough_model_and_provider():
     assert isinstance(kwargs.get("messages"), list), (
         f"kwargs['messages'] should be a list from request_body, got {type(kwargs.get('messages'))}"
     )
+    msg = kwargs["messages"][0]
+    assert "role" in msg and "content" in msg, f"Message should have 'role' and 'content', got keys: {list(msg.keys())}"
 
 
 # ---------------------------------------------------------------------------
@@ -779,10 +790,16 @@ async def test_pubsub_vertex_generate_content_messages_is_array():
     assert "response_cost" in kwargs
     assert isinstance(kwargs["response_cost"], (int, float))
 
-    # Messages should be propagated from request_body contents to kwargs
+    # Messages should be converted from Vertex contents format to OpenAI format
     assert isinstance(kwargs.get("messages"), list), (
         f"kwargs['messages'] should be a list from request_body, got {type(kwargs.get('messages'))}"
     )
+    assert len(kwargs["messages"]) > 0
+    # Verify conversion from {parts, role} to {role, content}
+    msg = kwargs["messages"][0]
+    assert "role" in msg, f"Converted message should have 'role', got keys: {list(msg.keys())}"
+    assert "content" in msg, f"Converted message should have 'content', got keys: {list(msg.keys())}"
+    assert msg["content"] == "Hi", f"Expected content 'Hi', got '{msg['content']}'"
 
 
 # ---------------------------------------------------------------------------
@@ -814,7 +831,7 @@ async def test_pubsub_streaming_chat_completion(_mock_premium):
         async for chunk in response:
             pass
 
-        await asyncio.sleep(3)
+        await wait_for_flush(mock_post)
 
         mock_post.assert_called_once()
         payload = extract_pubsub_payload(mock_post)
@@ -884,7 +901,7 @@ async def test_pubsub_payload_validates_against_schema(
                 mock_response=[0.1, 0.2, 0.3],
             )
 
-        await asyncio.sleep(3)
+        await wait_for_flush(mock_post)
 
         mock_post.assert_called_once()
         payload = extract_pubsub_payload(mock_post)

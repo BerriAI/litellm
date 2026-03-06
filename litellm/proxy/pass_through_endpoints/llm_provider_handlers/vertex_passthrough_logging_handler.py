@@ -549,7 +549,20 @@ class VertexPassthroughLoggingHandler:
             if "messages" in request_body:
                 kwargs["messages"] = request_body["messages"]
             elif "contents" in request_body:
-                kwargs["messages"] = request_body["contents"]
+                # Convert Vertex AI contents format ({parts, role}) to
+                # OpenAI message format ({role, content}) for consistency
+                kwargs["messages"] = [
+                    {
+                        "role": c.get("role", "user"),
+                        "content": " ".join(
+                            p.get("text", "")
+                            for p in c.get("parts", [])
+                            if "text" in p
+                        ),
+                    }
+                    for c in request_body["contents"]
+                    if isinstance(c, dict)
+                ]
 
         response_cost = litellm.completion_cost(
             completion_response=litellm_model_response,

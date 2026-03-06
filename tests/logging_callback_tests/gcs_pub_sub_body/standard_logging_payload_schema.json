@@ -12,6 +12,7 @@
     "prompt_tokens",
     "completion_tokens",
     "model",
+    "custom_llm_provider",
     "messages",
     "hidden_params"
   ],
