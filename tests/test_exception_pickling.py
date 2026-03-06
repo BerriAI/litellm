@@ -52,4 +52,4 @@ def test_pickle_roundtrip(cls, kwargs):
     assert type(restored) is cls
     assert restored.llm_provider == "openai"
     assert restored.model == "gpt-4o"
-    assert "message" in dir(restored)
+    assert kwargs["message"] in str(restored)
