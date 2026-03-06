@@ -710,18 +710,25 @@ async def _aggregate_spend_records(
     records: List[Any],
     entity_id_field: Optional[str],
     entity_metadata_field: Optional[Dict[str, dict]],
+    api_key_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Aggregate rows into DailySpendData list and total metrics."""
-    api_keys: Set[str] = set()
-    for record in records:
-        if record.api_key:
-            api_keys.add(record.api_key)
+    """Aggregate rows into DailySpendData list and total metrics.
 
-    api_key_metadata: Dict[str, Dict[str, Any]] = {}
+    If *api_key_metadata* is provided it will be used directly, avoiding a
+    redundant DB round-trip when the caller already fetched it.
+    """
+    if api_key_metadata is None:
+        api_keys: Set[str] = set()
+        for record in records:
+            if record.api_key:
+                api_keys.add(record.api_key)
+
+        api_key_metadata = {}
+        if api_keys:
+            api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
+
     model_metadata: Dict[str, Dict[str, Any]] = {}
     provider_metadata: Dict[str, Dict[str, Any]] = {}
-    if api_keys:
-        api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
 
     results: List[DailySpendData] = []
     total_metrics = SpendMetrics()
@@ -926,6 +933,23 @@ async def _get_aggregated_with_entity_breakdown(
         prisma_client.db.query_raw(q_entity_key, *params),
     )
 
+    # Collect all api_keys from Q0 + Q2 and fetch metadata once
+    all_api_keys: Set[str] = set()
+    for row in (raw_detail or []):
+        ak = row.get("api_key")
+        if ak:
+            all_api_keys.add(ak)
+    for row in (raw_entity_key or []):
+        ak = row.get("api_key")
+        if ak:
+            all_api_keys.add(ak)
+
+    api_key_metadata: Dict[str, Dict[str, Any]] = {}
+    if all_api_keys:
+        api_key_metadata = await get_api_key_metadata(
+            prisma_client, all_api_keys
+        )
+
     # Process detail rows for model / key / provider / endpoint breakdowns
     detail_records = [SimpleNamespace(**row) for row in (raw_detail or [])]
     aggregated = await _aggregate_spend_records(
@@ -933,19 +957,8 @@ async def _get_aggregated_with_entity_breakdown(
         records=detail_records,
         entity_id_field=None,
         entity_metadata_field=None,
+        api_key_metadata=api_key_metadata,
     )
-
-    # Fetch API key metadata for entity → key breakdown
-    entity_api_keys: Set[str] = {
-        row["api_key"]
-        for row in (raw_entity_key or [])
-        if row.get("api_key")
-    }
-    entity_api_key_metadata: Dict[str, Dict[str, Any]] = {}
-    if entity_api_keys:
-        entity_api_key_metadata = await get_api_key_metadata(
-            prisma_client, entity_api_keys
-        )
 
     # Build entity → key mapping (cross-date totals)
     entity_key_map: Dict[str, Dict[str, SpendMetrics]] = {}
@@ -998,7 +1011,7 @@ async def _get_aggregated_with_entity_breakdown(
             # entity → key table, so we only need it once per entity.
             if eid not in entities_with_key_breakdown:
                 for ak, ak_metrics in entity_key_map.get(eid, {}).items():
-                    meta = entity_api_key_metadata.get(ak, {})
+                    meta = api_key_metadata.get(ak, {})
                     entity_entry.api_key_breakdown[ak] = (
                         KeyMetricWithMetadata(
                             metrics=ak_metrics,
