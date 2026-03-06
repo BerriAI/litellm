@@ -1644,6 +1644,18 @@ if MCP_AVAILABLE:
                 },
             )
 
+    def _format_mcp_auth_header(
+        mcp_auth_header: str,
+        mcp_server: Optional["MCPServer"],
+    ) -> str:
+        """Format the Authorization header value based on the server's auth_type."""
+        server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
+        if server_auth_type == MCPAuth.api_key:
+            return f"ApiKey {mcp_auth_header}"
+        if server_auth_type == MCPAuth.basic:
+            return f"Basic {mcp_auth_header}"
+        return f"Bearer {mcp_auth_header}"
+
     async def execute_mcp_tool(
         name: str,
         arguments: Dict[str, Any],
@@ -1768,15 +1780,11 @@ if MCP_AVAILABLE:
             # because the tool function has headers baked into its closure.
             # Pre-format the full Authorization header value using the server's
             # configured auth_type so the generator doesn't need to know the prefix.
-            auth_header_value: Optional[str] = None
-            if mcp_auth_header:
-                server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
-                if server_auth_type == MCPAuth.api_key:
-                    auth_header_value = f"ApiKey {mcp_auth_header}"
-                elif server_auth_type == MCPAuth.basic:
-                    auth_header_value = f"Basic {mcp_auth_header}"
-                else:
-                    auth_header_value = f"Bearer {mcp_auth_header}"
+            auth_header_value: Optional[str] = (
+                _format_mcp_auth_header(mcp_auth_header, mcp_server)
+                if mcp_auth_header
+                else None
+            )
             _auth_token = _request_auth_header.set(auth_header_value)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)

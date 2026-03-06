@@ -764,6 +764,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/vertex_ai/live",
                         ],
                     },
                 },
@@ -804,6 +805,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
+                "supports_none_reasoning_effort": {"type": "boolean"},
+                "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "tiered_pricing": {
                     "type": "array",
                     "items": {

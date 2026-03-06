@@ -530,15 +530,11 @@ async def asend_message_streaming(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
         # Mirror the non-streaming path: always include trace and agent-id headers
-        streaming_extra_headers: Dict[str, str] = {
-            "X-LiteLLM-Trace-Id": str(request.id),
-        }
-        if agent_id:
-            streaming_extra_headers["X-LiteLLM-Agent-Id"] = agent_id
-        if agent_extra_headers:
-            streaming_extra_headers.update(agent_extra_headers)
-        a2a_client = await create_a2a_client(
-            base_url=api_base, extra_headers=streaming_extra_headers
+        a2a_client = await _create_streaming_a2a_client(
+            api_base=api_base,
+            request_id=request.id,
+            agent_id=agent_id,
+            agent_extra_headers=agent_extra_headers,
         )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
@@ -612,6 +608,21 @@ async def asend_message_streaming(
                     # Re-raise the mapped exception
                     raise
             raise
+
+
+async def _create_streaming_a2a_client(
+    api_base: str,
+    request_id: Any,
+    agent_id: Optional[str],
+    agent_extra_headers: Optional[Dict[str, str]],
+) -> "A2AClientType":
+    """Build trace/agent-id headers and create an A2A streaming client."""
+    extra_headers: Dict[str, str] = {"X-LiteLLM-Trace-Id": str(request_id)}
+    if agent_id:
+        extra_headers["X-LiteLLM-Agent-Id"] = agent_id
+    if agent_extra_headers:
+        extra_headers.update(agent_extra_headers)
+    return await create_a2a_client(base_url=api_base, extra_headers=extra_headers)
 
 
 async def create_a2a_client(

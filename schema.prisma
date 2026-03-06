@@ -70,6 +70,8 @@ model LiteLLM_AgentsTable {
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
+  static_headers Json?       @default("{}")
+  extra_headers  String[]    @default([])
 }
 
 model LiteLLM_OrganizationTable {
