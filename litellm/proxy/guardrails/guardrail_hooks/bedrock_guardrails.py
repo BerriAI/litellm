@@ -675,9 +675,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if request_data.get("api_key") is not None:
                 api_key = request_data["api_key"]
 
+        # Compute endpoint URL for top-level debug logging
+        _aws_bedrock_endpoint = self.optional_params.get(
+            "aws_bedrock_runtime_endpoint", None
+        )
+        _, _endpoint_base = self.get_runtime_endpoint(
+            api_base=None,
+            aws_bedrock_runtime_endpoint=_aws_bedrock_endpoint,
+            aws_region_name=aws_region_name,
+        )
+        guardrail_url = f"{_endpoint_base}/guardrail/{self.guardrailIdentifier}/version/{self.guardrailVersion}/apply"
+
         verbose_proxy_logger.debug(
-            "Bedrock AI request: body=%s, guardrail=%s/%s, region=%s",
+            "Bedrock AI request: body=%s, url=%s, headers=%s, guardrail=%s/%s, region=%s",
             bedrock_request_data,
+            guardrail_url,
+            {"Content-Type": "application/json"},
             self.guardrailIdentifier,
             self.guardrailVersion,
             aws_region_name,
