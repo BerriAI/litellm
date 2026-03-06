@@ -6460,6 +6460,8 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("valid/alias")
         _validate_key_alias_format("a" * 255)
         _validate_key_alias_format("my-key-123")
+        _validate_key_alias_format("user/user@example.com")
+        _validate_key_alias_format("team/user@example.com")
 
     def test_validate_key_alias_format_invalid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
@@ -6472,7 +6474,7 @@ class TestValidateKeyAliasFormat:
             "!",              # special char
             "-start",         # non-alphanumeric start
             "end-",           # non-alphanumeric end
-            "invalid@char",   # invalid char
+            "invalid#char",   # invalid char
             "a" * 256,        # too long
             "  leading",
             "trailing  ",
