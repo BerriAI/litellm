@@ -389,14 +389,26 @@ class AsyncHTTPHandler:
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers = get_default_headers()
 
+        # httpx ignores the `limits` param when a custom transport is active;
+        # the transport manages its own connection pool (e.g. aiohttp TCPConnector).
+        limits = httpx.Limits(
+            max_connections=HTTPX_MAX_CONNECTIONS,
+            max_keepalive_connections=HTTPX_MAX_KEEPALIVE_CONNECTIONS,
+        )
+        if transport is not None:
+            verbose_logger.debug(
+                "Custom transport active — httpx client-level `limits` "
+                "(max_connections=%d, max_keepalive=%d) will be ignored; "
+                "the transport manages its own connection pool.",
+                HTTPX_MAX_CONNECTIONS,
+                HTTPX_MAX_KEEPALIVE_CONNECTIONS,
+            )
+
         return httpx.AsyncClient(
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
-            limits=httpx.Limits(
-                max_connections=HTTPX_MAX_CONNECTIONS,
-                max_keepalive_connections=HTTPX_MAX_KEEPALIVE_CONNECTIONS,
-            ),
+            limits=limits,
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
@@ -949,14 +961,25 @@ class HTTPHandler:
         if client is None:
             transport = self._create_sync_transport()
 
+            # httpx ignores the `limits` param when a custom transport is active.
+            limits = httpx.Limits(
+                max_connections=HTTPX_MAX_CONNECTIONS,
+                max_keepalive_connections=HTTPX_MAX_KEEPALIVE_CONNECTIONS,
+            )
+            if transport is not None:
+                verbose_logger.debug(
+                    "Custom transport active — httpx client-level `limits` "
+                    "(max_connections=%d, max_keepalive=%d) will be ignored; "
+                    "the transport manages its own connection pool.",
+                    HTTPX_MAX_CONNECTIONS,
+                    HTTPX_MAX_KEEPALIVE_CONNECTIONS,
+                )
+
             # Create a client with a connection pool
             self.client = httpx.Client(
                 transport=transport,
                 timeout=timeout,
-                limits=httpx.Limits(
-                    max_connections=HTTPX_MAX_CONNECTIONS,
-                    max_keepalive_connections=HTTPX_MAX_KEEPALIVE_CONNECTIONS,
-                ),
+                limits=limits,
                 verify=ssl_config,
                 cert=cert,
                 headers=default_headers,
