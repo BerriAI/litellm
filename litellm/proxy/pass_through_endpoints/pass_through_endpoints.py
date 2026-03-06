@@ -76,9 +76,15 @@ _registered_pass_through_routes: Dict[
 ] = {}
 
 # Tracks adapter targets already registered to prevent duplicate entries.
-# Uses object identity (id) for adapter instances so that:
-# - The SAME adapter object registered twice (exact + subpath) is deduped correctly
-# - Different instances of the same class get separate registrations
+# Implements different dedup strategies based on target type:
+# - String targets (URLs): deduplicated by string value. Two endpoints with identical
+#   URL strings intentionally share one adapter instance (e.g., "https://api.example.com")
+# - Object targets (adapter classes): deduplicated by object identity (id(target)).
+#   Different instances of the same adapter class each get their own adapter_id,
+#   allowing independent configurations and lifecycle management.
+# This ensures that:
+#   - exact + subpath route pairs for the same adapter share a single registration
+#   - multiple distinct adapter instances are not accidentally collapsed together
 _seen_adapter_targets: dict = {}
 
 
@@ -1111,8 +1117,13 @@ def create_pass_through_route(
             adapter = target
         else:
             adapter = get_instance_fn(value=target)
-        # Deduplicate: reuse existing adapter_id when the same target is
-        # registered more than once (e.g. exact path + subpath routes).
+        # Deduplicate adapters based on target type:
+        # - String targets (URLs): deduplicated by string identity (e.g., "https://api.example.com")
+        #   Multiple endpoints with identical URL strings intentionally share one adapter instance.
+        # - Object targets (adapter classes): deduplicated by object identity using id(target)
+        #   Different instances of the same adapter class get separate registrations.
+        # This reuses existing adapter_id when the same target is registered more than once
+        # (e.g. exact path + subpath routes for the same adapter object/string).
         _target_key = target if isinstance(target, str) else id(target)
         if _target_key in _seen_adapter_targets:
             adapter_id = _seen_adapter_targets[_target_key]
