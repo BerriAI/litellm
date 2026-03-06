@@ -67,8 +67,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                 messages=messages, model=model, is_async=False
             )
 
+    @staticmethod
     def _validate_reasoning_content_in_messages(
-        self, messages: List[AllMessageValues], model: str
+        messages: List[AllMessageValues], model: str
     ) -> None:
         """
         Validate that assistant messages with tool_calls include reasoning_content

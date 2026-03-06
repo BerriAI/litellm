@@ -24186,6 +24186,7 @@
         "output_cost_per_token": 3e-06,
         "source": "https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
@@ -24256,6 +24257,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
         "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2",
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "moonshot/kimi-k2-thinking": {
@@ -24269,6 +24271,7 @@
         "output_cost_per_token": 2.5e-06,
         "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -24283,6 +24286,7 @@
         "output_cost_per_token": 8e-06,
         "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
