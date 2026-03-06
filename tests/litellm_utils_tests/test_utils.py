@@ -325,7 +325,7 @@ def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> 
     ]
 
     # trim_messages() catches the exception raised by the tokenizer and logs an error
-    with caplog.at_level(level=logging.ERROR, logger="LiteLLM"):
+    with caplog.at_level(level=logging.ERROR, logger="litellm"):
         trimmed_messages = trim_messages(messages, max_tokens=999)
 
     assert trimmed_messages == messages

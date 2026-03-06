@@ -888,7 +888,7 @@ async def test_streaming_responses_api_with_mcp_tools(
         record
         for record in caplog.records
         if record.levelno >= logging.ERROR
-        and ("LiteLLM" in record.name or "LiteLLM" in record.getMessage())
+        and ("litellm" in record.name.lower() or "LiteLLM" in record.getMessage())
     ]
     assert not lite_errors, "Unexpected LiteLLM errors: " + ", ".join(
         record.getMessage() for record in lite_errors
@@ -1404,7 +1404,7 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
     lite_errors = [
         record for record in caplog.records
         if record.levelno >= logging.ERROR
-        and ("LiteLLM" in record.name or "LiteLLM" in record.getMessage())
+        and ("litellm" in record.name.lower() or "LiteLLM" in record.getMessage())
     ]
     assert not lite_errors, "Unexpected LiteLLM errors: " + ", ".join(
         record.getMessage() for record in lite_errors

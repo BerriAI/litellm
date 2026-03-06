@@ -220,7 +220,7 @@ class TestMCPServerManager:
             }
         }
 
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with caplog.at_level(logging.WARNING, logger="litellm"):
             await manager.load_servers_from_config(config)
 
         assert any(
@@ -240,7 +240,7 @@ class TestMCPServerManager:
             }
         }
 
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with caplog.at_level(logging.WARNING, logger="litellm"):
             await manager.load_servers_from_config(config)
 
         # No warnings logged for the valid alias
@@ -256,7 +256,7 @@ class TestMCPServerManager:
         original_value = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR")
         monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", "/")
 
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with caplog.at_level(logging.WARNING, logger="litellm"):
             _reload_mcp_manager_module()
 
         assert any("violates SEP-986" in message for message in caplog.messages)
@@ -268,7 +268,7 @@ class TestMCPServerManager:
             monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", original_value)
 
         caplog.clear()
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with caplog.at_level(logging.WARNING, logger="litellm"):
             _reload_mcp_manager_module()
 
         assert all("violates SEP-986" not in message for message in caplog.messages)
@@ -279,7 +279,7 @@ class TestMCPServerManager:
         original_value = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR")
         monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", "_")
 
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with caplog.at_level(logging.WARNING, logger="litellm"):
             _reload_mcp_manager_module()
 
         assert all("violates SEP-986" not in message for message in caplog.messages)
