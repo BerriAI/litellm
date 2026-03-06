@@ -607,8 +607,17 @@ class AsyncHTTPHandler:
         # Close the client when you're done with it
         if hasattr(self.client, "aclose"):
             await self.client.aclose()
-        else:
+        elif hasattr(self.client, "close"):
             await self.client.close()
+
+    async def _safe_close_client(self, client: Any):
+        """Helper to safely close either an adapter or a raw httpx client."""
+        if client is None:
+            return
+        if hasattr(client, "aclose"):
+            await client.aclose()
+        elif hasattr(client, "close"):
+            await client.close()
 
     async def __aenter__(self):
         return self.client
@@ -691,7 +700,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.close()
+                await self._safe_close_client(new_client)
         except httpx.TimeoutException as e:
             end_time = time.time()
             time_delta = round(end_time - start_time, 3)
@@ -763,7 +772,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.close()
+                await self._safe_close_client(new_client)
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -829,7 +838,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.close()
+                await self._safe_close_client(new_client)
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -895,7 +904,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.close()
+                await self._safe_close_client(new_client)
         except httpx.HTTPStatusError as e:
             setattr(e, "status_code", e.response.status_code)
             if stream is True:

@@ -60,10 +60,6 @@ class AiohttpResponseWrapper(HTTPResponse):
     def text(self) -> str:
         if self._body is not None:
             return self._body.decode("utf-8", errors="replace")
-        # If body hasn't been read yet, we can't return it sync in aiohttp
-        # But we can check if aiohttp already has it internally
-        if hasattr(self._response, "_body") and self._response._body is not None:
-            return self._response._body.decode("utf-8", errors="replace")
         return ""
 
     @property
@@ -74,8 +70,6 @@ class AiohttpResponseWrapper(HTTPResponse):
     def content(self) -> bytes:
         if self._body is not None:
             return self._body
-        if hasattr(self._response, "_body") and self._response._body is not None:
-            return self._response._body
         return b""
 
     def raise_for_status(self) -> None:
@@ -88,8 +82,6 @@ class AiohttpResponseWrapper(HTTPResponse):
     def read(self) -> bytes:
         if self._body is not None:
             return self._body
-        if hasattr(self._response, "_body") and self._response._body is not None:
-            return self._response._body
         return b""
 
     def __getattr__(self, name: str) -> Any:
@@ -359,6 +351,7 @@ class BaseLLMAIOHTTPHandler:
                     headers=headers,
                     json=data,
                     data=form_data,
+                    stream=stream,
                 )
                 if not response.ok:
                     response.raise_for_status()
