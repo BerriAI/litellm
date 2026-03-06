@@ -8,12 +8,36 @@ When the router DID have a wildcard deployment (the common case), the
 wildcard pattern stayed in the list alongside the expanded models.
 """
 
+from unittest.mock import patch
+
 from litellm.proxy.auth.model_checks import (
     _check_wildcard_routing,
     _get_wildcard_models,
     get_complete_model_list,
 )
 from litellm.router import Router
+
+# Deterministic fake models used by mocked expansion so tests don't depend
+# on litellm's bundled static provider lists.
+_FAKE_OPENAI_MODELS = ["openai/gpt-4o", "openai/gpt-4o-mini"]
+_FAKE_ANTHROPIC_MODELS = ["anthropic/claude-3-sonnet", "anthropic/claude-3-haiku"]
+_FAKE_GEMINI_MODELS = ["gemini/gemini-1.5-pro", "gemini/gemini-1.5-flash"]
+_FAKE_ALL_MODELS = _FAKE_OPENAI_MODELS + _FAKE_ANTHROPIC_MODELS + _FAKE_GEMINI_MODELS
+
+_MOCK_TARGET = "litellm.proxy.auth.model_checks.get_known_models_from_wildcard"
+
+
+def _fake_get_known_models(wildcard_model, litellm_params=None):
+    """Return deterministic fake models keyed by wildcard pattern."""
+    if wildcard_model == "*":
+        return list(_FAKE_ALL_MODELS)
+    if wildcard_model.startswith("openai/"):
+        return list(_FAKE_OPENAI_MODELS)
+    if wildcard_model.startswith("anthropic/"):
+        return list(_FAKE_ANTHROPIC_MODELS)
+    if wildcard_model.startswith("gemini/"):
+        return list(_FAKE_GEMINI_MODELS)
+    return []
 
 
 class TestCheckWildcardRouting:
@@ -34,7 +58,8 @@ class TestGetWildcardModelsRemovesPatterns:
     """The core bug: wildcard patterns must be removed from unique_models
     when expanded, regardless of whether the router has a deployment."""
 
-    def test_wildcard_removed_when_router_has_deployment(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_wildcard_removed_when_router_has_deployment(self, _mock):
         """Bug repro: openai/* stays in unique_models when router has deployment."""
         model_list = [
             {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}}
@@ -55,7 +80,8 @@ class TestGetWildcardModelsRemovesPatterns:
         assert len(expanded) > 0
         assert all("*" not in m for m in expanded)
 
-    def test_wildcard_removed_when_router_has_no_deployment(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_wildcard_removed_when_router_has_no_deployment(self, _mock):
         """Already worked before fix — BYOK case."""
         router = Router(model_list=[])
 
@@ -68,7 +94,8 @@ class TestGetWildcardModelsRemovesPatterns:
         assert "openai/*" not in unique_models
         assert len(expanded) > 0
 
-    def test_wildcard_removed_when_no_router(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_wildcard_removed_when_no_router(self, _mock):
         """Already worked before fix — no router at all."""
         unique_models = ["anthropic/*"]
         expanded = _get_wildcard_models(
@@ -79,7 +106,8 @@ class TestGetWildcardModelsRemovesPatterns:
         assert "anthropic/*" not in unique_models
         assert len(expanded) > 0
 
-    def test_return_wildcard_routes_true_keeps_pattern(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_return_wildcard_routes_true_keeps_pattern(self, _mock):
         """When return_wildcard_routes=True, the pattern should be in expanded."""
         model_list = [
             {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}}
@@ -97,7 +125,8 @@ class TestGetWildcardModelsRemovesPatterns:
         # But it must still be removed from unique_models to avoid duplicates
         assert "openai/*" not in unique_models
 
-    def test_multiple_wildcards_all_removed(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_multiple_wildcards_all_removed(self, _mock):
         """Multiple wildcard providers should all be removed."""
         model_list = [
             {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
@@ -118,7 +147,8 @@ class TestGetWildcardModelsRemovesPatterns:
         assert "anthropic/*" not in unique_models
         assert "my-custom-model" in unique_models
 
-    def test_wildcard_removed_even_when_no_expansion_possible(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_wildcard_removed_even_when_no_expansion_possible(self, _mock):
         """A wildcard for an unknown provider with no deployments must still
         be removed from unique_models. Users should never see glob patterns
         in the /models response, even if we cannot expand them."""
@@ -136,7 +166,8 @@ class TestGetWildcardModelsRemovesPatterns:
         # No models expanded for unknown provider
         assert len(expanded) == 0
 
-    def test_unknown_wildcard_removed_when_no_router(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_unknown_wildcard_removed_when_no_router(self, _mock):
         """Even without a router, unknown-provider wildcards are removed."""
         unique_models = ["unknownprovider/*"]
         expanded = _get_wildcard_models(
@@ -147,7 +178,8 @@ class TestGetWildcardModelsRemovesPatterns:
         assert "unknownprovider/*" not in unique_models
         assert len(expanded) == 0
 
-    def test_global_star_wildcard_removed_with_router(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_global_star_wildcard_removed_with_router(self, _mock):
         """The bare '*' wildcard must be removed from unique_models even
         when no concrete models can be expanded (e.g. no API keys set)."""
         router = Router(model_list=[])
@@ -161,7 +193,8 @@ class TestGetWildcardModelsRemovesPatterns:
         assert "*" not in unique_models
         assert "my-custom-model" in unique_models
 
-    def test_global_star_wildcard_removed_without_router(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_global_star_wildcard_removed_without_router(self, _mock):
         """The bare '*' wildcard must be removed even without a router."""
         unique_models = ["*"]
         _get_wildcard_models(
@@ -171,7 +204,8 @@ class TestGetWildcardModelsRemovesPatterns:
         )
         assert "*" not in unique_models
 
-    def test_global_star_wildcard_with_router_deployment(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_global_star_wildcard_with_router_deployment(self, _mock):
         """Regression: bare '*' with a router deployment that has model_name='*'.
 
         Even when the router has a deployment matching '*', the pattern must
@@ -200,7 +234,8 @@ class TestGetWildcardModelsRemovesPatterns:
 class TestGetCompleteModelListEndToEnd:
     """End-to-end test matching issue #13752 scenario."""
 
-    def test_models_endpoint_no_wildcards_in_response(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_models_endpoint_no_wildcards_in_response(self, _mock):
         """Issue #13752: /models returns openai/*, anthropic/* etc."""
         model_list = [
             {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
@@ -230,7 +265,8 @@ class TestGetCompleteModelListEndToEnd:
         # Should contain real expanded model names
         assert len(result) > 0
 
-    def test_models_endpoint_with_mixed_wildcard_and_explicit(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_models_endpoint_with_mixed_wildcard_and_explicit(self, _mock):
         """Explicit models should survive alongside wildcard expansion."""
         model_list = [
             {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
@@ -258,7 +294,8 @@ class TestGetCompleteModelListEndToEnd:
         openai_models = [m for m in result if m.startswith("openai/")]
         assert len(openai_models) > 0
 
-    def test_return_wildcard_routes_true_includes_patterns(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_return_wildcard_routes_true_includes_patterns(self, _mock):
         """When explicitly requested, wildcards should appear."""
         model_list = [
             {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
@@ -286,7 +323,8 @@ class TestRegressionIssue13752:
     report where the router has wildcard deployments and /models returns
     raw wildcard patterns instead of expanded concrete model names."""
 
-    def test_bug_report_scenario_router_with_wildcard_deployments(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_bug_report_scenario_router_with_wildcard_deployments(self, _mock):
         """Reproduce the exact config from issue #13752.
 
         Config had:
@@ -338,7 +376,8 @@ class TestRouterDeploymentRegression:
     Ensures wildcard expansion works correctly when the router has actual
     deployments configured (the most common production scenario)."""
 
-    def test_router_deployment_expands_wildcards(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_router_deployment_expands_wildcards(self, _mock):
         """When router has a deployment for a wildcard, models are expanded
         from that deployment's litellm_params, not just from known models."""
         model_list = [
@@ -358,7 +397,8 @@ class TestRouterDeploymentRegression:
         assert len(expanded) > 0
         assert all("*" not in m for m in expanded)
 
-    def test_router_deployment_multiple_providers(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_router_deployment_multiple_providers(self, _mock):
         """Multiple wildcard deployments each expand independently."""
         model_list = [
             {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
@@ -379,7 +419,8 @@ class TestRouterDeploymentRegression:
         assert len(openai_expanded) > 0, "Router deployment should expand openai/*"
         assert len(anthropic_expanded) > 0, "Router deployment should expand anthropic/*"
 
-    def test_router_deployment_preserves_explicit_models(self):
+    @patch(_MOCK_TARGET, side_effect=_fake_get_known_models)
+    def test_router_deployment_preserves_explicit_models(self, _mock):
         """Explicit (non-wildcard) models in unique_models survive expansion."""
         model_list = [
             {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},

@@ -219,8 +219,10 @@ def get_known_models_from_wildcard(
     wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> List[str]:
     if wildcard_model == "*":
-        # Global wildcard — return all known models across all providers
-        return get_provider_models("*", litellm_params=litellm_params) or []
+        # Global wildcard — return all known models across all providers.
+        # Don't forward deployment-specific litellm_params; those credentials
+        # belong to one provider and shouldn't be used to query all providers.
+        return get_provider_models("*") or []
 
     try:
         wildcard_provider_prefix, wildcard_suffix = wildcard_model.split("/", 1)
@@ -289,6 +291,8 @@ def _get_wildcard_models(
             ):  # will add the wildcard route to the list eg: anthropic/*.
                 all_wildcard_models.append(model)
 
+            expanded_for_model: List[str] = []
+
             ## get litellm params from model
             if llm_router is not None:
                 model_list = llm_router.get_model_list(model_name=model)
@@ -300,20 +304,30 @@ def _get_wildcard_models(
                                 **router_model["litellm_params"]  # type: ignore
                             ),
                         )
-                        all_wildcard_models.extend(wildcard_models)
+                        expanded_for_model.extend(wildcard_models)
                 else:
                     # Router has no deployment for this wildcard (e.g., BYOK team models)
                     # Fall back to expanding from known provider models
                     wildcard_models = get_known_models_from_wildcard(
                         wildcard_model=model, litellm_params=None
                     )
-                    all_wildcard_models.extend(wildcard_models)
+                    expanded_for_model.extend(wildcard_models)
             else:
                 # get all known provider models
                 wildcard_models = get_known_models_from_wildcard(
                     wildcard_model=model, litellm_params=None
                 )
-                all_wildcard_models.extend(wildcard_models)
+                expanded_for_model.extend(wildcard_models)
+
+            if not expanded_for_model:
+                verbose_proxy_logger.warning(
+                    "Wildcard pattern '%s' removed from /models response "
+                    "but could not be expanded to any concrete models. "
+                    "Check that the provider is supported or that the "
+                    "router has a matching deployment.",
+                    model,
+                )
+            all_wildcard_models.extend(expanded_for_model)
 
     for model in models_to_remove:
         unique_models.remove(model)
