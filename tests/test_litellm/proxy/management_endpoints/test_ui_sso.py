@@ -3195,7 +3195,9 @@ class TestPKCEFunctionality:
         mock_cache.async_set_cache = AsyncMock()
 
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
-            with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+                "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+            ):
                 # Act
                 result = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
                     generic_sso=mock_sso,

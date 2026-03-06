@@ -3032,9 +3032,12 @@ class ProxyConfig:
             if use_pkce and redis_usage_cache is None:
                 verbose_proxy_logger.warning(
                     "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
-                    "PKCE verifiers will not be shared across instances. "
+                    "PKCE verifiers will not be shared across instances — callbacks may land on a "
+                    "different pod than the login request and fail silently. "
                     "Configure Redis via the 'cache' section in your proxy config, "
-                    "or enable sticky sessions for multi-instance deployments."
+                    "or enable sticky sessions for single-instance deployments. "
+                    "Set PKCE_STRICT_CACHE_MISS=true to fail fast with a 401 on cache misses "
+                    "instead of continuing without a code_verifier."
                 )
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
