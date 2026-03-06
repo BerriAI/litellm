@@ -576,6 +576,102 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             reasoning_content_blocks=reasoning_blocks if reasoning_blocks else None,
         )
 
+    def _make_stream_chunk(
+        self,
+        model: str,
+        *,
+        content: Optional[str] = None,
+        reasoning_content: Optional[str] = None,
+        finish_reason: Optional[str] = None,
+        usage: Optional[Usage] = None,
+    ) -> ModelResponseStream:
+        """Create a ModelResponseStream chunk for streaming responses."""
+        chunk = ModelResponseStream(
+            id=f"chatcmpl-{uuid.uuid4()}",
+            created=0,
+            model=model,
+            object="chat.completion.chunk",
+        )
+        delta_kwargs: Dict[str, Any] = {}
+        if content:
+            delta_kwargs["content"] = content
+        if reasoning_content:
+            delta_kwargs["reasoning_content"] = reasoning_content
+        if not finish_reason:
+            delta_kwargs["role"] = "assistant"
+        chunk.choices = [
+            StreamingChoices(
+                finish_reason=finish_reason,
+                index=0,
+                delta=Delta(**delta_kwargs),
+            )
+        ]
+        if usage:
+            setattr(chunk, "usage", usage)
+        return chunk
+
+    def _extract_reasoning_from_delta(self, delta: dict) -> Optional[str]:
+        """Extract reasoning text from a contentBlockDelta's delta dict."""
+        reasoning_content = delta.get("reasoningContent")
+        if isinstance(reasoning_content, dict):
+            text = reasoning_content.get("text")
+            if text:
+                return text
+        return delta.get("reasoningText")
+
+    def _process_streaming_data_obj(
+        self, data_obj: dict, model: str
+    ) -> List[ModelResponseStream]:
+        """Process a single SSE data object and return streaming chunks."""
+        chunks: List[ModelResponseStream] = []
+
+        # Process contentBlockDelta events
+        if "event" in data_obj and isinstance(data_obj["event"], dict):
+            event_payload = data_obj["event"]
+            content_block_delta = event_payload.get("contentBlockDelta")
+
+            if content_block_delta:
+                delta = content_block_delta.get("delta", {})
+                text = delta.get("text", "")
+                reasoning_text = self._extract_reasoning_from_delta(delta)
+
+                if reasoning_text:
+                    chunks.append(self._make_stream_chunk(
+                        model, reasoning_content=reasoning_text
+                    ))
+                if text:
+                    chunks.append(self._make_stream_chunk(model, content=text))
+
+            # Process metadata/usage
+            metadata = event_payload.get("metadata")
+            if metadata and "usage" in metadata:
+                usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
+                chunks.append(self._make_stream_chunk(
+                    model,
+                    finish_reason="stop",
+                    usage=Usage(
+                        prompt_tokens=usage_data.get("inputTokens", 0),
+                        completion_tokens=usage_data.get("outputTokens", 0),
+                        total_tokens=usage_data.get("totalTokens", 0),
+                    ),
+                ))
+
+        # Check for top-level reasoning events (Strands format)
+        # Skip if event has nested structure (already handled above)
+        if "event" not in data_obj or not isinstance(data_obj.get("event"), dict):
+            if reasoning_block := self._extract_reasoning_from_event(data_obj):
+                reasoning_text = reasoning_block.get("reasoningText", {}).get("text")
+                if reasoning_text:
+                    chunks.append(self._make_stream_chunk(
+                        model, reasoning_content=reasoning_text
+                    ))
+
+        # Process final message
+        if "message" in data_obj and isinstance(data_obj["message"], dict):
+            chunks.append(self._make_stream_chunk(model, finish_reason="stop"))
+
+        return chunks
+
     def _stream_agentcore_response_sync(
         self,
         response: httpx.Response,
@@ -605,121 +701,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     if not isinstance(data_obj, dict):
                         continue
 
-                    # Process contentBlockDelta events
-                    if "event" in data_obj and isinstance(data_obj["event"], dict):
-                        event_payload = data_obj["event"]
-                        content_block_delta = event_payload.get("contentBlockDelta")
-
-                        if content_block_delta:
-                            delta = content_block_delta.get("delta", {})
-                            text = delta.get("text", "")
-
-                            # Check for reasoning content (extended thinking)
-                            reasoning_text = None
-                            reasoning_content = delta.get("reasoningContent")
-                            if isinstance(reasoning_content, dict):
-                                reasoning_text = reasoning_content.get("text")
-                            if not reasoning_text:
-                                reasoning_text = delta.get("reasoningText")
-
-                            if reasoning_text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(
-                                            reasoning_content=reasoning_text,
-                                            role="assistant",
-                                        ),
-                                    )
-                                ]
-                                yield chunk
-
-                            if text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(content=text, role="assistant"),
-                                    )
-                                ]
-                                yield chunk
-
-                        # Process metadata/usage
-                        metadata = event_payload.get("metadata")
-                        if metadata and "usage" in metadata:
-                            chunk = ModelResponseStream(
-                                id=f"chatcmpl-{uuid.uuid4()}",
-                                created=0,
-                                model=model,
-                                object="chat.completion.chunk",
-                            )
-                            chunk.choices = [
-                                StreamingChoices(
-                                    finish_reason="stop",
-                                    index=0,
-                                    delta=Delta(),
-                                )
-                            ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
-                            setattr(chunk, "usage", Usage(
-                                prompt_tokens=usage_data.get("inputTokens", 0),
-                                completion_tokens=usage_data.get("outputTokens", 0),
-                                total_tokens=usage_data.get("totalTokens", 0),
-                            ))
-                            yield chunk
-
-                    # Check for top-level reasoning events (Strands format)
-                    # Skip if event has nested structure (already handled inline above)
-                    if "event" not in data_obj or not isinstance(data_obj.get("event"), dict):
-                        if reasoning_block := self._extract_reasoning_from_event(data_obj):
-                            reasoning_text = reasoning_block.get("reasoningText", {}).get("text")
-                            if reasoning_text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(
-                                            reasoning_content=reasoning_text,
-                                            role="assistant",
-                                        ),
-                                    )
-                                ]
-                                yield chunk
-
-                    # Process final message
-                    if "message" in data_obj and isinstance(data_obj["message"], dict):
-                        chunk = ModelResponseStream(
-                            id=f"chatcmpl-{uuid.uuid4()}",
-                            created=0,
-                            model=model,
-                            object="chat.completion.chunk",
-                        )
-                        chunk.choices = [
-                            StreamingChoices(
-                                finish_reason="stop",
-                                index=0,
-                                delta=Delta(),
-                            )
-                        ]
+                    for chunk in self._process_streaming_data_obj(data_obj, model):
                         yield chunk
 
                 except json.JSONDecodeError:
@@ -811,121 +793,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     if not isinstance(data_obj, dict):
                         continue
 
-                    # Process contentBlockDelta events
-                    if "event" in data_obj and isinstance(data_obj["event"], dict):
-                        event_payload = data_obj["event"]
-                        content_block_delta = event_payload.get("contentBlockDelta")
-
-                        if content_block_delta:
-                            delta = content_block_delta.get("delta", {})
-                            text = delta.get("text", "")
-
-                            # Check for reasoning content (extended thinking)
-                            reasoning_text = None
-                            reasoning_content = delta.get("reasoningContent")
-                            if isinstance(reasoning_content, dict):
-                                reasoning_text = reasoning_content.get("text")
-                            if not reasoning_text:
-                                reasoning_text = delta.get("reasoningText")
-
-                            if reasoning_text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(
-                                            reasoning_content=reasoning_text,
-                                            role="assistant",
-                                        ),
-                                    )
-                                ]
-                                yield chunk
-
-                            if text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(content=text, role="assistant"),
-                                    )
-                                ]
-                                yield chunk
-
-                        # Process metadata/usage
-                        metadata = event_payload.get("metadata")
-                        if metadata and "usage" in metadata:
-                            chunk = ModelResponseStream(
-                                id=f"chatcmpl-{uuid.uuid4()}",
-                                created=0,
-                                model=model,
-                                object="chat.completion.chunk",
-                            )
-                            chunk.choices = [
-                                StreamingChoices(
-                                    finish_reason="stop",
-                                    index=0,
-                                    delta=Delta(),
-                                )
-                            ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
-                            setattr(chunk, "usage", Usage(
-                                prompt_tokens=usage_data.get("inputTokens", 0),
-                                completion_tokens=usage_data.get("outputTokens", 0),
-                                total_tokens=usage_data.get("totalTokens", 0),
-                            ))
-                            yield chunk
-
-                    # Check for top-level reasoning events (Strands format)
-                    # Skip if event has nested structure (already handled inline above)
-                    if "event" not in data_obj or not isinstance(data_obj.get("event"), dict):
-                        if reasoning_block := self._extract_reasoning_from_event(data_obj):
-                            reasoning_text = reasoning_block.get("reasoningText", {}).get("text")
-                            if reasoning_text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(
-                                            reasoning_content=reasoning_text,
-                                            role="assistant",
-                                        ),
-                                    )
-                                ]
-                                yield chunk
-
-                    # Process final message
-                    if "message" in data_obj and isinstance(data_obj["message"], dict):
-                        chunk = ModelResponseStream(
-                            id=f"chatcmpl-{uuid.uuid4()}",
-                            created=0,
-                            model=model,
-                            object="chat.completion.chunk",
-                        )
-                        chunk.choices = [
-                            StreamingChoices(
-                                finish_reason="stop",
-                                index=0,
-                                delta=Delta(),
-                            )
-                        ]
+                    for chunk in self._process_streaming_data_obj(data_obj, model):
                         yield chunk
 
                 except json.JSONDecodeError:
