@@ -15,15 +15,18 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.duration_parser import (
-    get_last_day_of_month,
     _extract_from_regex,
+    duration_in_seconds,
+    get_last_day_of_month,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.utils import (
     check_valid_key,
     create_pretrained_tokenizer,
@@ -37,8 +40,6 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
 )
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
@@ -364,8 +365,8 @@ def test_aget_valid_models():
 
 @pytest.mark.parametrize("custom_llm_provider", ["anthropic", "xai"])
 def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
-    from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
 
     provider_config = ProviderConfigManager.get_provider_model_info(
         model=None,
@@ -445,6 +446,56 @@ def test_validate_environment_ollama_failed():
         kv = validate_environment(provider + "/mistral")
         assert not kv["keys_in_environment"]
         assert kv["missing_keys"] == ["OLLAMA_API_BASE"]
+
+
+@mock.patch.dict(os.environ, {"AZURE_API_BASE": "https://fake.openai.azure.com/"}, clear=True)
+def test_validate_environment_azure_partial_keys():
+    """When AZURE_API_BASE is set but AZURE_API_VERSION and AZURE_API_KEY are not,
+    only the actually missing keys should be reported."""
+    kv = validate_environment(model="azure/gpt-4")
+    assert not kv["keys_in_environment"]
+    assert "AZURE_API_BASE" not in kv["missing_keys"]
+    assert "AZURE_API_VERSION" in kv["missing_keys"]
+    assert "AZURE_API_KEY" in kv["missing_keys"]
+
+
+@mock.patch.dict(os.environ, {"AZURE_API_KEY": "fake-key", "AZURE_API_VERSION": "2024-02-15"}, clear=True)
+def test_validate_environment_azure_only_base_missing():
+    """When AZURE_API_KEY and AZURE_API_VERSION are set but AZURE_API_BASE is not,
+    only AZURE_API_BASE should be reported as missing."""
+    kv = validate_environment(model="azure/gpt-4")
+    assert not kv["keys_in_environment"]
+    assert kv["missing_keys"] == ["AZURE_API_BASE"]
+
+
+@mock.patch.dict(os.environ, {"VERTEXAI_PROJECT": "my-project"}, clear=True)
+def test_validate_environment_vertex_partial_keys():
+    """When VERTEXAI_PROJECT is set but VERTEXAI_LOCATION is not,
+    only VERTEXAI_LOCATION should be reported as missing."""
+    kv = validate_environment(model="vertex_ai/gemini-pro")
+    assert not kv["keys_in_environment"]
+    assert "VERTEXAI_PROJECT" not in kv["missing_keys"]
+    assert kv["missing_keys"] == ["VERTEXAI_LOCATION"]
+
+
+@mock.patch.dict(os.environ, {"AWS_ACCESS_KEY_ID": "fake-id"}, clear=True)
+def test_validate_environment_bedrock_partial_keys():
+    """When AWS_ACCESS_KEY_ID is set but AWS_SECRET_ACCESS_KEY is not,
+    only AWS_SECRET_ACCESS_KEY should be reported as missing."""
+    kv = validate_environment(model="bedrock/anthropic.claude-v2")
+    assert not kv["keys_in_environment"]
+    assert "AWS_ACCESS_KEY_ID" not in kv["missing_keys"]
+    assert kv["missing_keys"] == ["AWS_SECRET_ACCESS_KEY"]
+
+
+@mock.patch.dict(os.environ, {"CLOUDFLARE_API_KEY": "fake-key"}, clear=True)
+def test_validate_environment_cloudflare_partial_keys():
+    """When CLOUDFLARE_API_KEY is set but neither CLOUDFLARE_ACCOUNT_ID nor
+    CLOUDFLARE_API_BASE is set, only CLOUDFLARE_API_BASE should be missing."""
+    kv = validate_environment(model="cloudflare/some-model")
+    assert not kv["keys_in_environment"]
+    assert "CLOUDFLARE_API_KEY" not in kv["missing_keys"]
+    assert kv["missing_keys"] == ["CLOUDFLARE_API_BASE"]
 
 
 def test_function_to_dict():
@@ -1164,8 +1215,9 @@ def test_is_base64_encoded():
     clear=True,
 )
 def test_async_http_handler(mock_async_client):
-    import httpx
     import ssl
+
+    import httpx
 
     timeout = 120
     event_hooks = {"request": [lambda r: r]}
@@ -1201,8 +1253,10 @@ def test_async_http_handler_force_ipv4(mock_async_client):
 
     This is prod test - we need to ensure that httpx always uses ipv4 when litellm.force_ipv4 is True
     """
-    import httpx
     import ssl
+
+    import httpx
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     # Set force_ipv4 to True
@@ -1462,10 +1516,10 @@ def test_get_end_user_id_for_cost_tracking_metadata_handling(
     fields using the get_litellm_metadata_from_kwargs helper function.
     """
     from litellm.utils import get_end_user_id_for_cost_tracking
-    
+
     # Ensure cost tracking is enabled for this test
     litellm.disable_end_user_cost_tracking = False
-    
+
     result = get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
     assert result == expected_end_user_id
 
@@ -1531,9 +1585,10 @@ def test_token_counter_with_image_url_with_detail_high():
 
     PROD TEST this is importat - Can impact latency very badly
     """
-    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
-    from litellm._logging import verbose_logger
     import logging
+
+    from litellm._logging import verbose_logger
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 
     verbose_logger.setLevel(logging.DEBUG)
 
@@ -1590,8 +1645,8 @@ def test_logprobs_type():
 
 
 def test_get_valid_models_openai_proxy(monkeypatch):
-    from litellm.utils import get_valid_models
     import litellm
+    from litellm.utils import get_valid_models
 
     litellm._turn_on_debug()
 
@@ -1625,8 +1680,8 @@ def test_get_valid_models_openai_proxy(monkeypatch):
 
 
 def test_get_valid_models_fireworks_ai(monkeypatch):
-    from litellm.utils import get_valid_models
     import litellm
+    from litellm.utils import get_valid_models
 
     litellm._turn_on_debug()
 
@@ -1714,8 +1769,8 @@ def test_get_valid_models_default(monkeypatch):
 
     Prevent regression for existing usage.
     """
-    from litellm.utils import get_valid_models
     import litellm
+    from litellm.utils import get_valid_models
 
     monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
     valid_models = get_valid_models()
@@ -2026,10 +2081,10 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_wrapper_kwargs_passthrough():
-    from litellm.utils import client
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObject,
     )
+    from litellm.utils import client
 
     # Create mock original function
     mock_original = AsyncMock()
@@ -2122,9 +2177,10 @@ def test_validate_user_messages_invalid_content_type():
     print(e)
 
 
+from unittest.mock import Mock
+
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.utils import get_applied_guardrails
-from unittest.mock import Mock
 
 
 @pytest.mark.parametrize(
@@ -2268,8 +2324,8 @@ def test_delta_object():
 
 
 def test_get_provider_audio_transcription_config():
-    from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
 
     for provider in LlmProviders:
         config = ProviderConfigManager.get_provider_audio_transcription_config(
@@ -2329,8 +2385,8 @@ def test_get_valid_models_from_dynamic_api_key():
     """
     Test that get_valid_models returns the correct models for a given provider
     """
-    from litellm.utils import get_valid_models
     from litellm.types.router import CredentialLiteLLMParams
+    from litellm.utils import get_valid_models
 
     creds = CredentialLiteLLMParams(api_key="123")
 
@@ -2381,6 +2437,7 @@ def test_delta_tool_calls_sequential_indices():
     defaulting all tool calls to index=0.
     """
     import json
+
     from litellm.types.utils import Delta
 
     # Simulate tool calls from streaming responses without explicit indices
