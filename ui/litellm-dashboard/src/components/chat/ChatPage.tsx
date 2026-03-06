@@ -121,7 +121,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   };
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (text: string, historyOverride?: Array<{ role: "user" | "assistant"; content: string }>) => {
       const trimmed = text.trim();
       if (!trimmed || !selectedModel || isStreaming) return;
       setInputText("");
@@ -139,12 +139,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       abortControllerRef.current = new AbortController();
 
       const history = [
-        ...(activeConversation?.messages ?? [])
+        ...(historyOverride ?? (activeConversation?.messages ?? [])
           .filter((m) => m.role === "user" || m.role === "assistant")
           .map((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
-          })),
+          }))),
         { role: "user" as const, content: trimmed },
       ];
 
@@ -195,12 +195,17 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const handleEditAndResend = useCallback(
     (messageId: string, newContent: string) => {
       if (!activeConversationId || isStreaming) return;
-      // Remove the edited message and everything after it
+      // Compute the truncated history synchronously before the async state update lands,
+      // so handleSend receives the correct pre-edit context rather than the stale closure value.
+      const msgs = activeConversation?.messages ?? [];
+      const idx = msgs.findIndex((m) => m.id === messageId);
+      const priorMessages = (idx === -1 ? msgs : msgs.slice(0, idx))
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
       truncateAfterMessage(activeConversationId, messageId);
-      // Re-send with the new content (handleSend appends user msg + starts completion)
-      handleSend(newContent);
+      handleSend(newContent, priorMessages);
     },
-    [activeConversationId, isStreaming, truncateAfterMessage, handleSend],
+    [activeConversationId, isStreaming, activeConversation, truncateAfterMessage, handleSend],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
