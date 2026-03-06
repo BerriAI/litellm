@@ -26,11 +26,13 @@ def _rebuild_exception(cls, message, llm_provider, model, extra_kwargs=None):
         kwargs.update(extra_kwargs)
     try:
         return cls(**kwargs)
-    except TypeError:
-        # Some subclasses require 'response' as a positional arg
-        response = httpx.Response(status_code=500, request=httpx.Request("POST", "https://litellm.ai"))
-        kwargs["response"] = response
-        return cls(**kwargs)
+    except TypeError as first_err:
+        try:
+            response = httpx.Response(status_code=500, request=httpx.Request("POST", "https://litellm.ai"))
+            kwargs["response"] = response
+            return cls(**kwargs)
+        except TypeError:
+            raise first_err from None
 
 
 def _exception_reduce(self):
