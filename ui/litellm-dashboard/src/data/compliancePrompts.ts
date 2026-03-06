@@ -1,6 +1,7 @@
 import { insultsCompliancePrompts } from "./insultsCompliancePrompts";
 import { financialCompliancePrompts } from "./financialCompliancePrompts";
 import { codeExecutionCompliancePrompts } from "./codeExecutionCompliancePrompts";
+import { canadianPiiCompliancePrompts } from "./canadianPiiCompliancePrompts";
 import { claimsCompliancePrompts } from "./claimsCompliancePrompts";
 
 export interface CompliancePrompt {
@@ -258,6 +259,7 @@ const compliancePrompts: CompliancePrompt[] = [
   ...insultsCompliancePrompts,
   ...financialCompliancePrompts,
   ...codeExecutionCompliancePrompts,
+  ...canadianPiiCompliancePrompts,
   ...claimsCompliancePrompts,
 ];
 
@@ -535,6 +537,11 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
   "Topic Blocking": {
     icon: "shield",
     description: "Content filter guardrails that block messages matching specific prohibited topics while allowing legitimate use of related words in context.",
+  },
+  "Canadian PII (PIPEDA)": {
+    icon: "shield",
+    description:
+      "Canadian PII detection under PIPEDA and provincial privacy legislation — masks SIN, OHIP, driver's licence, passport, immigration docs, bank accounts, and postal codes.",
   },
   "Airline Brand Protection": {
     icon: "plane",
