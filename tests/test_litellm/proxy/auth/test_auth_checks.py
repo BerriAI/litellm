@@ -1657,60 +1657,32 @@ async def test_custom_auth_common_checks_opt_in():
 def test_litellm_cli_jwt_max_budget_env_var_parsing(monkeypatch):
     """
     Test LITELLM_CLI_JWT_MAX_BUDGET environment variable parsing.
-    Tests valid float values, invalid values, and empty strings.
+    Exercises the real _parse_cli_budget_env helper from litellm/__init__.py.
     """
-    import importlib
-    import sys
+    import warnings
+
+    from litellm import _parse_cli_budget_env
 
     # Test 1: Valid float value
     monkeypatch.setenv("LITELLM_CLI_JWT_MAX_BUDGET", "10.5")
-    
-    # We need to reload the module to pick up the new env var
-    if "litellm" in sys.modules:
-        # Save the current value
-        original_budget = getattr(litellm, "max_cli_session_budget", None)
-    
-    # Simulate what happens in __init__.py
-    import os
-    import warnings
-    
-    _cli_budget_env = os.environ.get("LITELLM_CLI_JWT_MAX_BUDGET", "").strip()
-    try:
-        max_cli_session_budget = float(_cli_budget_env) if _cli_budget_env else None
-    except ValueError:
-        max_cli_session_budget = None
-    
-    assert max_cli_session_budget == 10.5, f"Expected 10.5, got {max_cli_session_budget}"
+    assert _parse_cli_budget_env() == 10.5
 
     # Test 2: Invalid value (non-numeric) should fall back to None with a warning
     monkeypatch.setenv("LITELLM_CLI_JWT_MAX_BUDGET", "abc")
-    
-    _cli_budget_env = os.environ.get("LITELLM_CLI_JWT_MAX_BUDGET", "").strip()
-    try:
-        max_cli_session_budget = float(_cli_budget_env) if _cli_budget_env else None
-    except ValueError:
-        max_cli_session_budget = None
-    
-    assert max_cli_session_budget is None, f"Expected None for invalid value, got {max_cli_session_budget}"
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        result = _parse_cli_budget_env()
+    assert result is None
+    assert any("abc" in str(warning.message) for warning in w)
 
     # Test 3: Empty string should result in None
     monkeypatch.setenv("LITELLM_CLI_JWT_MAX_BUDGET", "")
-    
-    _cli_budget_env = os.environ.get("LITELLM_CLI_JWT_MAX_BUDGET", "").strip()
-    try:
-        max_cli_session_budget = float(_cli_budget_env) if _cli_budget_env else None
-    except ValueError:
-        max_cli_session_budget = None
-    
-    assert max_cli_session_budget is None, f"Expected None for empty string, got {max_cli_session_budget}"
+    assert _parse_cli_budget_env() is None
 
     # Test 4: Unset env var should result in None
     monkeypatch.delenv("LITELLM_CLI_JWT_MAX_BUDGET", raising=False)
-    
-    _cli_budget_env = os.environ.get("LITELLM_CLI_JWT_MAX_BUDGET", "").strip()
-    try:
-        max_cli_session_budget = float(_cli_budget_env) if _cli_budget_env else None
-    except ValueError:
-        max_cli_session_budget = None
-    
-    assert max_cli_session_budget is None, f"Expected None when env var unset, got {max_cli_session_budget}"
+    assert _parse_cli_budget_env() is None
+
+    # Test 5: Whitespace-only string should result in None
+    monkeypatch.setenv("LITELLM_CLI_JWT_MAX_BUDGET", "   ")
+    assert _parse_cli_budget_env() is None
