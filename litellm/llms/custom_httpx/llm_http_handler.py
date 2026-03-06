@@ -152,7 +152,6 @@ else:
     LiteLLMLoggingObj = Any
 
 
-
 class BaseLLMHTTPHandler:
     async def _make_common_async_call(
         self,
@@ -1875,7 +1874,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             api_base=api_base,
         )
-
+        
         headers = update_headers_with_filtered_beta(
             headers=headers, provider=custom_llm_provider
         )
@@ -2968,7 +2967,7 @@ class BaseLLMHTTPHandler:
                     data=transformed_request["upload_request"]["data"],
                     timeout=timeout,
                 )
-
+                
                 # Store initial response for transformation
                 if initial_response_data:
                     litellm_params["initial_file_response"] = initial_response_data
@@ -3097,7 +3096,7 @@ class BaseLLMHTTPHandler:
                     data=transformed_request["upload_request"]["data"],
                     timeout=timeout,
                 )
-
+                
                 # Store initial response for transformation
                 if initial_response_data:
                     litellm_params["initial_file_response"] = initial_response_data
@@ -4472,7 +4471,7 @@ class BaseLLMHTTPHandler:
             if logging_obj is not None
             else False
         )
-
+        
         if websearch_converted_stream:
             from typing import cast
 
@@ -4483,11 +4482,11 @@ class BaseLLMHTTPHandler:
             from litellm.types.llms.anthropic_messages.anthropic_response import (
                 AnthropicMessagesResponse,
             )
-
+            
             verbose_logger.debug(
                 "WebSearchInterception: No tool call made, converting non-streaming response to fake stream"
             )
-
+            
             # Convert the non-streaming response to a fake stream
             # The response should be an AnthropicMessagesResponse (dict)
             if isinstance(response, dict):
@@ -4496,7 +4495,7 @@ class BaseLLMHTTPHandler:
                     response=cast(AnthropicMessagesResponse, response)
                 )
                 return fake_stream
-
+        
         return None
 
     async def _call_agentic_chat_completion_hooks(
@@ -4579,23 +4578,23 @@ class BaseLLMHTTPHandler:
             if logging_obj is not None
             else False
         )
-
+        
         if websearch_converted_stream:
             from litellm._logging import verbose_logger
             from litellm.llms.base_llm.base_model_iterator import (
                 convert_model_response_to_streaming,
             )
-
+            
             verbose_logger.debug(
                 "WebSearchInterception: No tool call made, converting non-streaming chat completion to fake stream"
             )
-
+            
             # Convert the non-streaming ModelResponse to a fake stream
             if hasattr(response, "choices"):
                 # Use the existing converter for ModelResponse
                 fake_stream = convert_model_response_to_streaming(response)
                 return fake_stream
-
+        
         return None
 
     def _handle_error(
@@ -5369,7 +5368,7 @@ class BaseLLMHTTPHandler:
             model=model,
             litellm_params=litellm_params,
         )
-
+        
         if extra_headers:
             headers.update(extra_headers)
 
@@ -6286,7 +6285,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=video_status_provider_config,
             )
-
+    
     ###### CONTAINER HANDLER ######
     def container_create_handler(
         self,
@@ -6326,7 +6325,7 @@ class BaseLLMHTTPHandler:
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
         )
-
+        
         # Add Content-Type header for JSON requests
         headers["Content-Type"] = "application/json"
 
@@ -6376,7 +6375,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-
+    
     async def async_container_create_handler(
         self,
         name: str,
@@ -6402,7 +6401,7 @@ class BaseLLMHTTPHandler:
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
         )
-
+        
         # Add Content-Type header for JSON requests
         headers["Content-Type"] = "application/json"
 
@@ -6452,7 +6451,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-
+    
     def container_list_handler(
         self,
         container_provider_config: "BaseContainerConfig",
@@ -6544,7 +6543,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-
+    
     async def async_container_list_handler(
         self,
         container_provider_config: "BaseContainerConfig",
@@ -6621,7 +6620,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-
+    
     def container_retrieve_handler(
         self,
         container_id: str,
@@ -6677,7 +6676,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-
+        
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -6711,7 +6710,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-
+    
     async def async_container_retrieve_handler(
         self,
         container_id: str,
@@ -6754,7 +6753,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-
+        
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -6788,7 +6787,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-
+    
     def container_delete_handler(
         self,
         container_id: str,
@@ -6844,7 +6843,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-
+        
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -6878,7 +6877,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-
+    
     async def async_container_delete_handler(
         self,
         container_id: str,
@@ -6921,7 +6920,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-
+        
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -9078,7 +9077,7 @@ class BaseLLMHTTPHandler:
             data, files = self._prepare_skill_multipart_request(
                 request_body=request_body, headers=headers
             )
-
+            
             if files is not None:
                 response = sync_httpx_client.post(
                     url=url, headers=headers, data=data, files=files, timeout=timeout
@@ -9138,7 +9137,7 @@ class BaseLLMHTTPHandler:
             data, files = self._prepare_skill_multipart_request(
                 request_body=request_body, headers=headers
             )
-
+            
             if files is not None:
                 response = await async_httpx_client.post(
                     url=url, headers=headers, data=data, files=files, timeout=timeout
