@@ -333,7 +333,7 @@ function CopyButton({ text }: { text: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }).catch(() => {
-      message.error("Failed to copy to clipboard");
+      // clipboard not available (non-HTTPS or permission denied) — silently no-op
     });
   };
 
