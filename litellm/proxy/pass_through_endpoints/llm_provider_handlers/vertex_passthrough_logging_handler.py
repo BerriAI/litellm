@@ -130,13 +130,6 @@ class VertexPassthroughLoggingHandler:
                 "kwargs": kwargs,
             }
 
-        elif "predict" in url_route:
-            return VertexPassthroughLoggingHandler._handle_predict_response(
-                httpx_response=httpx_response,
-                logging_obj=logging_obj,
-                url_route=url_route,
-                kwargs=kwargs,
-            )
         elif "rawPredict" in url_route or "streamRawPredict" in url_route:
             from litellm.llms.vertex_ai.vertex_ai_partner_models import (
                 get_vertex_ai_partner_model_config,
@@ -191,6 +184,13 @@ class VertexPassthroughLoggingHandler:
                 "result": litellm_prediction_response,
                 "kwargs": kwargs,
             }
+        elif "predict" in url_route:
+            return VertexPassthroughLoggingHandler._handle_predict_response(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                kwargs=kwargs,
+            )
         elif "search" in url_route:
 
             litellm_vs_response = (
