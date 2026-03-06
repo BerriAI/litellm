@@ -1388,7 +1388,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             GenericGuardrailAPIInputs - processed_texts may be masked, images unchanged
 
         Raises:
-            Exception: If content is blocked by Bedrock guardrail
+            HTTPException: If content is blocked and disable_exception_on_block is False.
+            Exception: If the Bedrock guardrail API call fails unexpectedly.
+
+        Note:
+            When disable_exception_on_block is True, GuardrailInterventionNormalStringError
+            is handled internally: inputs["texts"] is set to the blocked message and
+            request_data["mock_response"] is set to short-circuit the LLM call.
         """
         texts = inputs.get("texts", [])
         try:
