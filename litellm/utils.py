@@ -1186,8 +1186,10 @@ async def _client_async_logging_helper(
         ################################################
         # Sync Logging Worker
         ################################################
+        # Deep copy to avoid data races: async_success_handler may mutate
+        # the result while the sync handler runs in a thread executor.
         logging_obj.handle_sync_success_callbacks_for_async_calls(
-            result=result,
+            result=copy.deepcopy(result),
             start_time=start_time,
             end_time=end_time,
         )
@@ -1941,7 +1943,7 @@ def client(original_function):  # noqa: PLR0915
                 )
             )
             logging_obj.handle_sync_success_callbacks_for_async_calls(
-                result=result,
+                result=copy.deepcopy(result),
                 start_time=start_time,
                 end_time=end_time,
             )
