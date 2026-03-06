@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from typing import Any, Dict, Set
@@ -216,7 +217,7 @@ async def update_hashicorp_vault_config(
         )
         raise HTTPException(
             status_code=500,
-            detail="Failed to initialize secret manager",
+            detail=f"Failed to initialize secret manager: {e}",
         )
 
     # Only persist to DB after successful init
@@ -378,11 +379,11 @@ async def test_hashicorp_vault_connection(
 
     # Step 1: Authenticate (exercises AppRole login, TLS cert login, or direct token)
     try:
-        headers = client._get_request_headers()
+        headers = await asyncio.to_thread(client._get_request_headers)
     except Exception as e:
         raise HTTPException(
             status_code=502,
-            detail="Vault authentication failed",
+            detail=f"Vault authentication failed: {e}",
         )
 
     # Step 2: Verify the token is valid via token/lookup-self
@@ -396,7 +397,7 @@ async def test_hashicorp_vault_connection(
     except Exception as e:
         raise HTTPException(
             status_code=502,
-            detail="Vault token validation failed",
+            detail=f"Vault token validation failed: {e}",
         )
 
     return {
