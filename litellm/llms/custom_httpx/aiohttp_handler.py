@@ -61,11 +61,12 @@ class AiohttpAdapter(HTTPClientAdapterAsync):
 
     async def send(self, request: Any, **kwargs) -> Any:
         if isinstance(request, dict):
-            method = request.pop("method")
-            url = request.pop("url")
+            request_copy = request.copy()
+            method = request_copy.pop("method")
+            url = request_copy.pop("url")
             # Merge kwargs
-            request.update(kwargs)
-            return await self.session.request(method, url, **request)
+            request_copy.update(kwargs)
+            return await self.session.request(method, url, **request_copy)
         else:
             raise ValueError(
                 f"Unsupported request type for AiohttpAdapter: {type(request)}"
@@ -233,16 +234,13 @@ class BaseLLMAIOHTTPHandler:
         )
 
         response: Optional[aiohttp.ClientResponse] = None
-        session = self._get_async_client_session(
-            dynamic_client_session=async_client_session
-            if isinstance(async_client_session, ClientSession)
-            else None
-        )
-
-        if not isinstance(async_client_session, HTTPClientAdapterAsync):
-            adapter: HTTPClientAdapterAsync = AiohttpAdapter(session)
+        if isinstance(async_client_session, HTTPClientAdapterAsync):
+            adapter: HTTPClientAdapterAsync = async_client_session
         else:
-            adapter = async_client_session
+            session = self._get_async_client_session(
+                dynamic_client_session=async_client_session
+            )
+            adapter = AiohttpAdapter(session)
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
