@@ -1211,7 +1211,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         choices=[
                             StreamingChoices(
                                 index=0,
-                                delta=Delta(thinking_blocks=[block]),
+                                delta=Delta(
+                                    thinking_blocks=[block],
+                                    reasoning_content=thinking_text or None,
+                                ),
                                 finish_reason=None,
                             )
                         ]
