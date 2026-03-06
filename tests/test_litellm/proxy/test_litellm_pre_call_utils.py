@@ -1767,6 +1767,7 @@ async def test_bearer_token_not_in_debug_logs():
     import logging
     from io import StringIO
 
+    from litellm._logging import verbose_proxy_logger
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -1793,7 +1794,7 @@ async def test_bearer_token_not_in_debug_logs():
     log_capture = StringIO()
     log_handler = logging.StreamHandler(log_capture)
     log_handler.setLevel(logging.DEBUG)
-    logger = logging.getLogger("LiteLLM Proxy")
+    logger = verbose_proxy_logger
     logger.addHandler(log_handler)
     original_level = logger.level
     logger.setLevel(logging.DEBUG)
