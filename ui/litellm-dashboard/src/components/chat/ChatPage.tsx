@@ -23,7 +23,6 @@ import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
 import { serverRootPath, getProxyBaseUrl } from "@/components/networking";
-import { useTheme } from "@/contexts/ThemeContext";
 
 interface ChatPageProps {
   accessToken: string;
@@ -66,8 +65,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const router = useRouter();
   const searchParams = useSearchParams();
   const activeConversationId = searchParams.get("id");
-  const { logoUrl } = useTheme();
-  const logoSrc = logoUrl || `${getProxyBaseUrl()}/get_image`;
+  const logoSrc = `${getProxyBaseUrl()}/get_image`;
 
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [models, setModels] = useState<string[]>([]);
