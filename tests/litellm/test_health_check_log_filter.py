@@ -80,6 +80,27 @@ class TestHealthCheckAccessFilter:
         )
         assert f.filter(record) is False
 
+    def test_filters_using_dict_args(self):
+        """Test the dict-args code path in _extract_path_from_record."""
+        f = HealthCheckAccessFilter()
+        record = self._make_record("%(method)s %(path)s")
+        record.args = {"method": "GET", "path": "/health/readiness"}
+        assert f.filter(record) is False
+
+    def test_allows_regular_request_using_dict_args(self):
+        """Test that non-health paths via dict-args are allowed through."""
+        f = HealthCheckAccessFilter()
+        record = self._make_record("%(method)s %(path)s")
+        record.args = {"method": "POST", "path": "/v1/chat/completions"}
+        assert f.filter(record) is True
+
+    def test_filters_dict_args_with_query_param(self):
+        """Test that dict-args with query params are correctly stripped."""
+        f = HealthCheckAccessFilter()
+        record = self._make_record("%(method)s %(path)s")
+        record.args = {"method": "GET", "path": "/health?full=true"}
+        assert f.filter(record) is False
+
 
 class TestApplyHealthCheckLogFilter:
     """Test runtime attachment of the filter to uvicorn.access logger."""
