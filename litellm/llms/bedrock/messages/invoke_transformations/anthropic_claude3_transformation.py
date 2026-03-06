@@ -425,6 +425,18 @@ class AmazonAnthropicClaudeMessagesConfig(
         # Ref: https://github.com/BerriAI/litellm/issues/22847
         remove_custom_field_from_tools(anthropic_messages_request)
 
+        # 5b. Convert `output_config` to inline schema (Bedrock invoke doesn't support output_config)
+        # output_config may contain "format" (same structure as output_format) and/or "effort"
+        output_config = anthropic_messages_request.pop("output_config", None)
+        if output_config and isinstance(output_config, dict):
+            output_config_format = output_config.get("format")
+            if output_config_format and not output_format:
+                # Only convert if output_format wasn't already handled above
+                self._convert_output_format_to_inline_schema(
+                    output_format=output_config_format,
+                    anthropic_messages_request=anthropic_messages_request,
+                )
+
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")

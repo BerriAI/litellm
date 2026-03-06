@@ -386,6 +386,174 @@ def test_opus_4_5_model_detection():
 #         f"computer-use beta should be kept, got: {anthropic_beta}"
 
 
+def test_output_config_conversion_to_inline_schema():
+    """
+    Test that output_config with format is converted to inline schema for Bedrock Invoke.
+
+    Bedrock Invoke doesn't support output_config, so the format.schema inside it
+    should be embedded into the user message content, similar to output_format handling.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/22797
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    config = AmazonAnthropicClaudeMessagesConfig()
+
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+    ]
+
+    output_config_schema = {
+        "type": "object",
+        "properties": {
+            "isNewTopic": {"type": "boolean"},
+            "title": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+        },
+        "required": ["isNewTopic", "title"],
+        "additionalProperties": False
+    }
+
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "schema": output_config_schema
+            }
+        }
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # Verify output_config was removed from the request
+    assert "output_config" not in result, "output_config should be removed from request body"
+
+    # Verify the schema was added to the last user message content
+    last_user_message = result["messages"][0]
+    content = last_user_message["content"]
+    assert isinstance(content, list)
+    assert len(content) == 2, "content should have 2 items (original text + schema)"
+
+    # Check original text is preserved
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == "Hello"
+
+    # Check schema was added as JSON string
+    assert content[1]["type"] == "text"
+    parsed_schema = json.loads(content[1]["text"])
+    assert parsed_schema["type"] == "object"
+    assert "isNewTopic" in parsed_schema["properties"]
+    assert "title" in parsed_schema["properties"]
+
+
+def test_output_config_with_effort_only():
+    """
+    Test that output_config with only effort (no format) is stripped without error.
+
+    Bedrock Invoke doesn't support output_config, so it should be removed even
+    when it only contains the 'effort' field.
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    config = AmazonAnthropicClaudeMessagesConfig()
+
+    messages = [
+        {"role": "user", "content": "Hello"}
+    ]
+
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 1024,
+        "output_config": {
+            "effort": "high"
+        }
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # Verify output_config was removed
+    assert "output_config" not in result, "output_config should be removed from request body"
+
+    # Content should remain unchanged (no schema to embed)
+    last_user_message = result["messages"][0]
+    assert isinstance(last_user_message["content"], str)
+    assert last_user_message["content"] == "Hello"
+
+
+def test_output_config_not_used_when_output_format_present():
+    """
+    Test that when both output_format and output_config are present,
+    only output_format's schema is used (to avoid duplicating the schema).
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    config = AmazonAnthropicClaudeMessagesConfig()
+
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+    ]
+
+    output_format_schema = {
+        "type": "object",
+        "properties": {"from_output_format": {"type": "string"}}
+    }
+
+    output_config_schema = {
+        "type": "object",
+        "properties": {"from_output_config": {"type": "string"}}
+    }
+
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 1024,
+        "output_format": {
+            "type": "json_schema",
+            "schema": output_format_schema
+        },
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "schema": output_config_schema
+            }
+        }
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # Both should be removed from the request
+    assert "output_format" not in result
+    assert "output_config" not in result
+
+    # Only output_format's schema should be embedded (not output_config's)
+    content = result["messages"][0]["content"]
+    assert len(content) == 2, "should have original text + one schema"
+    parsed_schema = json.loads(content[1]["text"])
+    assert "from_output_format" in parsed_schema["properties"]
+    assert "from_output_config" not in parsed_schema["properties"]
+
+
 def test_output_format_removed_from_bedrock_invoke_request():
     """
     Test that output_format parameter is removed from Bedrock Invoke requests.
