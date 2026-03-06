@@ -89,6 +89,7 @@ tests/test_custom_dir/*
 test.py
 
 litellm_config.yaml
+!.github/observatory/litellm_config.yaml
 .cursor
 .vscode/launch.json
 litellm/proxy/to_delete_loadtest_work/*
