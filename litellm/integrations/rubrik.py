@@ -15,8 +15,8 @@ Configuration:
         RUBRIK_BATCH_SIZE (optional): Batch size for logging (default 512)
         RUBRIK_SAMPLING_RATE (optional): Fraction of requests to sample (0.0-1.0)
 
-    Proxy config (litellm_settings):
-        callbacks: litellm.integrations.rubrik.rubrik_handler
+    Proxy config (guardrails):
+        See https://docs.litellm.ai/docs/adding_provider/simple_guardrail_tutorial
 
 To enable verbose logging, set the environment variable:
     export LITELLM_LOG=DEBUG
@@ -34,8 +34,9 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, Union,
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
@@ -101,10 +102,16 @@ class LLMResponseFormat(Enum):
     UNKNOWN = "unknown"
 
 
-class RubrikLogger(CustomBatchLogger):
+class RubrikLogger(CustomGuardrail):
     def __init__(self, **kwargs: Any) -> None:
+        # Batch logging state (inlined from CustomBatchLogger)
+        self.log_queue: List[Any] = []
+        self.flush_interval = litellm.DEFAULT_FLUSH_INTERVAL_SECONDS
+        self.batch_size: int = litellm.DEFAULT_BATCH_SIZE
+        self.last_flush_time = time.time()
         self.flush_lock = asyncio.Lock()
-        super().__init__(**kwargs, flush_lock=self.flush_lock)
+
+        super().__init__(guardrail_name="rubrik", **kwargs)
 
         verbose_logger.debug("initializing rubrik logger")
 
@@ -159,6 +166,21 @@ class RubrikLogger(CustomBatchLogger):
         except RuntimeError:
             verbose_logger.debug("No running event loop for periodic flush - will start when proxy runs")
 
+    async def periodic_flush(self) -> None:
+        """Periodically flush the log queue."""
+        while True:
+            await asyncio.sleep(self.flush_interval)
+            await self.flush_queue()
+
+    async def flush_queue(self) -> None:
+        """Flush all queued log entries."""
+        async with self.flush_lock:
+            if self.log_queue:
+                verbose_logger.debug("RubrikLogger: Flushing batch of %s events", len(self.log_queue))
+                await self.async_send_batch()
+                self.log_queue.clear()
+                self.last_flush_time = time.time()
+
     async def aclose(self) -> None:
         """Close the dedicated tool-blocking HTTP client."""
         await self.tool_blocking_client.aclose()
@@ -182,8 +204,8 @@ class RubrikLogger(CustomBatchLogger):
                             standard_logging_payload["messages"].insert(0, system_scaffold)  # type: ignore[union-attr]
                         elif isinstance(standard_logging_payload["messages"], (dict, str)):
                             standard_logging_payload["messages"] = [
-                                standard_logging_payload["messages"],
                                 system_scaffold,
+                                standard_logging_payload["messages"],
                             ]
                 except Exception as e:
                     verbose_logger.debug(f"Error adding system prompt to messages: {e}")
@@ -487,7 +509,10 @@ class RubrikLogger(CustomBatchLogger):
             verbose_logger.warning(f"Tool call delta missing function field: {delta}")
             return
 
-        accumulated_tool_calls[delta_index].function.arguments += delta.function.arguments or ""
+        existing = accumulated_tool_calls[delta_index]
+        if existing.function and existing.function.arguments is None:
+            existing.function.arguments = ""
+        existing.function.arguments += delta.function.arguments or ""
 
     @staticmethod
     def _is_tool_related_anthropic_chunk(chunk: Dict[str, Any]) -> bool:
