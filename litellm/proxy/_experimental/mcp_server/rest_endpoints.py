@@ -506,18 +506,39 @@ if MCP_AVAILABLE:
             )
 
             # Call execute_mcp_tool directly (permission checks already done)
+            start_time = datetime.now()
+            litellm_logging_obj_for_call = data.get("litellm_logging_obj")
             result = await execute_mcp_tool(
                 name=tool_name,
                 arguments=tool_arguments,
                 allowed_mcp_servers=allowed_mcp_servers,
-                start_time=datetime.now(),
+                start_time=start_time,
                 user_api_key_auth=data.get("user_api_key_auth"),
                 mcp_auth_header=data.get("mcp_auth_header"),
                 mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
                 oauth2_headers=data.get("oauth2_headers"),
                 raw_headers=data.get("raw_headers"),
-                litellm_logging_obj=data.get("litellm_logging_obj"),
+                litellm_logging_obj=litellm_logging_obj_for_call,
             )
+
+            if litellm_logging_obj_for_call:
+                litellm_logging_obj_for_call.post_call(original_response=result)
+                end_time = datetime.now()
+                await litellm_logging_obj_for_call.async_post_mcp_tool_call_hook(
+                    kwargs=litellm_logging_obj_for_call.model_call_details,
+                    response_obj=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+                litellm_logging_obj_for_call.call_type = (
+                    CallTypes.call_mcp_tool.value
+                )
+                await litellm_logging_obj_for_call.async_success_handler(
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+
             return result
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
