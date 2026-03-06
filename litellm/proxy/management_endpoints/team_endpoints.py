@@ -77,8 +77,8 @@ from litellm.proxy.management_endpoints.common_utils import (
     _upsert_budget_and_membership,
     _user_has_admin_view,
 )
-from litellm.proxy.management_endpoints.tag_management_endpoints import (
-    get_daily_activity,
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity_aggregated,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -3890,10 +3890,14 @@ async def get_team_daily_activity(
     page: int = 1,
     page_size: int = 10,
     exclude_team_ids: Optional[str] = None,
+    timezone: Optional[int] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get daily activity for specific teams or all teams.
+
+    Uses SQL GROUP BY to aggregate all matching rows without pagination,
+    ensuring accurate total spend regardless of data volume.
 
     Args:
         team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
@@ -3901,11 +3905,12 @@ async def get_team_daily_activity(
         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
         model (Optional[str]): Filter by model name.
         api_key (Optional[str]): Filter by API key.
-        page (int): Page number for pagination.
-        page_size (int): Number of items per page.
+        page (int): Deprecated, kept for backward compatibility. All results are returned in a single page.
+        page_size (int): Deprecated, kept for backward compatibility.
         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+        timezone (Optional[int]): Timezone offset in minutes from UTC (e.g., 480 for PST).
     Returns:
-        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
+        SpendAnalyticsPaginatedResponse: Response containing daily activity data with per-team breakdown.
     """
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -4009,17 +4014,17 @@ async def get_team_daily_activity(
     if final_api_key_filter is None and user_api_keys is not None:
         final_api_key_filter = user_api_keys
 
-    return await get_daily_activity(
+    return await get_daily_activity_aggregated(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
         entity_id=team_ids_list,
         entity_metadata_field=team_alias_metadata,
-        exclude_entity_ids=exclude_team_ids_list,
         start_date=start_date,
         end_date=end_date,
         model=model,
         api_key=final_api_key_filter,
-        page=page,
-        page_size=page_size,
+        exclude_entity_ids=exclude_team_ids_list,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
     )
