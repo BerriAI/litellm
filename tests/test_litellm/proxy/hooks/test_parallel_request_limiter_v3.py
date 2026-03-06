@@ -1116,7 +1116,7 @@ async def test_dynamic_rate_limiting_v3():
     ), "RPM limit should be enforced when dynamic mode and failures detected"
 
 
-@pytest.mark.flaky(reruns=3)
+@pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio
 async def test_async_increment_tokens_with_ttl_preservation():
     """

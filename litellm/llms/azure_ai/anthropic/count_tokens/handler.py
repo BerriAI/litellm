@@ -32,6 +32,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         api_base: str,
         litellm_params: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
@@ -62,6 +64,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             request_body = self.transform_request_to_count_tokens(
                 model=model,
                 messages=messages,
+                tools=tools,
+                system=system,
             )
 
             verbose_logger.debug(f"Transformed request: {request_body}")

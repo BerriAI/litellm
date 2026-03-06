@@ -438,6 +438,10 @@ class BaseConfig(ABC):
         """
         return True
 
+    def post_stream_processing(self, stream: Any) -> Any:
+        """Hook for providers to post-process streaming responses. Default: pass-through."""
+        return stream
+
     def calculate_additional_costs(
         self, model: str, prompt_tokens: int, completion_tokens: int
     ) -> Optional[dict]:

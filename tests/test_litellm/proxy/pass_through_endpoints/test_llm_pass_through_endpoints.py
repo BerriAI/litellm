@@ -20,6 +20,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     RouteChecks,
     bedrock_llm_proxy_route,
     create_pass_through_route,
+    cursor_proxy_route,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     openai_proxy_route,
@@ -2377,3 +2378,188 @@ class TestOpenAIPassthroughRoute:
             
             # Verify result
             assert result == {"id": "asst_123", "object": "assistant"}
+
+
+class TestCursorProxyRoute:
+    """Tests for the Cursor Cloud Agents pass-through route."""
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_creates_pass_through_with_basic_auth(self):
+        """should create a pass-through route with Basic Auth header for Cursor API"""
+        import base64
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.query_params = {}
+        mock_request.headers = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        test_api_key = "test-cursor-api-key-123"
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=test_api_key,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(
+                return_value={"agents": [], "nextCursor": None}
+            )
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await cursor_proxy_route(
+                endpoint="v0/agents",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            mock_create_route.assert_called_once()
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://api.cursor.com/v0/agents"
+
+            expected_auth = base64.b64encode(
+                f"{test_api_key}:".encode("utf-8")
+            ).decode("ascii")
+            assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+
+            assert result == {"agents": [], "nextCursor": None}
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_raises_on_missing_api_key(self):
+        """should raise 401 when no Cursor API key is available"""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.headers = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.litellm.credential_list",
+            [],
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await cursor_proxy_route(
+                    endpoint="v0/agents",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                    user_api_key_dict=mock_user_api_key_dict,
+                )
+            assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_uses_ui_credential(self):
+        """should use credentials added via UI (litellm.credential_list) when env var is not set"""
+        from litellm.types.utils import CredentialItem
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.query_params = {}
+        mock_request.headers = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        ui_credential = CredentialItem(
+            credential_name="my-cursor-key",
+            credential_values={"api_key": "crsr_ui_test_key", "api_base": "https://api.cursor.com"},
+            credential_info={"custom_llm_provider": "cursor"},
+        )
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.litellm.credential_list",
+            [ui_credential],
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(return_value={"models": []})
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await cursor_proxy_route(
+                endpoint="v0/models",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://api.cursor.com/v0/models"
+
+            import base64
+            expected_auth = base64.b64encode(b"crsr_ui_test_key:").decode("ascii")
+            assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_custom_api_base(self):
+        """should use CURSOR_API_BASE env var when set"""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.query_params = {}
+        mock_request.headers = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch.dict(
+            os.environ, {"CURSOR_API_BASE": "https://custom-cursor.example.com"}
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="test-key",
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(return_value={})
+            mock_create_route.return_value = mock_endpoint_func
+
+            await cursor_proxy_route(
+                endpoint="v0/me",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://custom-cursor.example.com/v0/me"
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_launch_agent(self):
+        """should handle POST to launch an agent through the pass-through"""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.headers = {"content-type": "application/json"}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="test-key",
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(
+                return_value={
+                    "id": "bc_abc123",
+                    "name": "Test Agent",
+                    "status": "CREATING",
+                }
+            )
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await cursor_proxy_route(
+                endpoint="v0/agents",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://api.cursor.com/v0/agents"
+            assert result["id"] == "bc_abc123"
+            assert result["status"] == "CREATING"

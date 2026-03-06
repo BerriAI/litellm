@@ -13,7 +13,6 @@ vi.mock("./log_filter_logic", () => ({
     filters: {},
     filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
     allTeams: [],
-    allKeyAliases: [],
     handleFilterChange: vi.fn(),
     handleFilterReset: mockHandleFilterResetFromHook,
   })),
@@ -37,7 +36,6 @@ vi.mock("../networking", async (importOriginal) => {
 });
 
 vi.mock("../key_team_helpers/filter_helpers", () => ({
-  fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
   fetchAllTeams: vi.fn().mockResolvedValue([]),
 }));
 
