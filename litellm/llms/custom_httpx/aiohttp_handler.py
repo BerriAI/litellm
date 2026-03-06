@@ -101,35 +101,35 @@ class AiohttpAdapter(HTTPClientAdapterAsync):
         self.session = session
 
     async def get(self, url: str, **kwargs) -> HTTPResponse:
-        stream = kwargs.get("stream", False)
+        stream = kwargs.pop("stream", False)
         response = AiohttpResponseWrapper(await self.session.get(url, **kwargs))
         if not stream:
             await response.aread()
         return response
 
     async def post(self, url: str, **kwargs) -> HTTPResponse:
-        stream = kwargs.get("stream", False)
+        stream = kwargs.pop("stream", False)
         response = AiohttpResponseWrapper(await self.session.post(url, **kwargs))
         if not stream:
             await response.aread()
         return response
 
     async def put(self, url: str, **kwargs) -> HTTPResponse:
-        stream = kwargs.get("stream", False)
+        stream = kwargs.pop("stream", False)
         response = AiohttpResponseWrapper(await self.session.put(url, **kwargs))
         if not stream:
             await response.aread()
         return response
 
     async def patch(self, url: str, **kwargs) -> HTTPResponse:
-        stream = kwargs.get("stream", False)
+        stream = kwargs.pop("stream", False)
         response = AiohttpResponseWrapper(await self.session.patch(url, **kwargs))
         if not stream:
             await response.aread()
         return response
 
     async def delete(self, url: str, **kwargs) -> HTTPResponse:
-        stream = kwargs.get("stream", False)
+        stream = kwargs.pop("stream", False)
         response = AiohttpResponseWrapper(await self.session.delete(url, **kwargs))
         if not stream:
             await response.aread()
@@ -149,7 +149,7 @@ class AiohttpAdapter(HTTPClientAdapterAsync):
             url = request_copy.pop("url")
             # Merge kwargs
             request_copy.update(kwargs)
-            stream = kwargs.get("stream", False)
+            stream = request_copy.pop("stream", False)
             response = AiohttpResponseWrapper(
                 await self.session.request(method, url, **request_copy)
             )
@@ -561,7 +561,11 @@ class BaseLLMAIOHTTPHandler:
                 encoding=encoding,
                 client=(
                     client
-                    if client is not None and isinstance(client, ClientSession)
+                    if client is not None
+                    and (
+                        isinstance(client, ClientSession)
+                        or isinstance(client, HTTPClientAdapterAsync)
+                    )
                     else None
                 ),
             )

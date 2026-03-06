@@ -4,7 +4,6 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import certifi
-import httpx
 import pytest
 from aiohttp import ClientSession, TCPConnector
 
@@ -62,17 +61,11 @@ async def test_force_ipv4_transport():
     litellm.force_ipv4 = True
     litellm.disable_aiohttp_transport = True
 
-    transport = AsyncHTTPHandler._create_async_transport()
-
-    # Should get an AsyncHTTPTransport
-    assert isinstance(transport, httpx.AsyncHTTPTransport)
-    # Verify IPv4 configuration through a request
-    client = httpx.AsyncClient(transport=transport)
-    try:
-        response = await client.get("http://example.com")
-        assert response.status_code == 200
-    finally:
-        await client.aclose()
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPTransport") as mock_transport:
+        AsyncHTTPHandler._create_async_transport()
+        
+        # Verify IPv4 configuration was passed to the transport constructor
+        mock_transport.assert_called_once_with(local_address="0.0.0.0")
 
 
 @pytest.mark.asyncio
