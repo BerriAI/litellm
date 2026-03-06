@@ -254,8 +254,8 @@ async def test_native_path_no_metadata_defaults_to_empty():
     )
     metadata = litellm_params.get("metadata", {})
 
-    assert "user_api_key" not in (metadata or {})
-    assert "requester_metadata" not in (metadata or {})
+    assert "user_api_key" not in metadata
+    assert "requester_metadata" not in metadata
 
 
 @pytest.mark.asyncio
@@ -355,9 +355,10 @@ def test_completion_path_metadata_forwarded():
     # Verify that metadata was passed to litellm.completion
     assert mock_completion.called
     call_kwargs = mock_completion.call_args
-    completion_metadata = call_kwargs.kwargs.get("metadata") or (
-        call_kwargs[1].get("metadata") if len(call_kwargs) > 1 else None
-    )
+    # Use explicit `is not None` check — `or` treats {} as falsy (#15466)
+    completion_metadata = call_kwargs.kwargs.get("metadata")
+    if completion_metadata is None and len(call_kwargs) > 1:
+        completion_metadata = call_kwargs[1].get("metadata")
 
     assert completion_metadata is not None, (
         "metadata was not forwarded to litellm.completion — "
@@ -404,9 +405,10 @@ async def test_completion_path_metadata_forwarded_async():
 
     assert mock_acompletion.called
     call_kwargs = mock_acompletion.call_args
-    completion_metadata = call_kwargs.kwargs.get("metadata") or (
-        call_kwargs[1].get("metadata") if len(call_kwargs) > 1 else None
-    )
+    # Use explicit `is not None` check — `or` treats {} as falsy (#15466)
+    completion_metadata = call_kwargs.kwargs.get("metadata")
+    if completion_metadata is None and len(call_kwargs) > 1:
+        completion_metadata = call_kwargs[1].get("metadata")
 
     assert completion_metadata is not None, (
         "metadata was not forwarded to litellm.acompletion"
@@ -449,5 +451,6 @@ def test_completion_path_none_metadata_not_injected():
     # metadata should come from transformation.py kwargs.get("metadata")
     # which will be None since we didn't inject it (metadata was None)
     # But litellm_metadata should still be passed through in kwargs
-    all_kwargs = call_kwargs.kwargs if call_kwargs.kwargs else call_kwargs[1]
+    # Use explicit `is not None` — `if call_kwargs.kwargs` treats {} as falsy
+    all_kwargs = call_kwargs.kwargs if call_kwargs.kwargs is not None else call_kwargs[1]
     assert all_kwargs.get("litellm_metadata", {}).get("proxy_key") == "val"
