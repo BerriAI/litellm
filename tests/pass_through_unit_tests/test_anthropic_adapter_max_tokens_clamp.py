@@ -40,12 +40,13 @@ class TestClampMaxTokens:
 
     def test_no_clamp_when_within_model_limit(self):
         """max_tokens within model limit should pass through unchanged."""
+        within_limit = _DEEPSEEK_MAX_OUTPUT - 1
         result = LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
-            max_tokens=4096,
+            max_tokens=within_limit,
             model="deepseek/deepseek-chat",
             drop_params=True,
         )
-        assert result == 4096
+        assert result == within_limit
 
     def test_no_clamp_when_drop_params_false(self):
         """max_tokens should not be clamped when drop_params is False."""
@@ -65,19 +66,15 @@ class TestClampMaxTokens:
         )
         assert result == 32000
 
-    def test_clamp_respects_global_drop_params(self):
+    def test_clamp_respects_global_drop_params(self, monkeypatch):
         """max_tokens should be clamped when litellm.drop_params is True."""
-        original = litellm.drop_params
-        try:
-            litellm.drop_params = True
-            result = LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
-                max_tokens=32000,
-                model="deepseek/deepseek-chat",
-                drop_params=None,
-            )
-            assert result == _DEEPSEEK_MAX_OUTPUT
-        finally:
-            litellm.drop_params = original
+        monkeypatch.setattr(litellm, "drop_params", True)
+        result = LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
+            max_tokens=32000,
+            model="deepseek/deepseek-chat",
+            drop_params=None,
+        )
+        assert result == _DEEPSEEK_MAX_OUTPUT
 
     def test_no_clamp_for_unknown_model(self):
         """Unknown models should pass max_tokens through unchanged."""
@@ -130,6 +127,16 @@ class TestClampMaxTokens:
         )
         assert result == expected_max
 
+    def test_clamp_forwards_custom_llm_provider(self):
+        """custom_llm_provider must be forwarded to get_model_info for correct model resolution."""
+        result = LiteLLMMessagesToCompletionTransformationHandler._clamp_max_tokens(
+            max_tokens=32000,
+            model="deepseek-chat",
+            custom_llm_provider="deepseek",
+            drop_params=True,
+        )
+        assert result == _DEEPSEEK_MAX_OUTPUT
+
 
 class TestPrepareCompletionKwargsMaxTokens:
     """Tests that _prepare_completion_kwargs applies clamping correctly."""
@@ -157,18 +164,14 @@ class TestPrepareCompletionKwargsMaxTokens:
         )
         assert completion_kwargs["max_tokens"] == 32000
 
-    def test_prepare_kwargs_clamps_with_global_drop_params(self):
+    def test_prepare_kwargs_clamps_with_global_drop_params(self, monkeypatch):
         """_prepare_completion_kwargs should respect litellm.drop_params global setting."""
-        original = litellm.drop_params
-        try:
-            litellm.drop_params = True
-            completion_kwargs, _ = (
-                LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
-                    max_tokens=32000,
-                    messages=[{"role": "user", "content": "hello"}],
-                    model="deepseek/deepseek-chat",
-                )
+        monkeypatch.setattr(litellm, "drop_params", True)
+        completion_kwargs, _ = (
+            LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+                max_tokens=32000,
+                messages=[{"role": "user", "content": "hello"}],
+                model="deepseek/deepseek-chat",
             )
-            assert completion_kwargs["max_tokens"] == _DEEPSEEK_MAX_OUTPUT
-        finally:
-            litellm.drop_params = original
+        )
+        assert completion_kwargs["max_tokens"] == _DEEPSEEK_MAX_OUTPUT
