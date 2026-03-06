@@ -11,12 +11,134 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Protocol,
     Tuple,
     Union,
+    runtime_checkable,
 )
 
-import certifi
 import httpx
+
+
+@runtime_checkable
+class HTTPClientAdapter(Protocol):
+    def get(self, url: str, **kwargs) -> Any:
+        ...
+
+    def post(self, url: str, **kwargs) -> Any:
+        ...
+
+    def put(self, url: str, **kwargs) -> Any:
+        ...
+
+    def patch(self, url: str, **kwargs) -> Any:
+        ...
+
+    def delete(self, url: str, **kwargs) -> Any:
+        ...
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        ...
+
+    def send(self, request: Any, **kwargs) -> Any:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+@runtime_checkable
+class AsyncHTTPClientAdapter(Protocol):
+    async def get(self, url: str, **kwargs) -> Any:
+        ...
+
+    async def post(self, url: str, **kwargs) -> Any:
+        ...
+
+    async def put(self, url: str, **kwargs) -> Any:
+        ...
+
+    async def patch(self, url: str, **kwargs) -> Any:
+        ...
+
+    async def delete(self, url: str, **kwargs) -> Any:
+        ...
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        ...
+
+    async def send(self, request: Any, **kwargs) -> Any:
+        ...
+
+    async def close(self) -> None:
+        ...
+
+
+class HTTPXAdapter(HTTPClientAdapter):
+    def __init__(self, client: httpx.Client):
+        self.client = client
+
+    def get(self, url: str, **kwargs) -> Any:
+        return self.client.get(url, **kwargs)
+
+    def post(self, url: str, **kwargs) -> Any:
+        return self.client.post(url, **kwargs)
+
+    def put(self, url: str, **kwargs) -> Any:
+        return self.client.put(url, **kwargs)
+
+    def patch(self, url: str, **kwargs) -> Any:
+        return self.client.patch(url, **kwargs)
+
+    def delete(self, url: str, **kwargs) -> Any:
+        return self.client.delete(url, **kwargs)
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        return self.client.build_request(method, url, **kwargs)
+
+    def send(self, request: Any, **kwargs) -> Any:
+        return self.client.send(request, **kwargs)
+
+    def close(self) -> None:
+        self.client.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.client, name)
+
+
+class HTTPXAsyncAdapter(AsyncHTTPClientAdapter):
+    def __init__(self, client: httpx.AsyncClient):
+        self.client = client
+
+    async def get(self, url: str, **kwargs) -> Any:
+        return await self.client.get(url, **kwargs)
+
+    async def post(self, url: str, **kwargs) -> Any:
+        return await self.client.post(url, **kwargs)
+
+    async def put(self, url: str, **kwargs) -> Any:
+        return await self.client.put(url, **kwargs)
+
+    async def patch(self, url: str, **kwargs) -> Any:
+        return await self.client.patch(url, **kwargs)
+
+    async def delete(self, url: str, **kwargs) -> Any:
+        return await self.client.delete(url, **kwargs)
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        return self.client.build_request(method, url, **kwargs)
+
+    async def send(self, request: Any, **kwargs) -> Any:
+        return await self.client.send(request, **kwargs)
+
+    async def close(self) -> None:
+        await self.client.aclose()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.client, name)
+
+
+import certifi
 from aiohttp import ClientSession, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
@@ -349,15 +471,19 @@ class AsyncHTTPHandler:
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
+        client: Optional[AsyncHTTPClientAdapter] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
-        self.client = self.create_client(
-            timeout=timeout,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-            shared_session=shared_session,
-        )
+        if client is not None:
+            self.client = client
+        else:
+            self.client = self.create_client(
+                timeout=timeout,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
+            )
         self.client_alias = client_alias
 
     def create_client(
@@ -366,7 +492,7 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> httpx.AsyncClient:
+    ) -> AsyncHTTPClientAdapter:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration(ssl_verify)
 
@@ -387,7 +513,7 @@ class AsyncHTTPHandler:
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers = get_default_headers()
 
-        return httpx.AsyncClient(
+        client = httpx.AsyncClient(
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
@@ -396,17 +522,18 @@ class AsyncHTTPHandler:
             headers=default_headers,
             follow_redirects=True,
         )
+        return HTTPXAsyncAdapter(client)
 
     async def close(self):
         # Close the client when you're done with it
-        await self.client.aclose()
+        await self.client.close()
 
     async def __aenter__(self):
         return self.client
 
-    async def __aexit__(self):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
         # close the client when exiting
-        await self.client.aclose()
+        await self.client.close()
 
     async def get(
         self,
@@ -482,7 +609,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.aclose()
+                await new_client.close()
         except httpx.TimeoutException as e:
             end_time = time.time()
             time_delta = round(end_time - start_time, 3)
@@ -554,7 +681,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.aclose()
+                await new_client.close()
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -620,7 +747,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.aclose()
+                await new_client.close()
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -686,7 +813,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.aclose()
+                await new_client.close()
         except httpx.HTTPStatusError as e:
             setattr(e, "status_code", e.response.status_code)
             if stream is True:
@@ -700,7 +827,7 @@ class AsyncHTTPHandler:
     async def single_connection_post_request(
         self,
         url: str,
-        client: httpx.AsyncClient,
+        client: AsyncHTTPClientAdapter,
         data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
@@ -915,7 +1042,7 @@ class HTTPHandler:
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
-        client: Optional[httpx.Client] = None,
+        client: Optional[Union[httpx.Client, HTTPClientAdapter]] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
         disable_default_headers: Optional[
             bool
@@ -938,7 +1065,7 @@ class HTTPHandler:
             transport = self._create_sync_transport()
 
             # Create a client with a connection pool
-            self.client = httpx.Client(
+            httpx_client = httpx.Client(
                 transport=transport,
                 timeout=timeout,
                 verify=ssl_config,
@@ -946,8 +1073,12 @@ class HTTPHandler:
                 headers=default_headers,
                 follow_redirects=True,
             )
+            self.client: HTTPClientAdapter = HTTPXAdapter(httpx_client)
         else:
-            self.client = client
+            if isinstance(client, httpx.Client):
+                self.client = HTTPXAdapter(client)
+            else:
+                self.client = client
 
     def close(self):
         # Close the client when you're done with it
