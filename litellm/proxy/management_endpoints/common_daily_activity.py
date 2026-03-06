@@ -971,8 +971,11 @@ async def _get_aggregated_with_entity_breakdown(
     total_metrics = SpendMetrics()
     results: List[DailySpendData] = []
     sorted_dates = sorted(date_entity_rows.keys(), reverse=True)
+    # Track which entities already got their api_key_breakdown attached
+    # so we only attach it once (on the most recent date each entity appears).
+    entities_with_key_breakdown: set = set()
 
-    for i, date_str in enumerate(sorted_dates):
+    for date_str in sorted_dates:
         day_metrics = SpendMetrics()
         day_entities: Dict[str, MetricWithMetadata] = {}
 
@@ -990,9 +993,10 @@ async def _get_aggregated_with_entity_breakdown(
                 metrics=entity_metrics, metadata=entity_meta
             )
 
-            # Attach per-key breakdown on the first date only
-            # (UI sums across dates for the entity → key table)
-            if i == 0:
+            # Attach per-key breakdown on the first (most recent) date
+            # each entity appears. The UI sums across dates for the
+            # entity → key table, so we only need it once per entity.
+            if eid not in entities_with_key_breakdown:
                 for ak, ak_metrics in entity_key_map.get(eid, {}).items():
                     meta = entity_api_key_metadata.get(ak, {})
                     entity_entry.api_key_breakdown[ak] = (
@@ -1004,6 +1008,7 @@ async def _get_aggregated_with_entity_breakdown(
                             ),
                         )
                     )
+                entities_with_key_breakdown.add(eid)
 
             day_entities[eid] = entity_entry
 
