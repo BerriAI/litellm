@@ -3161,14 +3161,15 @@ class TestPKCEFunctionality:
             # Assert
             assert token_params["include_client_id"] is False
             assert token_params["code_verifier"] == test_code_verifier
+            # Cache key is returned for deferred deletion (after exchange succeeds)
+            assert token_params["_pkce_cache_key"] == f"pkce_verifier:{test_state}"
 
-            # Verify cache was accessed and deleted
+            # Verify cache was read but NOT deleted yet (deletion is deferred to after
+            # successful token exchange to preserve the verifier for retries)
             mock_cache.async_get_cache.assert_called_once_with(
                 key=f"pkce_verifier:{test_state}"
             )
-            mock_cache.async_delete_cache.assert_called_once_with(
-                key=f"pkce_verifier:{test_state}"
-            )
+            mock_cache.async_delete_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_generic_sso_redirect_response_with_pkce(self):
@@ -3292,11 +3293,11 @@ class TestPKCEFunctionality:
                     )
                     assert "code_verifier" in token_params
                     assert token_params["code_verifier"] == stored_dict["code_verifier"]
+                    # Cache key returned for deferred deletion after successful exchange
+                    assert token_params["_pkce_cache_key"] == stored_key
                     mock_in_memory.async_get_cache.assert_not_called()
-                    # delete_cache called; key removed (asserted below)
-
-        # Verifier consumed (single-use); key removed from "Redis"
-        assert "pkce_verifier:multi_pod_state_xyz" not in mock_redis._store
+                    # Deletion is deferred — key still present until exchange succeeds
+                    assert stored_key in mock_redis._store
 
     @pytest.mark.asyncio
     async def test_pkce_fallback_in_memory_roundtrip_when_redis_none(self):
@@ -3361,15 +3362,13 @@ class TestPKCEFunctionality:
                     )
                     assert "code_verifier" in token_params
                     assert token_params["code_verifier"] == stored_value["code_verifier"]
+                    # Cache key returned for deferred deletion after successful exchange
+                    assert token_params["_pkce_cache_key"] == stored_key
                     mock_in_memory.async_get_cache.assert_called_once_with(
                         key=stored_key
                     )
-                    mock_in_memory.async_delete_cache.assert_called_once_with(
-                        key=stored_key
-                    )
-
-        # Verifier consumed; key removed from in-memory
-        assert "pkce_verifier:fallback_state_xyz" not in in_memory_store
+                    # Deletion is deferred — not called by prepare_token_exchange_parameters
+                    mock_in_memory.async_delete_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_pkce_prepare_token_exchange_returns_nothing_when_no_state(self):
