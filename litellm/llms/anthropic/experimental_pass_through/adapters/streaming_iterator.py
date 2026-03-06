@@ -23,8 +23,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     from litellm.types.llms.anthropic import (
         ContentBlockContentBlockDict,
-        ContentBlockStart,
-        ContentBlockStartText,
         TextBlock,
     )
 
