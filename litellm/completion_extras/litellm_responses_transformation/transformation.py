@@ -705,15 +705,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return optional_params
 
     def _map_reasoning_effort(self, reasoning_effort: Union[str, Dict[str, Any]]) -> Optional[Reasoning]:
-        # If dict is passed, convert it directly to Reasoning object
-        if isinstance(reasoning_effort, dict):
-            return Reasoning(**reasoning_effort)  # type: ignore[typeddict-item]
-
         # Check if auto-summary is enabled via flag or environment variable
         # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
         auto_summary_enabled = (
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
+
+        # If dict is passed, preserve user's values; only inject auto-summary
+        # when the user hasn't explicitly provided a summary.
+        if isinstance(reasoning_effort, dict):
+            if "summary" not in reasoning_effort and auto_summary_enabled:
+                reasoning_effort = {**reasoning_effort, "summary": "detailed"}
+            return Reasoning(**reasoning_effort)  # type: ignore[typeddict-item]
 
         # If string is passed, map with optional summary based on flag/env var
         if reasoning_effort == "none":
