@@ -626,3 +626,74 @@ class TestProxyOAuthHeaderForwarding:
         # x-litellm-api-key should be excluded (special header)
         assert "x-litellm-api-key" not in cleaned
         assert cleaned["content-type"] == "application/json"
+
+    def test_clean_headers_authorization_not_forwarded_when_used_for_litellm_auth(
+        self,
+    ):
+        """Authorization Bearer (LiteLLM key) must never be forwarded to the LLM provider.
+
+        When a user sends their LiteLLM key as 'Authorization: Bearer sk-1234' and
+        forward_llm_provider_auth_headers=True, the Authorization header must be stripped
+        — not sent to Anthropic as if it were an Anthropic API key.
+        """
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"authorization", b"Bearer sk-1234-litellm-proxy-key"),
+                (b"x-api-key", b"sk-ant-api03-real-anthropic-key"),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        # Authorization was the header used for LiteLLM auth
+        cleaned = clean_headers(
+            raw_headers,
+            forward_llm_provider_auth_headers=True,
+            authenticated_with_header="authorization",
+        )
+
+        # Authorization must NOT be forwarded — it was used for proxy auth
+        assert "authorization" not in cleaned
+        assert "Authorization" not in cleaned
+        # x-api-key should be forwarded (it's the real Anthropic key, auth was via Authorization)
+        assert "x-api-key" in cleaned
+        assert cleaned["x-api-key"] == "sk-ant-api03-real-anthropic-key"
+        assert cleaned["content-type"] == "application/json"
+
+    def test_clean_headers_oauth_authorization_forwarded_when_not_used_for_litellm_auth(
+        self,
+    ):
+        """OAuth Authorization header IS forwarded when x-litellm-api-key was used for proxy auth."""
+        from unittest.mock import patch
+
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        oauth_token = "Bearer claude-gODtUFO8RoSnClWTtHKFJg"
+
+        raw_headers = Headers(
+            raw=[
+                (b"x-litellm-api-key", b"sk-litellm-proxy-key"),
+                (b"authorization", oauth_token.encode()),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        # x-litellm-api-key was used for LiteLLM auth; Authorization carries the Anthropic OAuth token
+        with patch(
+            "litellm.llms.anthropic.common_utils.is_anthropic_oauth_key",
+            return_value=True,
+        ):
+            cleaned = clean_headers(
+                raw_headers,
+                forward_llm_provider_auth_headers=True,
+                authenticated_with_header="x-litellm-api-key",
+            )
+
+        # OAuth Authorization should be forwarded (not used for proxy auth)
+        assert "authorization" in cleaned
+        assert cleaned["authorization"] == oauth_token
+        # Proxy key must be stripped
+        assert "x-litellm-api-key" not in cleaned

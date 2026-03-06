@@ -283,7 +283,9 @@ def clean_headers(
         header_lower = header.lower()
 
         if header_lower == "authorization" and is_anthropic_oauth_key(value):
-            clean_headers[header] = value
+            if authenticated_with_header is None or authenticated_with_header.lower() != "authorization":
+                clean_headers[header] = value
+            continue
         # Special handling for x-api-key: forward it based on authenticated_with_header
         elif header_lower == "x-api-key":
             if (
