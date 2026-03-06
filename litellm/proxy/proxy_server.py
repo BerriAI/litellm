@@ -372,6 +372,9 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     user_update,
 )
+from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
+    router as jwt_key_mapping_router,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -379,9 +382,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
-)
-from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
-    router as jwt_key_mapping_router,
 )
 from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     router as mcp_management_router,
@@ -660,6 +660,9 @@ ui_message = f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit 
 ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
 
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
+
+chat_link = f"{server_root_path}/ui/chat"
+ui_message += f"\n\n💬 [```LiteLLM Chat UI```]({chat_link}). ChatGPT-like interface for your users to chat with AI models and MCP tools."
 
 custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 

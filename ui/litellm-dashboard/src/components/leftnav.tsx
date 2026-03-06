@@ -17,6 +17,7 @@ import {
   FolderOutlined,
   KeyOutlined,
   LineChartOutlined,
+  MessageOutlined,
   PlayCircleOutlined,
   RobotOutlined,
   SafetyOutlined,
