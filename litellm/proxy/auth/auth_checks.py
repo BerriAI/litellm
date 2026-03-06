@@ -756,7 +756,10 @@ async def get_default_end_user_budget(
     if cached_budget is not None:
         return LiteLLM_BudgetTable(**cached_budget)
 
-    # Fetch from database
+    # NOTE: The DB query below only executes on a cache miss.  Results are
+    # cached for DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL seconds (see
+    # async_set_cache below), so subsequent requests for the same budget_id
+    # are served from the in-memory cache without hitting the database.
     try:
         budget_record = await prisma_client.db.litellm_budgettable.find_unique(
             where={"budget_id": litellm.max_end_user_budget_id}
@@ -793,6 +796,11 @@ async def _persist_end_user_budget_id(
     Called from the async auth path (always has a running event loop).
     A DB failure is logged but does not propagate — the in-memory budget
     is already applied for the current request.
+
+    NOTE: This function is always invoked via ``asyncio.create_task()`` from
+    ``_apply_default_budget_to_end_user``, so the DB write never blocks the
+    auth hot path.  The single-row indexed UPDATE is intentionally kept as a
+    fire-and-forget task rather than awaited inline.
     """
     try:
         await prisma_client.db.litellm_endusertable.update(

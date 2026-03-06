@@ -151,13 +151,13 @@ class TestApplyDefaultBudgetToEndUser:
                 prisma_client=pc,
                 user_api_key_cache=cache,
             )
-            # Budget applied in-memory
+            # Budget applied in-memory (synchronously, before returning)
             assert result.litellm_budget_table is not None
 
-            # Let the event loop run the fire-and-forget task
+            # Let the event loop run the fire-and-forget asyncio.create_task
             await asyncio.sleep(0)
 
-            # Budget persisted to DB via background task
+            # Budget persisted to DB via background asyncio.create_task
             pc.db.litellm_endusertable.update.assert_awaited_once_with(
                 where={"user_id": "user-1"},
                 data={"budget_id": "default-budget"},
