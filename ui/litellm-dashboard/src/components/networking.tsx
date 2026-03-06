@@ -5058,6 +5058,192 @@ export const getGuardrailsUsageLogs = async (
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MCP Usage / Operational Visibility API Calls
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getMCPUsageLogs = async (
+  accessToken: string,
+  options: {
+    mcpServerName?: string;
+    toolName?: string;
+    page?: number;
+    pageSize?: number;
+    startDate?: string;
+    endDate?: string;
+  }
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/usage/logs` : `/v1/mcp/usage/logs`;
+    const params = new URLSearchParams();
+    if (options.mcpServerName) params.append("mcp_server_name", options.mcpServerName);
+    if (options.toolName) params.append("tool_name", options.toolName);
+    if (options.page != null) params.append("page", String(options.page));
+    if (options.pageSize != null) params.append("page_size", String(options.pageSize));
+    if (options.startDate) params.append("start_date", options.startDate);
+    if (options.endDate) params.append("end_date", options.endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get MCP usage logs:", error);
+    throw error;
+  }
+};
+
+export const getMCPUsageOverview = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/usage/overview` : `/v1/mcp/usage/overview`;
+    const params = new URLSearchParams();
+    if (startDate) params.append("start_date", startDate);
+    if (endDate) params.append("end_date", endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get MCP usage overview:", error);
+    throw error;
+  }
+};
+
+export const getMCPUsageTools = async (
+  accessToken: string,
+  mcpServerName: string,
+  startDate?: string,
+  endDate?: string
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/usage/tools` : `/v1/mcp/usage/tools`;
+    const params = new URLSearchParams();
+    params.append("mcp_server_name", mcpServerName);
+    if (startDate) params.append("start_date", startDate);
+    if (endDate) params.append("end_date", endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get MCP usage tools:", error);
+    throw error;
+  }
+};
+
+export const getMCPAlertRules = async (
+  accessToken: string,
+  mcpServerName?: string
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/alert-rules` : `/v1/mcp/alert-rules`;
+    const params = new URLSearchParams();
+    if (mcpServerName) params.append("mcp_server_name", mcpServerName);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get MCP alert rules:", error);
+    throw error;
+  }
+};
+
+export const createMCPAlertRule = async (
+  accessToken: string,
+  data: {
+    mcp_server_name?: string;
+    tool_name_pattern: string;
+    webhook_url: string;
+    alert_name: string;
+    description?: string;
+    enabled?: boolean;
+  }
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/alert-rules` : `/v1/mcp/alert-rules`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to create MCP alert rule:", error);
+    throw error;
+  }
+};
+
+export const deleteMCPAlertRule = async (
+  accessToken: string,
+  ruleId: string
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/alert-rules/${ruleId}` : `/v1/mcp/alert-rules/${ruleId}`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to delete MCP alert rule:", error);
+    throw error;
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Policy CRUD API Calls
 // ─────────────────────────────────────────────────────────────────────────────
 

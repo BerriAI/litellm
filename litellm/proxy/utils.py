@@ -4702,6 +4702,21 @@ async def update_spend_logs_job(
             tool_tracking_err,
         )
 
+    # MCP server usage tracking (same batch): SpendLogMCPServerIndex
+    try:
+        from litellm.proxy.db.spend_log_mcp_server_index import (
+            process_spend_logs_mcp_server_usage,
+        )
+        await process_spend_logs_mcp_server_usage(
+            prisma_client=prisma_client,
+            logs_to_process=logs_to_process,
+        )
+    except Exception as mcp_tracking_err:
+        verbose_proxy_logger.warning(
+            "Spend tracking - MCP server usage tracking failed (non-fatal): %s",
+            mcp_tracking_err,
+        )
+
 
 async def _monitor_spend_logs_queue(
     prisma_client: PrismaClient,
