@@ -20,15 +20,16 @@ class MinimaxChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler
     """Streaming handler that maps MiniMax reasoning_details to reasoning_content."""
 
     def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        # Let super() handle reasoning → reasoning_content first so that
+        # the priority order matches non-streaming: reasoning_content > reasoning > reasoning_details
+        choices = super()._map_reasoning_to_reasoning_content(choices)
         for choice in choices:
             delta = choice.get("delta", {})
             if "reasoning_details" in delta:
                 text = _concat_reasoning_details(delta.pop("reasoning_details"))
-                # Only set if reasoning_content not already present
-                # (consistent with non-streaming priority)
                 if text and "reasoning_content" not in delta:
                     delta["reasoning_content"] = text
-        return super()._map_reasoning_to_reasoning_content(choices)
+        return choices
 
 
 class MinimaxChatConfig(OpenAIGPTConfig):
@@ -130,7 +131,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool = False,
     ) -> MinimaxChatCompletionStreamingHandler:
         return MinimaxChatCompletionStreamingHandler(
             streaming_response=streaming_response,
