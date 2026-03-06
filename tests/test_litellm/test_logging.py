@@ -73,7 +73,7 @@ def test_json_formatter_parses_embedded_json_message():
     """
     formatter = JsonFormatter()
     record = logging.LogRecord(
-        name="LiteLLM",
+        name="litellm",
         level=logging.DEBUG,
         pathname="",
         lineno=0,
@@ -99,7 +99,7 @@ def test_json_formatter_includes_extra_attributes():
     """
     formatter = JsonFormatter()
     record = logging.LogRecord(
-        name="LiteLLM",
+        name="litellm",
         level=logging.DEBUG,
         pathname="",
         lineno=0,
@@ -122,7 +122,7 @@ def test_json_formatter_plain_message_unchanged():
     """
     formatter = JsonFormatter()
     record = logging.LogRecord(
-        name="LiteLLM",
+        name="litellm",
         level=logging.INFO,
         pathname="",
         lineno=0,
@@ -154,7 +154,7 @@ def test_json_formatter_parses_embedded_python_dict_repr():
         "for model: text-embedding-3-large"
     )
     record = logging.LogRecord(
-        name="LiteLLM Router",
+        name="litellm.router",
         level=logging.INFO,
         pathname="",
         lineno=0,
