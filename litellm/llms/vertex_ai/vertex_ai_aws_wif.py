@@ -87,13 +87,18 @@ class VertexAIAwsWifAuth:
                 '"aws_region_name": "<your-region>" to your credential file.'
             )
 
-        # Use BaseAWSLLM to get AWS credentials via any supported auth flow
+        # Build a credentials provider that re-resolves AWS creds on each call.
+        # This ensures rotated/refreshed STS tokens are picked up during
+        # long-running processes when google-auth refreshes the GCP token.
         base_aws = BaseAWSLLM()
-        boto3_credentials = base_aws.get_credentials(**aws_params)
+        aws_params_copy = dict(aws_params)  # avoid mutating caller's dict
 
-        # Create the custom supplier that wraps boto3 credentials
+        def _get_aws_credentials():
+            return base_aws.get_credentials(**aws_params_copy)
+
+        # Create the custom supplier with a lazy credentials provider
         supplier = AwsCredentialsSupplier(
-            boto3_credentials=boto3_credentials,
+            credentials_provider=_get_aws_credentials,
             aws_region=aws_region,
         )
 

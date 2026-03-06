@@ -1134,9 +1134,6 @@ class TestVertexBase:
                 json_obj, aws_params, scopes
             )
 
-            # Verify BaseAWSLLM.get_credentials was called with correct params
-            mock_base_aws.get_credentials.assert_called_once_with(**aws_params)
-
             # Verify aws.Credentials was called with supplier (not from_info)
             MockAwsCredentials.assert_called_once()
             call_kwargs = MockAwsCredentials.call_args[1]
@@ -1144,8 +1141,15 @@ class TestVertexBase:
             assert call_kwargs["subject_token_type"] == json_obj["subject_token_type"]
             assert call_kwargs["token_url"] == json_obj["token_url"]
             assert call_kwargs["credential_source"] is None
-            assert call_kwargs["aws_security_credentials_supplier"] is not None
             assert call_kwargs["service_account_impersonation_url"] == json_obj["service_account_impersonation_url"]
+
+            # Verify the supplier is a lazy credentials provider (calls
+            # get_credentials on demand, not at construction time)
+            supplier = call_kwargs["aws_security_credentials_supplier"]
+            assert supplier is not None
+            # Trigger the lazy provider — this should call get_credentials
+            supplier.get_aws_security_credentials(context=None, request=None)
+            mock_base_aws.get_credentials.assert_called_once_with(**aws_params)
 
             # Verify scopes were applied
             mock_gcp_creds.with_scopes.assert_called_once_with(scopes)
@@ -1285,7 +1289,7 @@ class TestVertexBase:
             assert token == "refreshed-token"
 
     def test_aws_credentials_supplier(self):
-        """Test AwsCredentialsSupplier: wraps boto3 creds, handles token=None."""
+        """Test AwsCredentialsSupplier: wraps credentials provider, handles token=None."""
         from litellm.llms.vertex_ai.aws_credentials_supplier import (
             AwsCredentialsSupplier,
         )
@@ -1297,7 +1301,7 @@ class TestVertexBase:
         mock_boto3_creds.token = "FwoGZXIvYXdzEBYaDHqa0AP"
 
         supplier = AwsCredentialsSupplier(
-            boto3_credentials=mock_boto3_creds,
+            credentials_provider=lambda: mock_boto3_creds,
             aws_region="us-east-1",
         )
 
@@ -1314,7 +1318,7 @@ class TestVertexBase:
         mock_static_creds.token = None
 
         supplier_static = AwsCredentialsSupplier(
-            boto3_credentials=mock_static_creds,
+            credentials_provider=lambda: mock_static_creds,
             aws_region="eu-west-1",
         )
 
@@ -1338,7 +1342,7 @@ class TestVertexBase:
         mock_boto3_creds.token = "TOKEN"
 
         supplier = AwsCredentialsSupplier(
-            boto3_credentials=mock_boto3_creds,
+            credentials_provider=lambda: mock_boto3_creds,
             aws_region="us-east-1",
         )
 
