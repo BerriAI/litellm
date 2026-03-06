@@ -465,6 +465,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
                 slice_end = min(offset + remaining_space, text_len)
                 chunk_text = text[offset:slice_end]
+                # Preserve non-text fields from the original item on each
+                # split fragment.  This is intentional: metadata like "qualifiers"
+                # is duplicated across fragments so the guardrail evaluates every
+                # text window with the correct context.  The "text" key is replaced
+                # with the sliced portion.
                 split_item = BedrockContentItem(
                     **{k: v for k, v in item.items() if k != "text"}
                 )
@@ -535,6 +540,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
 
         merged_json = dict(merged_response)
+        # Propagate per-chunk AWS exception markers (e.g. "Output": {"__type": "ThrottlingException"})
+        # so that _determine_guardrail_status_from_json correctly detects failures.
+        for _resp, _json_resp in responses:
+            for exc_key in ("Output", "output"):
+                if exc_key in _json_resp and exc_key not in merged_json:
+                    merged_json[exc_key] = _json_resp[exc_key]
+                    break
         return merged_response, merged_json
 
     async def _make_single_bedrock_api_request(

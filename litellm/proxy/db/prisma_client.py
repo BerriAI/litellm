@@ -66,7 +66,6 @@ class PrismaWrapper:
                 return urllib.parse.unquote(parsed.password)
             return None
         except Exception:
-
             return None
 
     def _parse_token_expiration(self, token: Optional[str]) -> Optional[datetime]:
@@ -392,6 +391,9 @@ class PrismaManager:
                     f"stderr: {result.stderr}"
                 )
             # Clear stale import cache and verify generated client is importable.
+            # Note: this purges all prisma.* entries from sys.modules even if
+            # the re-import below fails — acceptable because the proxy cannot
+            # function with a broken Prisma client regardless.
             importlib.invalidate_caches()
             for mod_name in list(sys.modules.keys()):
                 if mod_name == "prisma" or mod_name.startswith("prisma."):
@@ -433,6 +435,8 @@ class PrismaManager:
                         )
                         return False
 
+                    # Note: ProxyExtrasDBManager.setup_database handles its own
+                    # working-directory context internally; no cwd override needed here.
                     return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
                 else:
                     # Use prisma db push with increased timeout

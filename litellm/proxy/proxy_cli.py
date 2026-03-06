@@ -853,8 +853,8 @@ def run_server(  # noqa: PLR0915
                 except RuntimeError as e:
                     verbose_proxy_logger.warning(
                         "Prisma client auto-generation failed: %s — "
-                        "database operations will be unavailable until resolved. "
-                        "Run 'prisma generate' manually or check schema path.",
+                        "the proxy may fail at runtime when importing the Prisma client. "
+                        "Run 'prisma generate' manually in the schema directory to fix this.",
                         e,
                     )
 
