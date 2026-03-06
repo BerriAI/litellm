@@ -800,7 +800,7 @@ async def user_info_v2(
                 )
 
         return UserInfoV2Response(
-            user_info=user_info.model_dump(),
+            user_info=user_info,
         )
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -828,18 +828,16 @@ async def _is_team_admin_for_user(
         team_rows = await prisma_client.db.litellm_teamtable.find_many(
             where={"team_id": {"in": target_user_teams}}
         )
+        for row in team_rows:
+            team_obj = LiteLLM_TeamTable(**row.model_dump())
+            if _is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=team_obj
+            ):
+                return True
     except Exception:
         verbose_proxy_logger.exception(
             "_is_team_admin_for_user: failed to fetch teams for user"
         )
-        return False
-
-    for row in team_rows:
-        team_obj = LiteLLM_TeamTable(**row.model_dump())
-        if _is_user_team_admin(
-            user_api_key_dict=user_api_key_dict, team_obj=team_obj
-        ):
-            return True
     return False
 
 
