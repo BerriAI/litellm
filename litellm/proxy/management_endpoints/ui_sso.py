@@ -893,11 +893,21 @@ async def get_generic_sso_response(
                 code=status.HTTP_401_UNAUTHORIZED,
             )
 
-        verbose_proxy_logger.exception(
-            "Error verifying and processing generic SSO: %s. Passed in headers: %s",
-            e,
-            additional_generic_sso_headers_dict,
-        )
+        # Use .error() (not .exception()) for ProxyException — those are expected,
+        # intentional auth failures; emitting a full stack trace would produce
+        # false-positive alerts and pollute log aggregators.
+        if isinstance(e, ProxyException):
+            verbose_proxy_logger.error(
+                "SSO authentication failed: %s. Passed in headers: %s",
+                e,
+                additional_generic_sso_headers_dict,
+            )
+        else:
+            verbose_proxy_logger.exception(
+                "Error verifying and processing generic SSO: %s. Passed in headers: %s",
+                e,
+                additional_generic_sso_headers_dict,
+            )
         raise e
     verbose_proxy_logger.debug("generic result: %s", result)
     return result or {}, received_response
@@ -2765,9 +2775,14 @@ class SSOAuthenticationHandler:
 
         # Merge: userinfo takes precedence for identity claims (sub, email, name, …) per
         # the OpenID Connect spec (userinfo is the authoritative source for identity).
-        # token_response provides bearer credentials (access_token, id_token, refresh_token,
-        # token_type, expires_in) that userinfo endpoints do not return, so they are preserved.
-        return {**token_response, **userinfo}
+        # But bearer credentials (access_token, id_token, refresh_token) must always come
+        # from the token endpoint, not from userinfo (non-standard providers occasionally
+        # include these fields in userinfo, which would otherwise shadow the real bearer token).
+        merged = {**token_response, **userinfo}
+        for field in _OAUTH_TOKEN_FIELDS:
+            if field in token_response:
+                merged[field] = token_response[field]
+        return merged
 
     @staticmethod
     async def _get_pkce_userinfo(
@@ -2797,11 +2812,15 @@ class SSOAuthenticationHandler:
                         try:
                             userinfo = resp.json()
                             if not userinfo:
+                                # An empty dict means the provider returned 200 but no
+                                # identity claims — the session would be anonymous/broken.
+                                # Treat this as a failure so we attempt the id_token fallback.
                                 verbose_proxy_logger.warning(
-                                    "Userinfo endpoint returned an empty dict. "
-                                    "The session will have no identity claims. "
+                                    "Userinfo endpoint returned an empty dict; "
+                                    "treating as failure and attempting id_token fallback. "
                                     "Check your provider's userinfo endpoint configuration.",
                                 )
+                                userinfo = None
                         except Exception as json_err:
                             verbose_proxy_logger.warning(
                                 "Userinfo endpoint returned non-JSON response (status 200): %s",
