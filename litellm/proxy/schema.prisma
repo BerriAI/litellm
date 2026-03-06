@@ -1000,6 +1000,14 @@ model LiteLLM_UISettings {
   updated_at DateTime @updatedAt
 }
 
+// Generic config overrides table - one row per config_type
+model LiteLLM_ConfigOverrides {
+  config_type  String   @id
+  config_value Json
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+}
+
 // Skills table for storing LiteLLM-managed skills
 model LiteLLM_SkillsTable {
   skill_id       String   @id @default(uuid())

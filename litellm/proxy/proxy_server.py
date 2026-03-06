@@ -346,6 +346,9 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
+from litellm.proxy.management_endpoints.config_override_endpoints import (
+    router as config_override_router,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     admin_can_invite_user,
@@ -2235,6 +2238,7 @@ class ProxyConfig:
     def __init__(self) -> None:
         self.config: Dict[str, Any] = {}
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
+        self._last_hashicorp_vault_config: Optional[Dict[str, Any]] = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -4432,6 +4436,11 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="semantic_filter_settings"):
             await self._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="config_overrides"):
+            await self._init_hashicorp_vault_config_override(
+                prisma_client=prisma_client
+            )
+
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
         Initialize MCP semantic filter settings from database.
@@ -4539,6 +4548,65 @@ class ProxyConfig:
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
                     str(e)
                 )
+            )
+
+    async def _init_hashicorp_vault_config_override(
+        self, prisma_client: PrismaClient
+    ):
+        """
+        Load Hashicorp Vault config override from DB.
+        Decrypts sensitive fields, sets HCP_VAULT_* env vars, and reinitializes the secret manager.
+        Called periodically via _init_non_llm_objects_in_db to sync config across pods.
+        """
+        from litellm.proxy.management_endpoints.config_override_endpoints import (
+            HASHICORP_ENV_VAR_MAPPING,
+            _clear_hashicorp_vault_state,
+            _get_current_env_values,
+            _parse_config_value,
+            _set_env_vars,
+        )
+
+        try:
+            db_record = await prisma_client.db.litellm_configoverrides.find_unique(
+                where={"config_type": "hashicorp_vault"}
+            )
+
+            if db_record is None or db_record.config_value is None:
+                if self._last_hashicorp_vault_config is not None:
+                    _clear_hashicorp_vault_state(self)
+                return
+
+            config_data = _parse_config_value(db_record.config_value)
+
+            # Skip reinit if config hasn't changed since last poll
+            if self._last_hashicorp_vault_config == config_data:
+                return
+
+            # Decrypt all fields and set env vars
+            decrypted_data = self._decrypt_db_variables(config_data)
+
+            # Snapshot current env vars so we can restore on failure
+            previous_env = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+            _set_env_vars(decrypted_data)
+
+            # Reinitialize the secret manager
+            try:
+                self.initialize_secret_manager(
+                    key_management_system="hashicorp_vault"
+                )
+            except Exception:
+                # Restore previous working env vars instead of wiping all
+                _set_env_vars(previous_env)
+                raise
+
+            self._last_hashicorp_vault_config = config_data.copy()
+            verbose_proxy_logger.debug(
+                "Hashicorp Vault config override loaded from DB"
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error loading Hashicorp Vault config override from DB: %s",
+                str(e),
             )
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
@@ -12971,6 +13039,7 @@ app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(config_override_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
