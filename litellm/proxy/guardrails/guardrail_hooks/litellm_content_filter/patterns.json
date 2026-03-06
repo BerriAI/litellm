@@ -597,6 +597,33 @@
       "description": "Detects Canadian postal codes (A1A 1A1 format, excludes invalid first-letter characters per Canada Post spec)",
       "keyword_pattern": "\\b(?:postal\\s*code|zip\\s*code|mailing\\s*address|address|code\\s*postal|postcode)\\b",
       "allow_word_numbers": false
+    },
+    {
+      "name": "uoft_student_id",
+      "display_name": "Student/Employee Number (University of Toronto)",
+      "pattern": "\\b10\\d{8}\\b",
+      "category": "Canadian Institutional Identifiers (FIPPA)",
+      "description": "Detects University of Toronto student and employee numbers (10-digit, prefix '10'). Subject to Ontario FIPPA.",
+      "keyword_pattern": "\\b(?:student\\s*id\\s*number|student\\s*number|employee\\s*id\\s*number|employee\\s*number|student\\s*id|employee\\s*id|utorid|uoft\\s*id|university\\s*of\\s*toronto|u\\s*of\\s*t)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uoft_utorid",
+      "display_name": "UTORid (University of Toronto Login)",
+      "pattern": "\\b[a-z]{2,6}\\d{1,4}\\b",
+      "category": "Canadian Institutional Identifiers (FIPPA)",
+      "description": "Detects University of Toronto UTORid login identifiers (e.g. smithj12). Context keywords are essential due to the generic format.",
+      "keyword_pattern": "\\b(?:utorid|utoid|utor\\s*id|acorn|quercus|uoft\\s*login|university\\s*of\\s*toronto\\s*login|portal\\s*login|weblogin|shibboleth)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uoft_tcard",
+      "display_name": "TCard Number (University of Toronto Campus ID)",
+      "pattern": "\\b\\d{16}\\b",
+      "category": "Canadian Institutional Identifiers (FIPPA)",
+      "description": "Detects University of Toronto TCard campus ID card numbers (16-digit). Context keywords are critical to distinguish from payment card numbers.",
+      "keyword_pattern": "\\b(?:tcard\\s*number|t-card\\s*number|campus\\s*card\\s*number|campus\\s*id\\s*number|library\\s*card\\s*number|student\\s*card\\s*number|id\\s*card\\s*number|tcard|t-card|campus\\s*card|campus\\s*id|library\\s*card|student\\s*card|id\\s*card|university\\s*card)\\b",
+      "allow_word_numbers": false
     }
   ]
 }

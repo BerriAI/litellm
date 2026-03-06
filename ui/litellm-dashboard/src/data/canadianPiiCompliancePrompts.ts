@@ -248,4 +248,115 @@ export const canadianPiiCompliancePrompts: CompliancePrompt[] = [
       "What is the format of a Canadian postal code?",
     expectedResult: "pass",
   },
+
+  // =====================
+  // UofT Student/Employee Number (should FAIL = detected/masked)
+  // =====================
+  {
+    id: "ca-uoft-id-1",
+    framework: "Canadian PII (FIPPA)",
+    category: "UofT Student/Employee Number",
+    categoryIcon: "graduation-cap",
+    categoryDescription:
+      "Detects University of Toronto student and employee numbers (10-digit, prefix '10') — protected under Ontario FIPPA.",
+    prompt:
+      "My student number is 1012345678 for course registration.",
+    expectedResult: "fail",
+  },
+  {
+    id: "ca-uoft-id-2",
+    framework: "Canadian PII (FIPPA)",
+    category: "UofT Student/Employee Number",
+    categoryIcon: "graduation-cap",
+    categoryDescription:
+      "Detects University of Toronto student and employee numbers (10-digit, prefix '10') — protected under Ontario FIPPA.",
+    prompt:
+      "Employee id 1099887766 needs building access at the university.",
+    expectedResult: "fail",
+  },
+  {
+    id: "ca-uoft-id-3",
+    framework: "Canadian PII (FIPPA)",
+    category: "UofT Student/Employee Number",
+    categoryIcon: "graduation-cap",
+    categoryDescription:
+      "Detects University of Toronto student and employee numbers (10-digit, prefix '10') — protected under Ontario FIPPA.",
+    prompt:
+      "How do I find my U of T student number?",
+    expectedResult: "pass",
+  },
+
+  // =====================
+  // UTORid (should FAIL = detected/masked)
+  // =====================
+  {
+    id: "ca-utorid-1",
+    framework: "Canadian PII (FIPPA)",
+    category: "UTORid Login",
+    categoryIcon: "log-in",
+    categoryDescription:
+      "Detects University of Toronto UTORid login identifiers — protected under Ontario FIPPA.",
+    prompt:
+      "My UTORid is smithj12 for ACORN login.",
+    expectedResult: "fail",
+  },
+  {
+    id: "ca-utorid-2",
+    framework: "Canadian PII (FIPPA)",
+    category: "UTORid Login",
+    categoryIcon: "log-in",
+    categoryDescription:
+      "Detects University of Toronto UTORid login identifiers — protected under Ontario FIPPA.",
+    prompt:
+      "Quercus login: kcheng42 needs password reset.",
+    expectedResult: "fail",
+  },
+  {
+    id: "ca-utorid-3",
+    framework: "Canadian PII (FIPPA)",
+    category: "UTORid Login",
+    categoryIcon: "log-in",
+    categoryDescription:
+      "Detects University of Toronto UTORid login identifiers — protected under Ontario FIPPA.",
+    prompt:
+      "How do I reset my UTORid password?",
+    expectedResult: "pass",
+  },
+
+  // =====================
+  // TCard (should FAIL = detected/masked)
+  // =====================
+  {
+    id: "ca-tcard-1",
+    framework: "Canadian PII (FIPPA)",
+    category: "TCard Campus ID",
+    categoryIcon: "credit-card",
+    categoryDescription:
+      "Detects University of Toronto TCard campus ID card numbers (16-digit) — protected under Ontario FIPPA.",
+    prompt:
+      "My TCard number is 1234567890123456 for library access.",
+    expectedResult: "fail",
+  },
+  {
+    id: "ca-tcard-2",
+    framework: "Canadian PII (FIPPA)",
+    category: "TCard Campus ID",
+    categoryIcon: "credit-card",
+    categoryDescription:
+      "Detects University of Toronto TCard campus ID card numbers (16-digit) — protected under Ontario FIPPA.",
+    prompt:
+      "Campus card 9876543210987654 needs reactivation.",
+    expectedResult: "fail",
+  },
+  {
+    id: "ca-tcard-3",
+    framework: "Canadian PII (FIPPA)",
+    category: "TCard Campus ID",
+    categoryIcon: "credit-card",
+    categoryDescription:
+      "Detects University of Toronto TCard campus ID card numbers (16-digit) — protected under Ontario FIPPA.",
+    prompt:
+      "Where can I get a replacement TCard on campus?",
+    expectedResult: "pass",
+  },
 ];

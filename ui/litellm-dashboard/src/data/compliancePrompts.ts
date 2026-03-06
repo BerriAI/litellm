@@ -543,6 +543,11 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
     description:
       "Canadian PII detection under PIPEDA and provincial privacy legislation — masks SIN, OHIP, driver's licence, passport, immigration docs, bank accounts, and postal codes.",
   },
+  "Canadian PII (FIPPA)": {
+    icon: "graduation-cap",
+    description:
+      "Ontario FIPPA institutional identifier detection — masks University of Toronto student/employee numbers, UTORid logins, and TCard campus IDs.",
+  },
   "Airline Brand Protection": {
     icon: "plane",
     description: "Destination vs competitor intent — avoid answering competitor comparison questions.",

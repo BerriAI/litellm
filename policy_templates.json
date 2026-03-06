@@ -2510,7 +2510,7 @@
   {
     "id": "canadian-pii-protection",
     "title": "Canadian PII Protection (PIPEDA)",
-    "description": "Protects Canadian personal identifiers under PIPEDA and provincial privacy legislation. Masks Social Insurance Numbers (SIN), Ontario Health Insurance Plan (OHIP) numbers, Ontario driver's licence numbers, Canadian passport numbers, IRCC immigration documents, Canadian bank account routing information, postal codes, email addresses, and phone numbers.",
+    "description": "Protects Canadian personal identifiers under PIPEDA, Ontario FIPPA, and provincial privacy legislation. Masks Social Insurance Numbers (SIN), Ontario Health Insurance Plan (OHIP) numbers, Ontario driver's licence numbers, Canadian passport numbers, IRCC immigration documents, Canadian bank account routing information, postal codes, email addresses, phone numbers, and University of Toronto institutional identifiers (student/employee numbers, UTORid, TCard).",
     "icon": "ShieldCheckIcon",
     "iconColor": "text-red-500",
     "iconBg": "bg-red-50",
@@ -2519,7 +2519,8 @@
       "ca-pii-health-drivers",
       "ca-pii-immigration",
       "ca-pii-financial",
-      "ca-pii-contact-information"
+      "ca-pii-contact-information",
+      "ca-pii-institutional-ids"
     ],
     "complexity": "Medium",
     "guardrailDefinitions": [
@@ -2657,23 +2658,53 @@
         "guardrail_info": {
           "description": "Masks email addresses, phone numbers (North American format), and Canadian postal codes"
         }
+      },
+      {
+        "guardrail_name": "ca-pii-institutional-ids",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uoft_student_id",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uoft_utorid",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uoft_tcard",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks University of Toronto institutional identifiers (student/employee numbers, UTORid login, TCard campus ID) under Ontario FIPPA"
+        }
       }
     ],
     "templateData": {
       "policy_name": "canadian-pii-protection",
-      "description": "Canadian PII protection policy under PIPEDA and provincial privacy legislation. Masks SIN, OHIP, Ontario driver's licence, passport, IRCC immigration documents, bank account routing info, postal codes, email, and phone numbers.",
+      "description": "Canadian PII protection policy under PIPEDA, Ontario FIPPA, and provincial privacy legislation. Masks SIN, OHIP, Ontario driver's licence, passport, IRCC immigration documents, bank account routing info, postal codes, email, phone numbers, and University of Toronto institutional identifiers.",
       "guardrails_add": [
         "ca-pii-government-identifiers",
         "ca-pii-health-drivers",
         "ca-pii-immigration",
         "ca-pii-financial",
-        "ca-pii-contact-information"
+        "ca-pii-contact-information",
+        "ca-pii-institutional-ids"
       ],
       "guardrails_remove": []
     },
     "tags": [
       "PII Protection",
-      "Canada"
+      "Canada",
+      "FIPPA"
     ],
     "estimated_latency_ms": 1
   }
