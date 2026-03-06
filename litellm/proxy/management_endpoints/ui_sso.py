@@ -2581,6 +2581,10 @@ class SSOAuthenticationHandler:
                     if redis_usage_cache is None
                     else ""
                 )
+                # Raise immediately — falling through to a non-PKCE flow would only
+                # produce a confusing provider-side error (provider requires code_verifier).
+                # Since PKCE support is new in this release, there is no prior behavior
+                # to preserve: the verifier was never actually used before this PR.
                 raise ProxyException(
                     message=(
                         f"PKCE verifier not found in cache for state '{state}'. "
@@ -2843,7 +2847,8 @@ class SSOAuthenticationHandler:
                 )
 
         # Only fall back to id_token when the userinfo request failed (None).
-        # An empty dict ({}) from the endpoint is a valid response and not retried.
+        # An empty dict ({}) is treated as a failure (userinfo is set to None above)
+        # so we also attempt the id_token fallback in that case.
         # Explicitly check for a non-empty string to avoid attempting JWT decode on
         # a blank or non-string id_token field from a misbehaving provider.
         if userinfo is None and isinstance(id_token, str) and id_token:
