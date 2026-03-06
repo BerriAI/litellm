@@ -665,6 +665,7 @@ async def create_a2a_client(
     a2a_client = _A2AClient(
         httpx_client=httpx_client,
         agent_card=agent_card,
+        url=base_url,
     )
 
     # Store agent_card on client for later retrieval (SDK doesn't expose it)

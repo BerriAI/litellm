@@ -1,0 +1,1299 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.6.0 -- /home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/bin/python
+cachedir: .pytest_cache
+rootdir: /home/lucky_2004/repos/litellm
+configfile: pyproject.toml
+plugins: asyncio-0.21.2, respx-0.22.0, retry-1.7.0, anyio-4.11.0, xdist-3.8.0, requests-mock-1.12.1, mock-3.15.1
+asyncio: mode=Mode.AUTO
+collecting ... collected 1 item
+
+tests/test_litellm/a2a_protocol/test_a2a_url_override.py::test_create_a2a_client_url_override RETRY [100%]
+tests/test_litellm/a2a_protocol/test_a2a_url_override.py::test_create_a2a_client_url_override FAILED [100%]
+
+=================================== FAILURES ===================================
+_____________________ test_create_a2a_client_url_override ______________________
+
+self = <MagicMock name='_A2AClient' id='128446568450192'>, args = ()
+kwargs = {'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>, 'httpx_client': <ANY>, 'url': 'http://my-registered-agent:8080'}
+expected = call(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>, url='http://my-registered-agent:8080')
+actual = call(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567225280'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>)
+_error_message = <function NonCallableMock.assert_called_with.<locals>._error_message at 0x74d24fd97240>
+cause = None
+
+    def assert_called_with(self, /, *args, **kwargs):
+        """assert that the last call was made with the specified arguments.
+    
+        Raises an AssertionError if the args and keyword args passed in are
+        different to the last call to the mock."""
+        if self.call_args is None:
+            expected = self._format_mock_call_signature(args, kwargs)
+            actual = 'not called.'
+            error_message = ('expected call not found.\nExpected: %s\n  Actual: %s'
+                    % (expected, actual))
+            raise AssertionError(error_message)
+    
+        def _error_message():
+            msg = self._format_mock_failure_message(args, kwargs)
+            return msg
+        expected = self._call_matcher(_Call((args, kwargs), two=True))
+        actual = self._call_matcher(self.call_args)
+        if actual != expected:
+            cause = expected if isinstance(expected, Exception) else None
+>           raise AssertionError(_error_message()) from cause
+E           AssertionError: expected call not found.
+E           Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>, url='http://my-registered-agent:8080')
+E             Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567225280'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>)
+
+/usr/lib/python3.12/unittest/mock.py:944: AssertionError
+
+During handling of the above exception, another exception occurred:
+
+self = <MagicMock name='_A2AClient' id='128446568450192'>, args = ()
+kwargs = {'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>, 'httpx_client': <ANY>, 'url': 'http://my-registered-agent:8080'}
+
+    def assert_called_once_with(self, /, *args, **kwargs):
+        """assert that the mock was called exactly once and that that call was
+        with the specified arguments."""
+        if not self.call_count == 1:
+            msg = ("Expected '%s' to be called once. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+            raise AssertionError(msg)
+>       return self.assert_called_with(*args, **kwargs)
+E       AssertionError: expected call not found.
+E       Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>, url='http://my-registered-agent:8080')
+E         Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567225280'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>)
+E       
+E       pytest introspection follows:
+E       
+E       Kwargs:
+E       assert {'agent_card'...46567225280'>} == {'agent_card'...d-agent:8080'}
+E         Omitting 2 identical items, use -vv to show
+E         Right contains 1 more item:
+E         {'url': 'http://my-registered-agent:8080'}
+E         Full diff:
+E           {
+E            'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>,
+E         +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567225280'>,...
+E         
+E         ...Full output truncated (3 lines hidden), use '-vv' to show
+
+/usr/lib/python3.12/unittest/mock.py:956: AssertionError
+
+During handling of the above exception, another exception occurred:
+
+    @pytest.mark.asyncio
+    async def test_create_a2a_client_url_override():
+        """
+        Test that create_a2a_client passes the base_url as an override to the A2A SDK's A2AClient.
+        This ensures that the registered URL is used even if the agent card reports a different one.
+        """
+        base_url = "http://my-registered-agent:8080"
+        broken_card_url = "http://[::]:8081/invoke"
+    
+        # Mock agent card
+        mock_agent_card = MagicMock()
+        mock_agent_card.url = broken_card_url
+        mock_agent_card.name = "test-agent"
+    
+        # Mock A2ACardResolver
+        with patch("litellm.a2a_protocol.main.A2ACardResolver") as mock_resolver_cls:
+            mock_resolver = mock_resolver_cls.return_value
+            mock_resolver.get_agent_card = AsyncMock(return_value=mock_agent_card)
+    
+            # Mock _A2AClient (the SDK client)
+            with patch("litellm.a2a_protocol.main._A2AClient") as mock_sdk_client_cls:
+                # Mock successful import if not available
+                with patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True):
+                    client = await create_a2a_client(base_url=base_url)
+    
+                    # Verify SDK client was initialized with the override URL
+>                   mock_sdk_client_cls.assert_called_once_with(
+                        httpx_client=ANY, # We don't care about the exact client here
+                        agent_card=mock_agent_card,
+                        url=base_url # THIS IS THE CRITICAL ASSERTION
+                    )
+E                   AssertionError: expected call not found.
+E                   Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>, url='http://my-registered-agent:8080')
+E                     Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567225280'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>)
+E                   
+E                   pytest introspection follows:
+E                   
+E                   Kwargs:
+E                   assert {'agent_card'...46567225280'>} == {'agent_card'...d-agent:8080'}
+E                     Omitting 2 identical items, use -vv to show
+E                     Right contains 1 more item:
+E                     {'url': 'http://my-registered-agent:8080'}
+E                     Full diff:
+E                       {
+E                        'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>,
+E                     +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567225280'>,...
+E                     
+E                     ...Full output truncated (3 lines hidden), use '-vv' to show
+
+tests/test_litellm/a2a_protocol/test_a2a_url_override.py:31: AssertionError
+---------------------------- Captured stdout setup -----------------------------
+<module 'litellm' from '/home/lucky_2004/repos/litellm/litellm/__init__.py'>
+
+======================= the following tests were retried =======================
+	test_create_a2a_client_url_override failed on attempt 1! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446632152576'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446632156368'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446632152576'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446632152576'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446632156368'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446632152576'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46632156368'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446632152576'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446632156368'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446632152576'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446632156368'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446632152576'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46632156368'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446632152576'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446632156368'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 2! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570405792'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446570409488'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570405792'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570405792'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446570409488'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570405792'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46570409488'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446570405792'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446570409488'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570405792'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446570409488'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570405792'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46570409488'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446570405792'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446570409488'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 3! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446637225648'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446565878528'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446637225648'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446637225648'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446565878528'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446637225648'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46565878528'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446637225648'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446565878528'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446637225648'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446565878528'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446637225648'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46565878528'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446637225648'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446565878528'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 4! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568158256'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446568165456'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568158256'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568158256'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446568165456'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568158256'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46568165456'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446568158256'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446568165456'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568158256'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446568165456'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568158256'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46568165456'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446568158256'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446568165456'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 5! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446565485312'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446565489200'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446565485312'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446565485312'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446565489200'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446565485312'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46565489200'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446565485312'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446565489200'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446565485312'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446565489200'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446565485312'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46565489200'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446565485312'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446565489200'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 6! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570832976'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446570839168'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570832976'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570832976'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446570839168'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570832976'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46570839168'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446570832976'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446570839168'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570832976'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446570839168'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446570832976'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46570839168'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446570832976'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446570839168'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 7! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568385424'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446568389312'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568385424'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568385424'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446568389312'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568385424'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46568389312'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446568385424'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446568389312'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568385424'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446568389312'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568385424'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46568389312'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446568385424'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446568389312'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 8! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568154320'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446631823216'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568154320'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568154320'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446631823216'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568154320'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46631823216'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446568154320'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446631823216'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568154320'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446631823216'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568154320'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46631823216'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446568154320'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446631823216'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 9! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567844032'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567847824'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567844032'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567844032'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567847824'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567844032'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567847824'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567844032'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567847824'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567844032'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567847824'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567844032'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567847824'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567844032'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567847824'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 10! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569406704'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569412992'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569406704'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569406704'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569412992'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569406704'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569412992'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569406704'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569412992'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569406704'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569412992'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569406704'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569412992'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569406704'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569412992'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 11! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569072448'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569076144'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569072448'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569072448'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569076144'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569072448'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569076144'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569072448'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569076144'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569072448'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569076144'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569072448'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569076144'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569072448'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569076144'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 12! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569865312'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569871648'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569865312'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569865312'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569871648'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569865312'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569871648'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569865312'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569871648'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569865312'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569871648'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569865312'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569871648'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569865312'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569871648'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 13! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569744336'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569748416'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569744336'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569744336'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569748416'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569744336'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569748416'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569744336'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569748416'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569744336'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569748416'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569744336'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569748416'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569744336'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569748416'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 14! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568394016'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446568391520'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568394016'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568394016'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446568391520'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568394016'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46568391520'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446568394016'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446568391520'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568394016'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446568391520'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446568394016'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46568391520'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446568394016'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446568391520'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 15! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567646752'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567650496'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567646752'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567646752'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567650496'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567646752'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567650496'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567646752'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567650496'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567646752'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567650496'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567646752'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567650496'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567646752'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567650496'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 16! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567456864'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567463152'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567456864'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567456864'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567463152'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567456864'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567463152'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567456864'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567463152'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567456864'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567463152'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567456864'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567463152'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567456864'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567463152'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 17! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567629888'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567633680'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567629888'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567629888'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567633680'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567629888'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567633680'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567629888'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567633680'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567629888'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567633680'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567629888'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567633680'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567629888'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567633680'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 18! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567538400'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567544688'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567538400'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567538400'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567544688'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567538400'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567544688'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567538400'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567544688'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567538400'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567544688'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567538400'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567544688'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567538400'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567544688'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 19! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569972560'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569976592'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569972560'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569972560'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569976592'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569972560'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569976592'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569972560'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569976592'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569972560'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446569976592'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446569972560'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46569976592'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446569972560'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446569976592'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed on attempt 20! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567464928'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446570525088'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567464928'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567464928'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446570525088'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567464928'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46570525088'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567464928'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446570525088'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567464928'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446570525088'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446567464928'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46570525088'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446567464928'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446570525088'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+	test_create_a2a_client_url_override failed after 21 attempts!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567225280'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>)
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_mock/plugin.py", line 488, in assert_wrapper
+	    __wrapped_mock_method__(*args, **kwargs)
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567225280'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567225280'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567225280'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+	
+	During handling of the above exception, another exception occurred:
+	
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AssertionError: expected call not found.
+	Expected: _A2AClient(httpx_client=<ANY>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>, url='http://my-registered-agent:8080')
+	  Actual: _A2AClient(httpx_client=<MagicMock name='get_async_httpx_client().client' id='128446567225280'>, agent_card=<MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>)
+	
+	pytest introspection follows:
+	
+	Kwargs:
+	assert {'agent_card'...46567225280'>} == {'agent_card'...d-agent:8080'}
+	  Omitting 2 identical items, use -vv to show
+	  Right contains 1 more item:
+	  {'url': 'http://my-registered-agent:8080'}
+	  Full diff:
+	    {
+	     'agent_card': <MagicMock name='_A2AClient()._litellm_agent_card' id='128446633294880'>,
+	  +  'httpx_client': <MagicMock name='get_async_httpx_client().client' id='128446567225280'>,...
+	  
+	  ...Full output truncated (3 lines hidden), use '-vv' to show
+
+=========================== end of test retry report ===========================
+
+=========================== short test summary info ============================
+FAILED tests/test_litellm/a2a_protocol/test_a2a_url_override.py::test_create_a2a_client_url_override
+=================== 1 failed, 1 retried in 102.65s (0:01:42) ===================
