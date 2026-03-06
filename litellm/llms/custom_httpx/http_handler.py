@@ -414,7 +414,6 @@ class AsyncHTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -424,10 +423,8 @@ class AsyncHTTPHandler:
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
 
-        _timeout = timeout if timeout is not None else USE_CLIENT_DEFAULT
-
         response = await self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects, timeout=_timeout  # type: ignore
+            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
         )
         return response
 
@@ -962,7 +959,6 @@ class HTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -971,13 +967,10 @@ class HTTPHandler:
         params = params or {}
         params.update(self.extract_query_params(url))
 
-        _timeout = timeout if timeout is not None else USE_CLIENT_DEFAULT
-
         response = self.client.get(
             url,
             params=params,
             headers=headers,
-            timeout=_timeout,
         )
 
         return response
