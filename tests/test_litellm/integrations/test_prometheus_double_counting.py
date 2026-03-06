@@ -167,7 +167,7 @@ def test_callback_deduplication():
         # Since we added "prometheus" string twice, it might initialize it twice, but replacing
         # in-place should lead to correct count matching replaced. Actually the old buggy code
         # wouldn't remove "prometheus". The new one replaces it.
-        assert len(prometheus_instances) > 0
+        assert len(prometheus_instances) == 1
     finally:
         # Restore
         litellm.callbacks = old_callbacks
