@@ -281,8 +281,7 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
         Note: The TTS endpoint is at https://api.sarvam.ai/text-to-speech
         (without /v1), unlike the chat completions endpoint which uses /v1.
         We ignore the api_base from providers.json if it contains /v1.
-        """
-        if api_base:
+        base_url = base_url.rstrip("/")
             base_url = api_base.rstrip("/")
             if base_url.endswith("/v1"):
                 base_url = base_url[:-3]
