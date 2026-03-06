@@ -168,8 +168,20 @@ verbose_logger = logging.getLogger("litellm")
 verbose_proxy_logger = logging.getLogger("litellm.proxy")
 verbose_router_logger = logging.getLogger("litellm.router")
 
-# Library best practice: only a NullHandler by default (Python logging HOWTO)
+# Library best practice: attach a NullHandler so "No handlers found" warnings
+# never appear.  We also add a default StreamHandler at WARNING level to
+# preserve backward-compatible colored output for users who do not configure
+# logging themselves.  Library users who want complete silence can set
+# LITELLM_SILENT_LOGGING=true.
 verbose_logger.addHandler(logging.NullHandler())
+if not os.getenv("LITELLM_SILENT_LOGGING", "").lower() in ("1", "true", "yes", "on"):
+    _default_handler = logging.StreamHandler()
+    _default_handler.setLevel(logging.WARNING)
+    _default_handler.setFormatter(logging.Formatter(
+        "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
+        datefmt="%H:%M:%S",
+    ))
+    verbose_logger.addHandler(_default_handler)
 
 # Backward-compatible aliases for the old logger names.
 # The canonical names are "litellm", "litellm.proxy", "litellm.router".
@@ -332,12 +344,17 @@ def _get_uvicorn_json_log_config():
     return log_config
 
 
+_json_initialized = False
+
+
 def _turn_on_json():
     """
-    Turn on JSON logging
-
-    - Adds a JSON formatter to all loggers
+    Turn on JSON logging.  Idempotent — calling more than once is a no-op.
     """
+    global _json_initialized
+    if _json_initialized:
+        return
+    _json_initialized = True
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
@@ -369,7 +386,7 @@ def _ensure_stream_handler():
     by design — the handlers remain in the state set by _turn_on_json().
     """
     for h in verbose_logger.handlers:
-        if isinstance(h, logging.StreamHandler):
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, (logging.FileHandler, logging.NullHandler)):
             return
     verbose_logger.addHandler(_create_stream_handler())
 
@@ -408,7 +425,7 @@ def _is_debugging_on() -> bool:
     return verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True
 
 
-# SDK-only JSON_LOGS initialization is done in litellm/__init__.py
-# (after all module attributes like success_callback are defined)
-# to avoid circular-import errors.  See the comment near the bottom
-# of __init__.py for details.
+# JSON_LOGS initialization is done in litellm/__init__.py (after all module
+# attributes like success_callback are defined) to avoid circular-import
+# errors.  _turn_on_json() is idempotent so proxy code paths can call it
+# again safely.  See the comment near the bottom of __init__.py for details.

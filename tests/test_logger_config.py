@@ -55,7 +55,7 @@ class TestLoggerNamespace:
 
 
 class TestNullHandlerDefault:
-    """The library must ship with only a NullHandler on the parent logger."""
+    """The library must ship with a NullHandler + default StreamHandler(WARNING)."""
 
     def test_litellm_logger_has_null_handler(self):
         from litellm._logging import verbose_logger
@@ -63,19 +63,35 @@ class TestNullHandlerDefault:
         handler_types = [type(h) for h in verbose_logger.handlers]
         assert logging.NullHandler in handler_types
 
-    def test_litellm_logger_no_stream_handler_by_default(self):
-        """Importing litellm must NOT attach a StreamHandler."""
+    def test_litellm_logger_has_default_stream_handler(self):
+        """Importing litellm must attach a default StreamHandler at WARNING level."""
         out = _run_in_subprocess("""
             import logging, litellm
             from litellm._logging import verbose_logger
-            has_stream = any(
-                isinstance(h, logging.StreamHandler)
-                and not isinstance(h, logging.NullHandler)
-                for h in verbose_logger.handlers
-            )
-            print(has_stream)
+            stream_handlers = [
+                h for h in verbose_logger.handlers
+                if isinstance(h, logging.StreamHandler)
+                and not isinstance(h, (logging.NullHandler, logging.FileHandler))
+            ]
+            print(len(stream_handlers) >= 1 and stream_handlers[0].level == logging.WARNING)
         """)
-        assert out == "False"
+        assert out == "True"
+
+    def test_silent_logging_suppresses_default_handler(self):
+        """LITELLM_SILENT_LOGGING=true suppresses the default StreamHandler."""
+        out = _run_in_subprocess("""
+            import os, logging
+            os.environ["LITELLM_SILENT_LOGGING"] = "true"
+            import litellm
+            from litellm._logging import verbose_logger
+            stream_handlers = [
+                h for h in verbose_logger.handlers
+                if isinstance(h, logging.StreamHandler)
+                and not isinstance(h, (logging.NullHandler, logging.FileHandler))
+            ]
+            print(len(stream_handlers))
+        """)
+        assert out == "0"
 
 
 class TestRootLoggerNotTouched:
