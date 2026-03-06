@@ -1,10 +1,14 @@
 import json
+import time
 from typing import Any, List, Literal, Optional, Tuple
+
+import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.types.llms.openai import Batch
-from litellm.types.utils import CallTypes, ModelInfo, Usage
+from litellm.types.utils import CallTypes, ModelInfo, ModelResponse, Usage
 from litellm.utils import token_counter
 
 
