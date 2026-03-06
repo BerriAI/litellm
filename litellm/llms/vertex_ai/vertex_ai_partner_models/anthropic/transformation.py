@@ -109,12 +109,16 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         data.pop("output_format", None)
         
         # VertexAI doesn't support output_config.format (structured output schema),
-        # but does support output_config.effort (reasoning effort for Claude 4.6).
+        # but does support output_config.effort (reasoning effort for Claude 4.6,
+        # per Anthropic's API spec for reasoning mode).
         # Selectively strip only the unsupported "format" key.
+        # Copy first to avoid mutating a shared dict reference from optional_params.
         output_config = data.get("output_config")
         if isinstance(output_config, dict):
-            output_config.pop("format", None)
-            if not output_config:
+            output_config = {k: v for k, v in output_config.items() if k != "format"}
+            if output_config:
+                data["output_config"] = output_config
+            else:
                 data.pop("output_config", None)
         elif output_config is not None:
             data.pop("output_config", None)
