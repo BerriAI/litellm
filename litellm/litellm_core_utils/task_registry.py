@@ -3,6 +3,14 @@ Centralized asyncio task registry to prevent fire-and-forget task leaks.
 
 All background tasks created via asyncio.create_task() should go through
 this registry so they are tracked, cleaned up, and properly awaited on shutdown.
+
+Migration status (phased rollout — see #15128):
+  Phase 1 (this PR): proxy_server.py, common_request_processing.py,
+      pass_through_endpoints/streaming_handler.py (~26 call sites)
+  Phase 2 (follow-up): proxy/utils.py, proxy/auth/auth_checks.py,
+      proxy/auth/user_api_key_auth.py, proxy/management_endpoints/*
+  Phase 3 (follow-up): router.py, caching/redis_cache.py,
+      litellm_core_utils/logging_worker.py, remaining modules
 """
 
 import asyncio
