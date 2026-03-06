@@ -10,7 +10,7 @@ function generateTitle(firstUserMessage: string): string {
   if (trimmed.length <= TITLE_MAX_LENGTH) {
     return trimmed;
   }
-  return trimmed.slice(0, TITLE_MAX_LENGTH);
+  return trimmed.slice(0, TITLE_MAX_LENGTH) + "…";
 }
 
 function loadFromStorage(): { conversations: Conversation[]; storageUnavailable: boolean } {
