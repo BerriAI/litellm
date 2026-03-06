@@ -282,6 +282,103 @@ class TestInitialization:
                 h = RubrikLogger()
                 assert h.batch_size == 256
 
+    def test_batch_size_zero_ignored(self):
+        """Test that zero RUBRIK_BATCH_SIZE falls back to default."""
+        with patch("asyncio.create_task", Mock()):
+            with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host", "RUBRIK_BATCH_SIZE": "0"}):
+                h = RubrikLogger()
+                assert h.batch_size > 0
+
+    def test_batch_size_negative_ignored(self):
+        """Test that negative RUBRIK_BATCH_SIZE falls back to default."""
+        with patch("asyncio.create_task", Mock()):
+            with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host", "RUBRIK_BATCH_SIZE": "-5"}):
+                h = RubrikLogger()
+                assert h.batch_size > 0
+
+
+@pytest.mark.asyncio
+class TestBatchLogging:
+    """Test the batch logging pipeline."""
+
+    async def test_log_success_event_appends_to_queue(self, handler):
+        """Test that async_log_success_event appends to the log queue."""
+        kwargs = {
+            "standard_logging_object": {"messages": [{"role": "user", "content": "hi"}], "response": "hello"},
+        }
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+        assert len(handler.log_queue) == 1
+
+    async def test_log_success_event_sampling_skips(self, handler):
+        """Test that events are skipped when random exceeds sampling rate."""
+        handler.sampling_rate = 0.0  # Skip all events
+        kwargs = {
+            "standard_logging_object": {"messages": [{"role": "user", "content": "hi"}], "response": "hello"},
+        }
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+        assert len(handler.log_queue) == 0
+
+    async def test_log_success_event_inserts_system_prompt(self, handler):
+        """Test that Anthropic system prompt is prepended to messages."""
+        kwargs = {
+            "standard_logging_object": {"messages": [{"role": "user", "content": "hi"}], "response": "hello"},
+            "system": "You are helpful.",
+        }
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+        assert len(handler.log_queue) == 1
+        messages = handler.log_queue[0]["messages"]
+        assert messages[0]["role"] == "system"
+        assert messages[0]["content"] == "You are helpful."
+        assert messages[1]["role"] == "user"
+
+    async def test_flush_queue_sends_batch(self, handler):
+        """Test that flush_queue sends queued entries and clears the queue."""
+        handler.log_queue = [{"msg": "a"}, {"msg": "b"}]
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        handler.async_httpx_client = AsyncMock()
+        handler.async_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        await handler.flush_queue()
+
+        handler.async_httpx_client.post.assert_called_once()
+        call_kwargs = handler.async_httpx_client.post.call_args
+        assert len(call_kwargs.kwargs["json"]) == 2
+        assert len(handler.log_queue) == 0
+
+    async def test_flush_queue_empty_noop(self, handler):
+        """Test that flush_queue does nothing when queue is empty."""
+        handler.async_httpx_client = AsyncMock()
+        handler.async_httpx_client.post = AsyncMock()
+
+        await handler.flush_queue()
+
+        handler.async_httpx_client.post.assert_not_called()
+
+    async def test_log_batch_error_does_not_crash(self, handler):
+        """Test that HTTP errors in _log_batch_to_rubrik don't propagate."""
+        handler.log_queue = [{"msg": "a"}]
+
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+        mock_response.raise_for_status = Mock(
+            side_effect=httpx.HTTPStatusError("err", request=Mock(), response=mock_response)
+        )
+        handler.async_httpx_client = AsyncMock()
+        handler.async_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        await handler.flush_queue()
+        # Should not raise; queue should be cleared (fire-and-forget)
+        assert len(handler.log_queue) == 0
+
+    async def test_log_success_event_error_does_not_propagate(self, handler):
+        """Test that errors in the logging hook don't propagate."""
+        kwargs = {}  # Missing standard_logging_object — will raise KeyError
+        # Should not raise
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+
 
 @pytest.mark.asyncio
 class TestCheckAndModifyResponse:
@@ -722,7 +819,7 @@ class TestAsyncPostCallStreamingIteratorHook:
         """Test that partial blocking returns allowed tools with explanation in a single synthetic chunk."""
         explanation = "Tool blocked by policy"
 
-        async def mock_post(*args: Any, **kwargs: Any) -> Mock:
+        async def mock_post(*_args: Any, **kwargs: Any) -> Mock:
             request_json = kwargs.get("json", {})
             all_tool_calls = request_json["choices"][0]["message"]["tool_calls"]
             allowed = [tc for tc in all_tool_calls if tc["id"] == "call_B"]
@@ -831,7 +928,7 @@ class TestAsyncPostCallStreamingIteratorHook:
     async def test_streaming_text_only_with_real_data(self, handler):
         """Test that text-only responses (no tool calls) pass through unmodified."""
 
-        mock_post, request_data = create_blocking_mock_post(block_all=False)
+        mock_post, _ = create_blocking_mock_post(block_all=False)
 
         mock_client = AsyncMock()
         mock_client.post = mock_post
@@ -877,7 +974,7 @@ class TestAsyncPostCallStreamingIteratorHook:
 
         service_call_count = 0
 
-        async def mock_post_that_fails(*args: Any, **kwargs: Any) -> None:
+        async def mock_post_that_fails(*_args: Any, **_kwargs: Any) -> None:
             nonlocal service_call_count
             service_call_count += 1
             raise httpx.TimeoutException("Service timeout")

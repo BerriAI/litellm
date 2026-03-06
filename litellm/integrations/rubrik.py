@@ -34,8 +34,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, Union,
 
 import httpx
 
-import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
@@ -102,16 +102,14 @@ class LLMResponseFormat(Enum):
     UNKNOWN = "unknown"
 
 
-class RubrikLogger(CustomGuardrail):
+class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def __init__(self, **kwargs: Any) -> None:
-        # Batch logging state (inlined from CustomBatchLogger)
-        self.log_queue: List[Any] = []
-        self.flush_interval = litellm.DEFAULT_FLUSH_INTERVAL_SECONDS
-        self.batch_size: int = litellm.DEFAULT_BATCH_SIZE
-        self.last_flush_time = time.time()
         self.flush_lock = asyncio.Lock()
-
-        super().__init__(guardrail_name="rubrik", **kwargs)
+        super().__init__(
+            guardrail_name="rubrik",
+            flush_lock=self.flush_lock,
+            **kwargs,
+        )
 
         verbose_logger.debug("initializing rubrik logger")
 
@@ -138,7 +136,11 @@ class RubrikLogger(CustomGuardrail):
 
         if _batch_size:
             try:
-                self.batch_size = int(_batch_size)
+                parsed_batch = int(_batch_size)
+                if parsed_batch <= 0:
+                    verbose_logger.warning(f"RUBRIK_BATCH_SIZE={parsed_batch} is not positive, using default")
+                else:
+                    self.batch_size = parsed_batch
             except ValueError:
                 verbose_logger.warning(f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default")
 
@@ -166,20 +168,9 @@ class RubrikLogger(CustomGuardrail):
         except RuntimeError:
             verbose_logger.debug("No running event loop for periodic flush - will start when proxy runs")
 
-    async def periodic_flush(self) -> None:
-        """Periodically flush the log queue."""
-        while True:
-            await asyncio.sleep(self.flush_interval)
-            await self.flush_queue()
-
-    async def flush_queue(self) -> None:
-        """Flush all queued log entries."""
-        async with self.flush_lock:
-            if self.log_queue:
-                verbose_logger.debug("RubrikLogger: Flushing batch of %s events", len(self.log_queue))
-                await self.async_send_batch()
-                self.log_queue.clear()
-                self.last_flush_time = time.time()
+    async def async_send_batch(self, *args: Any, **kwargs: Any) -> None:
+        """Send the current log queue to Rubrik. Called by CustomBatchLogger.flush_queue."""
+        await self._log_batch_to_rubrik(data=list(self.log_queue))
 
     async def aclose(self) -> None:
         """Close the dedicated tool-blocking HTTP client."""
@@ -241,24 +232,6 @@ class RubrikLogger(CustomGuardrail):
             verbose_logger.exception(f"Rubrik HTTP Error: {e.response.status_code} - {e.response.text}")
         except Exception:
             verbose_logger.exception("Rubrik Layer Error")
-
-    async def async_send_batch(self) -> None:
-        """Handles sending batches of responses to Rubrik."""
-        if not self.log_queue:
-            return
-
-        await self._log_batch_to_rubrik(data=self.log_queue)
-
-    def _send_batch(self) -> None:
-        """Calls async_send_batch in an event loop."""
-        if not self.log_queue:
-            return
-
-        try:
-            asyncio.get_running_loop()
-            asyncio.create_task(self.async_send_batch())
-        except RuntimeError:
-            asyncio.run(self.async_send_batch())
 
     async def async_post_call_success_hook(
         self,
@@ -701,11 +674,20 @@ class RubrikLogger(CustomGuardrail):
         data_prefix = "data:"
         events: List[Dict[str, Any]] = []
 
-        for line in raw_chunk.decode("utf-8").split("\n"):
+        try:
+            text = raw_chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            verbose_logger.error("Rubrik: Failed to decode SSE chunk as UTF-8, skipping")
+            return events
+
+        for line in text.split("\n"):
             stripped_line = line.strip()
             if stripped_line.startswith(data_prefix):
                 json_payload = stripped_line[len(data_prefix):].strip()
-                events.append(json.loads(json_payload))
+                try:
+                    events.append(json.loads(json_payload))
+                except json.JSONDecodeError:
+                    verbose_logger.error("Rubrik: Malformed JSON in SSE event: %s", json_payload[:200])
 
         return events
 
@@ -817,7 +799,7 @@ class RubrikLogger(CustomGuardrail):
 # Module-level handler instance for use with litellm_settings.callbacks
 try:
     rubrik_handler = RubrikLogger()
-except (ValueError, RuntimeError) as e:
+except Exception as e:
     verbose_logger.warning(
         f"Rubrik handler not initialised ({e}). "
         "Set RUBRIK_WEBHOOK_URL to enable the plugin."
