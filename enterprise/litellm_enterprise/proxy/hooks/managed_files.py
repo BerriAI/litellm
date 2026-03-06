@@ -73,6 +73,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self.internal_usage_cache = internal_usage_cache
         self.prisma_client = prisma_client
 
+    @staticmethod
+    def _get_prometheus_logger():
+        """Find PrometheusLogger from litellm.callbacks, if registered."""
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        return PrometheusLogger.get_instance()
+
     async def store_unified_file_id(
         self,
         file_id: str,
@@ -173,6 +180,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 },  # FIX: Update status and file_object on every operation to keep state in sync
             },
         )
+
 
     async def get_unified_file_id(
         self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
@@ -801,6 +809,31 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_mappings=model_mappings,
             user_api_key_dict=user_api_key_dict,
         )
+
+        # Emit Prometheus metrics for managed file creation
+        prom_logger = self._get_prometheus_logger()
+        if prom_logger:
+            first_model = target_model_names_list[0] if target_model_names_list else None
+            first_provider = ""
+            if responses:
+                first_provider = getattr(responses[0], "_hidden_params", {}).get("custom_llm_provider") or ""
+            prom_logger.record_managed_file_created(
+                model=first_model or "",
+                api_provider=first_provider,
+                user=user_api_key_dict.user_id or "",
+                user_email=getattr(user_api_key_dict, "user_email", None) or "",
+                api_key_alias=user_api_key_dict.key_alias or "",
+            )
+            if response.bytes and response.bytes > 0:
+                prom_logger.record_managed_file_size(
+                    size_bytes=response.bytes,
+                    purpose=response.purpose or "batch",
+                    file_type="input",
+                    model=first_model,
+                    api_provider=first_provider,
+                    user=user_api_key_dict.user_id,
+                )
+
         return response
 
     @staticmethod
@@ -903,7 +936,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "unified_batch_id"
             )  # managed batch id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
-            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            model_name = cast(Optional[str], response._hidden_params.get("litellm_model_name"))
             original_response_id = response.id
 
             if (unified_batch_id or unified_file_id) and model_id:
@@ -964,6 +997,31 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 file_purpose="batch",
                 user_api_key_dict=user_api_key_dict,
             )
+
+            # Only record batch creation metric on actual create (not retrieve/cancel).
+            # unified_file_id in _hidden_params is only set by the create_batch endpoint.
+            # Use the original value from _hidden_params (not the local variable which gets
+            # overwritten in the output_file/error_file loop above).
+            original_unified_file_id = response._hidden_params.get("unified_file_id")
+            if original_unified_file_id:
+                prom_logger = self._get_prometheus_logger()
+                if prom_logger:
+                    batch_provider = ""
+                    if model_name:
+                        try:
+                            from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+                            _, batch_provider, _, _ = get_llm_provider(model=model_name)
+                        except Exception:
+                            if "/" in model_name:
+                                batch_provider = model_name.split("/")[0]
+                    prom_logger.record_managed_batch_created(
+                        model=model_name or "",
+                        api_provider=batch_provider,
+                        user=user_api_key_dict.user_id or "",
+                        user_email=getattr(user_api_key_dict, "user_email", None) or "",
+                        api_key_alias=user_api_key_dict.key_alias or "",
+                    )
+
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get(
@@ -973,7 +1031,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "unified_finetuning_job_id"
             )  # managed finetuning job id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
-            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            model_name = cast(Optional[str], response._hidden_params.get("litellm_model_name"))
             original_response_id = response.id
             if (unified_file_id or unified_finetuning_job_id) and model_id:
                 response.id = self.get_unified_generic_response_id(
@@ -1213,6 +1271,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 f"Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
             )
             
+            # Record blocked deletion metric
+            prom_logger = self._get_prometheus_logger()
+            if prom_logger:
+                prom_logger.record_managed_file_deleted(result="blocked")
+
             raise HTTPException(
                 status_code=400,
                 detail=error_message,
@@ -1245,6 +1308,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
         )
+
+        # Record successful deletion metric only on actual success
+        if stored_file_object or delete_response:
+            prom_logger = self._get_prometheus_logger()
+            if prom_logger:
+                prom_logger.record_managed_file_deleted(result="success")
 
         if stored_file_object:
             return stored_file_object
