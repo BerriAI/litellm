@@ -329,16 +329,14 @@ export const handleError = async (errorData: string | any) => {
   // Convert errorData to string if it isn't already
   const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
 
-  // Auth errors must never be throttled — always process immediately
+  // Auth errors bypass the throttle — they must always trigger cleanup
   if (isAuthenticationError(errorString)) {
-    lastErrorTime = currentTime;
+    clearTokenCookies();
     if (shouldAllowAuthRedirect()) {
-      clearTokenCookies();
       NotificationsManager.info("UI Session Expired. Logging out.");
       const browserLocation = getWindowLocation();
       if (browserLocation) {
-        // Redirect to login instead of reloading the current page
-        const loginPath = getProxyBaseUrl() + "/ui/login";
+        const loginPath = (proxyBaseUrl || "") + "/ui/login";
         window.location.href = loginPath;
       }
     }
