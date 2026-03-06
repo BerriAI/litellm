@@ -466,3 +466,33 @@ def test_get_tools_by_names_exact_match_preferred():
     assert len(result) == 1
     # Exact match should win
     assert result[0]["name"] == "get_transcript"
+
+
+def test_get_tools_by_names_exact_match_preferred_reversed_order():
+    """
+    Exact name match is preferred even when the prefixed tool appears first.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Prefixed tool appears BEFORE the unprefixed (exact) match
+    sep = MCP_TOOL_PREFIX_SEPARATOR
+    available_tools = [
+        {"name": f"youtube{sep}get_transcript", "description": "Get transcript (prefixed)"},
+        {"name": "get_transcript", "description": "Get transcript (unprefixed)"},
+    ]
+
+    result = filter_instance._get_tools_by_names(["get_transcript"], available_tools)
+
+    assert len(result) == 1
+    # Exact match should still win even though it appears second
+    assert result[0]["name"] == "get_transcript"

@@ -226,17 +226,22 @@ class SemanticMCPToolFilter:
 
         # Build a map from matched router name → available tool
         matched: Dict[str, Any] = {}
+        exact_matched: set = set()  # names resolved via exact match
         for tool in available_tools:
             tool_name, _ = self._extract_tool_info(tool)
             if tool_name in tool_name_set:
                 # Exact match (unprefixed name or already matching)
                 matched[tool_name] = tool
+                exact_matched.add(tool_name)
             else:
                 # Suffix match: tool_name may be "server<sep>raw_name"
                 raw_name, server_prefix = split_server_prefix_from_name(tool_name)
                 suffix = raw_name if server_prefix else None
                 if suffix and suffix in tool_name_set:
-                    if suffix in matched:
+                    if suffix in exact_matched:
+                        # An exact match already won — skip silently
+                        pass
+                    elif suffix in matched:
                         verbose_logger.warning(
                             "MCP suffix collision: tool '%s' (server '%s') "
                             "collides with already-matched suffix '%s' — "
