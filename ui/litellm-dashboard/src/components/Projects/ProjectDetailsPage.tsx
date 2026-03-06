@@ -17,11 +17,10 @@ import {
 } from "antd";
 import { LoadingOutlined } from "@ant-design/icons";
 import { BarChart } from "@tremor/react";
-import { ArrowLeftIcon, DollarSignIcon, EditIcon, UsersIcon } from "lucide-react";
+import { ArrowLeftIcon, DollarSignIcon, EditIcon, KeyIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { EditProjectModal } from "./ProjectModals/EditProjectModal";
-import { ProjectKeysSection } from "./ProjectKeysSection";
 
 const { Title, Text } = Typography;
 const { Content } = Layout;
@@ -204,7 +203,17 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
       {/* Keys & Team */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} lg={12}>
-          <ProjectKeysSection projectId={project.project_id} />
+          <Card
+            title={
+              <Flex align="center" gap={8}>
+                <KeyIcon size={16} />
+                Keys
+              </Flex>
+            }
+            style={{ height: "100%" }}
+          >
+            <Empty description="No keys to display" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          </Card>
         </Col>
         <Col xs={24} lg={12}>
           <Card

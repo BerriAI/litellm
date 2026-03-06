@@ -55,13 +55,12 @@ from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
 )
-from litellm.types.utils import GuardrailStatus
+from litellm.types.utils import GuardrailStatus, StreamingChoices
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
     ModelResponseStream,
-    StreamingChoices,
 )
 
 
@@ -1017,7 +1016,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             presidio_config=presidio_config,
                             request_data=request_data,
                         )
-
         return response
 
     async def _mask_output_response(
@@ -1032,7 +1030,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return response
 
         # skip streaming here; handled in async_post_call_streaming_iterator_hook
-        if response.choices and isinstance(response.choices[0], StreamingChoices):
+        if isinstance(response, ModelResponseStream):
             return response
 
         await self._process_response_for_pii(

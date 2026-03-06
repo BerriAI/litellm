@@ -137,6 +137,12 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
+# MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
+MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
+MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
+MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
+MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
@@ -1236,6 +1242,11 @@ X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
+LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
+    "Truncation is a DB storage safeguard. "
+    "Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). "
+    "To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env."
+)
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
@@ -1321,6 +1332,11 @@ CLI_JWT_EXPIRATION_HOURS = int(
     or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS")
     or 24
 )
+
+########################### UI SESSION DURATION ###########################
+# Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
+# Does NOT apply to EXPERIMENTAL_UI_LOGIN flow, which intentionally uses a fixed 10-minute expiry for security.
+LITELLM_UI_SESSION_DURATION = os.getenv("LITELLM_UI_SESSION_DURATION", "24h")
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"

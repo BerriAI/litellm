@@ -89,6 +89,25 @@ def _get_metadata_variable_name(request: Request) -> str:
     return "metadata"
 
 
+def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str]:
+    """
+    Extract chain id for call chaining from request headers.
+
+    x-litellm-trace-id and x-litellm-session-id are interchangeable; when both
+    are present, x-litellm-trace-id takes precedence. Header keys are matched
+    case-insensitively so this works with raw header dicts from any transport.
+
+    Used by MCP (and other paths that have raw_headers but no Request) to set
+    litellm_trace_id/litellm_session_id for spend logs and logging consistency.
+    """
+    if not headers:
+        return None
+    normalized = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
+    return normalized.get("x-litellm-trace-id") or normalized.get(
+        "x-litellm-session-id"
+    )
+
+
 def safe_add_api_version_from_query_params(data: dict, request: Request):
     try:
         if hasattr(request, "query_params"):
@@ -177,12 +196,12 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    key_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    team_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    key_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    )
+    team_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
@@ -576,9 +595,13 @@ class LiteLLMProxyRequestSetup:
         #########################################################################################
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
+
         agent_id_from_header = headers.get("x-litellm-agent-id")
-        trace_id_from_header = headers.get("x-litellm-trace-id")
-        session_id_from_header = headers.get("x-litellm-session-id")
+        # x-litellm-trace-id and x-litellm-session-id are interchangeable for call chaining
+        chain_id = headers.get("x-litellm-trace-id") or headers.get(
+            "x-litellm-session-id"
+        )
+
 
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
@@ -586,16 +609,13 @@ class LiteLLMProxyRequestSetup:
                 f"Extracted agent_id from header: {agent_id_from_header}"
             )
 
-        if trace_id_from_header:
-            metadata_from_headers["trace_id"] = trace_id_from_header
+        if chain_id:
+            metadata_from_headers["trace_id"] = chain_id
+            metadata_from_headers["session_id"] = chain_id
+            data["litellm_session_id"] = chain_id
+            data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug(
-                f"Extracted trace_id from header: {trace_id_from_header}"
-            )
-
-        if session_id_from_header:
-            metadata_from_headers["session_id"] = session_id_from_header
-            verbose_proxy_logger.debug(
-                f"Extracted session_id from header: {session_id_from_header}"
+                f"Extracted chain_id from header (trace-id/session-id): {chain_id}"
             )
 
         if isinstance(data[_metadata_variable_name], dict):
@@ -702,11 +722,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name][
-                "tags"
-            ] = LiteLLMProxyRequestSetup._merge_tags(
-                request_tags=data[_metadata_variable_name].get("tags"),
-                tags_to_add=key_metadata["tags"],
+            data[_metadata_variable_name]["tags"] = (
+                LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=key_metadata["tags"],
+                )
             )
         if "disable_global_guardrails" in key_metadata and isinstance(
             key_metadata["disable_global_guardrails"], bool
@@ -779,7 +799,7 @@ class LiteLLMProxyRequestSetup:
         Add team-based callbacks from the config
         """
         team_config = proxy_config.load_team_config(team_id=team_id)
-        if len(team_config.keys()) == 0:
+        if not isinstance(team_config, dict) or len(team_config) == 0:
             return None
 
         callback_vars_dict = {**team_config.get("callback_vars", team_config)}
@@ -839,14 +859,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     """
 
     from litellm.proxy.proxy_server import llm_router, premium_user
-    from litellm.types.proxy.litellm_pre_call_utils import (
-        RedactedDict,
-        SecretFields,
-    )
+    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
-    _raw_headers: Dict[str, str] = RedactedDict(
-        _safe_get_request_headers(request)
-    )
+    _raw_headers: Dict[str, str] = RedactedDict(_safe_get_request_headers(request))
 
     forward_llm_auth = False
     if general_settings:
@@ -986,9 +1001,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name][
-            "global_max_parallel_requests"
-        ] = general_settings.get("global_max_parallel_requests", None)
+        data[_metadata_variable_name]["global_max_parallel_requests"] = (
+            general_settings.get("global_max_parallel_requests", None)
+        )
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
@@ -1076,6 +1091,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ] = user_api_key_dict.user_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
+    data[_metadata_variable_name]["user_api_key_team_metadata"] = (
+        user_api_key_dict.team_metadata
+    )
+    data[_metadata_variable_name]["user_api_key_object_permission_id"] = (
+        getattr(user_api_key_dict, "object_permission_id", None)
+    )
+    data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = (
+        getattr(user_api_key_dict, "team_object_permission_id", None)
+    )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
 

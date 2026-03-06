@@ -4,6 +4,9 @@ from typing import Any, Optional, Union
 import httpx
 
 import litellm
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -13,11 +16,9 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
-from litellm.anthropic_beta_headers_manager import (
-            update_headers_with_filtered_beta,
-        )
+
 from ..base_aws_llm import BaseAWSLLM, Credentials
-from ..common_utils import BedrockError
+from ..common_utils import BedrockError, _get_all_bedrock_regions
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
@@ -279,11 +280,22 @@ class BedrockConverseLLM(BaseAWSLLM):
                 if _stripped.startswith(rp):
                     _stripped = _stripped[len(rp):]
                     break
+            # Strip embedded region prefix (e.g. "bedrock/us-east-1/model" -> "model")
+            # and capture it so it can be used as aws_region_name below.
+            _region_from_model: Optional[str] = None
+            _potential_region = _stripped.split("/", 1)[0]
+            if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
+                _region_from_model = _potential_region
+                _stripped = _stripped.split("/", 1)[1]
+                _model_for_id = _stripped
             for _nova_prefix in ["nova-2/", "nova/"]:
                 if _stripped.startswith(_nova_prefix):
                     _model_for_id = _model_for_id.replace(_nova_prefix, "", 1)
                     break
             modelId = self.encode_model_id(model_id=_model_for_id)
+            # Inject region extracted from model path so _get_aws_region_name picks it up
+            if _region_from_model is not None and "aws_region_name" not in optional_params:
+                optional_params["aws_region_name"] = _region_from_model
 
         fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
             fake_stream=fake_stream,

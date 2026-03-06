@@ -24,6 +24,18 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return "gpt-5" in model and "gpt-5-chat" not in model
 
     @classmethod
+    def is_model_gpt_5_search_model(cls, model: str) -> bool:
+        """Check if the model is a GPT-5 search variant (e.g. gpt-5-search-api).
+
+        Search-only models have a severely restricted parameter set compared to
+        regular GPT-5 models.  They are identified by name convention (contain
+        both ``gpt-5`` and ``search``).  Note: ``supports_web_search`` in model
+        info is a *different* concept — it indicates a model can *use* web
+        search as a tool, which many non-search-only models also support.
+        """
+        return "gpt-5" in model and "search" in model
+
+    @classmethod
     def is_model_gpt_5_codex_model(cls, model: str) -> bool:
         """Check if the model is specifically a GPT-5 Codex variant."""
         return "gpt-5-codex" in model
@@ -36,16 +48,26 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     
     @classmethod
     def is_model_gpt_5_1_model(cls, model: str) -> bool:
-        """Check if the model is a gpt-5.1 or gpt-5.2 chat variant.
+        """Check if the model is a gpt-5.1, gpt-5.2, or gpt-5.4 chat variant.
         
-        gpt-5.1/5.2 support temperature when reasoning_effort="none",
+        gpt-5.1/5.2/5.4 support temperature when reasoning_effort="none",
         unlike base gpt-5 which only supports temperature=1. Excludes
-        pro variants which keep stricter knobs.
+        pro variants which keep stricter knobs and chat-only variants
+        which only support temperature=1.
         """
         model_name = model.split("/")[-1]
         is_gpt_5_1 = model_name.startswith("gpt-5.1")
-        is_gpt_5_2 = model_name.startswith("gpt-5.2") and "pro" not in model_name
-        return is_gpt_5_1 or is_gpt_5_2
+        is_gpt_5_2 = (
+            model_name.startswith("gpt-5.2")
+            and "pro" not in model_name
+            and not model_name.startswith("gpt-5.2-chat")
+        )
+        is_gpt_5_4 = (
+            model_name.startswith("gpt-5.4")
+            and "pro" not in model_name
+            and not model_name.startswith("gpt-5.4-chat")
+        )
+        return is_gpt_5_1 or is_gpt_5_2 or is_gpt_5_4
 
     @classmethod
     def is_model_gpt_5_2_pro_model(cls, model: str) -> bool:
@@ -57,9 +79,26 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     def is_model_gpt_5_2_model(cls, model: str) -> bool:
         """Check if the model is a gpt-5.2 variant (including pro)."""
         model_name = model.split("/")[-1]
-        return model_name.startswith("gpt-5.2")
+        return model_name.startswith("gpt-5.2") or model_name.startswith("gpt-5.4")
 
     def get_supported_openai_params(self, model: str) -> list:
+        if self.is_model_gpt_5_search_model(model):
+            return [
+                "max_tokens",
+                "max_completion_tokens",
+                "stream",
+                "stream_options",
+                "web_search_options",
+                "service_tier",
+                "safety_identifier",
+                "response_format",
+                "user",
+                "store",
+                "verbosity",
+                "max_retries",
+                "extra_headers",
+            ]
+
         from litellm.utils import supports_tool_choice
 
         base_gpt_series_params = super().get_supported_openai_params(model=model)
@@ -69,13 +108,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             base_gpt_series_params.remove("tool_choice")
 
         non_supported_params = [
-            "logprobs",
-            "top_p",
             "presence_penalty",
             "frequency_penalty",
-            "top_logprobs",
             "stop",
+            "logit_bias",
+            "modalities",
+            "prediction",
+            "audio",
+            "web_search_options",
         ]
+
+        # gpt-5.1/5.2/5.4 support logprobs, top_p, top_logprobs when reasoning_effort="none"
+        if not self.is_model_gpt_5_1_model(model):
+            non_supported_params.extend(["logprobs", "top_p", "top_logprobs"])
 
         return [
             param
@@ -90,6 +135,18 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        if self.is_model_gpt_5_search_model(model):
+            if "max_tokens" in non_default_params:
+                optional_params["max_completion_tokens"] = non_default_params.pop(
+                    "max_tokens"
+                )
+            return super()._map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+
         reasoning_effort = (
             non_default_params.get("reasoning_effort")
             or optional_params.get("reasoning_effort")
@@ -104,7 +161,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max and gpt-5.2 models."
+                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max, gpt-5.2, and gpt-5.4+ models."
                         ),
                         status_code=400,
                     )
@@ -117,6 +174,24 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             optional_params["max_completion_tokens"] = non_default_params.pop(
                 "max_tokens"
             )
+
+        # gpt-5.1/5.2/5.4 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
+        if self.is_model_gpt_5_1_model(model):
+            sampling_params = ["logprobs", "top_logprobs", "top_p"]
+            has_sampling = any(p in non_default_params for p in sampling_params)
+            if has_sampling and reasoning_effort not in (None, "none"):
+                if litellm.drop_params or drop_params:
+                    for p in sampling_params:
+                        non_default_params.pop(p, None)
+                else:
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            "gpt-5.1/5.2/5.4 only support logprobs, top_p, top_logprobs when "
+                            "reasoning_effort='none'. Current reasoning_effort='{}'. "
+                            "To drop unsupported params set `litellm.drop_params = True`"
+                        ).format(reasoning_effort),
+                        status_code=400,
+                    )
 
         if "temperature" in non_default_params:
             temperature_value: Optional[float] = non_default_params.pop("temperature")

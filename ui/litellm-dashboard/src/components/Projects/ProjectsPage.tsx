@@ -1,15 +1,12 @@
-import { useDeleteProject } from "@/app/(dashboard)/hooks/projects/useDeleteProject";
 import { useProjects, ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { LoadingOutlined, PlusOutlined } from "@ant-design/icons";
 import {
-  Alert,
   Button,
   Card,
   Flex,
   Input,
   Layout,
-  message,
   Pagination,
   Space,
   Spin,
@@ -22,8 +19,6 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import { LayersIcon, SearchIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
-import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
 import { ProjectDetail } from "./ProjectDetailsPage";
 
@@ -35,11 +30,8 @@ export function ProjectsPage() {
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
 
-  const deleteMutation = useDeleteProject();
-
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
-  const [projectToDelete, setProjectToDelete] = useState<ProjectResponse | null>(null);
   const [searchText, setSearchText] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
@@ -158,18 +150,6 @@ export function ProjectsPage() {
       responsive: ["xl"],
       render: (date: string) => new Date(date).toLocaleDateString(),
     },
-    {
-      title: "Actions",
-      key: "actions",
-      width: 80,
-      render: (_: unknown, record: ProjectResponse) => (
-        <TableIconActionButton
-          variant="Delete"
-          tooltipText="Delete project"
-          onClick={() => setProjectToDelete(record)}
-        />
-      ),
-    },
   ];
 
   if (selectedProjectId) {
@@ -185,12 +165,6 @@ export function ProjectsPage() {
     <Content
       style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
     >
-      <Alert
-        message="Projects is currently in beta. Features and behavior may change without notice."
-        type="warning"
-        showIcon
-        style={{ marginBottom: 16 }}
-      />
       <Flex
         justify="space-between"
         align="center"
@@ -198,7 +172,7 @@ export function ProjectsPage() {
       >
         <Space direction="vertical" size={0}>
           <Title level={2} style={{ margin: 0 }}>
-            [BETA] Projects
+            Projects
           </Title>
           <Text type="secondary">
             Manage projects within your teams
@@ -249,34 +223,6 @@ export function ProjectsPage() {
       <CreateProjectModal
         isOpen={isCreateModalVisible}
         onClose={() => setIsCreateModalVisible(false)}
-      />
-
-      <DeleteResourceModal
-        isOpen={projectToDelete !== null}
-        title="Delete Project"
-        alertMessage="This action is irreversible. All keys must be unlinked from this project before it can be deleted."
-        message="Are you sure you want to delete this project?"
-        resourceInformationTitle="Project Information"
-        resourceInformation={[
-          { label: "Name", value: projectToDelete?.project_alias || "—" },
-          { label: "Project ID", value: projectToDelete?.project_id, code: true },
-          { label: "Team", value: teamAliasMap.get(projectToDelete?.team_id ?? "") || projectToDelete?.team_id || "—" },
-        ]}
-        onCancel={() => setProjectToDelete(null)}
-        onOk={() => {
-          if (!projectToDelete) return;
-          deleteMutation.mutate([projectToDelete.project_id], {
-            onSuccess: () => {
-              message.success("Project deleted successfully");
-              setProjectToDelete(null);
-            },
-            onError: (error) => {
-              message.error(error.message || "Failed to delete project");
-            },
-          });
-        }}
-        confirmLoading={deleteMutation.isPending}
-        requiredConfirmation={projectToDelete?.project_alias ?? undefined}
       />
     </Content>
   );
