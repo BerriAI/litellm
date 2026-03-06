@@ -198,3 +198,12 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
 
         # managed_files_obj.afile_content should NOT have been called
         mock_managed_files_hook.afile_content.assert_not_called()
+
+        # Verify the DB update writes batch_processed, status, and file_object
+        mock_prisma.db.litellm_managedobjecttable.update.assert_called_once()
+        update_call_kwargs = mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs
+        assert update_call_kwargs["data"]["batch_processed"] is True
+        assert update_call_kwargs["data"]["status"] == "complete"
+        assert "file_object" in update_call_kwargs["data"], (
+            "file_object must be written to DB so list_batches reads updated status"
+        )
