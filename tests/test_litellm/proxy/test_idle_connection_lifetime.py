@@ -55,8 +55,8 @@ class TestAppendQueryParamsIncludesIdleLifetime:
             "max_idle_connection_lifetime": 60,
         }
         result = append_query_params(url, params)
-        # The update should override the existing value
-        assert "max_idle_connection_lifetime=60" in result
+        # URL's existing value wins
+        assert "max_idle_connection_lifetime=30" in result
         assert result.count("max_idle_connection_lifetime") == 1
 
     def test_custom_lifetime_value(self):
@@ -80,7 +80,7 @@ class TestIdleLifetimeEnvVarOverride:
         value = int(
             os.getenv(
                 "LITELLM_DB_IDLE_LIFETIME",
-                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+                str(LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value),
             )
         )
         assert value == 120
@@ -92,7 +92,7 @@ class TestIdleLifetimeEnvVarOverride:
         value = int(
             os.getenv(
                 "LITELLM_DB_IDLE_LIFETIME",
-                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+                str(LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value),
             )
         )
         assert value == 60

@@ -54,6 +54,9 @@ def append_query_params(url: Optional[str], params: dict) -> str:
     for key, value in params.items():
         if key not in parsed_query:
             parsed_query[key] = value
+        else:
+            # Log when URL-embedded parameter takes precedence over config default
+            verbose_proxy_logger.debug(f"URL parameter '{key}' already exists with value '{parsed_query[key]}', keeping existing value over config value '{value}'")
     encoded_query = urlparse.urlencode(parsed_query, doseq=True)
     modified_url = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
     return modified_url  # type: ignore
@@ -673,7 +676,6 @@ def run_server(  # noqa: PLR0915
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
-        db_connection_idle_lifetime = LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
