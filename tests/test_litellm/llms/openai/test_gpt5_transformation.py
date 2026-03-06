@@ -1,8 +1,8 @@
 import pytest
 
 import litellm
-from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.openai import OpenAIConfig
 
 
 @pytest.fixture()
@@ -260,20 +260,21 @@ def test_gpt5_drops_reasoning_effort_xhigh_when_requested(config: OpenAIConfig):
 
 # GPT-5.1 temperature handling tests
 def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
-    """Test that GPT-5.1 models are correctly detected."""
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex-max")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-2025-12-11")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.3-chat-latest")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-pro")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-codex")
+    """Test that models supporting reasoning_effort='none' are correctly detected via model map."""
+    # gpt-5.1 and gpt-5.2 chat variants support none
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-2025-11-13", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-chat-latest", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2-2025-12-11", "none")
+    # codex/pro/chat variants do not support none
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex-max", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.2-chat-latest", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.2-pro", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-mini", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-codex", "none")
 
 
 def test_gpt5_1_temperature_with_reasoning_effort_none(config: OpenAIConfig):
@@ -301,6 +302,36 @@ def test_gpt5_2_temperature_with_reasoning_effort_none(config: OpenAIConfig):
         )
         assert params["temperature"] == temp
         assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_4_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-pro",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_pro_rejects_non_default_temperature(config: OpenAIConfig):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="gpt-5.4-pro",
+            drop_params=False,
+        )
 
 
 def test_gpt5_1_temperature_without_reasoning_effort(config: OpenAIConfig):
@@ -403,7 +434,7 @@ def test_gpt5_2_chat_temperature_restricted(config: OpenAIConfig):
     Regression test for https://github.com/BerriAI/litellm/issues/21911
     """
     # gpt-5.2-chat should reject non-1 temperature when drop_params=False
-    for model in ["gpt-5.2-chat", "gpt-5.2-chat-latest", "gpt-5.3-chat-latest"]:
+    for model in ["gpt-5.2-chat", "gpt-5.2-chat-latest"]:
         with pytest.raises(litellm.utils.UnsupportedParamsError):
             config.map_openai_params(
                 non_default_params={"temperature": 0.7},

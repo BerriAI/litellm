@@ -81,7 +81,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         retrieve_batch_data: RetrieveBatchRequest,
         client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> LiteLLMBatch:
-        response = await client.batches.retrieve(**retrieve_batch_data)
+        response = await client.batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
 
     def retrieve_batch(

@@ -678,6 +678,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "moderation",
                         "realtime",
                         "rerank",
+                        "realtime",
                         "responses",
                         "ocr",
                         "search",

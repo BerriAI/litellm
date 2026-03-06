@@ -136,6 +136,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
     supports_url_context: Optional[bool]
+    supports_none_reasoning_effort: Optional[bool]
+    supports_xhigh_reasoning_effort: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -3203,6 +3205,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
+    BEDROCK_MANTLE = "bedrock_mantle"
 
 
 # Create a set of all provider values for quick lookup

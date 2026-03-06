@@ -116,6 +116,9 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - Optional features enabled via environment variables
 - Separate licensing and authentication for enterprise features
 
+### HTTP Client Cache Safety
+- **Never close HTTP/SDK clients on cache eviction.** `LLMClientCache._remove_key()` must not call `close()`/`aclose()` on evicted clients — they may still be used by in-flight requests. Doing so causes `RuntimeError: Cannot send a request, as the client has been closed.` after the 1-hour TTL expires. Cleanup happens at shutdown via `close_litellm_async_clients()`.
+
 ### Troubleshooting: DB schema out of sync after proxy restart
 `litellm-proxy-extras` runs `prisma migrate deploy` on startup using **its own** bundled migration files, which may lag behind schema changes in the current worktree. Symptoms: `Unknown column`, `Invalid prisma invocation`, or missing data on new fields.
 
