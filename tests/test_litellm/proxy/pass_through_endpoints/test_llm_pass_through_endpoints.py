@@ -21,6 +21,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     bedrock_llm_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    is_passthrough_request_using_router_model,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     openai_proxy_route,
@@ -1399,6 +1400,138 @@ class TestLLMPassthroughFactoryProxyRoute:
                 is_streaming_request=False,
             )
             mock_endpoint_func.assert_awaited_once()
+
+
+class TestIsPassthroughRequestUsingRouterModel:
+    """
+    Tests for is_passthrough_request_using_router_model, specifically the
+    query_params fallback logic added for vLLM GET passthrough support.
+    """
+
+    def _make_router(self, model_names: list):
+        """Create a mock Router whose get_model_names returns the given names."""
+        router = MagicMock()
+        router.get_model_names.return_value = model_names
+        return router
+
+    def test_model_from_body(self):
+        """Model in request body is found in the router."""
+        router = self._make_router(["my-vllm"])
+        assert (
+            is_passthrough_request_using_router_model(
+                {"model": "my-vllm"}, router
+            )
+            is True
+        )
+
+    def test_model_from_body_not_in_router(self):
+        """Model in request body that is NOT in the router."""
+        router = self._make_router(["my-vllm"])
+        assert (
+            is_passthrough_request_using_router_model(
+                {"model": "unknown-model"}, router
+            )
+            is False
+        )
+
+    def test_model_from_query_params_when_body_has_no_model(self):
+        """Fallback: no model in body, model found in query_params."""
+        router = self._make_router(["my-vllm"])
+        assert (
+            is_passthrough_request_using_router_model(
+                {}, router, query_params={"model": "my-vllm"}
+            )
+            is True
+        )
+
+    def test_unknown_model_from_query_params(self):
+        """Fallback: no model in body, query_params model not in router."""
+        router = self._make_router(["my-vllm"])
+        assert (
+            is_passthrough_request_using_router_model(
+                {}, router, query_params={"model": "unknown-model"}
+            )
+            is False
+        )
+
+    def test_body_model_takes_priority_over_query_params(self):
+        """When both body and query_params have model, body wins."""
+        router = self._make_router(["body-model"])
+        assert (
+            is_passthrough_request_using_router_model(
+                {"model": "body-model"},
+                router,
+                query_params={"model": "query-model"},
+            )
+            is True
+        )
+
+    def test_body_model_takes_priority_even_when_query_matches(self):
+        """Body model that doesn't match should make result False even if
+        query_params model would match."""
+        router = self._make_router(["query-model"])
+        assert (
+            is_passthrough_request_using_router_model(
+                {"model": "unknown"},
+                router,
+                query_params={"model": "query-model"},
+            )
+            is False
+        )
+
+    def test_query_params_none_backward_compat(self):
+        """query_params defaults to None — old callers still work."""
+        router = self._make_router(["my-vllm"])
+        assert (
+            is_passthrough_request_using_router_model({"model": "my-vllm"}, router)
+            is True
+        )
+        assert (
+            is_passthrough_request_using_router_model({}, router) is False
+        )
+
+    def test_no_model_anywhere(self):
+        """No model in body, no query_params → False."""
+        router = self._make_router(["my-vllm"])
+        assert (
+            is_passthrough_request_using_router_model({}, router, query_params={})
+            is False
+        )
+
+    def test_none_router(self):
+        """None router always returns False."""
+        assert (
+            is_passthrough_request_using_router_model(
+                {"model": "x"}, None
+            )
+            is False
+        )
+        assert (
+            is_passthrough_request_using_router_model(
+                {}, None, query_params={"model": "x"}
+            )
+            is False
+        )
+
+    def test_query_params_without_model_key(self):
+        """query_params dict present but has no 'model' key."""
+        router = self._make_router(["my-vllm"])
+        assert (
+            is_passthrough_request_using_router_model(
+                {}, router, query_params={"other_key": "value"}
+            )
+            is False
+        )
+
+    def test_body_model_none_explicit(self):
+        """Body has model key set to None — should fall back to query_params."""
+        router = self._make_router(["qp-model"])
+        assert (
+            is_passthrough_request_using_router_model(
+                {"model": None}, router, query_params={"model": "qp-model"}
+            )
+            is True
+        )
 
 
 class TestVLLMProxyRoute:
