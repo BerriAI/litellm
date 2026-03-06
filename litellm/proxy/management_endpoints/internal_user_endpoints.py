@@ -99,8 +99,10 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
 
     data_json.pop("teams", None)  # handled separately
 
-    if "initial_budget_reset_at" in data_json:
+    if "initial_budget_reset_at" in data_json and data_json.get("initial_budget_reset_at") is not None:
         data_json["budget_reset_at"] = data_json.pop("initial_budget_reset_at")
+    else:
+        data_json.pop("initial_budget_reset_at", None)
 
     return data_json
 
@@ -427,8 +429,8 @@ async def new_user(
 
         response_dict["key"] = response.get("token", "")
 
-        if data.initial_budget_reset_at is not None:
-            response_dict["initial_budget_reset_at"] = data.initial_budget_reset_at
+        if data.initial_budget_reset_at is not None and response.get("budget_reset_at") is not None:
+            response_dict["initial_budget_reset_at"] = response.get("budget_reset_at")
 
         new_user_response = NewUserResponse(**response_dict)
 
