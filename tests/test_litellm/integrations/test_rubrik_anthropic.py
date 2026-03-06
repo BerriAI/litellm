@@ -631,7 +631,7 @@ class TestAnthropicStreaming:
 
     async def test_anthropic_streaming_text_only_with_real_data(self, handler):
         """Test that text-only Anthropic responses (no tool calls) pass through unmodified."""
-        sample_data_path = Path(__file__).parent / "rubrik_test_sample_data" / "anthropi_streaming_text_response"
+        sample_data_path = Path(__file__).parent / "rubrik_test_sample_data" / "anthropic_streaming_text_response"
         blocking_service_called: Dict[str, Any] = {}
 
         async def mock_post(*args: Any, **kwargs: Any) -> Mock:

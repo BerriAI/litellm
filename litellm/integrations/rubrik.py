@@ -112,7 +112,13 @@ class RubrikLogger(CustomBatchLogger):
         rbrk_sampling_rate = os.getenv("RUBRIK_SAMPLING_RATE")
         if rbrk_sampling_rate is not None:
             try:
-                self.sampling_rate = float(rbrk_sampling_rate.strip())
+                parsed = float(rbrk_sampling_rate.strip())
+                if not (0.0 <= parsed <= 1.0):
+                    verbose_logger.warning(
+                        f"RUBRIK_SAMPLING_RATE={parsed!r} out of range [0.0, 1.0], clamping."
+                    )
+                    parsed = max(0.0, min(1.0, parsed))
+                self.sampling_rate = parsed
             except ValueError:
                 verbose_logger.warning(f"Invalid RUBRIK_SAMPLING_RATE: {rbrk_sampling_rate!r}, using 1.0")
 
@@ -262,6 +268,12 @@ class RubrikLogger(CustomBatchLogger):
                 openai_dict = self._anthropic_response_to_openai_dict(cast(Dict[str, Any], response))
             else:
                 openai_dict = cast(ModelResponse, response).model_dump()
+
+            # Skip blocking service call if response has no tool calls
+            choices = openai_dict.get("choices", [])
+            has_tool_calls = any(choice.get("message", {}).get("tool_calls") for choice in choices)
+            if not has_tool_calls:
+                return response
 
             modified_openai_dict = await self._check_and_modify_response(openai_dict)
 

@@ -22,4 +22,7 @@ Files prefixed with `anthropic_` contain real Anthropic-format responses from Cl
 - `anthropic_tool_call_response.json` - Single tool use
 - `anthropic_multiple_tool_call_response.json` - Multiple tool uses
 
-Note: Anthropic streaming is not currently supported by the tool blocking plugin.
+**Streaming:**
+- `anthropic_streaming_text_response` - Streaming text-only response
+- `anthropic_streaming_tool_call_response` - Streaming with single tool call
+- `anthropic_streaming_multiple_tool_call_response` - Streaming with multiple tool calls

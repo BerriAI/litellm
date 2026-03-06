@@ -253,6 +253,20 @@ class TestInitialization:
                 h = RubrikLogger()
                 assert h.sampling_rate == 1.0
 
+    def test_sampling_rate_clamped_above_one(self):
+        """Test that sampling rate > 1.0 is clamped to 1.0."""
+        with patch("asyncio.create_task", Mock()):
+            with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host", "RUBRIK_SAMPLING_RATE": "2.0"}):
+                h = RubrikLogger()
+                assert h.sampling_rate == 1.0
+
+    def test_sampling_rate_clamped_below_zero(self):
+        """Test that sampling rate < 0.0 is clamped to 0.0."""
+        with patch("asyncio.create_task", Mock()):
+            with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host", "RUBRIK_SAMPLING_RATE": "-0.5"}):
+                h = RubrikLogger()
+                assert h.sampling_rate == 0.0
+
     def test_batch_size_invalid_ignored(self):
         """Test that invalid RUBRIK_BATCH_SIZE falls back to default."""
         with patch("asyncio.create_task", Mock()):
@@ -378,12 +392,9 @@ class TestAsyncPostCallSuccessHook:
     """Test the main hook method."""
 
     async def test_no_tool_calls_returns_original(self, handler, mock_response_no_tools):
-        """Test that responses without tool calls are returned unchanged by the service."""
-        mock_http_response = Mock()
-        mock_http_response.json.return_value = {"choices": [{"message": {"content": "Hello"}}]}
-
+        """Test that responses without tool calls skip the blocking service entirely."""
         mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_http_response)
+        mock_client.post = AsyncMock()
         handler.tool_blocking_client = mock_client
 
         result = await handler.async_post_call_success_hook(
@@ -392,7 +403,7 @@ class TestAsyncPostCallSuccessHook:
             response=mock_response_no_tools,
         )
 
-        mock_client.post.assert_called_once()
+        mock_client.post.assert_not_called()
         assert result == mock_response_no_tools
 
     async def test_successful_blocking(self, handler, mock_response_with_tools):
