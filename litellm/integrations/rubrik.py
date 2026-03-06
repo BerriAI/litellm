@@ -461,6 +461,15 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             async for remaining_chunk in parsed_stream:
                 yield self._encode_anthropic_chunk_to_sse(remaining_chunk)
 
+            # Normal path completed — clear so post-loop guard doesn't re-emit
+            buffered_chunks.clear()
+
+        # Stream ended without message_delta — fail-open: emit buffered chunks unmodified
+        if is_buffering and buffered_chunks:
+            for buffered_chunk in buffered_chunks:
+                if buffered_chunk.get("type") not in _TERMINAL_MESSAGE_EVENTS:
+                    yield self._encode_anthropic_chunk_to_sse(buffered_chunk)
+
     @staticmethod
     def _accumulate_openai_tool_call_delta(
         delta: ChatCompletionDeltaToolCall,

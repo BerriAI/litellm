@@ -658,6 +658,39 @@ class TestAnthropicStreaming:
                 f"Expected sequential indices [0, 1, 2] but got {block_start_indices}"
             )
 
+    async def test_anthropic_streaming_fail_open_on_missing_message_delta(self, handler):
+        """Test that buffered tool chunks are emitted if stream ends without message_delta (fail-open)."""
+
+        async def mock_stream():
+            events = [
+                {"type": "message_start", "message": {"id": "msg_123", "content": [], "stop_reason": None}},
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi"}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "tool_1", "name": "get_weather", "input": {}}},
+                {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"loc": "NYC"}'}},
+                {"type": "content_block_stop", "index": 1},
+                # Stream ends here — no message_delta or message_stop
+            ]
+            for m in events:
+                yield f"data: {json.dumps(m)}\n\n".encode()
+
+        chunks = []
+        async for chunk in handler.async_post_call_streaming_iterator_hook(
+            user_api_key_dict={},
+            response=mock_stream(),
+            request_data=create_anthropic_request_data(),
+        ):
+            chunks.append(await self._decode_sse(chunk))
+
+        # Should have the text chunks (passed through before buffering)
+        assert len(self._find_text_deltas(chunks)) > 0
+
+        # Should have the tool chunks (fail-open emitted from post-loop guard)
+        tool_blocks = self._find_tool_use_blocks(chunks)
+        assert len(tool_blocks) == 1, f"Expected 1 tool block from fail-open, got {len(tool_blocks)}"
+        assert tool_blocks[0]["content_block"]["name"] == "get_weather"
+
     async def test_anthropic_streaming_text_only_with_real_data(self, handler):
         """Test that text-only Anthropic responses (no tool calls) pass through unmodified."""
         sample_data_path = Path(__file__).parent / "rubrik_test_sample_data" / "anthropic_streaming_text_response"
