@@ -1973,7 +1973,7 @@ class SSOAuthenticationHandler:
             ) = SSOAuthenticationHandler.generate_pkce_params()
             redirect_params["code_challenge"] = code_challenge
             redirect_params["code_challenge_method"] = "S256"
-            verbose_proxy_logger.info("PKCE enabled for authorization request")
+            verbose_proxy_logger.debug("PKCE enabled for authorization request")
 
         return redirect_params, code_verifier
 
@@ -2763,9 +2763,11 @@ class SSOAuthenticationHandler:
             additional_headers=additional_headers,
         )
 
-        # Merge with token_response taking precedence so token fields (e.g. access_token)
-        # cannot be overridden by non-standard userinfo fields.
-        return {**userinfo, **token_response}
+        # Merge: userinfo takes precedence for identity claims (sub, email, name, …) per
+        # the OpenID Connect spec (userinfo is the authoritative source for identity).
+        # token_response provides bearer credentials (access_token, id_token, refresh_token,
+        # token_type, expires_in) that userinfo endpoints do not return, so they are preserved.
+        return {**token_response, **userinfo}
 
     @staticmethod
     async def _get_pkce_userinfo(
