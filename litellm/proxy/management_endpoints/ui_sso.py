@@ -842,10 +842,6 @@ async def get_generic_sso_response(
                 redirect_url=redirect_url,
                 additional_headers=additional_generic_sso_headers_dict,
             )
-            # Token exchange succeeded — now it is safe to delete the single-use
-            # verifier.  Deleting before the exchange would lose it on retries.
-            if pkce_cache_key:
-                await SSOAuthenticationHandler._delete_pkce_verifier(pkce_cache_key)
             # Pass the full response so custom response_convertor implementations
             # can access all fields (including id_token for claim extraction).
             result = response_convertor(combined_response, generic_sso)
@@ -874,6 +870,12 @@ async def get_generic_sso_response(
         process_sso_jwt_access_token(
             access_token_str, sso_jwt_handler, result, role_mappings=role_mappings
         )
+        # Delete the single-use PKCE verifier only after all downstream processing
+        # (response_convertor and process_sso_jwt_access_token) has completed
+        # successfully.  Deleting earlier would consume the verifier on a transient
+        # failure, forcing the user to restart the entire OAuth flow from scratch.
+        if pkce_cache_key:
+            await SSOAuthenticationHandler._delete_pkce_verifier(pkce_cache_key)
 
     except Exception as e:
         error_message = str(e)
