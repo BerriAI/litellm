@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatMessage, Conversation } from "./types";
 
 const STORAGE_KEY = "litellm_chat_history_v1";
@@ -61,6 +61,9 @@ export function useChatHistory(activeConversationId: string | null): {
   const [storageUnavailable, setStorageUnavailable] = useState(false);
   const [staleId, setStaleId] = useState(false);
   const [currentActiveId, setCurrentActiveId] = useState<string | null>(activeConversationId);
+  // Ref so updater functions stay pure (no state setter calls inside setConversations)
+  const storageUnavailableRef = useRef(false);
+  const initializedRef = useRef(false);
 
   // Sync internal active id whenever the URL-derived prop changes (e.g. "New chat" → null)
   useEffect(() => {
@@ -70,8 +73,10 @@ export function useChatHistory(activeConversationId: string | null): {
 
   useEffect(() => {
     const { conversations: loaded, storageUnavailable: unavailable } = loadFromStorage();
+    storageUnavailableRef.current = unavailable;
     setConversations(loaded);
     setStorageUnavailable(unavailable);
+    initializedRef.current = true;
 
     if (activeConversationId !== null) {
       const found = loaded.some((c) => c.id === activeConversationId);
@@ -79,21 +84,18 @@ export function useChatHistory(activeConversationId: string | null): {
         setStaleId(true);
       }
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const persistConversations = useCallback(
-    (updated: Conversation[]) => {
-      const trimmed = trimConversations(updated);
-      setConversations(trimmed);
-      if (!storageUnavailable) {
-        const success = saveToStorage(trimmed);
-        if (!success) {
-          setStorageUnavailable(true);
-        }
-      }
-    },
-    [storageUnavailable],
-  );
+  // Persist to localStorage after every conversations change (pure effect, no setState inside updaters)
+  useEffect(() => {
+    if (!initializedRef.current) return;
+    if (storageUnavailableRef.current) return;
+    const success = saveToStorage(conversations);
+    if (!success) {
+      storageUnavailableRef.current = true;
+      setStorageUnavailable(true);
+    }
+  }, [conversations]);
 
   const createConversation = useCallback(
     (model: string): string => {
@@ -108,11 +110,11 @@ export function useChatHistory(activeConversationId: string | null): {
         createdAt: now,
         updatedAt: now,
       };
-      persistConversations([newConversation, ...conversations]);
+      setConversations((prev) => trimConversations([newConversation, ...prev]));
       setCurrentActiveId(id);
       return id;
     },
-    [conversations, persistConversations],
+    [],
   );
 
   const appendMessage = useCallback(
@@ -125,12 +127,8 @@ export function useChatHistory(activeConversationId: string | null): {
 
       setConversations((prev) => {
         const updated = prev.map((conv) => {
-          if (conv.id !== conversationId) {
-            return conv;
-          }
-
+          if (conv.id !== conversationId) return conv;
           const updatedMessages = [...conv.messages, newMessage];
-
           let title = conv.title;
           if (
             title === "New conversation" &&
@@ -139,26 +137,12 @@ export function useChatHistory(activeConversationId: string | null): {
           ) {
             title = generateTitle(newMessage.content);
           }
-
-          return {
-            ...conv,
-            title,
-            messages: updatedMessages,
-            updatedAt: Date.now(),
-          };
+          return { ...conv, title, messages: updatedMessages, updatedAt: Date.now() };
         });
-
-        const trimmed = trimConversations(updated);
-        if (!storageUnavailable) {
-          const success = saveToStorage(trimmed);
-          if (!success) {
-            setStorageUnavailable(true);
-          }
-        }
-        return trimmed;
+        return trimConversations(updated);
       });
     },
-    [storageUnavailable],
+    [],
   );
 
   const updateLastAssistantMessage = useCallback(
@@ -168,43 +152,20 @@ export function useChatHistory(activeConversationId: string | null): {
     ) => {
       setConversations((prev) => {
         const updated = prev.map((conv) => {
-          if (conv.id !== conversationId) {
-            return conv;
-          }
-
+          if (conv.id !== conversationId) return conv;
           const messages = [...conv.messages];
           const lastAssistantIndex = messages.reduceRight((found, msg, idx) => {
             if (found !== -1) return found;
             return msg.role === "assistant" ? idx : -1;
           }, -1);
-
-          if (lastAssistantIndex === -1) {
-            return conv;
-          }
-
-          messages[lastAssistantIndex] = {
-            ...messages[lastAssistantIndex],
-            ...updates,
-          };
-
-          return {
-            ...conv,
-            messages,
-            updatedAt: Date.now(),
-          };
+          if (lastAssistantIndex === -1) return conv;
+          messages[lastAssistantIndex] = { ...messages[lastAssistantIndex], ...updates };
+          return { ...conv, messages, updatedAt: Date.now() };
         });
-
-        const trimmed = trimConversations(updated);
-        if (!storageUnavailable) {
-          const success = saveToStorage(trimmed);
-          if (!success) {
-            setStorageUnavailable(true);
-          }
-        }
-        return trimmed;
+        return trimConversations(updated);
       });
     },
-    [storageUnavailable],
+    [],
   );
 
   const truncateAfterMessage = useCallback(
@@ -214,36 +175,33 @@ export function useChatHistory(activeConversationId: string | null): {
           if (conv.id !== conversationId) return conv;
           const idx = conv.messages.findIndex((m) => m.id === messageId);
           if (idx === -1) return conv;
-          const messages = conv.messages.slice(0, idx);
-          return { ...conv, messages, updatedAt: Date.now() };
+          return { ...conv, messages: conv.messages.slice(0, idx), updatedAt: Date.now() };
         });
-        const trimmed = trimConversations(updated);
-        if (!storageUnavailable) saveToStorage(trimmed);
-        return trimmed;
+        return trimConversations(updated);
       });
     },
-    [storageUnavailable],
+    [],
   );
 
   const deleteConversation = useCallback(
     (id: string) => {
-      const updated = conversations.filter((c) => c.id !== id);
-      persistConversations(updated);
-      if (currentActiveId === id) {
-        setCurrentActiveId(null);
-      }
+      setConversations((prev) => trimConversations(prev.filter((c) => c.id !== id)));
+      if (currentActiveId === id) setCurrentActiveId(null);
     },
-    [conversations, currentActiveId, persistConversations],
+    [currentActiveId],
   );
 
   const renameConversation = useCallback(
     (id: string, newTitle: string) => {
-      const updated = conversations.map((conv) =>
-        conv.id === id ? { ...conv, title: newTitle, updatedAt: Date.now() } : conv,
+      setConversations((prev) =>
+        trimConversations(
+          prev.map((conv) =>
+            conv.id === id ? { ...conv, title: newTitle, updatedAt: Date.now() } : conv,
+          ),
+        ),
       );
-      persistConversations(updated);
     },
-    [conversations, persistConversations],
+    [],
   );
 
   const setActiveConversationId = useCallback((id: string | null) => {
