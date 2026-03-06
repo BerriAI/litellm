@@ -139,10 +139,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       abortControllerRef.current = new AbortController();
 
       const history = [
-        ...(activeConversation?.messages ?? []).map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        })),
+        ...(activeConversation?.messages ?? [])
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          })),
         { role: "user" as const, content: trimmed },
       ];
 
@@ -170,7 +172,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
           updateLastAssistantMessage(convId!, {
-            content: (activeConversation?.messages.at(-1)?.content ?? "") + " [stopped]",
+            content: accumulatedContent + " [stopped]",
           });
         } else {
           updateLastAssistantMessage(convId!, {
@@ -601,11 +603,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                     </span>
                     {isStreaming ? (
                       <button onClick={handleStop} style={{
-                        background: "#111827", border: "none", borderRadius: 7,
-                        padding: "7px 10px", cursor: "pointer", color: "#fff",
-                        display: "flex", alignItems: "center",
+                        background: "none", border: "1.5px solid #d1d5db", borderRadius: "50%",
+                        width: 32, height: 32, cursor: "pointer", color: "#374151",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        flexShrink: 0,
                       }}>
-                        <BorderOutlined style={{ fontSize: 14 }} />
+                        <div style={{ width: 10, height: 10, background: "#374151", borderRadius: 2 }} />
                       </button>
                     ) : (
                       <button
