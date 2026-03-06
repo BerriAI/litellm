@@ -254,7 +254,9 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "predibase":
         return litellm.PredibaseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "voyage":
-        if litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embedding(model):
+        if litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embedding(
+            model, custom_llm_provider
+        ):
             return litellm.VoyageMultimodalEmbeddingConfig().get_supported_openai_params(
                 model=model
             )

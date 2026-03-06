@@ -30,6 +30,7 @@ from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
+from litellm.utils import supports_multimodal_embedding
 
 
 class VoyageError(BaseLLMException):
@@ -124,6 +125,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         Convert OpenAI-style input (str or list of str) to Voyage multimodal format.
         Voyage expects: inputs = [ {"content": [ {"type": "text", "text": "..."} ]}, ... ]
         If input is already a list of dicts with "content" key, return as-is.
+        Raises ValueError for unsupported input (empty list or list of token IDs).
         """
         if isinstance(input, str):
             return [{"content": [{"type": "text", "text": input}]}]
@@ -136,8 +138,15 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                     {"content": [{"type": "text", "text": item}]}
                     for item in input
                 ]
-            # list of token IDs not supported for multimodal; treat as invalid
-        return [{"content": [{"type": "text", "text": ""}]}]
+            # list of token IDs not supported for multimodal
+            raise ValueError(
+                "Voyage multimodal embeddings require input to be a string, list of "
+                "strings, or Voyage-native format [{\"content\": [{\"type\": \"text\", \"text\": \"...\"}, ...]}]"
+            )
+        raise ValueError(
+            "Voyage multimodal embeddings require non-empty input: a string, list of "
+            "strings, or Voyage-native format [{\"content\": [...]}]"
+        )
 
     def transform_embedding_request(
         self,
@@ -192,5 +201,19 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         )
 
     @staticmethod
-    def is_multimodal_embedding(model: str) -> bool:
-        return "multimodal" in model.lower()
+    def is_multimodal_embedding(
+        model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        """
+        True if the model uses Voyage /v1/multimodalembeddings. Driven by
+        supports_multimodal_embedding in model_prices_and_context_window.json.
+        """
+        try:
+            return supports_multimodal_embedding(
+                model=model,
+                custom_llm_provider=custom_llm_provider
+                if custom_llm_provider is not None
+                else "voyage",
+            )
+        except Exception:
+            return False

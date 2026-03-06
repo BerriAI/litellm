@@ -2659,6 +2659,21 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def supports_multimodal_embedding(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports Voyage-style multimodal embedding
+    (/v1/multimodalembeddings). Driven by supports_multimodal_embedding in
+    model_prices_and_context_window.json.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_multimodal_embedding",
+    )
+
+
 def get_supported_regions(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> Optional[List[str]]:
@@ -3333,7 +3348,9 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             request_type="embeddings",
         )
         _check_valid_arg(supported_params=supported_params)
-        if litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embedding(model):
+        if litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embedding(
+            model, custom_llm_provider
+        ):
             optional_params = (
                 litellm.VoyageMultimodalEmbeddingConfig().map_openai_params(
                     non_default_params=non_default_params,
@@ -5761,6 +5778,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
+                supports_multimodal_embedding=_model_info.get(
+                    "supports_multimodal_embedding", None
+                ),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
                 ),
@@ -8127,7 +8147,9 @@ class ProviderConfigManager:
     ) -> Optional[BaseEmbeddingConfig]:
         if (
             litellm.LlmProviders.VOYAGE == provider
-            and litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embedding(model)
+            and litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embedding(
+                model, provider.value
+            )
         ):
             return litellm.VoyageMultimodalEmbeddingConfig()
         elif (
