@@ -384,11 +384,11 @@ class PrismaManager:
             if result.returncode != 0:
                 verbose_proxy_logger.error(
                     f"'prisma generate' failed (exit {result.returncode}): "
-                    f"{result.stderr}"
+                    f"stdout: {result.stdout}, stderr: {result.stderr}"
                 )
                 raise RuntimeError(
                     f"'prisma generate' failed with exit code {result.returncode}. "
-                    f"stderr: {result.stderr}"
+                    f"stdout: {result.stdout}, stderr: {result.stderr}"
                 )
             # Clear stale import cache and verify generated client is importable.
             # Note: this purges all prisma.* entries from sys.modules even if
