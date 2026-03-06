@@ -383,6 +383,8 @@ except ValueError:
         f"LITELLM_CLI_JWT_MAX_BUDGET={_cli_budget_env!r} is not a valid number; ignoring."
     )
     max_cli_session_budget = None
+    del _w
+del _cli_budget_env
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
