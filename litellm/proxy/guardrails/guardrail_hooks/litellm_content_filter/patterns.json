@@ -595,7 +595,7 @@
       "pattern": "\\b[ABCEGHJ-NPRSTVXY]\\d[ABCEGHJ-NPRSTV-Z][\\-\\s]?\\d[ABCEGHJ-NPRSTV-Z]\\d\\b",
       "category": "Canadian PII Patterns",
       "description": "Detects Canadian postal codes (A1A 1A1 format, excludes invalid first-letter characters per Canada Post spec)",
-      "keyword_pattern": "\\b(?:postal\\s*code|zip\\s*code|mailing\\s*address|address|code\\s*postal|postcode)\\b",
+      "keyword_pattern": "\\b(?:postal\\s*code|zip\\s*code|mailing\\s*address|street\\s*address|shipping\\s*address|home\\s*address|code\\s*postal|postcode)\\b",
       "allow_word_numbers": false
     },
     {

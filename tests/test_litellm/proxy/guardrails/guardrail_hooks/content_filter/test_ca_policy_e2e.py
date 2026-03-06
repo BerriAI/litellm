@@ -70,6 +70,11 @@ class TestCanadianPIIPolicyE2E:
             ),
             ContentFilterPattern(
                 pattern_type="prebuilt",
+                pattern_name="us_phone",
+                action=ContentFilterAction.MASK,
+            ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
                 pattern_name="ca_postal_code",
                 action=ContentFilterAction.MASK,
             ),
@@ -343,6 +348,26 @@ class TestCanadianPIIPolicyE2E:
 
         assert "REDACTED" not in output
         assert output == text
+
+    # =====================
+    # Phone Number tests
+    # =====================
+
+    @pytest.mark.asyncio
+    async def test_phone_number_masked(self):
+        """North American phone number is detected and masked"""
+        guardrail = self.setup_canadian_guardrail()
+
+        text = "Call me at (416) 555-1234 to discuss."
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data={},
+            input_type="request",
+        )
+        output = result.get("texts", [])[0]
+
+        assert "REDACTED" in output
+        assert "(416) 555-1234" not in output
 
     # =====================
     # Postal Code tests
