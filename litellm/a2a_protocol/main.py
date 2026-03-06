@@ -162,6 +162,31 @@ async def _send_message_via_completion_bridge(
     return LiteLLMSendMessageResponse.from_dict(response_dict)
 
 
+async def _create_a2a_client_with_headers(
+    api_base: Optional[str],
+    trace_id: Optional[str],
+    agent_id: Optional[str],
+) -> tuple:
+    """Create an A2A client with LiteLLM trace headers."""
+    if api_base is None:
+        raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
+    trace_id = trace_id or str(uuid.uuid4())
+    extra_headers: Dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
+    if agent_id:
+        extra_headers["X-LiteLLM-Agent-Id"] = agent_id
+    return await create_a2a_client(base_url=api_base, extra_headers=extra_headers), trace_id
+
+
+def _set_message_context_id(message: Any, context_id: str) -> None:
+    """Set context_id on an A2A message if not already set."""
+    if isinstance(message, dict):
+        if message.get("context_id") is None:
+            message["context_id"] = context_id
+    else:
+        if getattr(message, "context_id", None) is None:
+            message.context_id = context_id
+
+
 @client
 async def asend_message(
     a2a_client: Optional["A2AClientType"] = None,
@@ -245,16 +270,8 @@ async def asend_message(
 
     # Create A2A client if not provided but api_base is available
     if a2a_client is None:
-        if api_base is None:
-            raise ValueError(
-                "Either a2a_client or api_base is required for standard A2A flow"
-            )
-        trace_id = trace_id or str(uuid.uuid4())
-        extra_headers = {"X-LiteLLM-Trace-Id": trace_id}
-        if agent_id:
-            extra_headers["X-LiteLLM-Agent-Id"] = agent_id
-        a2a_client = await create_a2a_client(
-            base_url=api_base, extra_headers=extra_headers
+        a2a_client, trace_id = await _create_a2a_client_with_headers(
+            api_base=api_base, trace_id=trace_id, agent_id=agent_id
         )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
@@ -271,13 +288,7 @@ async def asend_message(
     card_url = getattr(agent_card, "url", None) if agent_card else None
 
     context_id = trace_id or str(uuid.uuid4())
-    message = request.params.message
-    if isinstance(message, dict):
-        if message.get("context_id") is None:
-            message["context_id"] = context_id
-    else:
-        if getattr(message, "context_id", None) is None:
-            message.context_id = context_id
+    _set_message_context_id(request.params.message, context_id)
 
     # Retry loop: if connection fails due to localhost URL in agent card, retry with fixed URL
     a2a_response = None

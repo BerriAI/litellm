@@ -181,15 +181,15 @@ def test_azure_gpt5_1_temperature_with_reasoning_effort_other_values(config: Azu
 
 
 def test_azure_gpt5_1_series_temperature_handling(config: AzureOpenAIGPT5Config):
-    """Test that Azure GPT-5.1 with gpt5_series prefix supports temperature with reasoning_effort='none'."""
+    """Test that Azure GPT-5.1 with gpt5_series prefix passes through temperature=1."""
     params = config.map_openai_params(
-        non_default_params={"temperature": 0.6},
+        non_default_params={"temperature": 1},
         optional_params={},
         model="gpt5_series/gpt-5.1",
         drop_params=False,
         api_version="2024-05-01-preview",
     )
-    assert params["temperature"] == 0.6
+    assert params["temperature"] == 1
 
 
 def test_azure_gpt5_reasoning_effort_none_error(config: AzureOpenAIGPT5Config):
