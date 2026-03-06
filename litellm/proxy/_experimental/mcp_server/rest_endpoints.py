@@ -511,7 +511,7 @@ if MCP_AVAILABLE:
                 arguments=tool_arguments,
                 allowed_mcp_servers=allowed_mcp_servers,
                 start_time=datetime.now(),
-                user_api_key_auth=data.get("user_api_key_auth"),
+                user_api_key_auth=data.get("user_api_key_auth") or user_api_key_dict,
                 mcp_auth_header=data.get("mcp_auth_header"),
                 mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
                 oauth2_headers=data.get("oauth2_headers"),

@@ -1762,6 +1762,14 @@ if MCP_AVAILABLE:
         # These tools are registered with their prefixed names
         #########################################################
         local_tool = global_mcp_tool_registry.get_tool(name)
+        # OpenAPI tools are always registered with their prefixed name.  If the
+        # caller used the bare (unprefixed) name and we already resolved the
+        # server, construct the prefixed name and try again.
+        if local_tool is None and mcp_server is not None and mcp_server.spec_path:
+            prefixed_name = add_server_prefix_to_name(name, get_server_prefix(mcp_server))
+            local_tool = global_mcp_tool_registry.get_tool(prefixed_name)
+            if local_tool:
+                name = prefixed_name
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
             # For BYOK servers the credential must be injected via a ContextVar
