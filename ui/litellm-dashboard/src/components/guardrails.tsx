@@ -14,6 +14,7 @@ import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { getGuardrailLogoAndName } from "./guardrails/guardrail_info_helpers";
 import { CustomCodeModal } from "./guardrails/custom_code";
 import GuardrailGarden from "./guardrails/guardrail_garden";
+import { TeamGuardrailsTab } from "./guardrails/TeamGuardrailsTab";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -139,6 +140,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
           <Tab>Guardrail Garden</Tab>
           <Tab>Guardrails</Tab>
           <Tab disabled={!accessToken || guardrailsList.length === 0}>Test Playground</Tab>
+          <Tab>Team Guardrails</Tab>
         </TabList>
 
         <TabPanels>
@@ -241,6 +243,11 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               accessToken={accessToken}
               onClose={() => setActiveTab(0)}
             />
+          </TabPanel>
+
+          {/* Team Guardrails Tab */}
+          <TabPanel>
+            <TeamGuardrailsTab accessToken={accessToken} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
