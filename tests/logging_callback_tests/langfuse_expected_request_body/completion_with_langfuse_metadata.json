@@ -20,7 +20,8 @@
                     "content": "Hello! How can I assist you today?",
                     "role": "assistant",
                     "tool_calls": null,
-                    "function_call": null
+                    "function_call": null,
+                    "provider_specific_fields": null
                 },
                 "sessionId": "test_session_id",
                 "version": "test_trace_version",
@@ -75,7 +76,8 @@
                     "content": "Hello! How can I assist you today?",
                     "role": "assistant",
                     "tool_calls": null,
-                    "function_call": null
+                    "function_call": null,
+                    "provider_specific_fields": null
                 },
                 "level": "DEFAULT",
                 "parentObservationId": "test_parent_observation_id",

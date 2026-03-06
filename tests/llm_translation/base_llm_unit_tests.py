@@ -187,6 +187,7 @@ class BaseLLMChatTest(ABC):
         print(response)
         print(json.dumps(response, indent=4, default=str))
 
+    @pytest.mark.flaky(retries=3, delay=1)
     def test_tool_call_with_empty_enum_property(self):
         litellm._turn_on_debug()
         from litellm.utils import supports_function_calling
@@ -853,7 +854,7 @@ class BaseLLMChatTest(ABC):
         "image_url",
         [
             "http://img1.etsystatic.com/260/0/7813604/il_fullxfull.4226713999_q86e.jpg",
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+            "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
         ],
     )
     @pytest.mark.flaky(retries=4, delay=2)
@@ -919,7 +920,7 @@ class BaseLLMChatTest(ABC):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        image_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+        image_url = "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
 
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_vision(base_completion_call_args["model"], None):

@@ -7,11 +7,20 @@ Thank you for your interest in contributing to LiteLLM! We welcome contributions
 Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Sign the Contributor License Agreement (CLA)** - [see details](#contributor-license-agreement-cla)
+- [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+
+#### Proxy (Backend) PRs
+
 - [ ] **Add testing** - Adding at least 1 test is a hard requirement - [see details](#adding-testing)
 - [ ] **Ensure your PR passes all checks**:
   - [ ] [Unit Tests](#running-unit-tests) - `make test-unit`
   - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
-- [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+
+#### UI PRs
+
+- [ ] **Ensure the UI builds successfully** - `npm run build`
+- [ ] **Ensure all UI unit tests pass** - `npm run test`
+- [ ] **Add tests for new components or logic** - If you are adding a new component or new logic, add corresponding tests
 
 ## **Contributor License Agreement (CLA)**
 
@@ -24,8 +33,9 @@ Before contributing code to LiteLLM, you must sign our [Contributor License Agre
 ### 1. Setup Your Local Development Environment
 
 ```bash
-# Clone the repository
-git clone https://github.com/BerriAI/litellm.git
+# Fork the repository on GitHub (click the Fork button at https://github.com/BerriAI/litellm)
+# Then clone your fork locally
+git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
 # Create a new branch for your feature
@@ -244,6 +254,43 @@ docker run \
     --config /app/config.yaml --detailed_debug
 ```
 
+## UI Development
+
+### 1. Setup Your Local UI Development Environment
+
+```bash
+# Clone the repo (if you haven't already)
+git clone https://github.com/YOUR_USERNAME/litellm.git
+cd litellm
+
+# Navigate to the UI dashboard directory
+cd ui/litellm-dashboard
+
+# Install dependencies
+npm install
+
+# Start the development server
+npm run dev
+```
+
+### 2. Adding UI Tests
+
+If you are adding a **new component** or **new logic**, you must add corresponding tests.
+
+### 3. Running UI Unit Tests
+
+```bash
+npm run test
+```
+
+### 4. Building the UI
+
+Ensure the UI builds successfully before submitting your PR:
+
+```bash
+npm run build
+```
+
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
@@ -258,7 +305,7 @@ docker run \
 If you need help:
 
 - 💬 [Join our Discord](https://discord.gg/wuPM9dRgDw)
-- 💬 [Join our Slack](https://join.slack.com/share/enQtOTE0ODczMzk2Nzk4NC01YjUxNjY2YjBlYTFmNDRiZTM3NDFiYTM3MzVkODFiMDVjOGRjMmNmZTZkZTMzOWQzZGQyZWIwYjQ0MWExYmE3)
+- 💬 [Join our Slack](https://www.litellm.ai/support)
 - 📧 Email us: ishaan@berri.ai / krrish@berri.ai
 - 🐛 [Create an issue](https://github.com/BerriAI/litellm/issues/new)
 

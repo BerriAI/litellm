@@ -13,24 +13,10 @@ import {
 } from "@tanstack/react-table";
 import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_info_helpers";
 import EditGuardrailForm from "./edit_guardrail_form";
-
-interface GuardrailItem {
-  guardrail_id?: string;
-  guardrail_name: string | null;
-  litellm_params: {
-    guardrail: string;
-    mode: string;
-    default_on: boolean;
-    pii_entities_config?: { [key: string]: string };
-    [key: string]: any;
-  };
-  guardrail_info: Record<string, any> | null;
-  created_at?: string;
-  updated_at?: string;
-}
+import { Guardrail, GuardrailDefinitionLocation } from "./types";
 
 interface GuardrailTableProps {
-  guardrailsList: GuardrailItem[];
+  guardrailsList: Guardrail[];
   isLoading: boolean;
   onDeleteClick: (guardrailId: string, guardrailName: string) => void;
   accessToken: string | null;
@@ -50,7 +36,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
 }) => {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
   const [editModalVisible, setEditModalVisible] = useState(false);
-  const [selectedGuardrail, setSelectedGuardrail] = useState<GuardrailItem | null>(null);
+  const [selectedGuardrail, setSelectedGuardrail] = useState<Guardrail | null>(null);
 
   // Format date helper function
   const formatDate = (dateString?: string) => {
@@ -59,7 +45,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
     return date.toLocaleString();
   };
 
-  const handleEditClick = (guardrail: GuardrailItem) => {
+  const handleEditClick = (guardrail: Guardrail) => {
     setSelectedGuardrail(guardrail);
     setEditModalVisible(true);
   };
@@ -70,7 +56,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
     onGuardrailUpdated();
   };
 
-  const columns: ColumnDef<GuardrailItem>[] = [
+  const columns: ColumnDef<Guardrail>[] = [
     {
       header: "Guardrail ID",
       accessorKey: "guardrail_id",
@@ -173,21 +159,36 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
     },
     {
       id: "actions",
-      header: "",
+      header: "Actions",
       cell: ({ row }) => {
         const guardrail = row.original;
+        const isConfigGuardrail = guardrail.guardrail_definition_location === GuardrailDefinitionLocation.CONFIG;
         return (
           <div className="flex space-x-2">
-            <Icon
-              icon={TrashIcon}
-              size="sm"
-              onClick={() =>
-                guardrail.guardrail_id &&
-                onDeleteClick(guardrail.guardrail_id, guardrail.guardrail_name || "Unnamed Guardrail")
-              }
-              className="cursor-pointer hover:text-red-500"
-              tooltip="Delete guardrail"
-            />
+            {isConfigGuardrail ? (
+              <Tooltip title="Config guardrail cannot be deleted on the dashboard. Please delete it from the config file.">
+                <Icon
+                  data-testid="config-delete-icon"
+                  icon={TrashIcon}
+                  size="sm"
+                  className="cursor-not-allowed text-gray-400"
+                  title="Config guardrail cannot be deleted on the dashboard. Please delete it from the config file."
+                  aria-label="Delete guardrail (config)"
+                />
+              </Tooltip>
+            ) : (
+              <Tooltip title="Delete guardrail">
+                <Icon
+                  icon={TrashIcon}
+                  size="sm"
+                  onClick={() =>
+                    guardrail.guardrail_id &&
+                    onDeleteClick(guardrail.guardrail_id, guardrail.guardrail_name || "Unnamed Guardrail")
+                  }
+                  className="cursor-pointer hover:text-red-500"
+                />
+              </Tooltip>
+            )}
           </div>
         );
       },

@@ -68,6 +68,8 @@ def mock_request():
             self.request_body = request_body or {}
             # Add url attribute that the actual code expects
             self.url = "http://localhost:8000/test"
+            # Add state attribute that FastAPI requests have
+            self.state = type("State", (), {})()
 
         async def body(self) -> bytes:
             return bytes(json.dumps(self.request_body), "utf-8")
@@ -234,7 +236,7 @@ def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
 
 
 athropic_request_body = {
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-5-20250929",
     "max_tokens": 256,
     "messages": [{"role": "user", "content": "Hello, world tell me 2 sentences "}],
     "litellm_metadata": {"tags": ["hi", "hello"]},

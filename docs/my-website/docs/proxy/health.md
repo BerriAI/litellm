@@ -106,6 +106,13 @@ model_list:
       mode: image_generation # 👈 ADD THIS
 ```
 
+#### Custom Health Check Prompt
+
+By default, health checks use the prompt `"test from litellm"`. You can customize this prompt globally by setting an environment variable, or per-model via config:
+
+```bash
+DEFAULT_HEALTH_CHECK_PROMPT="this is a test prompt"
+```
 
 ### Text Completion Models 
 
@@ -321,6 +328,22 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       health_check_timeout: 10 # 👈 OVERRIDE HEALTH CHECK TIMEOUT
+```
+
+## Health Check Max Tokens
+
+By default, health checks use `max_tokens=1` to minimize cost and latency. For wildcard models, the default is `max_tokens=10`.
+
+You can override this per-model by setting `health_check_max_tokens` in the `model_info` section of your config.yaml.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_max_tokens: 5 # 👈 OVERRIDE HEALTH CHECK MAX TOKENS
 ```
 
 ## `/health/readiness`

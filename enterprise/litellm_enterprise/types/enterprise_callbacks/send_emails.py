@@ -1,9 +1,10 @@
 import enum
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from litellm.proxy._types import WebhookEvent
+
 
 class EmailParams(BaseModel):
     logo_url: str
@@ -22,9 +23,21 @@ class SendKeyCreatedEmailEvent(WebhookEvent):
     """
 
 
+class SendKeyRotatedEmailEvent(WebhookEvent):
+    virtual_key: str
+    key_alias: Optional[str] = None
+    """
+    The virtual key that was rotated
+    this will be sk-123xxx, since we will be emailing this to the user to start using the new key
+    """
+
+
 class EmailEvent(str, enum.Enum):
     virtual_key_created = "Virtual Key Created"
     new_user_invitation = "New User Invitation"
+    virtual_key_rotated = "Virtual Key Rotated"
+    soft_budget_crossed = "Soft Budget Crossed"
+    max_budget_alert = "Max Budget Alert"
 
 class EmailEventSettings(BaseModel):
     event: EmailEvent
@@ -37,8 +50,11 @@ class DefaultEmailSettings(BaseModel):
     """Default settings for email events"""
     settings: Dict[EmailEvent, bool] = Field(
         default_factory=lambda: {
-            EmailEvent.virtual_key_created: False,  # Off by default
+            EmailEvent.virtual_key_created: True,  # On by default
             EmailEvent.new_user_invitation: True,  # On by default
+            EmailEvent.virtual_key_rotated: True,  # On by default
+            EmailEvent.soft_budget_crossed: True,  # On by default
+            EmailEvent.max_budget_alert: True,  # On by default
         }
     )
     def to_dict(self) -> Dict[str, bool]:

@@ -1,21 +1,29 @@
-import React, { useState, useEffect } from "react";
-import { Form, Input, Select, Button as AntdButton, Tooltip } from "antd";
-import { Button as TremorButton, TextInput } from "@tremor/react";
+import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import PolicySelector from "@/components/policies/PolicySelector";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { TextInput, Button as TremorButton } from "@tremor/react";
+import { Form, Input, Select, Switch, Tooltip } from "antd";
+import { useEffect, useState } from "react";
+import { rolesWithWriteAccess } from "../../utils/roles";
+import AgentSelector from "../agent_management/AgentSelector";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import { mapInternalToDisplayNames } from "../callback_info_helpers";
+import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import { fetchTeamModels } from "../organisms/create_key_button";
-import { modelAvailableCall, getPromptsList } from "../networking";
-import NumericalInput from "../shared/numerical_input";
-import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import NotificationsManager from "../molecules/notifications_manager";
+import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
+import { fetchTeamModels } from "../organisms/create_key_button";
+import NumericalInput from "../shared/numerical_input";
+import { Tag } from "../tag_management/types";
 import EditLoggingSettings from "../team/EditLoggingSettings";
-import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils";
-import { fetchMCPAccessGroups } from "../networking";
-import { mapInternalToDisplayNames } from "../callback_info_helpers";
-import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
-import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
-import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
-import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -31,7 +39,6 @@ interface KeyEditViewProps {
 // Add this helper function
 const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): string[] => {
   // If no teams data is available, return empty array
-  console.log("getAvailableModelsForKey:", teams);
   if (!teams || !keyData.team_id) {
     return [];
   }
@@ -47,6 +54,27 @@ const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): st
   return [];
 };
 
+// Helper function to determine key_type display value from allowed_routes
+const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
+  if (!allowedRoutes || allowedRoutes.length === 0) {
+    return "default";
+  }
+
+  if (allowedRoutes.includes("llm_api_routes")) {
+    return "llm_api";
+  }
+
+  if (allowedRoutes.includes("management_routes")) {
+    return "management";
+  }
+
+  if (allowedRoutes.includes("info_routes")) {
+    return "read_only";
+  }
+
+  return "default";
+};
+
 export function KeyEditView({
   keyData,
   onCancel,
@@ -57,13 +85,12 @@ export function KeyEditView({
   userRole,
   premiumUser = false,
 }: KeyEditViewProps) {
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const [form] = Form.useForm();
-  const [userModels, setUserModels] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
+  const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const team = teams?.find((team) => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>(
     Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -71,18 +98,19 @@ export function KeyEditView({
   );
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
-
-  const fetchMcpAccessGroups = async () => {
-    if (!accessToken) return;
-    if (mcpAccessGroupsLoaded) return;
-    try {
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-      setMcpAccessGroupsLoaded(true);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
+  const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
+  const [isKeySaving, setIsKeySaving] = useState(false);
+  const { data: projects } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
+  const hasProject = Boolean(keyData.project_id);
+  const projectDisplay = (() => {
+    if (!keyData.project_id) return null;
+    const project = projects?.find((p) => p.project_id === keyData.project_id);
+    return project?.project_alias
+      ? `${project.project_alias} (${keyData.project_id})`
+      : keyData.project_id;
+  })();
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -139,21 +167,31 @@ export function KeyEditView({
     ...keyData,
     token: keyData.token || keyData.token_id,
     budget_duration: getBudgetDuration(keyData.budget_duration),
-    metadata: formatMetadataForDisplay(keyData.metadata),
+    metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
     guardrails: keyData.metadata?.guardrails,
+    disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
     prompts: keyData.metadata?.prompts,
+    tags: keyData.metadata?.tags,
     vector_stores: keyData.object_permission?.vector_stores || [],
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
       accessGroups: keyData.object_permission?.mcp_access_groups || [],
     },
     mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
+    agents_and_groups: {
+      agents: keyData.object_permission?.agents || [],
+      accessGroups: keyData.object_permission?.agent_access_groups || [],
+    },
     logging_settings: extractLoggingSettings(keyData.metadata),
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
+    access_group_ids: keyData.access_group_ids || [],
     auto_rotate: keyData.auto_rotate || false,
     ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
+    allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
+      ? keyData.allowed_routes.join(", ")
+      : "",
   };
 
   useEffect(() => {
@@ -161,9 +199,11 @@ export function KeyEditView({
       ...keyData,
       token: keyData.token || keyData.token_id,
       budget_duration: getBudgetDuration(keyData.budget_duration),
-      metadata: formatMetadataForDisplay(keyData.metadata),
+      metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
       guardrails: keyData.metadata?.guardrails,
+      disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
       prompts: keyData.metadata?.prompts,
+      tags: keyData.metadata?.tags,
       vector_stores: keyData.object_permission?.vector_stores || [],
       mcp_servers_and_groups: {
         servers: keyData.object_permission?.mcp_servers || [],
@@ -174,8 +214,12 @@ export function KeyEditView({
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
         : [],
+      access_group_ids: keyData.access_group_ids || [],
       auto_rotate: keyData.auto_rotate || false,
       ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
+      allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
+        ? keyData.allowed_routes.join(", ")
+        : "",
     });
   }, [keyData, form]);
 
@@ -190,25 +234,177 @@ export function KeyEditView({
     }
   }, [rotationInterval, form]);
 
-  console.log("premiumUser:", premiumUser);
+  // Fetch tags for selector
+  useEffect(() => {
+    const fetchTags = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await tagListCall(accessToken);
+        setTagsList(response);
+      } catch (error) {
+        NotificationsManager.fromBackend("Error fetching tags: " + error);
+      }
+    };
+    fetchTags();
+  }, [accessToken]);
+
+  const handleSubmit = async (values: any) => {
+    try {
+      setIsKeySaving(true);
+
+      // Parse allowed_routes from comma-separated string to array
+      if (typeof values.allowed_routes === "string") {
+        const trimmedInput = values.allowed_routes.trim();
+        if (trimmedInput === "") {
+          values.allowed_routes = [];
+        } else {
+          values.allowed_routes = trimmedInput
+            .split(",")
+            .map((route: string) => route.trim())
+            .filter((route: string) => route.length > 0);
+        }
+      }
+      // If it's already an array (shouldn't happen, but handle it), keep as is
+
+      if (neverExpire) {
+        values.duration = null;
+      }
+
+      await onSubmit(values);
+    } finally {
+      setIsKeySaving(false);
+    }
+  };
 
   return (
-    <Form form={form} onFinish={onSubmit} initialValues={initialValues} layout="vertical">
+    <Form form={form} onFinish={handleSubmit} initialValues={initialValues} layout="vertical">
       <Form.Item label="Key Alias" name="key_alias">
         <TextInput />
       </Form.Item>
 
       <Form.Item label="Models" name="models">
-        <Select mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-          {/* Only show All Team Models if team has models */}
-          {availableModels.length > 0 && <Select.Option value="all-team-models">All Team Models</Select.Option>}
-          {/* Show available team models */}
-          {availableModels.map((model) => (
-            <Select.Option key={model} value={model}>
-              {model}
-            </Select.Option>
-          ))}
-        </Select>
+        <Form.Item
+          noStyle
+          shouldUpdate={(prevValues, currentValues) =>
+            prevValues.allowed_routes !== currentValues.allowed_routes || prevValues.models !== currentValues.models
+          }
+        >
+          {({ getFieldValue, setFieldValue }) => {
+            const allowedRoutesValue = getFieldValue("allowed_routes") || "";
+            // Convert string to array for checking
+            const allowedRoutes = typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
+              ? allowedRoutesValue.split(",").map((r: string) => r.trim()).filter((r: string) => r.length > 0)
+              : [];
+            const isDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
+            const models = getFieldValue("models") || [];
+
+            return (
+              <>
+                <Select
+                  mode="multiple"
+                  placeholder="Select models"
+                  style={{ width: "100%" }}
+                  disabled={isDisabled}
+                  value={isDisabled ? [] : models}
+                  onChange={(value) => setFieldValue("models", value)}
+                >
+                  {/* Only show All Team Models if team has models */}
+                  {availableModels.length > 0 && <Select.Option value="all-team-models">All Team Models</Select.Option>}
+                  {availableModels.map((model) => (
+                    <Select.Option key={model} value={model}>
+                      {model}
+                    </Select.Option>
+                  ))}
+                </Select>
+                {isDisabled && (
+                  <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                    Models field is disabled for this key type
+                  </div>
+                )}
+              </>
+            );
+          }}
+        </Form.Item>
+      </Form.Item>
+
+      <Form.Item label="Key Type">
+        <Form.Item
+          noStyle
+          shouldUpdate={(prevValues, currentValues) => prevValues.allowed_routes !== currentValues.allowed_routes}
+        >
+          {({ getFieldValue, setFieldValue }) => {
+            const allowedRoutesValue = getFieldValue("allowed_routes") || "";
+            // Convert string to array for getKeyTypeFromRoutes
+            const allowedRoutes = typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
+              ? allowedRoutesValue.split(",").map((r: string) => r.trim()).filter((r: string) => r.length > 0)
+              : [];
+            const keyTypeValue = getKeyTypeFromRoutes(allowedRoutes);
+
+            return (
+              <Select
+                placeholder="Select key type"
+                style={{ width: "100%" }}
+                optionLabelProp="label"
+                value={keyTypeValue}
+                onChange={(value) => {
+                  switch (value) {
+                    case "default":
+                      setFieldValue("allowed_routes", "");
+                      break;
+                    case "llm_api":
+                      setFieldValue("allowed_routes", "llm_api_routes");
+                      break;
+                    case "management":
+                      setFieldValue("allowed_routes", "management_routes");
+                      setFieldValue("models", []);
+                      break;
+                  }
+                }}
+              >
+                <Select.Option value="default" label="Default">
+                  <div style={{ padding: "4px 0" }}>
+                    <div style={{ fontWeight: 500 }}>Default</div>
+                    <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      Can call AI APIs + Management routes
+                    </div>
+                  </div>
+                </Select.Option>
+                <Select.Option value="llm_api" label="AI APIs">
+                  <div style={{ padding: "4px 0" }}>
+                    <div style={{ fontWeight: 500 }}>AI APIs</div>
+                    <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      Can call only AI API routes (chat/completions, embeddings, etc.)
+                    </div>
+                  </div>
+                </Select.Option>
+                <Select.Option value="management" label="Management">
+                  <div style={{ padding: "4px 0" }}>
+                    <div style={{ fontWeight: 500 }}>Management</div>
+                    <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      Can call only management routes (user/team/key management)
+                    </div>
+                  </div>
+                </Select.Option>
+              </Select>
+            );
+          }}
+        </Form.Item>
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Allowed Routes{" "}
+            <Tooltip title="List of allowed routes for the key (comma-separated). Can be specific routes (e.g., '/chat/completions') or route patterns (e.g., 'llm_api_routes', 'management_routes', '/keys/*'). Leave empty to allow all routes.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="allowed_routes"
+      >
+        <Input
+          placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes"
+        />
       </Form.Item>
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -254,9 +450,59 @@ export function KeyEditView({
               form.setFieldValue("guardrails", v);
             }}
             accessToken={accessToken}
+            disabled={!canEditGuardrails}
+          />
+        )}
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Disable Global Guardrails{" "}
+            <Tooltip title="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="disable_global_guardrails"
+        valuePropName="checked"
+      >
+        <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Policies{" "}
+            <Tooltip title="Apply policies to this key to control guardrails and other settings">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="policies"
+      >
+        {accessToken && (
+          <PolicySelector
+            onChange={(v) => {
+              form.setFieldValue("policies", v);
+            }}
+            accessToken={accessToken}
             disabled={!premiumUser}
           />
         )}
+      </Form.Item>
+
+      <Form.Item label="Tags" name="tags">
+        <Select
+          mode="tags"
+          style={{ width: "100%" }}
+          placeholder="Select or enter tags"
+          options={Object.values(tagsList).map((tag) => ({
+            value: tag.name,
+            label: tag.name,
+            title: tag.description || tag.name,
+          }))}
+        />
       </Form.Item>
 
       <Form.Item label="Prompts" name="prompts">
@@ -277,8 +523,25 @@ export function KeyEditView({
         </Tooltip>
       </Form.Item>
 
+      <Form.Item
+        label={
+          <span>
+            Access Groups{" "}
+            <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="access_group_ids"
+      >
+        <AccessGroupSelector placeholder="Select access groups (optional)" />
+      </Form.Item>
+
       <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-        <Tooltip title={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : ""} placement="top">
+        <Tooltip
+          title={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : ""}
+          placement="top"
+        >
           <PassThroughRoutesSelector
             onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
             value={form.getFieldValue("allowed_passthrough_routes")}
@@ -286,7 +549,8 @@ export function KeyEditView({
             placeholder={
               !premiumUser
                 ? "Premium feature - Upgrade to set allowed pass through routes by key"
-                : Array.isArray(keyData.metadata?.allowed_passthrough_routes) && keyData.metadata.allowed_passthrough_routes.length > 0
+                : Array.isArray(keyData.metadata?.allowed_passthrough_routes) &&
+                  keyData.metadata.allowed_passthrough_routes.length > 0
                   ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
                   : "Select or enter allowed pass through routes"
             }
@@ -337,9 +601,31 @@ export function KeyEditView({
         )}
       </Form.Item>
 
-      <Form.Item label="Team ID" name="team_id">
-        <Select placeholder="Select team" style={{ width: "100%" }}>
-          {/* Only show All Team Models if team has models */}
+      <Form.Item label="Agents / Access Groups" name="agents_and_groups">
+        <AgentSelector
+          onChange={(val) => form.setFieldValue("agents_and_groups", val)}
+          value={form.getFieldValue("agents_and_groups")}
+          accessToken={accessToken || ""}
+          placeholder="Select agents or access groups (optional)"
+        />
+      </Form.Item>
+
+      <Form.Item
+        label="Team ID"
+        name="team_id"
+        help={enableProjectsUI && hasProject ? "Team is locked because this key belongs to a project" : undefined}
+      >
+        <Select
+          placeholder="Select team"
+          showSearch
+          disabled={enableProjectsUI && hasProject}
+          style={{ width: "100%" }}
+          filterOption={(input, option) => {
+            const team = teams?.find((t) => t.team_id === option?.value);
+            if (!team) return false;
+            return team.team_alias?.toLowerCase().includes(input.toLowerCase()) ?? false;
+          }}
+        >
           {teams?.map((team) => (
             <Select.Option key={team.team_id} value={team.team_id}>
               {`${team.team_alias} (${team.team_id})`}
@@ -347,6 +633,11 @@ export function KeyEditView({
           ))}
         </Select>
       </Form.Item>
+      {enableProjectsUI && hasProject && (
+        <Form.Item label="Project">
+          <Input value={projectDisplay ?? ""} disabled />
+        </Form.Item>
+      )}
       <Form.Item label="Logging Settings" name="logging_settings">
         <EditLoggingSettings
           value={form.getFieldValue("logging_settings")}
@@ -374,7 +665,12 @@ export function KeyEditView({
           onAutoRotationChange={setAutoRotationEnabled}
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
+          neverExpire={neverExpire}
+          onNeverExpireChange={setNeverExpire}
         />
+        <Form.Item name="duration" hidden initialValue="">
+          <Input />
+        </Form.Item>
       </div>
 
       {/* Hidden form field for token */}
@@ -397,8 +693,12 @@ export function KeyEditView({
 
       <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
         <div className="flex justify-end items-center gap-2">
-          <AntdButton onClick={onCancel}>Cancel</AntdButton>
-          <TremorButton type="submit">Save Changes</TremorButton>
+          <TremorButton variant="secondary" onClick={onCancel} disabled={isKeySaving}>
+            Cancel
+          </TremorButton>
+          <TremorButton type="submit" loading={isKeySaving}>
+            Save Changes
+          </TremorButton>
         </div>
       </div>
     </Form>

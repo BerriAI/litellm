@@ -13,6 +13,7 @@ import httpx
 from dotenv import load_dotenv
 
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -36,11 +37,16 @@ class LiteLLMDatabaseConnectionPool(Enum):
     database_connection_pool_timeout = 60
 
 
-def append_query_params(url, params) -> str:
+def append_query_params(url: Optional[str], params: dict) -> str:
     from litellm._logging import verbose_proxy_logger
 
     verbose_proxy_logger.debug(f"url: {url}")
     verbose_proxy_logger.debug(f"params: {params}")
+    if not isinstance(url, str) or url == "":
+        # Preserve previous startup behavior when DATABASE_URL is absent.
+        # Returning an empty string avoids urlparse type errors in test/dev flows.
+        verbose_proxy_logger.warning("append_query_params received empty or non-string URL, returning empty string")
+        return ""
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
     parsed_query.update(params)
@@ -126,6 +132,7 @@ class ProxyInitializationHelpers:
         Get the arguments for `uvicorn` worker
         """
         import litellm
+        from litellm._logging import _get_uvicorn_json_log_config
 
         uvicorn_args = {
             "app": "litellm.proxy.proxy_server:app",
@@ -136,8 +143,8 @@ class ProxyInitializationHelpers:
             print(f"Using log_config: {log_config}")  # noqa
             uvicorn_args["log_config"] = log_config
         elif litellm.json_logs:
-            print("Using json logs. Setting log_config to None.")  # noqa
-            uvicorn_args["log_config"] = None
+            # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON
+            uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
         return uvicorn_args
@@ -270,6 +277,15 @@ class ProxyInitializationHelpers:
         if max_requests_before_restart is not None:
             gunicorn_options["max_requests"] = max_requests_before_restart
 
+        # Clean up prometheus .db files when a worker exits (prevents ghost gauge values)
+        if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+            from litellm.proxy.prometheus_cleanup import mark_worker_exit
+
+            def child_exit(server, worker):
+                mark_worker_exit(worker.pid)
+
+            gunicorn_options["child_exit"] = child_exit
+
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
             print(  # noqa
                 f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
@@ -307,6 +323,47 @@ class ProxyInitializationHelpers:
             return None  # Let uvicorn choose the default loop on Windows
         return "uvloop"
 
+    @staticmethod
+    def _maybe_setup_prometheus_multiproc_dir(
+        num_workers: int,
+        litellm_settings: Optional[dict],
+    ) -> None:
+        """
+        Auto-create PROMETHEUS_MULTIPROC_DIR when running with multiple workers
+        and prometheus is configured as a callback.
+        """
+        import tempfile
+
+        if num_workers <= 1 or litellm_settings is None:
+            return
+
+        # Check if prometheus is in any callback list
+        callbacks = litellm_settings.get("callbacks") or []
+        success_callbacks = litellm_settings.get("success_callback") or []
+        failure_callbacks = litellm_settings.get("failure_callback") or []
+        all_callbacks = callbacks + success_callbacks + failure_callbacks
+        if "prometheus" not in all_callbacks:
+            return
+
+        from litellm.proxy.prometheus_cleanup import wipe_directory
+
+        multiproc_dir = (
+            os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+            or os.environ.get("prometheus_multiproc_dir")
+        )
+
+        auto_created = not multiproc_dir
+        if not multiproc_dir:
+            multiproc_dir = os.path.join(
+                tempfile.gettempdir(), "litellm_prometheus_multiproc"
+            )
+            os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
+
+        os.makedirs(multiproc_dir, exist_ok=True)
+        wipe_directory(multiproc_dir)
+        action = "Auto-created" if auto_created else "Using existing"
+        print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")  # noqa
+
 
 @click.command()
 @click.option(
@@ -316,7 +373,7 @@ class ProxyInitializationHelpers:
 @click.option(
     "--num_workers",
     default=DEFAULT_NUM_WORKERS_LITELLM_PROXY,
-    help="Number of uvicorn / gunicorn workers to spin up. By default, it equals the number of logical CPUs in the system, or 4 workers if that cannot be determined.",
+    help="Number of uvicorn / gunicorn workers to spin up. Default is 1 (from DEFAULT_NUM_WORKERS_LITELLM_PROXY)",
     envvar="NUM_WORKERS",
 )
 @click.option("--api_base", default=None, help="API base URL.")
@@ -615,7 +672,7 @@ def run_server(  # noqa: PLR0915
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
-        if iam_token_db_auth:
+        if iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
             from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
             db_host = os.getenv("DATABASE_HOST")
@@ -683,12 +740,7 @@ def run_server(  # noqa: PLR0915
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
-            if general_settings:
-                ### LOAD SECRET MANAGER ###
-                key_management_system = general_settings.get(
-                    "key_management_system", None
-                )
-                proxy_config.initialize_secret_manager(key_management_system)
+            ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
                 "key_management_settings", None
             )
@@ -697,6 +749,15 @@ def run_server(  # noqa: PLR0915
 
                 litellm._key_management_settings = KeyManagementSettings(
                     **key_management_settings
+                )
+
+            if general_settings:
+                ### LOAD SECRET MANAGER ###
+                key_management_system = general_settings.get(
+                    "key_management_system", None
+                )
+                proxy_config.initialize_secret_manager(
+                    key_management_system=key_management_system, config_file_path=config
                 )
             database_url = general_settings.get("database_url", None)
             if database_url is None and os.getenv("DATABASE_URL") is None:
@@ -807,6 +868,12 @@ def run_server(  # noqa: PLR0915
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
+
+        # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
+        ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+            num_workers=num_workers,
+            litellm_settings=litellm_settings if config else None,
+        )
 
         # --- SEPARATE HEALTH APP LOGIC ---
         # To run the health app separately, use:

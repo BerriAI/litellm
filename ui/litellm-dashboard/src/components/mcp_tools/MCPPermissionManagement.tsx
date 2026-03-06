@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
-import { Form, Select, Tooltip, Collapse } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
+import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { MCPServer } from "./types";
 const { Panel } = Collapse;
 
@@ -31,6 +31,22 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
       if (mcpServer.extra_headers) {
         form.setFieldValue("extra_headers", mcpServer.extra_headers);
       }
+      if (mcpServer.static_headers) {
+        const staticHeaders = Object.entries(mcpServer.static_headers).map(([header, value]) => ({
+          header,
+          value: value != null ? String(value) : "",
+        }));
+        form.setFieldValue("static_headers", staticHeaders);
+      }
+      if (typeof mcpServer.allow_all_keys === "boolean") {
+        form.setFieldValue("allow_all_keys", mcpServer.allow_all_keys);
+      }
+      if (typeof mcpServer.available_on_public_internet === "boolean") {
+        form.setFieldValue("available_on_public_internet", mcpServer.available_on_public_internet);
+      }
+    } else {
+      form.setFieldValue("allow_all_keys", false);
+      form.setFieldValue("available_on_public_internet", true);
     }
   }, [mcpServer, form]);
 
@@ -48,8 +64,51 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         }
         key="permissions"
         className="border-0"
+        forceRender
       >
         <div className="space-y-6 pt-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Allow All LiteLLM Keys
+                <Tooltip title="When enabled, every API key can access this MCP server.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+              <p className="text-sm text-gray-600 mt-1">Enable if this server should be &quot;public&quot; to all keys.</p>
+            </div>
+            <Form.Item
+              name="allow_all_keys"
+              valuePropName="checked"
+              initialValue={mcpServer?.allow_all_keys ?? false}
+              className="mb-0"
+            >
+              <Switch />
+            </Form.Item>
+          </div>
+
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Internal network only
+                <Tooltip title="When on, only requests from within your internal network are accepted. Turn off to allow external clients (other clusters, ChatGPT, etc). API key authentication is always required regardless of this setting.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+              <p className="text-sm text-gray-600 mt-1">Turn on to restrict access to callers within your internal network only.</p>
+            </div>
+            <Form.Item
+              name="available_on_public_internet"
+              valuePropName="checked"
+              getValueProps={(value) => ({ checked: !value })}
+              getValueFromEvent={(checked: boolean) => !checked}
+              initialValue={true}
+              className="mb-0"
+            >
+              <Switch />
+            </Form.Item>
+          </div>
+
           <Form.Item
             label={
               <span className="text-sm font-medium text-gray-700 flex items-center">
@@ -104,6 +163,62 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               tokenSeparators={[","]}
               allowClear
             />
+          </Form.Item>
+
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Static Headers
+                <Tooltip title="Send these key-value headers with every request to this MCP server.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+            required={false}
+          >
+            <Form.List name="static_headers">
+              {(fields, { add, remove }) => (
+                <div className="space-y-3">
+                  {fields.map(({ key, name, ...restField }) => (
+                    <Space key={key} className="flex w-full" align="baseline" size="middle">
+                      <Form.Item
+                        {...restField}
+                        name={[name, "header"]}
+                        className="flex-1"
+                        rules={[{ required: true, message: "Header name is required" }]}
+                      >
+                        <Input
+                          size="large"
+                          allowClear
+                          className="rounded-lg"
+                          placeholder="Header name (e.g., X-API-Key)"
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, "value"]}
+                        className="flex-1"
+                        rules={[{ required: true, message: "Header value is required" }]}
+                      >
+                        <Input
+                          size="large"
+                          allowClear
+                          className="rounded-lg"
+                          placeholder="Header value"
+                        />
+                      </Form.Item>
+                      <MinusCircleOutlined
+                        onClick={() => remove(name)}
+                        className="text-gray-500 hover:text-red-500 cursor-pointer"
+                      />
+                    </Space>
+                  ))}
+                  <Button type="dashed" onClick={() => add()} icon={<PlusOutlined />} block>
+                    Add Static Header
+                  </Button>
+                </div>
+              )}
+            </Form.List>
           </Form.Item>
         </div>
       </Panel>

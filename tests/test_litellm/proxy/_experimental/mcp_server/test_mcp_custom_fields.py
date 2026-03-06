@@ -22,7 +22,7 @@ from litellm.proxy._types import LiteLLM_MCPServerTable
 class TestMCPCustomFields:
     """Test custom fields functionality in MCP server configuration."""
 
-    def test_custom_fields_preserved_from_config(self):
+    async def test_custom_fields_preserved_from_config(self):
         """Test that custom fields in mcp_info are preserved when loading from config."""
         manager = MCPServerManager()
 
@@ -46,7 +46,7 @@ class TestMCPCustomFields:
         }
 
         # Load servers from config
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         # Get the loaded server
         servers = list(manager.config_mcp_servers.values())
@@ -66,33 +66,34 @@ class TestMCPCustomFields:
         assert mcp_info["priority"] == 10
         assert mcp_info["tags"] == ["production", "api"]
 
-    def test_custom_fields_preserved_from_database(self):
+    async def test_custom_fields_preserved_from_database(self):
         """Test that custom fields in mcp_info are preserved when adding from database."""
         manager = MCPServerManager()
 
         # Mock database record with custom fields
-        mock_server = Mock(spec=LiteLLM_MCPServerTable)
-        mock_server.server_id = "test-server-id"
-        mock_server.server_name = "Test Server"
-        mock_server.description = "A test server"
-        mock_server.url = "http://localhost:3000"
-        mock_server.transport = "http"
-        mock_server.auth_type = MCPAuth.bearer_token
-        mock_server.alias = None
-        mock_server.mcp_info = {
-            "server_name": "Test Server",
-            "description": "A test server",
-            "custom_db_field": "database_value",
-            "metadata": {"source": "database"},
-            "version": "1.0.0"
-        }
-        mock_server.command = None
-        mock_server.args = None
-        mock_server.env = None
-        mock_server.mcp_access_groups = None
+        mock_server = LiteLLM_MCPServerTable(
+            server_id="test-server-id",
+            server_name="Test Server",
+            alias=None,
+            description="A test server",
+            url="http://localhost:3000",
+            transport="http",
+            auth_type=MCPAuth.bearer_token,
+            mcp_info={
+                "server_name": "Test Server",
+                "description": "A test server",
+                "custom_db_field": "database_value",
+                "metadata": {"source": "database"},
+                "version": "1.0.0",
+            },
+            command=None,
+            args=[],
+            env={},
+            mcp_access_groups=[],
+        )
 
         # Add server to manager
-        manager.add_update_server(mock_server)
+        await manager.add_server(mock_server)
 
         # Get the added server
         server = manager.get_mcp_server_by_id("test-server-id")
@@ -109,7 +110,7 @@ class TestMCPCustomFields:
         assert mcp_info["metadata"] == {"source": "database"}
         assert mcp_info["version"] == "1.0.0"
 
-    def test_empty_mcp_info_handled_gracefully(self):
+    async def test_empty_mcp_info_handled_gracefully(self):
         """Test that empty or missing mcp_info is handled gracefully."""
         manager = MCPServerManager()
 
@@ -122,7 +123,7 @@ class TestMCPCustomFields:
             }
         }
 
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         servers = list(manager.config_mcp_servers.values())
         assert len(servers) == 1
@@ -133,7 +134,7 @@ class TestMCPCustomFields:
         # Should have default server_name
         assert mcp_info["server_name"] == "test_server"
 
-    def test_missing_mcp_info_creates_defaults(self):
+    async def test_missing_mcp_info_creates_defaults(self):
         """Test that missing mcp_info creates appropriate defaults."""
         manager = MCPServerManager()
 
@@ -146,7 +147,7 @@ class TestMCPCustomFields:
             }
         }
 
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         servers = list(manager.config_mcp_servers.values())
         assert len(servers) == 1
@@ -158,7 +159,7 @@ class TestMCPCustomFields:
         assert mcp_info["server_name"] == "test_server"
         assert mcp_info["description"] == "Server description"
 
-    def test_config_description_fallback(self):
+    async def test_config_description_fallback(self):
         """Test that description from config level is used as fallback."""
         manager = MCPServerManager()
 
@@ -174,7 +175,7 @@ class TestMCPCustomFields:
             }
         }
 
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         servers = list(manager.config_mcp_servers.values())
         server = servers[0]
@@ -184,7 +185,7 @@ class TestMCPCustomFields:
         assert mcp_info["description"] == "Config level description"
         assert mcp_info["custom_field"] == "custom_value"
 
-    def test_mcp_info_description_takes_precedence(self):
+    async def test_mcp_info_description_takes_precedence(self):
         """Test that description in mcp_info takes precedence over config level."""
         manager = MCPServerManager()
 
@@ -201,7 +202,7 @@ class TestMCPCustomFields:
             }
         }
 
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         servers = list(manager.config_mcp_servers.values())
         server = servers[0]

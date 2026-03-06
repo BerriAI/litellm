@@ -1,0 +1,157 @@
+# EU AI Act Article 5 - Prohibited Practices Detection
+# Uses conditional logic: BLOCK if identifier word + block word appear together
+# Reference: https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_article5_prohibited_practices"
+description: "Detects EU AI Act Article 5 prohibited practices using conditional keyword matching"
+default_action: "BLOCK"
+
+# IDENTIFIER WORDS - Actions that could create prohibited systems
+# When combined with prohibited contexts (block words), triggers violation
+identifier_words:
+  # System development actions
+  - "build"
+  - "create"
+  - "develop"
+  - "design"
+  - "implement"
+
+  # Analysis/scoring actions
+  - "score"
+  - "rank"
+  - "rate"
+  - "assess"
+  - "evaluate"
+  - "classify"
+  - "profile"
+  - "grade"
+
+  # Detection/recognition actions
+  - "recognize"
+  - "detect"
+  - "identify"
+  - "infer"
+  - "deduce"
+  - "predict"
+  - "determine"
+  - "analyze"
+
+# ADDITIONAL BLOCK WORDS - Prohibited contexts from Article 5
+# When combined with identifier words, indicates violation
+additional_block_words:
+  # Social scoring (Article 5.1.c)
+  - "social behavior"
+  - "social credit"
+  - "social score"
+  - "trustworthiness"
+  - "citizen score"
+  - "reputation score"
+  - "behavioral score"
+  - "social media behavior"
+
+  # Emotion recognition in workplace/education (Article 5.1.f)
+  - "employee emotion"
+  - "worker emotion"
+  - "staff emotion"
+  - "workplace emotion"
+  - "student emotion"
+  - "classroom emotion"
+  - "employee sentiment"
+  - "worker sentiment"
+  - "student sentiment"
+  - "employee mood"
+  - "worker mood"
+
+  # Biometric categorization (Article 5.1.h)
+  - "race from face"
+  - "ethnicity from face"
+  - "race from biometric"
+  - "ethnicity from biometric"
+  - "political views from"
+  - "political opinions from"
+  - "sexual orientation from"
+  - "religion from biometric"
+  - "religious beliefs from"
+
+  # Predictive profiling
+  - "crime prediction"
+  - "criminal behavior"
+  - "recidivism"
+  - "employee performance prediction"
+  - "creditworthiness from social"
+
+  # Manipulation (Article 5.1.a)
+  - "subliminal"
+  - "subconscious"
+  - "behavior manipulation"
+
+  # Vulnerability exploitation (Article 5.1.b)
+  - "children vulnerability"
+  - "elderly vulnerability"
+  - "disabled vulnerability"
+
+# ALWAYS BLOCK - Explicit prohibited practices (always blocked regardless of context)
+always_block_keywords:
+  # Social scoring systems
+  - keyword: "social credit system"
+    severity: "high"
+  - keyword: "social scoring system"
+    severity: "high"
+  - keyword: "citizen scoring"
+    severity: "high"
+
+  # Emotion recognition in workplace/education
+  - keyword: "emotion recognition in workplace"
+    severity: "high"
+  - keyword: "emotion detection of employees"
+    severity: "high"
+  - keyword: "emotion recognition in classroom"
+    severity: "high"
+  - keyword: "student emotion detection"
+    severity: "high"
+
+  # Biometric categorization
+  - keyword: "infer race from face"
+    severity: "high"
+  - keyword: "predict race from facial"
+    severity: "high"
+  - keyword: "infer ethnicity from biometric"
+    severity: "high"
+  - keyword: "predict political opinions from"
+    severity: "high"
+  - keyword: "biometric categorization system"
+    severity: "high"
+
+  # Predictive profiling
+  - keyword: "predictive policing"
+    severity: "high"
+  - keyword: "crime prediction algorithm"
+    severity: "high"
+  - keyword: "recidivism prediction"
+    severity: "high"
+
+# EXCEPTIONS - Legitimate use cases (always allowed)
+exceptions:
+  # Research and education
+  - "research on"
+  - "study on"
+  - "academic"
+  - "thesis on"
+
+  # Compliance monitoring
+  - "audit for bias"
+  - "detect discrimination"
+  - "compliance monitoring"
+  - "ethical review"
+  - "fairness testing"
+
+  # Entertainment/product contexts
+  - "movie"
+  - "game"
+  - "product review"
+  - "customer feedback"
+
+  # Meta-discussion
+  - "explain"
+  - "what is"
+  - "article 5"
+  - "prohibited by"

@@ -2,12 +2,16 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from litellm_enterprise.proxy.audit_logging_endpoints import router as audit_router
 from litellm_enterprise.types.proxy.audit_logging_endpoints import AuditLogResponse
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.proxy_server import app
 
+# Create an app with just the audit router for testing
+app = FastAPI()
+app.include_router(audit_router)
 client = TestClient(app)
 
 # Mock data for testing

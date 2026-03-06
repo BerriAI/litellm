@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterable, List, Optional, Set, Union
+from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -11,7 +11,13 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    _get_salt_key,
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.utils import PrismaClient
+from litellm.types.mcp import MCPCredentials
 
 
 def _prepare_mcp_server_data(
@@ -35,6 +41,18 @@ def _prepare_mcp_server_data(
     if "alias" not in data_dict:
         data_dict["alias"] = getattr(data, "alias", None)
 
+    # Handle credentials serialization
+    credentials = data_dict.get("credentials")
+    if credentials is not None:
+        data_dict["credentials"] = encrypt_credentials(
+            credentials=credentials, encryption_key=_get_salt_key()
+        )
+        data_dict["credentials"] = safe_dumps(data_dict["credentials"])
+
+    # Handle static_headers serialization
+    if data.static_headers is not None:
+        data_dict["static_headers"] = safe_dumps(data.static_headers)
+
     # Handle mcp_info serialization
     if data.mcp_info is not None:
         data_dict["mcp_info"] = safe_dumps(data.mcp_info)
@@ -43,9 +61,43 @@ def _prepare_mcp_server_data(
     if data.env is not None:
         data_dict["env"] = safe_dumps(data.env)
 
+    # Handle tool name override serialization
+    if data.tool_name_to_display_name is not None:
+        data_dict["tool_name_to_display_name"] = safe_dumps(data.tool_name_to_display_name)
+    if data.tool_name_to_description is not None:
+        data_dict["tool_name_to_description"] = safe_dumps(data.tool_name_to_description)
+
     # mcp_access_groups is already List[str], no serialization needed
 
+    # Force include is_byok even when False (exclude_none=True would not drop it,
+    # but be explicit to ensure a False value is always written to the DB).
+    data_dict["is_byok"] = getattr(data, "is_byok", False)
+
     return data_dict
+
+
+def encrypt_credentials(
+    credentials: MCPCredentials, encryption_key: Optional[str]
+) -> MCPCredentials:
+    auth_value = credentials.get("auth_value")
+    if auth_value is not None:
+        credentials["auth_value"] = encrypt_value_helper(
+            value=auth_value,
+            new_encryption_key=encryption_key,
+        )
+    client_id = credentials.get("client_id")
+    if client_id is not None:
+        credentials["client_id"] = encrypt_value_helper(
+            value=client_id,
+            new_encryption_key=encryption_key,
+        )
+    client_secret = credentials.get("client_secret")
+    if client_secret is not None:
+        credentials["client_secret"] = encrypt_value_helper(
+            value=client_secret,
+            new_encryption_key=encryption_key,
+        )
+    return credentials
 
 
 async def get_all_mcp_servers(
@@ -76,12 +128,12 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server: Optional[LiteLLM_MCPServerTable] = (
-        await prisma_client.db.litellm_mcpservertable.find_unique(
-            where={
-                "server_id": server_id,
-            }
-        )
+    mcp_server: Optional[
+        LiteLLM_MCPServerTable
+    ] = await prisma_client.db.litellm_mcpservertable.find_unique(
+        where={
+            "server_id": server_id,
+        }
     )
     return mcp_server
 
@@ -92,12 +144,12 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    _mcp_servers: List[LiteLLM_MCPServerTable] = (
-        await prisma_client.db.litellm_mcpservertable.find_many(
-            where={
-                "server_id": {"in": server_ids},
-            }
-        )
+    _mcp_servers: List[
+        LiteLLM_MCPServerTable
+    ] = await prisma_client.db.litellm_mcpservertable.find_many(
+        where={
+            "server_id": {"in": server_ids},
+        }
     )
     final_mcp_servers: List[LiteLLM_MCPServerTable] = []
     for _mcp_server in _mcp_servers:
@@ -299,3 +351,103 @@ async def update_mcp_server(
     )
 
     return updated_mcp_server
+
+
+async def rotate_mcp_server_credentials_master_key(
+    prisma_client: PrismaClient, touched_by: str, new_master_key: str
+):
+    mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+
+    for mcp_server in mcp_servers:
+        credentials = mcp_server.credentials
+        if not credentials:
+            continue
+
+        credentials_copy = dict(credentials)
+        encrypted_credentials = encrypt_credentials(
+            credentials=cast(MCPCredentials, credentials_copy),
+            encryption_key=new_master_key,
+        )
+
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        serialized_credentials = safe_dumps(encrypted_credentials)
+
+        await prisma_client.db.litellm_mcpservertable.update(
+            where={"server_id": mcp_server.server_id},
+            data={
+                "credentials": serialized_credentials,
+                "updated_by": touched_by,
+            },
+        )
+
+
+async def store_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    credential: str,
+) -> None:
+    """Store a user credential for a BYOK MCP server."""
+    import base64
+
+    encoded = base64.urlsafe_b64encode(credential.encode()).decode()
+    await prisma_client.db.litellm_mcpusercredentials.upsert(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
+        data={
+            "create": {
+                "user_id": user_id,
+                "server_id": server_id,
+                "credential_b64": encoded,
+            },
+            "update": {"credential_b64": encoded},
+        },
+    )
+
+
+async def get_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> Optional[str]:
+    """Return credential for a user+server pair, or None."""
+    import base64
+
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if row is None:
+        return None
+    try:
+        return base64.urlsafe_b64decode(row.credential_b64).decode()
+    except Exception:
+        # Fall back to nacl decryption for credentials stored by older code
+        return decrypt_value_helper(
+            value=row.credential_b64,
+            key="byok_credential",
+            exception_type="debug",
+            return_original_value=False,
+        )
+
+
+async def has_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> bool:
+    """Return True if the user has a stored credential for this server."""
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    return row is not None
+
+
+async def delete_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> None:
+    """Delete the user's stored credential for a BYOK MCP server."""
+    await prisma_client.db.litellm_mcpusercredentials.delete(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )

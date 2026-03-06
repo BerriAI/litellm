@@ -378,8 +378,8 @@ async def test_gemini_custom_api_base_proxy_integration():
     expected_url = f"{custom_api_base}/models/{model}:{endpoint}"
     assert result_url == expected_url, f"Expected {expected_url}, got {result_url}"
     
-    # Verify the auth header is set to the API key
-    assert auth_header == "test-api-key", f"Expected 'test-api-key', got {auth_header}"
+    # Verify the auth header is set to the API key as a dictionary
+    assert auth_header == {"x-goog-api-key": "test-api-key"}, f"Expected {{'x-goog-api-key': 'test-api-key'}}, got {auth_header}"
     
     print(f"✅ Custom API base URL construction test passed: {result_url}")
     
@@ -398,6 +398,9 @@ async def test_gemini_custom_api_base_proxy_integration():
     # Verify streaming URL has ?alt=sse parameter
     expected_streaming_url = f"{custom_api_base}/models/{model}:{endpoint}?alt=sse"
     assert result_url_streaming == expected_streaming_url, f"Expected {expected_streaming_url}, got {result_url_streaming}"
+    
+    # Verify the auth header is also set correctly for streaming
+    assert auth_header_streaming == {"x-goog-api-key": "test-api-key"}, f"Expected {{'x-goog-api-key': 'test-api-key'}}, got {auth_header_streaming}"
     
     print(f"✅ Custom API base streaming URL test passed: {result_url_streaming}")
     
@@ -462,7 +465,8 @@ async def test_gemini_proxy_config_with_custom_api_base():
         
         expected_url = f"{model_config['litellm_params']['api_base']}/models/{model}:generateContent"
         assert result_url == expected_url, f"Expected {expected_url}, got {result_url} for model {model}"
-        assert auth_header == model_config["litellm_params"]["api_key"], f"Expected API key, got {auth_header} for model {model}"
+        expected_auth_header = {"x-goog-api-key": model_config["litellm_params"]["api_key"]}
+        assert auth_header == expected_auth_header, f"Expected {expected_auth_header}, got {auth_header} for model {model}"
         
         print(f"✅ Model {model} configuration test passed: {result_url}")
     

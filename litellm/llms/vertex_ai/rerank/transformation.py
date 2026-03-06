@@ -27,19 +27,40 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
     def __init__(self) -> None:
         super().__init__()
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[Dict] = None,
+    ) -> str:
         """
         Get the complete URL for the Vertex AI Discovery Engine ranking API
         """
-        # Get project ID from environment or litellm config
+        # Try to get project ID from optional_params first (e.g., vertex_project parameter)
+        params = optional_params or {}
+        
+        # Get credentials to extract project ID if needed
+        vertex_credentials = self.safe_get_vertex_ai_credentials(params.copy())
+        vertex_project = self.safe_get_vertex_ai_project(params.copy())
+        
+        # Use _ensure_access_token to extract project_id from credentials
+        # This is the same method used in vertex embeddings
+        _, vertex_project = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
+        )
+        
+        # Fallback to environment or litellm config
         project_id = (
-            get_secret_str("VERTEXAI_PROJECT") 
+            vertex_project
+            or get_secret_str("VERTEXAI_PROJECT") 
             or litellm.vertex_project
         )
         
         if not project_id:
             raise ValueError(
-                "Vertex AI project ID is required. Please set 'VERTEXAI_PROJECT' or 'litellm.vertex_project'"
+                "Vertex AI project ID is required. Please set 'VERTEXAI_PROJECT', 'litellm.vertex_project', or pass 'vertex_project' parameter"
             )
         
         return f"https://discoveryengine.googleapis.com/v1/projects/{project_id}/locations/global/rankingConfigs/default_ranking_config:rank"
@@ -49,13 +70,15 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[Dict] = None,
     ) -> dict:
         """
         Validate and set up authentication for Vertex AI Discovery Engine API
         """
-        # Get credentials and project info
-        vertex_credentials = self.get_vertex_ai_credentials({})
-        vertex_project = self.get_vertex_ai_project({})
+        # Get credentials and project info from optional_params (which contains vertex_credentials, etc.)
+        litellm_params = optional_params.copy() if optional_params else {}
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params)
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params)
         
         # Get access token using the base class method
         access_token, project_id = self._ensure_access_token(
@@ -218,10 +241,12 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         """
         Map Cohere rerank params to Vertex AI format
         """
-        return {
+        result = {
             "query": query,
             "documents": documents,
             "top_n": top_n,
             "return_documents": return_documents,
         }
+        result.update(non_default_params)
+        return result
 

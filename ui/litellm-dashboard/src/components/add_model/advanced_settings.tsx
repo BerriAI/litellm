@@ -6,6 +6,9 @@ import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
 import CacheControlSettings from "./cache_control_settings";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { Tag } from "../tag_management/types";
+import { formItemValidateJSON } from "../../utils/textUtils";
 const { Link } = Typography;
 
 interface AdvancedSettingsProps {
@@ -13,6 +16,8 @@ interface AdvancedSettingsProps {
   setShowAdvancedSettings: (show: boolean) => void;
   teams?: Team[] | null;
   guardrailsList: string[];
+  tagsList: Record<string, Tag>;
+  accessToken: string;
 }
 
 const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
@@ -20,6 +25,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   setShowAdvancedSettings,
   teams,
   guardrailsList,
+  tagsList,
+  accessToken,
 }) => {
   const [form] = Form.useForm();
   const [customPricing, setCustomPricing] = React.useState(false);
@@ -35,18 +42,6 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
       return Promise.reject("Please enter a valid positive number");
     }
     return Promise.resolve();
-  };
-
-  const validateJSON = (_: any, value: string) => {
-    if (!value) {
-      return Promise.resolve();
-    }
-    try {
-      JSON.parse(value);
-      return Promise.resolve();
-    } catch (error) {
-      return Promise.reject("Please enter valid JSON");
-    }
   };
 
   // Handle custom pricing changes
@@ -120,6 +115,33 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
             <Form.Item
               label={
                 <span>
+                  Attached Knowledge Bases (RAG){" "}
+                  <Tooltip title="Vector stores to use for RAG. Every request to this model will automatically retrieve context from these knowledge bases.">
+                    <a
+                      href="https://docs.litellm.ai/docs/completion/knowledgebase"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </a>
+                  </Tooltip>
+                </span>
+              }
+              name="vector_store_ids"
+              className="mt-4"
+              help="Select vector stores to attach. Requests to this model will automatically use these for RAG. Set up vector stores in Tools > Vector Stores."
+            >
+              <VectorStoreSelector
+                onChange={() => {}}
+                accessToken={accessToken}
+                placeholder="Select knowledge bases (optional)"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span>
                   Guardrails{" "}
                   <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
                     <a
@@ -142,6 +164,19 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 style={{ width: "100%" }}
                 placeholder="Select or enter guardrails"
                 options={guardrailsList.map((name) => ({ value: name, label: name }))}
+              />
+            </Form.Item>
+
+            <Form.Item label="Tags" name="tags" className="mb-4">
+              <Select
+                mode="tags"
+                style={{ width: "100%" }}
+                placeholder="Select or enter tags"
+                options={Object.values(tagsList).map((tag) => ({
+                  value: tag.name,
+                  label: tag.name,
+                  title: tag.description || tag.name,
+                }))}
               />
             </Form.Item>
 
@@ -217,7 +252,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               name="litellm_extra_params"
               tooltip="Optional litellm params used for making a litellm.completion() call."
               className="mb-4 mt-4"
-              rules={[{ validator: validateJSON }]}
+              rules={[{ validator: formItemValidateJSON }]}
             >
               <TextArea
                 rows={4}
@@ -244,7 +279,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               name="model_info_params"
               tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
               className="mb-0"
-              rules={[{ validator: validateJSON }]}
+              rules={[{ validator: formItemValidateJSON }]}
             >
               <TextArea
                 rows={4}

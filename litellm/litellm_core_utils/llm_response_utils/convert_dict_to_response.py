@@ -6,7 +6,6 @@ from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,
@@ -21,11 +20,13 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
     Choices,
+    CompletionTokensDetailsWrapper,
     Delta,
     EmbeddingResponse,
     Function,
     HiddenParams,
     ImageResponse,
+    PromptTokensDetailsWrapper,
 )
 from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.types.utils import (
@@ -37,10 +38,18 @@ from litellm.types.utils import (
     TextChoices,
     TextCompletionResponse,
     TranscriptionResponse,
+    TranscriptionUsageDurationObject,
+    TranscriptionUsageTokensObject,
     Usage,
 )
 
 from .get_headers import get_response_headers
+
+_MESSAGE_FIELDS: frozenset = frozenset(Message.model_fields.keys())
+_CHOICES_FIELDS: frozenset = frozenset(Choices.model_fields.keys())
+_MODEL_RESPONSE_FIELDS: frozenset = frozenset(ModelResponse.model_fields.keys()) | {
+    "usage"
+}
 
 
 def _safe_convert_created_field(created_value) -> int:
@@ -302,6 +311,22 @@ class LiteLLMResponseObjectHandler:
                     "text_tokens": 0,
                 }
 
+            # Map Responses API naming to Chat Completions API naming for cost calculator
+            if usage.get("prompt_tokens") is None:
+                usage["prompt_tokens"] = usage.get("input_tokens", 0)
+            if usage.get("completion_tokens") is None:
+                usage["completion_tokens"] = usage.get("output_tokens", 0)
+
+            # Convert dicts to wrapper objects so getattr() works in cost calculation
+            if isinstance(usage.get("input_tokens_details"), dict):
+                usage["prompt_tokens_details"] = PromptTokensDetailsWrapper(
+                    **usage["input_tokens_details"]
+                )
+            if isinstance(usage.get("output_tokens_details"), dict):
+                usage["completion_tokens_details"] = CompletionTokensDetailsWrapper(
+                    **usage["output_tokens_details"]
+                )
+
         if model_response_object is None:
             model_response_object = ImageResponse(**response_object)
             return model_response_object
@@ -423,33 +448,62 @@ def convert_to_model_response_object(  # noqa: PLR0915
         bool
     ] = None,  # used for supporting 'json_schema' on older models
 ):
-    received_args = locals()
     additional_headers = get_response_headers(_response_headers)
 
     if hidden_params is None:
         hidden_params = {}
+    
+    # Preserve existing additional_headers if they contain important provider headers
+    # For responses API, additional_headers may already be set with LLM provider headers
+    existing_additional_headers = hidden_params.get("additional_headers", {})
+    if existing_additional_headers and _response_headers is None:
+        # Keep existing headers when _response_headers is None (responses API case)
+        additional_headers = existing_additional_headers
+    else:
+        # Merge new headers with existing ones
+        if existing_additional_headers:
+            additional_headers.update(existing_additional_headers)
+    
     hidden_params["additional_headers"] = additional_headers
 
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
+    # Some OpenAI-compatible providers (e.g., Apertis) return empty error objects
+    # even on success. Only raise if the error contains meaningful data.
     if (
         response_object is not None
         and "error" in response_object
         and response_object["error"] is not None
     ):
-        error_args = {"status_code": 422, "message": "Error in response object"}
-        if isinstance(response_object["error"], dict):
-            if "code" in response_object["error"]:
-                error_args["status_code"] = response_object["error"]["code"]
-            if "message" in response_object["error"]:
-                if isinstance(response_object["error"]["message"], dict):
-                    message_str = json.dumps(response_object["error"]["message"])
-                else:
-                    message_str = str(response_object["error"]["message"])
-                error_args["message"] = message_str
-        raised_exception = Exception()
-        setattr(raised_exception, "status_code", error_args["status_code"])
-        setattr(raised_exception, "message", error_args["message"])
-        raise raised_exception
+        error_obj = response_object["error"]
+        has_meaningful_error = False
+
+        if isinstance(error_obj, dict):
+            # Check if error dict has non-empty message or non-null code
+            error_message = error_obj.get("message", "")
+            error_code = error_obj.get("code")
+            has_meaningful_error = bool(error_message) or error_code is not None
+        elif isinstance(error_obj, str):
+            # String error is meaningful if non-empty
+            has_meaningful_error = bool(error_obj)
+        else:
+            # Any other truthy value is considered meaningful
+            has_meaningful_error = True
+
+        if has_meaningful_error:
+            error_args = {"status_code": 422, "message": "Error in response object"}
+            if isinstance(error_obj, dict):
+                if "code" in error_obj:
+                    error_args["status_code"] = error_obj["code"]
+                if "message" in error_obj:
+                    if isinstance(error_obj["message"], dict):
+                        message_str = json.dumps(error_obj["message"])
+                    else:
+                        message_str = str(error_obj["message"])
+                    error_args["message"] = message_str
+            raised_exception = Exception()
+            setattr(raised_exception, "status_code", error_args["status_code"])
+            setattr(raised_exception, "message", error_args["message"])
+            raise raised_exception
 
     try:
         if response_type == "completion" and (
@@ -496,11 +550,13 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         message = litellm.Message(content=json_mode_content_str)
                         finish_reason = "stop"
                 if message is None:
-                    provider_specific_fields = {}
-                    message_keys = Message.model_fields.keys()
-                    for field in choice["message"].keys():
-                        if field not in message_keys:
-                            provider_specific_fields[field] = choice["message"][field]
+                    # Preserve provider_specific_fields if already present
+                    # in the response (e.g. from proxy passthrough)
+                    provider_specific_fields = dict(
+                        choice["message"].get("provider_specific_fields", None) or {}
+                    )
+                    for f in choice["message"].keys() - _MESSAGE_FIELDS:
+                        provider_specific_fields[f] = choice["message"][f]
 
                     # Handle reasoning models that display `reasoning_content` within `content`
                     reasoning_content, content = _extract_reasoning_content(
@@ -549,10 +605,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     finish_reason = "tool_calls"
 
                 ## PROVIDER SPECIFIC FIELDS ##
-                provider_specific_fields = {}
-                for field in choice.keys():
-                    if field not in Choices.model_fields.keys():
-                        provider_specific_fields[field] = choice[field]
+                provider_specific_fields = {
+                    f: choice[f] for f in choice.keys() - _CHOICES_FIELDS
+                }
 
                 logprobs = choice.get("logprobs", None)
                 enhancements = choice.get("enhancements", None)
@@ -576,7 +631,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 )
 
             if "id" in response_object:
-                model_response_object.id = response_object["id"] or str(uuid.uuid4())
+                # Preserve the auto-generated id from ModelResponse.__init__
+                # when the provider returns a falsy id (None, "")
+                model_response_object.id = response_object["id"] or model_response_object.id
 
             if "system_fingerprint" in response_object:
                 model_response_object.system_fingerprint = response_object[
@@ -611,10 +668,8 @@ def convert_to_model_response_object(  # noqa: PLR0915
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
 
-            special_keys = list(litellm.ModelResponse.model_fields.keys())
-            special_keys.append("usage")
             for k, v in response_object.items():
-                if k not in special_keys:
+                if k not in _MODEL_RESPONSE_FIELDS:
                     setattr(model_response_object, k, v)
 
             return model_response_object
@@ -684,8 +739,32 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
 
+            if "usage" in response_object and response_object["usage"] is not None:
+                tr_usage_object: Optional[
+                    Union[
+                        TranscriptionUsageDurationObject, TranscriptionUsageTokensObject
+                    ]
+                ] = None
+
+                if response_object["usage"].get("type", None) == "duration":
+                    tr_usage_object = TranscriptionUsageDurationObject(
+                        **response_object["usage"]
+                    )
+                elif response_object["usage"].get("type", None) == "tokens":
+                    tr_usage_object = TranscriptionUsageTokensObject(
+                        **response_object["usage"]
+                    )
+                if tr_usage_object is not None:
+                    setattr(model_response_object, "usage", tr_usage_object)
+
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
+
+            # Store internally-calculated duration in _hidden_params for cost
+            # tracking without exposing it in the response body. Must be set
+            # after hidden_params assignment to avoid being overwritten.
+            if "_audio_transcription_duration" in response_object:
+                model_response_object._hidden_params["audio_transcription_duration"] = response_object["_audio_transcription_duration"]
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
@@ -713,6 +792,17 @@ def convert_to_model_response_object(  # noqa: PLR0915
 
             return model_response_object
     except Exception:
+        received_args = dict(
+            response_object=response_object,
+            model_response_object=model_response_object,
+            response_type=response_type,
+            stream=stream,
+            start_time=start_time,
+            end_time=end_time,
+            hidden_params=hidden_params,
+            _response_headers=_response_headers,
+            convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
+        )
         raise Exception(
             f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
         )

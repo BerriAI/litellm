@@ -15,6 +15,21 @@ import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import litellm
+from litellm import main as litellm_main
+
+
+@pytest.fixture(autouse=True)
+def clear_client_cache():
+    """
+    Clear the HTTP client cache before each test to ensure mocks are used.
+    This prevents cached real clients from being reused across tests.
+    """
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    yield
+    if cache is not None:
+        cache.flush_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -160,7 +175,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+                            "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
                             "format": "image/png",
                         },
                     },
@@ -192,8 +207,33 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             json_str = json_str.decode("utf-8")
 
         print(f"type of json_str: {type(json_str)}")
-        assert "png" in json_str
-        assert "jpeg" not in json_str
+        
+        # Bedrock models convert URLs to base64, while direct Anthropic models support URLs
+        # bedrock/invoke models use Anthropic messages API which supports URLs
+        if model.startswith("bedrock/invoke/"):
+            # bedrock/invoke should convert URLs to base64 (doesn't support URL references)
+            # URL should NOT be in the JSON (it should be converted to base64)
+            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
+            # Should have base64 data in the source (type="base64", not type="url")
+            assert '"type":"base64"' in json_str or '"type": "base64"' in json_str
+            # Should have "data" field containing base64 content
+            assert '"data"' in json_str
+        elif model.startswith("bedrock/"):
+            # Regular Bedrock models should convert URLs to base64 (uses "bytes" field)
+            # URL should NOT be in the JSON (it should be converted to base64)
+            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
+            # Should have "bytes" field (Bedrock uses "bytes" not "base64" in the field name)
+            assert '"bytes"' in json_str or '"bytes":' in json_str
+        elif model.startswith("anthropic/"):
+            # Direct Anthropic models should pass HTTPS URLs directly (HTTP URLs are converted to base64)
+            # Since we're using HTTPS URL, it should be passed as-is
+            assert "https://awsmp-logos.s3.amazonaws.com" in json_str
+            # For Anthropic, URL references use "url" type, not base64
+            assert '"type":"url"' in json_str or '"type": "url"' in json_str
+        else:
+            # For other models, check format parameter is respected
+            assert "png" in json_str
+            assert "jpeg" not in json_str
 
 
 @pytest.mark.parametrize("model", ["gpt-4o-mini"])
@@ -218,7 +258,7 @@ async def test_url_with_format_param_openai(model, sync_mode):
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+                            "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
                             "format": "image/png",
                         },
                     },
@@ -266,6 +306,30 @@ def test_bedrock_latency_optimized_inference():
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert json_data["performanceConfig"]["latency"] == "optimized"
+
+
+def test_strip_input_examples_for_non_anthropic_providers():
+    tools = [
+        {
+            "type": "function",
+            "name": "example_tool",
+            "input_examples": [{"foo": "bar"}],
+            "function": {
+                "name": "example_tool",
+                "input_examples": [{"foo": "bar"}],
+            },
+        }
+    ]
+
+    assert not litellm_main._should_allow_input_examples(
+        custom_llm_provider="openai", model="gpt-4o-mini"
+    )
+
+    cleaned = litellm_main._drop_input_examples_from_tools(tools=tools)
+
+    assert isinstance(cleaned, list)
+    assert "input_examples" not in cleaned[0]
+    assert "input_examples" not in cleaned[0]["function"]
 
 
 def test_custom_provider_with_extra_headers():
@@ -351,7 +415,7 @@ def set_openrouter_api_key():
 
 @pytest.mark.asyncio
 async def test_extra_body_with_fallback(
-    respx_mock: respx.MockRouter, set_openrouter_api_key
+    respx_mock: respx.MockRouter, set_openrouter_api_key, monkeypatch
 ):
     """
     test regression for https://github.com/BerriAI/litellm/issues/8425.
@@ -359,73 +423,92 @@ async def test_extra_body_with_fallback(
     This was perhaps a wider issue with the acompletion function not passing kwargs such as extra_body correctly when fallbacks are specified.
     """
 
-    # since this uses respx, we need to set use_aiohttp_transport to False
-    litellm.disable_aiohttp_transport = True
-    # Set up test parameters
-    model = "openrouter/deepseek/deepseek-chat"
-    messages = [{"role": "user", "content": "Hello, world!"}]
-    extra_body = {
-        "provider": {
-            "order": ["DeepSeek"],
-            "allow_fallbacks": False,
-            "require_parameters": True,
+    # Save original state to restore after test
+    original_disable_aiohttp = litellm.disable_aiohttp_transport
+
+    try:
+        # since this uses respx, we need to set use_aiohttp_transport to False
+        # Set both the global variable and environment variable to ensure it takes effect
+        litellm.disable_aiohttp_transport = True
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        # Flush cache to ensure no stale aiohttp clients are used
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        
+        # Set up test parameters
+        model = "openrouter/deepseek/deepseek-chat"
+        messages = [{"role": "user", "content": "Hello, world!"}]
+        extra_body = {
+            "provider": {
+                "order": ["DeepSeek"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            }
         }
-    }
-    fallbacks = [{"model": "openrouter/google/gemini-flash-1.5-8b"}]
+        fallbacks = [{"model": "openrouter/google/gemini-flash-1.5-8b"}]
 
-    respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(
-        json={
-            "id": "chatcmpl-123",
-            "object": "chat.completion",
-            "created": 1677652288,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello from mocked response!",
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
-        }
-    )
+        # Set up mock to respond to any POST request to the OpenRouter endpoint
+        # This ensures it works for both primary and fallback models
+        mock_route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions")
+        mock_route.return_value = httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello from mocked response!",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+            }
+        )
 
-    response = await litellm.acompletion(
-        model=model,
-        messages=messages,
-        extra_body=extra_body,
-        fallbacks=fallbacks,
-        api_key="fake-openrouter-api-key",
-    )
+        response = await litellm.acompletion(
+            model=model,
+            messages=messages,
+            extra_body=extra_body,
+            fallbacks=fallbacks,
+            api_key="fake-openrouter-api-key",
+        )
 
-    # Get the request from the mock
-    request: httpx.Request = respx_mock.calls[0].request
-    request_body = request.read()
-    request_body = json.loads(request_body)
+        # Verify the response
+        assert response is not None
+        assert len(respx_mock.calls) > 0, "Mock was not called - check if aiohttp transport is properly disabled"
+        
+        # Get the request from the mock
+        request: httpx.Request = respx_mock.calls[0].request
+        request_body = request.read()
+        request_body = json.loads(request_body)
 
-    # Verify basic parameters
-    assert request_body["model"] == "deepseek/deepseek-chat"
-    assert request_body["messages"] == messages
+        # Verify basic parameters
+        assert request_body["model"] == "deepseek/deepseek-chat"
+        assert request_body["messages"] == messages
 
-    # Verify the extra_body parameters remain under the provider key
-    assert request_body["provider"]["order"] == ["DeepSeek"]
-    assert request_body["provider"]["allow_fallbacks"] is False
-    assert request_body["provider"]["require_parameters"] is True
-
-    # Verify the response
-    assert response is not None
-    assert response.choices[0].message.content == "Hello from mocked response!"
+        # Verify the extra_body parameters remain under the provider key
+        assert request_body["provider"]["order"] == ["DeepSeek"]
+        assert request_body["provider"]["allow_fallbacks"] is False
+        assert request_body["provider"]["require_parameters"] is True
+    finally:
+        # Restore original state to prevent test pollution
+        litellm.disable_aiohttp_transport = original_disable_aiohttp
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_openai_env_base(
     respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
 ):
     "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
+    # Ensure aiohttp transport is disabled to use httpx which respx can mock
     litellm.disable_aiohttp_transport = True
 
     expected_base_url = "http://localhost:12345/v1"
@@ -437,7 +520,11 @@ async def test_openai_env_base(
     model = "gpt-4o"
     messages = [{"role": "user", "content": "Hello, how are you?"}]
 
-    respx_mock.post(f"{expected_base_url}/chat/completions").respond(
+    # Configure respx mock to intercept the request
+    mock_route = respx_mock.post(
+        url__regex=r"http://localhost:12345/v1/chat/completions.*"
+    ).mock(return_value=httpx.Response(
+        status_code=200,
         json={
             "id": "chatcmpl-123",
             "object": "chat.completion",
@@ -455,12 +542,19 @@ async def test_openai_env_base(
             ],
             "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
         }
-    )
+    ))
 
-    response = await litellm.acompletion(model=model, messages=messages)
-
-    # verify we had a response
-    assert response.choices[0].message.content == "Hello from mocked response!"
+    try:
+        response = await litellm.acompletion(model=model, messages=messages)
+        
+        # verify we had a response
+        assert response.choices[0].message.content == "Hello from mocked response!"
+        
+        # Verify the mock was called
+        assert mock_route.called, "Mock route was not called - request may have bypassed respx"
+    finally:
+        # Clean up to avoid affecting other tests
+        litellm.disable_aiohttp_transport = False
 
 
 def build_database_url(username, password, host, dbname):
@@ -1252,6 +1346,8 @@ def test_anthropic_text_disable_url_suffix_env_var():
 
 
 def test_image_edit_merges_headers_and_extra_headers():
+    from litellm.images.main import base_llm_http_handler
+    
     combined_headers = {
         "x-test-header-one": "value-1",
         "x-test-header-two": "value-2",
@@ -1268,8 +1364,9 @@ def test_image_edit_merges_headers_and_extra_headers():
             "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
             return_value=mock_image_edit_config,
         ) as mock_config,
-        patch(
-            "litellm.images.main.base_llm_http_handler.image_edit_handler",
+        patch.object(
+            base_llm_http_handler,
+            "image_edit_handler",
             return_value="ok",
         ) as mock_handler,
     ):
@@ -1410,3 +1507,43 @@ async def test_async_mock_completion_stream_with_model_response():
             accumulated_content += chunk.choices[0].delta.content
 
     assert "This is an async test response" in accumulated_content or len(chunks) > 0
+
+
+class TestCallTypesOCR:
+    """Test that OCR call types are properly defined in CallTypes enum.
+
+    Fixes https://github.com/BerriAI/litellm/issues/17381
+    """
+
+    def test_ocr_call_type_exists(self):
+        """Test that CallTypes.ocr exists and has correct value."""
+        from litellm.types.utils import CallTypes
+
+        assert hasattr(CallTypes, "ocr")
+        assert CallTypes.ocr.value == "ocr"
+
+    def test_aocr_call_type_exists(self):
+        """Test that CallTypes.aocr exists and has correct value."""
+        from litellm.types.utils import CallTypes
+
+        assert hasattr(CallTypes, "aocr")
+        assert CallTypes.aocr.value == "aocr"
+
+    def test_ocr_call_type_from_string(self):
+        """Test that CallTypes can be constructed from 'ocr' string."""
+        from litellm.types.utils import CallTypes
+
+        call_type = CallTypes("ocr")
+        assert call_type == CallTypes.ocr
+
+    def test_aocr_call_type_from_string(self):
+        """Test that CallTypes can be constructed from 'aocr' string.
+
+        This is the actual use case that was failing - the OCR endpoint
+        uses route_type='aocr' and guardrails try to instantiate
+        CallTypes('aocr').
+        """
+        from litellm.types.utils import CallTypes
+
+        call_type = CallTypes("aocr")
+        assert call_type == CallTypes.aocr

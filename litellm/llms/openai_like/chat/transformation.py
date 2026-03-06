@@ -61,6 +61,23 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         return message
 
     @staticmethod
+    def _sanitize_usage_obj(response_json: dict) -> dict:
+        """
+        Checks for a 'usage' object in the response and replaces any None token values with 0.
+        This enforces OpenAI compatibility for providers that might return null.
+
+        This method is future-proof and sanitizes any key ending in '_tokens'.
+        """
+        if "usage" in response_json and isinstance(response_json.get("usage"), dict):
+            usage = response_json["usage"]
+            # Iterate through all keys in the usage dictionary
+            for key, value in usage.items():
+                # Sanitize if the key ends with '_tokens' and its value is None
+                if key.endswith("_tokens") and value is None:
+                    usage[key] = 0
+        return response_json
+
+    @staticmethod
     def _transform_response(
         model: str,
         response: httpx.Response,
@@ -84,6 +101,9 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             original_response=response_json,
             additional_args={"complete_input_dict": data},
         )
+
+        # Sanitize the usage object at the source
+        response_json = OpenAILikeChatConfig._sanitize_usage_obj(response_json)
 
         if json_mode:
             for choice in response_json["choices"]:

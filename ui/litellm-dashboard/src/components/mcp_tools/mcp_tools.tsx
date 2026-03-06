@@ -1,121 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
-import { MCPTool, MCPToolsViewerProps, CallMCPToolResponse, mcpServerHasAuth } from "./types";
+import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
-import { getMCPAuthToken, setMCPAuthToken, removeMCPAuthToken } from "./mcp_auth_storage";
 
-import { Modal, Input, Form } from "antd";
-import { Button, Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, SafetyOutlined, ToolOutlined } from "@ant-design/icons";
-
-import { AUTH_TYPE } from "./types";
-import NotificationsManager from "../molecules/notifications_manager";
-
-type AuthModalProps = {
-  visible: boolean;
-  onOk: (values: any) => void;
-  onCancel: () => void;
-  authType?: string | null;
-};
-
-export const AuthModal = ({ visible, onOk, onCancel, authType }: AuthModalProps) => {
-  const [form] = Form.useForm();
-
-  // Handler for modal OK
-  const handleOk = () => {
-    form.validateFields().then((values) => {
-      if (authType === AUTH_TYPE.BASIC) {
-        onOk(`${values.username.trim()}:${values.password.trim()}`);
-      } else {
-        onOk(values.authValue.trim());
-      }
-    });
-  };
-
-  let content;
-  if (authType === AUTH_TYPE.API_KEY || authType === AUTH_TYPE.BEARER_TOKEN) {
-    const label = authType === AUTH_TYPE.API_KEY ? "API Key" : "Bearer Token";
-    content = (
-      <Form.Item name="authValue" label={label} rules={[{ required: true, message: `Please input your ${label}` }]}>
-        <Input.Password />
-      </Form.Item>
-    );
-  } else if (authType === AUTH_TYPE.BASIC) {
-    content = (
-      <>
-        <Form.Item name="username" label="Username" rules={[{ required: true, message: "Please input your username" }]}>
-          <Input />
-        </Form.Item>
-        <Form.Item name="password" label="Password" rules={[{ required: true, message: "Please input your password" }]}>
-          <Input.Password />
-        </Form.Item>
-      </>
-    );
-  }
-
-  return (
-    <Modal open={visible} title="Authentication" onOk={handleOk} onCancel={onCancel} destroyOnClose>
-      <Form form={form} layout="vertical">
-        {content}
-      </Form>
-    </Modal>
-  );
-};
-
-const AuthSection = ({
-  authType,
-  onAuthSubmit,
-  onClearAuth,
-  hasAuth,
-}: {
-  authType: string | null | undefined;
-  onAuthSubmit: (value: string) => void;
-  onClearAuth: () => void;
-  hasAuth: boolean;
-}) => {
-  const [modalVisible, setModalVisible] = useState(false);
-
-  const handleAddAuth = () => setModalVisible(true);
-
-  const handleModalOk = (authValue: string) => {
-    onAuthSubmit(authValue);
-    setModalVisible(false);
-  };
-
-  const handleModalCancel = () => setModalVisible(false);
-
-  const handleClearAuth = () => {
-    onClearAuth();
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <Text className="text-sm font-medium text-gray-700">Authentication {hasAuth ? "✓" : ""}</Text>
-        <div className="flex gap-2">
-          {hasAuth && (
-            <Button
-              onClick={handleClearAuth}
-              size="sm"
-              variant="secondary"
-              className="text-xs text-red-600 hover:text-red-700"
-            >
-              Clear
-            </Button>
-          )}
-          <Button onClick={handleAddAuth} size="sm" variant="secondary" className="text-xs">
-            {hasAuth ? "Update" : "Add Auth"}
-          </Button>
-        </div>
-      </div>
-      <Text className="text-xs text-gray-500">
-        {hasAuth ? "Authentication configured and saved locally" : "Some tools may require authentication"}
-      </Text>
-      <AuthModal visible={modalVisible} onOk={handleModalOk} onCancel={handleModalCancel} authType={authType} />
-    </div>
-  );
-};
+import { Card, Title, Text } from "@tremor/react";
+import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined } from "@ant-design/icons";
+import { Input, Button as AntdButton } from "antd";
 
 const MCPToolsViewer = ({
   serverId,
@@ -123,37 +14,37 @@ const MCPToolsViewer = ({
   auth_type,
   userRole,
   userID,
-  serverAlias, // Add serverAlias prop
+  serverAlias,
+  extraHeaders,
 }: MCPToolsViewerProps) => {
-  const [mcpAuthValue, setMcpAuthValue] = useState("");
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
-  const [toolResult, setToolResult] = useState<CallMCPToolResponse | null>(null);
+  const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
+  const [toolSearchTerm, setToolSearchTerm] = useState("");
+  
+  // State for passthrough headers
+  const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
+  const [showHeaderInput, setShowHeaderInput] = useState(false);
 
-  // Load stored auth token on component mount
-  useEffect(() => {
-    if (mcpServerHasAuth(auth_type)) {
-      const storedAuthValue = getMCPAuthToken(serverId, serverAlias || undefined);
-      if (storedAuthValue) {
-        setMcpAuthValue(storedAuthValue);
+  // Check if this server has extra headers configured
+  const hasExtraHeaders = extraHeaders && extraHeaders.length > 0;
+
+  // Build custom headers for MCP server requests
+  const buildCustomHeaders = () => {
+    if (!serverAlias || !hasExtraHeaders) return undefined;
+    
+    const customHeaders: Record<string, string> = {};
+    
+    // Add passthrough headers with server-specific prefix
+    Object.entries(passthroughHeaders).forEach(([headerName, headerValue]) => {
+      if (headerValue && headerValue.trim()) {
+        // Format: x-mcp-{alias}-{header_name}
+        const mcpHeaderName = `x-mcp-${serverAlias}-${headerName.toLowerCase()}`;
+        customHeaders[mcpHeaderName] = headerValue;
       }
-    }
-  }, [serverId, serverAlias, auth_type]);
-
-  // Function to handle auth submission with localStorage persistence
-  const handleAuthSubmit = (authValue: string) => {
-    setMcpAuthValue(authValue);
-    if (authValue && mcpServerHasAuth(auth_type)) {
-      setMCPAuthToken(serverId, authValue, auth_type || "none", serverAlias || undefined);
-      NotificationsManager.success("Authentication token saved locally");
-    }
-  };
-
-  // Function to clear auth token
-  const handleClearAuth = () => {
-    setMcpAuthValue("");
-    removeMCPAuthToken(serverId);
-    NotificationsManager.info("Authentication token cleared");
+    });
+    
+    return Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
   };
 
   // Query to fetch MCP tools
@@ -161,11 +52,12 @@ const MCPToolsViewer = ({
     data: mcpToolsResponse,
     isLoading: isLoadingTools,
     error: mcpToolsError,
+    refetch: refetchTools,
   } = useQuery({
-    queryKey: ["mcpTools", serverId, mcpAuthValue, serverAlias],
+    queryKey: ["mcpTools", serverId, passthroughHeaders],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
-      return listMCPTools(accessToken, serverId, mcpAuthValue, serverAlias || undefined);
+      return listMCPTools(accessToken, serverId, buildCustomHeaders());
     },
     enabled: !!accessToken,
     staleTime: 30000, // Consider data fresh for 30 seconds
@@ -173,16 +65,16 @@ const MCPToolsViewer = ({
 
   // Mutation for calling a tool
   const { mutate: executeTool, isPending: isCallingTool } = useMutation({
-    mutationFn: async (args: { tool: MCPTool; arguments: Record<string, any>; authValue: string }) => {
+    mutationFn: async (args: { tool: MCPTool; arguments: Record<string, any> }) => {
       if (!accessToken) throw new Error("Access Token required");
 
       try {
-        const result = await callMCPTool(
-          accessToken,
-          args.tool.name,
+        const result: CallMCPToolResponse = await callMCPTool(
+          accessToken, 
+          serverId, 
+          args.tool.name, 
           args.arguments,
-          args.authValue,
-          serverAlias || undefined,
+          { customHeaders: buildCustomHeaders() }
         );
         return result;
       } catch (error) {
@@ -190,7 +82,7 @@ const MCPToolsViewer = ({
       }
     },
     onSuccess: (data) => {
-      setToolResult(data);
+      setToolResult(data.content);
       setToolError(null);
     },
     onError: (error: Error) => {
@@ -200,7 +92,16 @@ const MCPToolsViewer = ({
   });
 
   const toolsData = mcpToolsResponse?.tools || [];
-  const hasAuth = mcpAuthValue !== "";
+
+  // Filter tools based on search term
+  const filteredTools = toolsData.filter((tool: MCPTool) => {
+    const searchLower = toolSearchTerm.toLowerCase();
+    return (
+      tool.name.toLowerCase().includes(searchLower) ||
+      (tool.description && tool.description.toLowerCase().includes(searchLower)) ||
+      (tool.mcp_info.server_name && tool.mcp_info.server_name.toLowerCase().includes(searchLower))
+    );
+  });
 
   return (
     <div className="w-full h-screen p-4 bg-white">
@@ -211,6 +112,80 @@ const MCPToolsViewer = ({
             <Title className="text-xl font-semibold mb-6 mt-2">MCP Tools</Title>
 
             <div className="flex flex-col flex-1">
+              {/* Extra Headers Input Section */}
+              {hasExtraHeaders && (
+                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center">
+                      <KeyOutlined className="text-blue-600 mr-2" />
+                      <Text className="text-sm font-medium text-blue-800">
+                        Additional Headers
+                      </Text>
+                    </div>
+                    <AntdButton
+                      size="small"
+                      type="link"
+                      onClick={() => setShowHeaderInput(!showHeaderInput)}
+                      className="text-blue-700 p-0 h-auto"
+                    >
+                      {showHeaderInput ? "Hide" : "Configure"}
+                    </AntdButton>
+                  </div>
+                  
+                  {!showHeaderInput && Object.keys(passthroughHeaders).length === 0 && (
+                    <Text className="text-xs text-blue-700">
+                      This server requires additional headers. Click &quot;Configure&quot; to provide values.
+                    </Text>
+                  )}
+                  
+                  {showHeaderInput && (
+                    <div className="mt-3 space-y-2">
+                      {extraHeaders?.map((headerName) => (
+                        <div key={headerName}>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            {headerName}
+                          </label>
+                          <Input
+                            size="small"
+                            placeholder={`Enter ${headerName}`}
+                            value={passthroughHeaders[headerName] || ""}
+                            onChange={(e) => {
+                              setPassthroughHeaders({
+                                ...passthroughHeaders,
+                                [headerName]: e.target.value,
+                              });
+                            }}
+                            prefix={<KeyOutlined className="text-gray-400" />}
+                            className="rounded"
+                          />
+                        </div>
+                      ))}
+                      <AntdButton
+                        size="small"
+                        type="primary"
+                        onClick={() => {
+                          refetchTools();
+                          setShowHeaderInput(false);
+                        }}
+                        disabled={Object.values(passthroughHeaders).every(v => !v || !v.trim())}
+                        className="w-full mt-2"
+                      >
+                        Load Tools
+                      </AntdButton>
+                    </div>
+                  )}
+                  
+                  {!showHeaderInput && Object.keys(passthroughHeaders).length > 0 && (
+                    <div className="mt-2">
+                      <Text className="text-xs text-green-700 flex items-center">
+                        <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                        {Object.keys(passthroughHeaders).length} header(s) configured
+                      </Text>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Tool Selection - Show tools first */}
               <div className="flex flex-col flex-1 min-h-0">
                 <Text className="font-medium block mb-3 text-gray-700 flex items-center">
@@ -221,6 +196,21 @@ const MCPToolsViewer = ({
                     </span>
                   )}
                 </Text>
+
+                {/* Search Bar */}
+                {toolsData.length > 0 && (
+                  <div className="mb-3">
+                    <Input
+                      placeholder="Search tools..."
+                      prefix={<SearchOutlined className="text-gray-400" />}
+                      value={toolSearchTerm}
+                      onChange={(e) => setToolSearchTerm(e.target.value)}
+                      allowClear
+                      className="rounded-lg"
+                      size="middle"
+                    />
+                  </div>
+                )}
 
                 {/* Loading State */}
                 {isLoadingTools && (
@@ -260,22 +250,29 @@ const MCPToolsViewer = ({
 
                 {/* Tools List */}
                 {!isLoadingTools && !mcpToolsResponse?.error && toolsData.length > 0 && (
-                  <div
-                    className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable"
-                    style={{
-                      maxHeight: "400px",
-                      scrollbarWidth: "auto",
-                      scrollbarColor: "#cbd5e0 #f7fafc",
-                    }}
-                  >
-                    {toolsData.map((tool: MCPTool) => (
+                  <>
+                    {filteredTools.length === 0 ? (
+                      <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                        <SearchOutlined className="text-2xl text-gray-400 mb-2" />
+                        <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
+                        <p className="text-xs text-gray-500">No tools match &quot;{toolSearchTerm}&quot;</p>
+                      </div>
+                    ) : (
+                      <div
+                        className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable"
+                        style={{
+                          maxHeight: "400px",
+                          scrollbarWidth: "auto",
+                          scrollbarColor: "#cbd5e0 #f7fafc",
+                        }}
+                      >
+                        {filteredTools.map((tool: MCPTool) => (
                       <div
                         key={tool.name}
-                        className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${
-                          selectedTool?.name === tool.name
+                        className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${selectedTool?.name === tool.name
                             ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
                             : "border-gray-200 bg-white hover:border-gray-300"
-                        }`}
+                          }`}
                         onClick={() => {
                           setSelectedTool(tool);
                           setToolResult(null);
@@ -313,48 +310,12 @@ const MCPToolsViewer = ({
                           </div>
                         )}
                       </div>
-                    ))}
-                  </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
-
-              {/* Authentication Section - Below tools list */}
-              {mcpServerHasAuth(auth_type) && (
-                <div className="pt-4 border-t border-gray-200 flex-shrink-0 mt-6">
-                  {!hasAuth ? (
-                    /* Prominent display when auth required but not provided */
-                    <div className="p-4 bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 rounded-lg">
-                      <div className="flex items-center mb-3">
-                        <SafetyOutlined className="mr-2 text-orange-600 text-lg" />
-                        <Text className="font-semibold text-orange-800">Authentication Required</Text>
-                      </div>
-                      <Text className="text-sm text-orange-700 mb-4">
-                        This MCP server requires authentication. You must add your credentials below to access the
-                        tools.
-                      </Text>
-                      <AuthSection
-                        authType={auth_type}
-                        onAuthSubmit={handleAuthSubmit}
-                        onClearAuth={handleClearAuth}
-                        hasAuth={hasAuth}
-                      />
-                    </div>
-                  ) : (
-                    /* Subtle display when already authenticated */
-                    <>
-                      <Text className="font-medium block mb-3 text-gray-700 flex items-center">
-                        <SafetyOutlined className="mr-2" /> Authentication
-                      </Text>
-                      <AuthSection
-                        authType={auth_type}
-                        onAuthSubmit={handleAuthSubmit}
-                        onClearAuth={handleClearAuth}
-                        hasAuth={hasAuth}
-                      />
-                    </>
-                  )}
-                </div>
-              )}
             </div>
           </div>
 
@@ -379,10 +340,8 @@ const MCPToolsViewer = ({
                 <div className="h-full">
                   <ToolTestPanel
                     tool={selectedTool}
-                    needsAuth={mcpServerHasAuth(auth_type)}
-                    authValue={mcpAuthValue}
                     onSubmit={(args) => {
-                      executeTool({ tool: selectedTool, arguments: args, authValue: mcpAuthValue });
+                      executeTool({ tool: selectedTool, arguments: args });
                     }}
                     result={toolResult}
                     error={toolError}

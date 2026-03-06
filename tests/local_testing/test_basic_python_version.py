@@ -38,10 +38,21 @@ def test_litellm_proxy_server():
 
 
 def test_package_dependencies():
+    """
+    Test that all optional dependencies are correctly specified in extras.
+    """
     try:
-        import tomli
         import pathlib
         import litellm
+        
+        # Try to import tomllib (Python 3.11+) or tomli (older versions)
+        try:
+            import tomllib as tomli
+        except ImportError:
+            try:
+                import tomli
+            except ImportError:
+                pytest.skip("tomli/tomllib not available - skipping dependency check")
 
         # Get the litellm package root path
         litellm_path = pathlib.Path(litellm.__file__).parent.parent
@@ -127,8 +138,8 @@ def test_litellm_proxy_server_config_no_general_settings():
             ]
         )
 
-        # Allow some time for the server to start
-        time.sleep(60)  # Adjust the sleep time if necessary
+        # Allow some time for the server to start (increased for CI environments)
+        time.sleep(90)  # Increased from 60s for slower CI runners
 
         # Send a request to the /health/liveliness endpoint
         response = requests.get("http://localhost:4000/health/liveliness")

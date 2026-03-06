@@ -173,7 +173,7 @@ def transform_openai_messages_to_gemini_context_caching(
         supports_system_message=supports_system_message, messages=messages
     )
 
-    transformed_messages = _gemini_convert_messages_with_history(messages=new_messages)
+    transformed_messages = _gemini_convert_messages_with_history(messages=new_messages, model=model)
     
     model_name = "models/{}".format(model)
 

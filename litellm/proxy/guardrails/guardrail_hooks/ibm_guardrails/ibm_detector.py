@@ -7,8 +7,7 @@
 
 import os
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
-from urllib.parse import urlencode
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import httpx
 
@@ -26,7 +25,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMDetectorDetection,
     IBMDetectorResponseOrchestrator,
 )
-from litellm.types.utils import GuardrailStatus, ModelResponseStream
+from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponseStream
 
 GUARDRAIL_NAME = "ibm_guardrails"
 
@@ -40,6 +39,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         detector_id: Optional[str] = None,
         is_detector_server: bool = True,
         detector_params: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
         score_threshold: Optional[float] = None,
         block_on_detection: bool = True,
         verify_ssl: bool = True,
@@ -47,7 +47,7 @@ class IBMGuardrailDetector(CustomGuardrail):
     ):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
-            params={"ssl_verify": verify_ssl}
+            params={"ssl_verify": verify_ssl},
         )
 
         # Set API configuration
@@ -71,6 +71,7 @@ class IBMGuardrailDetector(CustomGuardrail):
 
         self.is_detector_server = is_detector_server
         self.detector_params = detector_params or {}
+        self.extra_headers = extra_headers or {}
         self.score_threshold = score_threshold
         self.block_on_detection = block_on_detection
         self.verify_ssl = verify_ssl
@@ -107,6 +108,7 @@ class IBMGuardrailDetector(CustomGuardrail):
     async def _call_detector_server(
         self,
         contents: List[str],
+        event_type: GuardrailEventHooks,
         request_data: Optional[dict] = None,
     ) -> List[List[IBMDetectorDetection]]:
         """
@@ -127,12 +129,12 @@ class IBMGuardrailDetector(CustomGuardrail):
         headers = {
             "Authorization": f"Bearer {self.auth_token}",
             "content-type": "application/json",
+            "detector-id": self.detector_id,
         }
 
-        query_params = {"detector_id": self.detector_id}
-
-        # update the api_url with the query params
-        self.api_url = f"{self.api_url}?{urlencode(query_params)}"
+        # Add any extra headers to the request
+        for header, value in self.extra_headers.items():
+            headers[header] = value
 
         verbose_proxy_logger.debug(
             "IBM Detector Server request to %s with payload: %s",
@@ -141,7 +143,6 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
-
             response = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
@@ -171,6 +172,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             return response_json
@@ -191,6 +193,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             raise
@@ -198,6 +201,7 @@ class IBMGuardrailDetector(CustomGuardrail):
     async def _call_orchestrator(
         self,
         content: str,
+        event_type: GuardrailEventHooks,
         request_data: Optional[dict] = None,
     ) -> List[IBMDetectorDetection]:
         """
@@ -221,6 +225,10 @@ class IBMGuardrailDetector(CustomGuardrail):
             "Authorization": f"Bearer {self.auth_token}",
             "content-type": "application/json",
         }
+
+        # Add any extra headers to the request
+        for header, value in self.extra_headers.items():
+            headers[header] = value
 
         verbose_proxy_logger.debug(
             "IBM Orchestrator request to %s with payload: %s",
@@ -253,6 +261,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             return response_json.get("detections", [])
@@ -273,6 +282,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             raise
@@ -436,18 +446,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         """
         Runs before the LLM API call
@@ -478,6 +477,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     result = await self._call_detector_server(
                         contents=contents_to_check,
                         request_data=data,
+                        event_type=GuardrailEventHooks.pre_call,
                     )
 
                     verbose_proxy_logger.debug(
@@ -506,6 +506,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                         orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
+                            event_type=GuardrailEventHooks.pre_call,
                         )
 
                         verbose_proxy_logger.debug(
@@ -533,16 +534,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ):
         """
         Runs in parallel to LLM API call
@@ -572,6 +564,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     result = await self._call_detector_server(
                         contents=contents_to_check,
                         request_data=data,
+                        event_type=GuardrailEventHooks.during_call,
                     )
 
                     verbose_proxy_logger.debug(
@@ -600,6 +593,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                         orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
+                            event_type=GuardrailEventHooks.during_call,
                         )
 
                         verbose_proxy_logger.debug(
@@ -688,6 +682,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     result = await self._call_detector_server(
                         contents=contents_to_check,
                         request_data=data,
+                        event_type=GuardrailEventHooks.post_call,
                     )
 
                     verbose_proxy_logger.debug(
@@ -717,6 +712,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                         orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
+                            event_type=GuardrailEventHooks.post_call,
                         )
 
                         verbose_proxy_logger.debug(

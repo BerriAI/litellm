@@ -23,7 +23,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 class HostedVLLMChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> List[str]:
         params = super().get_supported_openai_params(model)
-        params.append("reasoning_effort")
+        params.extend(["reasoning_effort", "thinking"])
         return params
 
     def map_openai_params(
@@ -41,6 +41,27 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             _tools = _remove_strict_from_schema(_tools)
         if _tools is not None:
             non_default_params["tools"] = _tools
+
+        # Handle thinking parameter - convert Anthropic-style to OpenAI-style reasoning_effort
+        # vLLM is OpenAI-compatible, so it understands reasoning_effort, not thinking
+        # Reference: https://github.com/BerriAI/litellm/issues/19761
+        thinking = non_default_params.pop("thinking", None)
+        if thinking is not None and isinstance(thinking, dict):
+            if thinking.get("type") == "enabled":
+                # Only convert if reasoning_effort not already set
+                if "reasoning_effort" not in non_default_params:
+                    budget_tokens = thinking.get("budget_tokens", 0)
+                    # Map budget_tokens to reasoning_effort level
+                    # Same logic as Anthropic adapter (translate_anthropic_thinking_to_reasoning_effort)
+                    if budget_tokens >= 10000:
+                        non_default_params["reasoning_effort"] = "high"
+                    elif budget_tokens >= 5000:
+                        non_default_params["reasoning_effort"] = "medium"
+                    elif budget_tokens >= 2000:
+                        non_default_params["reasoning_effort"] = "low"
+                    else:
+                        non_default_params["reasoning_effort"] = "minimal"
+
         return super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
@@ -116,10 +137,29 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
-        Support translating video files from file_id or file_data to video_url
+        Support translating:
+        - video files from file_id or file_data to video_url
+        - thinking_blocks on assistant messages to content blocks
         """
         for message in messages:
-            if message["role"] == "user":
+            if message["role"] == "assistant":
+                thinking_blocks = message.pop("thinking_blocks", None)  # type: ignore
+                if thinking_blocks:
+                    new_content: list = [
+                        {"type": block["type"], "thinking": block.get("thinking", "")}
+                        if block.get("type") == "thinking"
+                        else {"type": block["type"], "data": block.get("data", "")}
+                        for block in thinking_blocks
+                    ]
+                    existing_content = message.get("content")
+                    if isinstance(existing_content, str):
+                        new_content.append(
+                            {"type": "text", "text": existing_content}
+                        )
+                    elif isinstance(existing_content, list):
+                        new_content.extend(existing_content)
+                    message["content"] = new_content  # type: ignore
+            elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):
                     replaced_content_items: List[

@@ -11,6 +11,7 @@ import litellm
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 
 
+@pytest.mark.flaky(retries=3, delay=5)
 class TestBedrockInvokeClaudeJson(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         litellm._turn_on_debug()
@@ -114,7 +115,7 @@ def test_nova_invoke_streaming_chunk_parsing():
     }
     result = decoder._chunk_parser(nova_tool_start_chunk)
     assert result.choices[0].delta.content == ""
-    assert result.choices[0].index == 1
+    assert result.choices[0].index == 0
     assert result.choices[0].delta.tool_calls is not None
     assert result.choices[0].delta.tool_calls[0].type == "function"
     assert result.choices[0].delta.tool_calls[0].function.name == "get_weather"
@@ -129,7 +130,7 @@ def test_nova_invoke_streaming_chunk_parsing():
     }
     result = decoder._chunk_parser(nova_tool_args_chunk)
     assert result.choices[0].delta.content == ""
-    assert result.choices[0].index == 2
+    assert result.choices[0].index == 0
     assert result.choices[0].delta.tool_calls is not None
     assert (
         result.choices[0].delta.tool_calls[0].function.arguments

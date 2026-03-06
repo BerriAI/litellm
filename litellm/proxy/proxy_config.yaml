@@ -1,26 +1,63 @@
 model_list:
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
+  - model_name: gpt-4o
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-east-1
-      custom_llm_provider: bedrock
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
-    litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-west-2
-      custom_llm_provider: bedrock
-    
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
 
-# like MCPs/vector stores
-search_tools:
-  - search_tool_name: litellm-search
+  - model_name: text-embedding-3-small
     litellm_params:
-      search_provider: perplexity
-      api_key: os.environ/PERPLEXITYAI_API_KEY
-  - search_tool_name: exa-search
-    litellm_params:
-      search_provider: exa_ai
-      api_key: os.environ/EXA_API_KEY
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
 
+  - model_name: bedrock-claude-sonnet-3.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-sonnet-4
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-sonnet-4.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-opus-4.5
+    litellm_params:
+      model: "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-nova-premier
+    litellm_params:
+      model: "bedrock/us.amazon.nova-premier-v1:0"
+      aws_region_name: "us-east-1"
+
+# MCP Server Configuration
+mcp_servers:
+  # Wikipedia MCP - reliable and works without external deps
+  wikipedia:
+    transport: "stdio"
+    command: "uvx"
+    args: ["mcp-server-fetch"]
+    description: "Fetch web pages and Wikipedia content"
+  deepwiki:
+    transport: "http"
+    url: "https://mcp.deepwiki.com/mcp"
+
+
+# General Settings
+general_settings:
+  master_key: sk-1234
+  store_model_in_db: false
+
+# LiteLLM Settings
 litellm_settings:
-  callbacks: ["datadog"]
+  # Enable MCP Semantic Tool Filter
+  mcp_semantic_tool_filter:
+    enabled: true
+    embedding_model: "text-embedding-3-small"
+    top_k: 5
+    similarity_threshold: 0.3
+  

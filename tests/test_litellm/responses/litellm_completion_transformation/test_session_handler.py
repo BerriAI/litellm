@@ -27,22 +27,22 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
         {
             "request_id": "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb",
             "call_type": "aresponses",
-            "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "api_key": "sk-test-mock-api-key-123",
             "spend": 0.004803,
             "total_tokens": 329,
             "prompt_tokens": 11,
             "completion_tokens": 318,
             "startTime": "2025-05-30T03:17:06.703+00:00",
             "endTime": "2025-05-30T03:17:11.894+00:00",
-            "model": "claude-3-5-sonnet-latest",
+            "model": "claude-sonnet-4-5-20250929",
             "session_id": "a96757c4-c6dc-4c76-b37e-e7dfa526b701",
             "proxy_server_request": {
                 "input": "who is Michael Jordan",
-                "model": "anthropic/claude-3-5-sonnet-latest",
+                "model": "anthropic/claude-sonnet-4-5-20250929",
             },
             "response": {
                 "id": "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb",
-                "model": "claude-3-5-sonnet-20241022",
+                "model": "claude-sonnet-4-5-20250929",
                 "object": "chat.completion",
                 "choices": [
                     {
@@ -68,23 +68,23 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
         {
             "request_id": "chatcmpl-370760c9-39fa-4db7-b034-d1f8d933c935",
             "call_type": "aresponses",
-            "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "api_key": "sk-test-mock-api-key-123",
             "spend": 0.010437,
             "total_tokens": 967,
             "prompt_tokens": 339,
             "completion_tokens": 628,
             "startTime": "2025-05-30T03:17:28.600+00:00",
             "endTime": "2025-05-30T03:17:39.921+00:00",
-            "model": "claude-3-5-sonnet-latest",
+            "model": "claude-sonnet-4-5-20250929",
             "session_id": "a96757c4-c6dc-4c76-b37e-e7dfa526b701",
             "proxy_server_request": {
                 "input": "can you tell me more about him",
-                "model": "anthropic/claude-3-5-sonnet-latest",
+                "model": "anthropic/claude-sonnet-4-5-20250929",
                 "previous_response_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmFudGhyb3BpYzttb2RlbF9pZDplMGYzMDJhMTQxMmU3ODQ3MGViYjI4Y2JlZDAxZmZmNWY4OGMwZDMzMWM2NjdlOWYyYmE0YjQxM2M2ZmJkMjgyO3Jlc3BvbnNlX2lkOmNoYXRjbXBsLTkzNWI4ZGFkLWZkYzItNDY2ZS1hOGNhLWUyNmU1YThhMjFiYg==",
             },
             "response": {
                 "id": "chatcmpl-370760c9-39fa-4db7-b034-d1f8d933c935",
-                "model": "claude-3-5-sonnet-20241022",
+                "model": "claude-sonnet-4-5-20250929",
                 "object": "chat.completion",
                 "choices": [
                     {
@@ -319,7 +319,7 @@ async def test_should_check_cold_storage_for_full_payload():
                 ]
             }
         ],
-        "model": "anthropic/claude-3-7-sonnet-20250219",
+        "model": "anthropic/claude-4-sonnet-20250514",
         "stream": True,
         "litellm_trace_id": "16b86861-c120-4ecb-865b-4d2238bfd8f0"
     }
@@ -333,7 +333,7 @@ async def test_should_check_cold_storage_for_full_payload():
                 "content": "Hello, this is a regular message"
             }
         ],
-        "model": "anthropic/claude-3-7-sonnet-20250219",
+        "model": "anthropic/claude-4-sonnet-20250514",
         "stream": True
     }
     
@@ -373,7 +373,7 @@ async def test_get_chat_completion_message_history_empty_response_dict():
     This tests the fix for response validation to check for empty dict responses.
     """
     from unittest.mock import AsyncMock, patch
-    
+
     # Mock spend logs with empty response dict
     mock_spend_logs = [
         {

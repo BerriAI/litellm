@@ -1,13 +1,13 @@
-import React, { useState } from "react";
-import { Button } from "@tremor/react";
-import { Modal } from "antd";
-import Papa from "papaparse";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { createTeamAliasMap } from "@/utils/teamUtils";
+import { Button, Modal, Skeleton } from "antd";
+import React, { useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
+import ExportFormatSelector from "./ExportFormatSelector";
 import ExportSummary from "./ExportSummary";
 import ExportTypeSelector from "./ExportTypeSelector";
-import ExportFormatSelector from "./ExportFormatSelector";
-import { generateExportData, generateMetadata } from "./utils";
 import type { EntityUsageExportModalProps, ExportFormat, ExportScope } from "./types";
+import { handleExportCSV, handleExportJSON } from "./utils";
 
 const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   isOpen,
@@ -21,54 +21,22 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
   const [exportScope, setExportScope] = useState<ExportScope>("daily");
   const [isExporting, setIsExporting] = useState(false);
+  const { data: teams, isLoading: isLoadingTeams } = useTeams();
 
-  const entityLabel = entityType === "tag" ? "Tag" : "Team";
+  const entityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const modalTitle = customTitle || `Export ${entityLabel} Usage`;
 
-  const handleExportCSV = () => {
-    const data = generateExportData(spendData, exportScope, entityLabel);
-    const csv = Papa.unparse(data);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.csv`;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-  };
-
-  const handleExportJSON = () => {
-    const data = generateExportData(spendData, exportScope, entityLabel);
-    const metadata = generateMetadata(entityType, dateRange, selectedFilters, exportScope, spendData);
-    const exportObject = {
-      metadata,
-      data,
-    };
-    const jsonString = JSON.stringify(exportObject, null, 2);
-    const blob = new Blob([jsonString], { type: "application/json" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.json`;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-  };
-
+  // Cache team alias map using useMemo
+  const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
   const handleExport = async (format?: ExportFormat) => {
     const formatToUse = format || exportFormat;
     setIsExporting(true);
     try {
       if (formatToUse === "csv") {
-        handleExportCSV();
+        handleExportCSV(spendData, exportScope, entityLabel, entityType, teamAliasMap);
         NotificationsManager.success(`${entityLabel} usage data exported successfully as CSV`);
       } else {
-        handleExportJSON();
+        handleExportJSON(spendData, exportScope, entityLabel, entityType, dateRange, selectedFilters, teamAliasMap);
         NotificationsManager.success(`${entityLabel} usage data exported successfully as JSON`);
       }
       onClose();
@@ -87,27 +55,40 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
       onCancel={onClose}
       footer={null}
       width={480}
-      destroyOnClose
     >
       <div className="space-y-5 py-2">
-        <ExportSummary dateRange={dateRange} selectedFilters={selectedFilters} />
-
-        <ExportTypeSelector value={exportScope} onChange={setExportScope} entityType={entityType} />
-
-        <ExportFormatSelector value={exportFormat} onChange={setExportFormat} />
-
-        <div className="flex items-center justify-end gap-2 pt-4 border-t">
-          <Button variant="secondary" onClick={onClose} disabled={isExporting} size="sm">
-            Cancel
-          </Button>
-          <Button onClick={() => handleExport()} loading={isExporting} disabled={isExporting} size="sm">
-            {isExporting ? "Exporting..." : `Export ${exportFormat.toUpperCase()}`}
-          </Button>
-        </div>
+        {isLoadingTeams ? (
+          <Skeleton active />
+        ) : (
+          <>
+            <ExportSummary dateRange={dateRange} selectedFilters={selectedFilters} />
+            <ExportTypeSelector value={exportScope} onChange={setExportScope} entityType={entityType} />
+            <ExportFormatSelector value={exportFormat} onChange={setExportFormat} />
+          </>
+        )}
+        {isLoadingTeams ? (
+          <div className="flex items-center justify-end gap-2 pt-4 border-t">
+            <Skeleton.Button active />
+            <Skeleton.Button active />
+          </div>
+        ) : (
+          <div className="flex items-center justify-end gap-2 pt-4 border-t">
+            <Button variant="outlined" onClick={onClose} disabled={isExporting}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => handleExport()}
+              loading={isExporting || isLoadingTeams}
+              disabled={isExporting || isLoadingTeams}
+              type="primary"
+            >
+              {isExporting ? "Exporting..." : `Export ${exportFormat.toUpperCase()}`}
+            </Button>
+          </div>
+        )}
       </div>
     </Modal>
   );
 };
 
 export default EntityUsageExportModal;
-

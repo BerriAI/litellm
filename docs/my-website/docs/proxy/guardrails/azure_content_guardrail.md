@@ -100,6 +100,19 @@ AzureHarmCategories:
 
 n/a 
 
+## Important Notes
+
+### Azure Content Safety Character Limit
+
+Both Azure Prompt Shield and Azure Text Moderation have a **10,000 character limit** per request. When text exceeds this limit:
+
+- LiteLLM automatically splits the text into chunks at word boundaries (no words are broken)
+- Each chunk is sent separately to the Azure Content Safety API for analysis
+- If any chunk is flagged (attack detected or severity threshold exceeded), the entire request is blocked
+- If all chunks are safe, the request is allowed to proceed
+
+This applies to both `pre_call` and `post_call` hooks and ensures that long prompts are properly analyzed without breaking words or losing context. 
+
 
 ## Further Reading
 

@@ -136,6 +136,89 @@ response = speech(
 | `wav` | riff-24khz-16bit-mono-pcm | 24kHz |
 | `pcm` | raw-24khz-16bit-mono-pcm | 24kHz |
 
+## Passing Raw SSML
+
+LiteLLM automatically detects when your `input` contains SSML (by checking for `<speak>` tags) and passes it through to Azure without any transformation. This gives you complete control over speech synthesis.
+
+**When to use raw SSML:**
+- Using the `<lang>` element with multilingual voices to translate text (e.g., English text → Spanish speech)
+- Complex SSML structures with multiple voices or prosody changes
+- Fine-grained control over pronunciation, breaks, emphasis, and other speech features
+
+### LiteLLM SDK
+
+```python showLineNumbers title="Raw SSML for Multilingual Translation"
+from litellm import speech
+
+# Use <lang> element to convert English text to Spanish speech
+# The <lang> element forces the output language regardless of input text language
+language_code = "es-ES"
+text = "Hello, how are you today?"  # English text
+voice = "en-US-AvaMultilingualNeural"
+
+ssml = f"""<speak version="1.0"
+    xmlns="http://www.w3.org/2001/10/synthesis"
+    xmlns:mstts="http://www.w3.org/2001/mstts"
+    xml:lang="{language_code}">
+<voice name="{voice}">
+    <lang xml:lang="{language_code}">{text}</lang>
+</voice>
+</speak>"""
+
+response = speech(
+    model="azure/speech/azure-tts",
+    voice=voice,
+    input=ssml,  # LiteLLM auto-detects SSML and sends as-is
+    api_base="https://eastus.tts.speech.microsoft.com",
+    api_key=os.environ["AZURE_TTS_API_KEY"],
+)
+response.stream_to_file("speech.mp3")
+```
+
+```python showLineNumbers title="Raw SSML with Complex Features"
+from litellm import speech
+
+# Complex SSML with multiple prosody adjustments
+ssml = """<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' 
+    xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='en-US'>
+<voice name='en-US-JennyNeural'>
+    <mstts:express-as style='cheerful' styledegree='2'>
+        <prosody rate='+20%' pitch='high'>
+            Welcome to our service!
+        </prosody>
+    </mstts:express-as>
+    <break time='500ms'/>
+    <prosody rate='-10%'>
+        How can I help you today?
+    </prosody>
+</voice>
+</speak>"""
+
+response = speech(
+    model="azure/speech/azure-tts",
+    voice="en-US-JennyNeural",
+    input=ssml,  # LiteLLM detects <speak> and passes through unchanged
+    api_base="https://eastus.tts.speech.microsoft.com",
+    api_key=os.environ["AZURE_TTS_API_KEY"],
+)
+response.stream_to_file("speech.mp3")
+```
+
+### LiteLLM Proxy
+
+```bash
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "azure-speech",
+    "voice": "en-US-AvaMultilingualNeural",
+    "input": "<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xmlns:mstts=\"http://www.w3.org/2001/mstts\" xml:lang=\"es-ES\"><voice name=\"en-US-AvaMultilingualNeural\"><lang xml:lang=\"es-ES\">Hello, how are you today?</lang></voice></speak>"
+  }' \
+  --output speech.mp3
+```
+
+
 ## Sending Azure-Specific Params
 
 Azure AI Speech supports advanced SSML features through optional parameters:

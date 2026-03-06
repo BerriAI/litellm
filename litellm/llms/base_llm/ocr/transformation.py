@@ -15,7 +15,9 @@ else:
     LiteLLMLoggingObj = Any
 
 
-# DocumentType for OCR - Mistral format document dict
+# DocumentType for OCR - providers always receive a dict with
+# type="document_url" or type="image_url" (str values only).
+# File-type inputs are preprocessed to this format in litellm/ocr/main.py.
 DocumentType = Dict[str, str]
 
 
@@ -106,6 +108,7 @@ class BaseOCRConfig:
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
         **kwargs,
     ) -> Dict:
         """
@@ -119,6 +122,7 @@ class BaseOCRConfig:
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: Optional[dict] = None,
         **kwargs,
     ) -> str:
         """
@@ -139,9 +143,13 @@ class BaseOCRConfig:
         Transform OCR request to provider-specific format.
         Override in provider-specific implementations.
         
+        Note: By the time this method is called, any file-type documents have already
+        been converted to document_url/image_url format with base64 data URIs by
+        the preprocessing in litellm/ocr/main.py.
+        
         Args:
             model: Model name
-            document: Document to process (Mistral format dict, or file path, bytes, etc.)
+            document: Document to process - always a dict with type="document_url" or type="image_url"
             optional_params: Optional parameters for the request
             headers: Request headers
             
@@ -195,6 +203,36 @@ class BaseOCRConfig:
         Override in provider-specific implementations.
         """
         raise NotImplementedError("transform_ocr_response must be implemented by provider")
+
+    async def async_transform_ocr_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        **kwargs,
+    ) -> OCRResponse:
+        """
+        Async transform provider-specific OCR response to standard format.
+        Optional method - providers can override if they need async transformations
+        (e.g., Azure Document Intelligence for async operation polling).
+        
+        Default implementation falls back to sync transform_ocr_response.
+        
+        Args:
+            model: Model name
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+            
+        Returns:
+            OCRResponse in standard format
+        """
+        # Default implementation: call sync version
+        return self.transform_ocr_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+            **kwargs,
+        )
 
     def get_error_class(
         self,

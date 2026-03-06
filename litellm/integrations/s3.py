@@ -181,13 +181,13 @@ class S3Logger:
 
 def get_s3_object_key(
     s3_path: str,
-    team_alias_prefix: str,
+    prefix: str,
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
     s3_object_key = (
         (s3_path.rstrip("/") + "/" if s3_path else "")
-        + team_alias_prefix
+        + prefix
         + start_time.strftime("%Y-%m-%d")
         + "/"
         + s3_file_name

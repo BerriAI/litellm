@@ -30,8 +30,8 @@ jobs:
 
     - name: Install dependencies
       run: |
+        poetry lock
         poetry install --with dev
-        poetry run pip install openai==1.100.1
 
     - name: Run Black formatting
       run: |
@@ -73,3 +73,35 @@ jobs:
     - name: Check import safety
       run: |
         poetry run python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Run secret scan test
+      run: |
+        pip install pytest
+        pytest tests/litellm/test_no_hardcoded_secrets.py -v
+
+    - name: Run ggshield secret scan
+      env:
+        GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+      run: |
+        if [ -n "$GITGUARDIAN_API_KEY" ]; then
+          pip install ggshield
+          ggshield secret scan repo .
+        else
+          echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
+        fi

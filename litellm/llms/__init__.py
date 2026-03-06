@@ -43,6 +43,10 @@ def get_cost_for_web_search_request(
         # Perplexity handles search costs internally in its own cost calculator
         # Return 0.0 to indicate costs are already accounted for
         return 0.0
+    elif custom_llm_provider == "xai":
+        from .xai.cost_calculator import cost_per_web_search_request
+
+        return cost_per_web_search_request(usage=usage, model_info=model_info)
     else:
         return None
 
@@ -106,6 +110,21 @@ def discover_guardrail_translation_mappings() -> (
                 except Exception as e:
                     verbose_logger.error(f"Error processing {module_path}: {e}")
                     continue
+
+        try:
+            from litellm.proxy._experimental.mcp_server.guardrail_translation import (
+                guardrail_translation_mappings as mcp_guardrail_translation_mappings,
+            )
+
+            discovered_mappings.update(mcp_guardrail_translation_mappings)
+            verbose_logger.debug(
+                "Loaded MCP guardrail translation mappings: %s",
+                list(mcp_guardrail_translation_mappings.keys()),
+            )
+        except ImportError:
+            verbose_logger.debug(
+                "MCP guardrail translation mappings not available; skipping"
+            )
 
         verbose_logger.debug(
             f"Discovered {len(discovered_mappings)} guardrail translation mappings: {list(discovered_mappings.keys())}"

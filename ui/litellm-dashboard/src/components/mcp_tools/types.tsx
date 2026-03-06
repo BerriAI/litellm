@@ -10,17 +10,29 @@ export const AUTH_TYPE = {
   API_KEY: "api_key",
   BEARER_TOKEN: "bearer_token",
   BASIC: "basic",
+  OAUTH2: "oauth2",
+};
+
+export const OAUTH_FLOW = {
+  INTERACTIVE: "interactive",
+  M2M: "m2m",
 };
 
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
+  STDIO: "stdio",
+  OPENAPI: "openapi",
 };
 
-export const handleTransport = (transport?: string | null): string => {
-  console.log(transport);
+export const handleTransport = (transport?: string | null, specPath?: string | null): string => {
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
+  }
+
+  // If server has spec_path, display as "openapi" instead of the raw transport type
+  if (specPath && transport !== TRANSPORT.STDIO) {
+    return TRANSPORT.OPENAPI;
   }
 
   return transport;
@@ -34,10 +46,6 @@ export const handleAuth = (authType?: string | null): string => {
   return authType;
 };
 
-export const mcpServerHasAuth = (authType?: string | null): boolean => {
-  return handleAuth(authType) !== AUTH_TYPE.NONE;
-};
-
 // Define the structure for tool input schema properties
 export interface InputSchemaProperty {
   type: string;
@@ -46,6 +54,7 @@ export interface InputSchemaProperty {
   required?: string[]; // For required fields in nested objects
   enum?: string[]; // For enum values
   default?: any; // For default values
+  items?: InputSchemaProperty | InputSchemaProperty[]; // For array item schemas
 }
 
 // Define the structure for the input schema of a tool
@@ -113,7 +122,12 @@ export interface MCPEmbeddedResource {
 export type MCPContent = MCPTextContent | MCPImageContent | MCPEmbeddedResource;
 
 // Define the response structure for the callMCPTool endpoint
-export type CallMCPToolResponse = MCPContent[];
+export type CallMCPToolResponse = {
+  content: MCPContent[];
+  _meta: any;
+  isError: boolean;
+  structuredContent: any;
+};
 
 // Props for the main component
 export interface MCPToolsViewerProps {
@@ -123,6 +137,7 @@ export interface MCPToolsViewerProps {
   userRole: string | null;
   userID: string | null;
   serverAlias?: string | null;
+  extraHeaders?: string[] | null;
 }
 
 export interface MCPServer {
@@ -130,25 +145,69 @@ export interface MCPServer {
   server_name?: string | null;
   alias?: string | null;
   description?: string | null;
-  url: string;
+  /**
+   * Only required for HTTP/SSE transports.
+   * For `stdio`, the backend can return null/undefined.
+   */
+  url?: string | null;
+  spec_path?: string | null;
   transport?: string | null;
   auth_type?: string | null;
+  authorization_url?: string | null;
+  token_url?: string | null;
+  registration_url?: string | null;
   mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;
   updated_at: string;
   updated_by: string;
   extra_headers?: string[] | null;
+  static_headers?: Record<string, string> | null;
   status?: "healthy" | "unhealthy" | "unknown";
   last_health_check?: string | null;
   health_check_error?: string | null;
   teams?: Team[];
   mcp_access_groups?: string[];
   allowed_tools?: string[];
+  tool_name_to_display_name?: Record<string, string>;
+  tool_name_to_description?: Record<string, string>;
+  allow_all_keys?: boolean;
+  available_on_public_internet?: boolean;
+
+  /** Stdio-only fields (present when transport === 'stdio') */
+  command?: string | null;
+  args?: string[] | null;
+  env?: Record<string, string> | null;
+
+  /** BYOK (Bring Your Own Key) fields */
+  is_byok?: boolean | null;
+  byok_description?: string[] | null;
+  byok_api_key_help_url?: string | null;
+  has_user_credential?: boolean | null;
 }
 
 export interface MCPServerProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+}
+
+// Discoverable MCP server from the curated registry
+export interface DiscoverableMCPServer {
+  name: string;
+  title: string;
+  description: string;
+  icon_url?: string | null;
+  category: string;
+  registry_url?: string | null;
+  transport: string;
+  url?: string | null;
+  command?: string | null;
+  args?: string[] | null;
+  env_vars?: Array<{ name: string; description?: string; secret?: boolean }> | null;
+}
+
+export interface DiscoverMCPServersResponse {
+  servers: DiscoverableMCPServer[];
+  categories: string[];
 }
