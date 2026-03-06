@@ -7,11 +7,20 @@ from unittest.mock import patch
 
 @pytest.fixture
 def isolate_model_cost_state():
-    """Save and restore _model_cost_remote_loaded state across tests."""
+    """Save and restore _model_cost_remote_loaded state and provider model sets across tests."""
     import litellm
     original_state = litellm._model_cost_remote_loaded
     original_last_failure = litellm._model_cost_last_failure_monotonic
     original_cost_dict = dict(litellm.model_cost)  # shallow copy
+    
+    # Save all provider model sets that add_known_models might modify
+    saved_model_sets = {}
+    for attr_name in dir(litellm):
+        attr = getattr(litellm, attr_name, None)
+        if isinstance(attr, set) and attr_name.endswith("_models"):
+            # Save a copy of each provider model set
+            saved_model_sets[attr_name] = set(attr)
+    
     litellm._model_cost_last_failure_monotonic = 0.0
     yield
     # Restore state after test
@@ -19,6 +28,11 @@ def isolate_model_cost_state():
     litellm._model_cost_last_failure_monotonic = original_last_failure
     litellm.model_cost.clear()
     litellm.model_cost.update(original_cost_dict)
+    
+    # Restore all provider model sets
+    for attr_name, original_set in saved_model_sets.items():
+        getattr(litellm, attr_name).clear()
+        getattr(litellm, attr_name).update(original_set)
 
 
 class TestLazyModelCostMap:
