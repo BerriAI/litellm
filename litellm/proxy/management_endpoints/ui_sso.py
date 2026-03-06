@@ -2688,7 +2688,10 @@ class SSOAuthenticationHandler:
         try:
             async with httpx.AsyncClient() as http_client:
                 response = await http_client.post(token_endpoint, **post_kwargs)
-        except httpx.HTTPError as exc:
+        except Exception as exc:
+            # Catch all network-level errors (SSL, DNS, TCP, timeout, etc.) and
+            # wrap them as a clean ProxyException rather than leaking raw httpx/OS
+            # exceptions to callers.
             verbose_proxy_logger.error("PKCE token endpoint unreachable: %s", exc)
             raise ProxyException(
                 message=f"Token endpoint request failed: {exc}",

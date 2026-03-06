@@ -4725,3 +4725,83 @@ async def test_pkce_userinfo_raises_when_both_sources_unavailable():
             )
 
     assert "unavailable" in exc_info.value.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_pkce_cache_miss_raises_proxy_exception():
+    """prepare_token_exchange_parameters raises ProxyException when PKCE is enabled
+    but no verifier is found in cache (cross-instance cache miss scenario)."""
+    import os
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from starlette.requests import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)  # verifier not found
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.query_params = {"state": "missing_state_123"}
+
+    with pytest.raises(ProxyException) as exc_info:
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+        ), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
+            await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=mock_request, generic_include_client_id=False
+            )
+
+    assert "verifier not found" in exc_info.value.message.lower() or "cache" in exc_info.value.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_pkce_token_exchange_public_client_no_secret():
+    """Public PKCE client (include_client_id=False, no secret) sends client_id in
+    POST body and does NOT include Basic Auth or client_secret."""
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    token_resp = {
+        "access_token": "tok_public",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    userinfo_resp = {"sub": "pubuser", "email": "pub@example.com"}
+
+    async def fake_post(*args, **kwargs):
+        assert "auth" not in kwargs, "Public client must not use Basic Auth"
+        data = kwargs.get("data", {})
+        assert data.get("client_id") == "public_client_id"
+        assert "client_secret" not in data, "No secret should be sent for public client"
+        assert data.get("code_verifier") == "public_verifier"
+        mock = MagicMock()
+        mock.status_code = 200
+        mock.json.return_value = token_resp
+        return mock
+
+    with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(side_effect=fake_post)
+        mock_userinfo = MagicMock()
+        mock_userinfo.status_code = 200
+        mock_userinfo.json.return_value = userinfo_resp
+        mock_client.get = AsyncMock(return_value=mock_userinfo)
+        mock_client_cls.return_value = mock_client
+
+        result = await SSOAuthenticationHandler._pkce_token_exchange(
+            authorization_code="auth_pub",
+            code_verifier="public_verifier",
+            client_id="public_client_id",
+            client_secret=None,  # public client — no secret
+            token_endpoint="https://example.com/token",
+            userinfo_endpoint="https://example.com/userinfo",
+            include_client_id=False,
+            redirect_url="https://proxy.example.com/callback",
+            additional_headers={},
+        )
+
+    assert result["access_token"] == "tok_public"
+    assert result["sub"] == "pubuser"
