@@ -64,6 +64,12 @@ class TaskRegistry:
     def mark_awaited(self, task: asyncio.Task) -> None:
         """Mark a task as directly awaited, suppressing the failure debug log."""
         with self._lock:
+            if task not in self._tasks:
+                logger.warning(
+                    "mark_awaited() called with a task not tracked by this registry: %s",
+                    task.get_name(),
+                )
+                return
             self._directly_awaited.add(task)
 
     def create_task(

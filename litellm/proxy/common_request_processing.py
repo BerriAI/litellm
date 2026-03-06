@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.task_registry import tracked_create_task
+from litellm.litellm_core_utils.task_registry import TaskRegistry, tracked_create_task
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
@@ -841,16 +841,16 @@ class ProxyBaseLLMRequestProcessing:
         tasks = []
         # Start the moderation check (during_call_hook) as early as possible
         # This gives it a head start to mask/validate input while the proxy handles routing
-        tasks.append(
-            tracked_create_task(
-                proxy_logging_obj.during_call_hook(
-                    data=self.data,
-                    user_api_key_dict=user_api_key_dict,
-                    call_type=route_type,  # type: ignore
-                ),
-                name="during-call-hook",
-            )
+        during_call_task = tracked_create_task(
+            proxy_logging_obj.during_call_hook(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=route_type,  # type: ignore
+            ),
+            name="during-call-hook",
         )
+        TaskRegistry.get_instance().mark_awaited(during_call_task)
+        tasks.append(during_call_task)
 
         # Pass contents if provided
         if contents:
