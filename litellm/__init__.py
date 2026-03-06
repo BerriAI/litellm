@@ -451,6 +451,7 @@ output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.get_model_cost_map import _cost_map_source_info
 
 # Load local backup at import time (fast, ~12 ms, no network I/O).
 _model_cost_url: str = model_cost_map_url
@@ -504,6 +505,18 @@ def _ensure_remote_model_cost() -> None:
             return
         try:
             remote = get_model_cost_map(url=_model_cost_url)
+            # get_model_cost_map() silently returns local backup on network
+            # failure.  Check _cost_map_source_info.source to distinguish a
+            # genuine remote fetch from a silent local fallback so the retry
+            # cooldown stays effective for network-unreachable scenarios.
+            if _cost_map_source_info.source != "remote":
+                _model_cost_last_failure_monotonic = time.monotonic()
+                verbose_logger.warning(
+                    "LiteLLM: Remote model cost map unavailable (%s). "
+                    "Using local backup; will retry after cooldown.",
+                    _cost_map_source_info.fallback_reason or "unknown",
+                )
+                return
             model_cost.update(remote)  # merge remote on top of local; no clear() needed
             add_known_models(model_cost_map=model_cost)  # repopulate provider model sets with merged data
             _model_cost_remote_loaded = True
