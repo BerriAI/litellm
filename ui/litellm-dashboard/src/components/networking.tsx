@@ -8880,6 +8880,55 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   return data;
 };
 
+export const getHashicorpVaultConfig = async (accessToken: string) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/config_overrides/hashicorp_vault`
+    : `/config_overrides/hashicorp_vault`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    throw new Error(errorMessage);
+  }
+  const data = await response.json();
+  return data;
+};
+
+export const updateHashicorpVaultConfig = async (
+  accessToken: string,
+  config: Record<string, any>,
+) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/config_overrides/hashicorp_vault`
+    : `/config_overrides/hashicorp_vault`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(config),
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const detail = errorData?.detail;
+    const errorMessage =
+      (typeof detail === "object" && detail?.error) ||
+      (typeof detail === "string" && detail) ||
+      deriveErrorMessage(errorData);
+    throw new Error(errorMessage);
+  }
+  const data = await response.json();
+  return data;
+};
+
 // ============================================================
 // Claude Code Marketplace Networking Functions
 // ============================================================
