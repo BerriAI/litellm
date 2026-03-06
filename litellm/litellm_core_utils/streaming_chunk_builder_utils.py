@@ -467,9 +467,10 @@ class ChunkProcessor:
                 usage_chunk.prompt_tokens_details, PromptTokensDetailsWrapper
             ):
                 prompt_tokens_details = usage_chunk.prompt_tokens_details
-        if "cost" in usage_chunk:
-            cost = usage_chunk.get("cost")
-        elif hasattr(usage_chunk, "cost") and usage_chunk.cost is not None:
+        if isinstance(usage_chunk, dict):
+            if "cost" in usage_chunk:
+                cost = usage_chunk.get("cost")
+        elif hasattr(usage_chunk, "cost"):
             cost = usage_chunk.cost
 
         return {
