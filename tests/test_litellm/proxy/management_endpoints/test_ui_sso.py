@@ -3753,6 +3753,77 @@ class TestPKCEFunctionality:
 
         assert "cache" in exc_info.value.message.lower() or "verifier" in exc_info.value.message.lower()
 
+    @pytest.mark.asyncio
+    async def test_pkce_cache_miss_non_strict_logs_warning_and_continues(self):
+        """Default (non-strict) cache-miss behavior: logs a warning and returns params
+        without code_verifier rather than raising, to preserve backward compatibility."""
+        import os
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from starlette.requests import Request
+
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        mock_cache = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=None)  # verifier not found
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {"state": "missing_state_non_strict"}
+
+        # PKCE_STRICT_CACHE_MISS not set (default false) — should NOT raise
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+        ), patch.dict(
+            os.environ,
+            {"GENERIC_CLIENT_USE_PKCE": "true"},
+            clear=False,
+        ):
+            # Remove PKCE_STRICT_CACHE_MISS if set in environment
+            os.environ.pop("PKCE_STRICT_CACHE_MISS", None)
+            result = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=mock_request, generic_include_client_id=False
+            )
+
+        # Should return params without code_verifier (no raise)
+        assert "code_verifier" not in result
+        assert "_pkce_cache_key" not in result
+
+    @pytest.mark.asyncio
+    async def test_pkce_token_exchange_non200_raises_proxy_exception(self):
+        """_pkce_token_exchange raises ProxyException when the token endpoint
+        returns a non-200 status (e.g. 401 Unauthorized from provider)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+
+        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(ProxyException) as exc_info:
+                await SSOAuthenticationHandler._pkce_token_exchange(
+                    authorization_code="auth_code",
+                    code_verifier="verifier",
+                    client_id="client_id",
+                    client_secret="secret",
+                    token_endpoint="https://example.com/token",
+                    userinfo_endpoint=None,
+                    include_client_id=True,
+                    redirect_url="https://proxy.example.com/callback",
+                    additional_headers={},
+                )
+
+        assert "401" in exc_info.value.message or "token" in exc_info.value.message.lower()
+
+
 # Tests for SSO user team assignment bug (Issue: SSO Users Not Added to Entra-Synced Teams on First Login)
 class TestAddMissingTeamMember:
     """Tests for the add_missing_team_member function"""

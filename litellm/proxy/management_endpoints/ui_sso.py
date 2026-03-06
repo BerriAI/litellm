@@ -815,8 +815,15 @@ async def get_generic_sso_response(
                     param="GENERIC_TOKEN_ENDPOINT",
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            # Both guards above raise, so narrowing holds at this point.
-            assert isinstance(authorization_code, str)  # appease static type checker
+            # Both guards above raise, so authorization_code is a non-empty str here.
+            # Use an explicit type guard rather than assert (assert is a no-op with -O).
+            if not isinstance(authorization_code, str):
+                raise ProxyException(
+                    message="Missing authorization code in callback",
+                    type=ProxyErrorTypes.auth_error,
+                    param="code",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
             combined_response = await SSOAuthenticationHandler._pkce_token_exchange(
                 authorization_code=authorization_code,
                 code_verifier=code_verifier,
