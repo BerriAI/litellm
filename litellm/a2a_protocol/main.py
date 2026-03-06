@@ -664,15 +664,21 @@ async def create_a2a_client(
 
     verbose_logger.info(f"Creating A2A client for {base_url}")
 
-    # Always create a fresh httpx client per A2A call so that per-agent auth
-    # headers (extra_headers) are never shared across agents or requests.
-    # Mutating a cached shared client would cause headers from one agent to
-    # bleed into requests made to a different agent.
-    httpx_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout),
-        headers=extra_headers or {},
-    )
+    # Use LiteLLM's cached httpx client to avoid creating a new client per
+    # request (+500ms latency).  When extra_headers are provided they are
+    # included in the cache-key params so that per-agent auth headers are
+    # never shared across agents.
+    _params: Dict[str, Any] = {"timeout": timeout}
     if extra_headers:
+        # Sort keys for deterministic cache key generation
+        _params["extra_headers"] = str(sorted(extra_headers.items()))
+    http_handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.A2A,
+        params=_params,
+    )
+    httpx_client = http_handler.client
+    if extra_headers:
+        httpx_client.headers.update(extra_headers)
         verbose_proxy_logger.debug(
             f"A2A client created with extra_headers={list(extra_headers.keys())}"
         )
