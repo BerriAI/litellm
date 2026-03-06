@@ -2143,10 +2143,11 @@ class CustomStreamWrapper:
                     self.sent_stream_usage = True
                     return response
 
-                _final_response = _safe_model_deep_copy(complete_streaming_response) if complete_streaming_response is not None else response
+                _async_response = _safe_model_deep_copy(complete_streaming_response) if complete_streaming_response is not None else response
+                _sync_response = _safe_model_deep_copy(complete_streaming_response) if complete_streaming_response is not None else response
                 asyncio.create_task(
                     self.logging_obj.async_success_handler(
-                        _final_response,
+                        _async_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
@@ -2155,7 +2156,7 @@ class CustomStreamWrapper:
 
                 executor.submit(
                     self.logging_obj.success_handler,
-                    _final_response,
+                    _sync_response,
                     cache_hit=cache_hit,
                     start_time=None,
                     end_time=None,
