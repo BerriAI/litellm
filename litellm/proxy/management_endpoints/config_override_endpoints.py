@@ -8,7 +8,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.httpx_handler import httpxSpecialProvider
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -37,7 +38,6 @@ HASHICORP_ENV_VAR_MAPPING: Dict[str, str] = {
 
 HASHICORP_SENSITIVE_FIELDS: Set[str] = {
     "vault_token",
-    "approle_role_id",
     "approle_secret_id",
     "client_key",
 }
@@ -387,11 +387,11 @@ async def test_hashicorp_vault_connection(
 
     # Step 2: Verify the token is valid via token/lookup-self
     try:
-        sync_client = _get_httpx_client()
+        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.ProxyServer)
         lookup_url = f"{client.vault_addr}/v1/auth/token/lookup-self"
         if client.vault_namespace:
             headers["X-Vault-Namespace"] = client.vault_namespace
-        response = sync_client.get(lookup_url, headers=headers)
+        response = await async_client.get(lookup_url, headers=headers)
         response.raise_for_status()
     except Exception as e:
         raise HTTPException(
