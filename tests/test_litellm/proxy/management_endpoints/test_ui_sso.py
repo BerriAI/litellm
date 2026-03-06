@@ -3458,6 +3458,9 @@ class TestPKCEFunctionality:
 
         assert result["access_token"] == "tok_abc"
         assert result["email"] == "user@example.com"
+        # id_token was explicit null in token_response — the merge loop must remove it
+        # rather than leaving "id_token": None in the result.
+        assert "id_token" not in result, "null id_token from token endpoint must be absent in merged result"
         # Verify userinfo GET used the correct Bearer token header
         get_call = mock_userinfo_client.get.call_args
         assert get_call is not None
@@ -3640,6 +3643,35 @@ class TestPKCEFunctionality:
                 )
 
         assert "unavailable" in exc_info.value.message.lower()
+        assert str(exc_info.value.code) == "401"
+
+    @pytest.mark.asyncio
+    async def test_pkce_userinfo_http200_empty_body_no_id_token_raises(self):
+        """When userinfo returns HTTP 200 with an empty/null body and no id_token is
+        available, _get_pkce_userinfo raises ProxyException."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = None  # HTTP 200 with null JSON body
+
+        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(ProxyException) as exc_info:
+                await SSOAuthenticationHandler._get_pkce_userinfo(
+                    access_token="access_token",
+                    id_token=None,  # no id_token fallback available
+                    userinfo_endpoint="https://example.com/userinfo",
+                    additional_headers={},
+                )
+
+        assert "unavailable" in exc_info.value.message.lower() or "no userinfo" in exc_info.value.message.lower() or "userinfo" in exc_info.value.message.lower()
         assert str(exc_info.value.code) == "401"
 
 
