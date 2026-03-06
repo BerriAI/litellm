@@ -172,11 +172,13 @@ class PassThroughEndpointHandler(BaseTranslation):
         if not text_to_check:
             return response
 
-        # Merge caller's request_data (contains pii_tokens from input masking)
-        # with response info and user API key metadata
+        # Merge response dict with caller's request_data (contains pii_tokens from
+        # input masking). request_data is spread last so input-phase keys (e.g.
+        # pii_tokens) take precedence over any colliding keys in the response dict.
+        # Note: response is always a dict here (non-dict returns early above).
         request_data: dict = {
+            **response,
             **(request_data or {}),
-            **({"response": response} if not isinstance(response, dict) else response),
         }
 
         # Add user API key metadata with prefixed keys
