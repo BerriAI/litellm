@@ -3423,6 +3423,10 @@ class TestPKCEFunctionality:
             assert isinstance(kwargs["auth"], httpx.BasicAuth)
             # Verify code_verifier is in the POST body (essential PKCE field)
             assert kwargs.get("data", {}).get("code_verifier") == "verifier_abc"
+            # Verify credentials are NOT double-sent in the POST body when using Basic Auth
+            post_data = kwargs.get("data", {})
+            assert "client_secret" not in post_data, "client_secret must not appear in POST body when using Basic Auth"
+            assert "client_id" not in post_data, "client_id must not appear in POST body when using Basic Auth (include_client_id=False)"
             return mock_response
 
         # Use separate mock clients for token exchange and userinfo —
