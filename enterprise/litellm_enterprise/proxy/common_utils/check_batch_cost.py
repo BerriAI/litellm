@@ -239,8 +239,11 @@ class CheckBatchCost:
                 # mark the job as complete
                 completed_jobs.append(job)
 
-            if len(completed_jobs) > 0:
-                await self.prisma_client.db.litellm_managedobjecttable.update_many(
-                    where={"id": {"in": [job.id for job in completed_jobs]}},
-                    data={"batch_processed": True, "status": "complete"},
+                await self.prisma_client.db.litellm_managedobjecttable.update(
+                    where={"id": job.id},
+                    data={
+                        "batch_processed": True,
+                        "status": "complete",
+                        "file_object": response.model_dump_json(),
+                    },
                 )
