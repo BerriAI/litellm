@@ -1,7 +1,5 @@
 """Tests for litellm.proxy.db.db_schema helper."""
 
-
-
 import pytest
 
 from litellm.proxy.db.db_schema import get_database_schema
