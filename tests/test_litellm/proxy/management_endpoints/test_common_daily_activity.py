@@ -469,3 +469,203 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metadata.key_alias == "toto-test-2"
     assert key_data.metadata.team_id == "69cd4b77-b095-4489-8c46-4f2f31d840a2"
     assert key_data.metrics.spend == 10.0
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_entity_breakdown_multi_query():
+    """Test the optimised multi-query path used when include_entity_breakdown=True.
+
+    Verifies that:
+    - per-entity per-date data appears in each day's breakdown.entities
+    - cross-date model/provider/key breakdowns appear on the first date only
+    - entity → API key correlation is present on the first date's entities
+    - total metrics are correctly accumulated
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    # Mock rows for the 3 concurrent queries.
+    # Q0 (detail without entity): full-dimension rows collapsed across teams
+    detail_rows = [
+        {
+            "date": "2024-01-02",
+            "api_key": "key-1",
+            "model": "gpt-4",
+            "model_group": "gpt-4",
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": None,
+            "endpoint": "/v1/chat/completions",
+            "spend": 30.0,
+            "prompt_tokens": 200,
+            "completion_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 3,
+            "successful_requests": 3,
+            "failed_requests": 0,
+        },
+        {
+            "date": "2024-01-01",
+            "api_key": "key-1",
+            "model": "gpt-4",
+            "model_group": "gpt-4",
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": None,
+            "endpoint": "/v1/chat/completions",
+            "spend": 20.0,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 2,
+            "successful_requests": 2,
+            "failed_requests": 0,
+        },
+    ]
+
+    # Q1 (entity per date): per-team per-day
+    entity_daily_rows = [
+        {
+            "team_id": "team-a",
+            "date": "2024-01-02",
+            "spend": 20.0,
+            "prompt_tokens": 120,
+            "completion_tokens": 60,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 2,
+            "successful_requests": 2,
+            "failed_requests": 0,
+        },
+        {
+            "team_id": "team-b",
+            "date": "2024-01-02",
+            "spend": 10.0,
+            "prompt_tokens": 80,
+            "completion_tokens": 40,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
+        {
+            "team_id": "team-a",
+            "date": "2024-01-01",
+            "spend": 20.0,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 2,
+            "successful_requests": 2,
+            "failed_requests": 0,
+        },
+    ]
+
+    # Q2 (entity × key): cross-date entity→key mapping
+    entity_key_rows = [
+        {
+            "team_id": "team-a",
+            "api_key": "key-1",
+            "spend": 40.0,
+            "prompt_tokens": 220,
+            "completion_tokens": 110,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 4,
+            "successful_requests": 4,
+            "failed_requests": 0,
+        },
+        {
+            "team_id": "team-b",
+            "api_key": "key-1",
+            "spend": 10.0,
+            "prompt_tokens": 80,
+            "completion_tokens": 40,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
+    ]
+
+    # Return different results per query_raw call
+    mock_prisma.db.query_raw = AsyncMock(
+        side_effect=[detail_rows, entity_daily_rows, entity_key_rows]
+    )
+
+    # API key metadata
+    mock_key = MagicMock()
+    mock_key.token = "key-1"
+    mock_key.key_alias = "my-key"
+    mock_key.team_id = "team-a"
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[mock_key]
+    )
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        entity_metadata_field={"team-a": {"alias": "Team A"}, "team-b": {"alias": "Team B"}},
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+        model=None,
+        api_key=None,
+        include_entity_breakdown=True,
+    )
+
+    # 2 dates
+    assert len(result.results) == 2
+
+    # Results sorted descending by date
+    day2 = result.results[0]
+    day1 = result.results[1]
+    assert str(day2.date) == "2024-01-02"
+    assert str(day1.date) == "2024-01-01"
+
+    # Per-date entity breakdown present on both days
+    assert "team-a" in day2.breakdown.entities
+    assert "team-b" in day2.breakdown.entities
+    assert "team-a" in day1.breakdown.entities
+    # team-b has no spend on day1
+    assert "team-b" not in day1.breakdown.entities
+
+    # Entity metrics are per-date
+    assert day2.breakdown.entities["team-a"].metrics.spend == 20.0
+    assert day2.breakdown.entities["team-b"].metrics.spend == 10.0
+    assert day1.breakdown.entities["team-a"].metrics.spend == 20.0
+
+    # Entity metadata preserved
+    assert day2.breakdown.entities["team-a"].metadata.get("alias") == "Team A"
+
+    # Per-date model breakdown from the detail query
+    assert "gpt-4" in day2.breakdown.models
+    assert day2.breakdown.models["gpt-4"].metrics.spend == 30.0  # day2 only
+    assert "gpt-4" in day1.breakdown.models
+    assert day1.breakdown.models["gpt-4"].metrics.spend == 20.0  # day1 only
+
+    # Per-date API key breakdown
+    assert "key-1" in day2.breakdown.api_keys
+    assert "key-1" in day1.breakdown.api_keys
+
+    # Entity → key correlation on first date entities
+    assert "key-1" in day2.breakdown.entities["team-a"].api_key_breakdown
+    ak_breakdown = day2.breakdown.entities["team-a"].api_key_breakdown["key-1"]
+    assert ak_breakdown.metrics.spend == 40.0  # Cross-date total
+    assert ak_breakdown.metadata.key_alias == "my-key"
+
+    # No entity → key on second date
+    assert len(day1.breakdown.entities["team-a"].api_key_breakdown) == 0
+
+    # Total metrics
+    assert result.metadata.total_spend == 50.0  # 30 + 20
+    assert result.metadata.total_api_requests == 5  # 3 + 2
+
+    # Day metrics are correct
+    assert day2.metrics.spend == 30.0  # team-a(20) + team-b(10)
+    assert day1.metrics.spend == 20.0  # team-a(20)
