@@ -629,6 +629,35 @@ class TestAnthropicStreaming:
             assert len(message_deltas) == 1
             assert message_deltas[0]["delta"]["stop_reason"] == "tool_use"
 
+    async def test_anthropic_streaming_reindexes_non_contiguous_tool_blocks(self, handler):
+        """Test that tool blocks at non-contiguous indices (e.g. 3,4 after text at 0) are re-indexed sequentially."""
+        sample_data_path = (
+            Path(__file__).parent / "rubrik_test_sample_data" / "anthropic_streaming_multiple_tool_call_response"
+        )
+
+        async def mock_post(*args: Any, **kwargs: Any) -> Mock:
+            request_json = kwargs.get("json", {})
+            return Mock(status_code=200, json=lambda: request_json)
+
+        with patch.object(handler.tool_blocking_client, "post", new=mock_post):
+            chunks = []
+            async for chunk in handler.async_post_call_streaming_iterator_hook(
+                user_api_key_dict={},
+                response=self._create_sse_stream_from_file(sample_data_path),
+                request_data=create_anthropic_request_data(),
+            ):
+                chunks.append(await self._decode_sse(chunk))
+
+            # Collect all indices from content_block_start events
+            block_start_indices = [
+                c["index"] for c in chunks if c.get("type") == "content_block_start"
+            ]
+
+            # Text at 0, then tools should be re-indexed to 1 and 2 (not 3 and 4)
+            assert block_start_indices == [0, 1, 2], (
+                f"Expected sequential indices [0, 1, 2] but got {block_start_indices}"
+            )
+
     async def test_anthropic_streaming_text_only_with_real_data(self, handler):
         """Test that text-only Anthropic responses (no tool calls) pass through unmodified."""
         sample_data_path = Path(__file__).parent / "rubrik_test_sample_data" / "anthropic_streaming_text_response"

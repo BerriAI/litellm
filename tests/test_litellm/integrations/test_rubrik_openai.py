@@ -888,6 +888,58 @@ class TestAsyncPostCallStreamingIteratorHook:
         # Should keep finish_reason="tool_calls" since some tools are allowed
         assert result_chunk.choices[0].finish_reason == "tool_calls"
 
+    async def test_streaming_partial_blocking_empty_explanation(self, handler):
+        """Test that empty explanation from blocking service does not produce spurious whitespace."""
+
+        async def mock_post(*_args: Any, **kwargs: Any) -> Mock:
+            request_json = kwargs.get("json", {})
+            all_tool_calls = request_json["choices"][0]["message"]["tool_calls"]
+            allowed = [tc for tc in all_tool_calls if tc["id"] == "call_B"]
+
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "choices": [{"message": {"role": "assistant", "content": "", "tool_calls": allowed}}],
+            }
+            mock_response.raise_for_status = Mock()
+            return mock_response
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        handler.tool_blocking_client = mock_client
+
+        tool_call_deltas = [
+            ChatCompletionDeltaToolCall(
+                index=0, id="call_A", type="function",
+                function=Function(name="blocked_tool", arguments='{"x": 1}'),
+            ),
+            ChatCompletionDeltaToolCall(
+                index=1, id="call_B", type="function",
+                function=Function(name="allowed_tool", arguments='{"y": 2}'),
+            ),
+        ]
+
+        chunks = []
+        async for chunk in handler.async_post_call_streaming_iterator_hook(
+            user_api_key_dict={},
+            response=create_tool_call_stream(tool_call_deltas),
+            request_data=create_openai_request_data(),
+        ):
+            chunks.append(chunk)
+
+        assert len(chunks) == 1
+        result_chunk = chunks[0]
+
+        # Should have the allowed tool call
+        assert result_chunk.choices[0].delta.tool_calls is not None
+        assert len(result_chunk.choices[0].delta.tool_calls) == 1
+        assert result_chunk.choices[0].delta.tool_calls[0].id == "call_B"
+
+        # Empty explanation should NOT produce whitespace-only content
+        content = result_chunk.choices[0].delta.content
+        assert content is None or content.strip() == ""
+        # Specifically, should not be "\n\n"
+        assert content != "\n\n"
+
     async def test_streaming_allowing_with_real_data(self, handler):
         """Test allowing tool calls using real streaming data (no blocking)."""
 

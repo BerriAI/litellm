@@ -414,8 +414,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             event_type = chunk.get("type")
             is_tool_chunk = self._is_tool_related_anthropic_chunk(chunk)
 
-            # Track content block index before buffering starts
-            if not is_buffering and event_type in _CONTENT_BLOCK_EVENTS:
+            # Track content block index for non-tool chunks before buffering starts
+            if not is_buffering and not is_tool_chunk and event_type in _CONTENT_BLOCK_EVENTS:
                 current_content_index = chunk.get("index", current_content_index)
 
             if is_tool_chunk:
