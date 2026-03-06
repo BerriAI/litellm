@@ -4529,6 +4529,8 @@ async def test_pkce_token_exchange_basic_auth():
         # Verify Basic Auth is set
         assert "auth" in kwargs
         assert isinstance(kwargs["auth"], httpx.BasicAuth)
+        # Verify code_verifier is in the POST body (essential PKCE field)
+        assert kwargs.get("data", {}).get("code_verifier") == "verifier_abc"
         return mock_response
 
     with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:

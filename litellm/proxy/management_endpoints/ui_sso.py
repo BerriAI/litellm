@@ -2616,9 +2616,9 @@ class SSOAuthenticationHandler:
         post_kwargs: Dict[str, Any] = {
             "data": token_data,
             "headers": {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
                 **additional_headers,
+                "Content-Type": "application/x-www-form-urlencoded",  # must not be overridden
+                "Accept": "application/json",
             },
             "timeout": 30.0,
         }
@@ -2719,8 +2719,8 @@ class SSOAuthenticationHandler:
                     resp = await client.get(
                         userinfo_endpoint,
                         headers={
-                            "Authorization": f"Bearer {access_token}",
                             **additional_headers,
+                            "Authorization": f"Bearer {access_token}",  # must not be overridden
                         },
                         timeout=30.0,
                     )
