@@ -24,6 +24,13 @@ try:
 except ImportError:
 
     class _A2ACardResolver:  # type: ignore[no-redef]
+        """Stub fallback when a2a-sdk is not installed.
+
+        Provides the same constructor signature so LiteLLMA2ACardResolver can
+        be instantiated without the SDK.  Any actual card resolution raises a
+        clear RuntimeError directing the user to install the package.
+        """
+
         def __init__(
             self, httpx_client: Optional[Any] = None, base_url: Optional[str] = None
         ):
