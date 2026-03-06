@@ -5,6 +5,7 @@ NOTE: ModelsLab uses key-in-body authentication. The MODELSLAB_API_KEY
 will appear in the request body (not headers). LiteLLM's logging pipeline
 may log this — treat the key accordingly.
 """
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -14,7 +15,12 @@ from httpx._types import RequestFiles
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    _get_httpx_client,
+    get_async_httpx_client,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
@@ -218,7 +224,7 @@ class ModelsLabVideoConfig(BaseVideoConfig):
         timeout: int = MODELSLAB_POLL_TIMEOUT_SECONDS,
         interval: int = MODELSLAB_POLL_INTERVAL_SECONDS,
     ) -> Dict:
-        """Poll the ModelsLab fetch endpoint until status is success or error."""
+        """Poll the ModelsLab fetch endpoint until status is success or error (sync path)."""
         fetch_url = f"{MODELSLAB_VIDEO_BASE_URL}/fetch/{request_id}"
         body = {"key": self._api_key}
         client: HTTPHandler = _get_httpx_client()
@@ -226,8 +232,15 @@ class ModelsLabVideoConfig(BaseVideoConfig):
 
         while time.time() < deadline:
             time.sleep(interval)
-            resp = client.post(fetch_url, json=body)
-            resp.raise_for_status()
+            try:
+                resp = client.post(fetch_url, json=body)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise BaseLLMException(
+                    status_code=e.response.status_code,
+                    message=f"ModelsLab poll request failed: {e.response.text}",
+                    headers=dict(e.response.headers),
+                ) from e
             data = resp.json()
             status = data.get("status", "")
             if status in ("success", "error"):
@@ -238,6 +251,101 @@ class ModelsLabVideoConfig(BaseVideoConfig):
             status_code=408,
             message=f"ModelsLab video generation timed out after {timeout}s (request_id={request_id})",
             headers={},
+        )
+
+    async def _poll_async(
+        self,
+        request_id: str,
+        timeout: int = MODELSLAB_POLL_TIMEOUT_SECONDS,
+        interval: int = MODELSLAB_POLL_INTERVAL_SECONDS,
+    ) -> Dict:
+        """Poll the ModelsLab fetch endpoint using asyncio.sleep (async path)."""
+        fetch_url = f"{MODELSLAB_VIDEO_BASE_URL}/fetch/{request_id}"
+        body = {"key": self._api_key}
+        async_client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.MODELSLAB,
+        )
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            await asyncio.sleep(interval)
+            try:
+                resp = await async_client.post(fetch_url, json=body)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise BaseLLMException(
+                    status_code=e.response.status_code,
+                    message=f"ModelsLab poll request failed: {e.response.text}",
+                    headers=dict(e.response.headers),
+                ) from e
+            data = resp.json()
+            status = data.get("status", "")
+            if status in ("success", "error"):
+                return data
+            # still processing — keep polling
+
+        raise BaseLLMException(
+            status_code=408,
+            message=f"ModelsLab video generation timed out after {timeout}s (request_id={request_id})",
+            headers={},
+        )
+
+    async def async_transform_video_create_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
+    ) -> VideoObject:
+        """
+        Async version of transform_video_create_response.
+        Uses asyncio.sleep in the poll loop instead of time.sleep, so it does
+        not block the event loop during long-running video generation jobs.
+        """
+        response_data = raw_response.json()
+        status = response_data.get("status", "")
+        request_id = str(response_data.get("request_id", response_data.get("id", "")))
+
+        if status == "error":
+            raise BaseLLMException(
+                status_code=raw_response.status_code,
+                message=response_data.get("message", "ModelsLab video generation failed"),
+                headers=dict(raw_response.headers),
+            )
+
+        if status == "processing":
+            response_data = await self._poll_async(request_id)
+            status = response_data.get("status", "")
+
+        if status == "error":
+            raise BaseLLMException(
+                status_code=500,
+                message=response_data.get("message", "ModelsLab video generation failed"),
+                headers={},
+            )
+
+        if status == "success":
+            output = response_data.get("output", [])
+            output_url = output[0] if output else None
+            video_obj = VideoObject(
+                id=request_id,
+                object="video",
+                status="completed",
+                created_at=int(time.time()),
+            )  # type: ignore[arg-type]
+            if output_url:
+                video_obj._hidden_params["output_url"] = output_url
+            if custom_llm_provider and video_obj.id:
+                video_obj.id = encode_video_id_with_provider(
+                    video_obj.id, custom_llm_provider, model
+                )
+            return video_obj
+
+        raise BaseLLMException(
+            status_code=raw_response.status_code,
+            message=f"Unexpected ModelsLab video status: {status}",
+            headers=dict(raw_response.headers),
         )
 
     def transform_video_status_retrieve_request(

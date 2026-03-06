@@ -2,7 +2,7 @@
 Tests for ModelsLab video generation transformation.
 All tests are mocked — no real network calls.
 """
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -250,3 +250,108 @@ class TestModelsLabVideoTransformation:
                 )
 
         assert "Insufficient credits" in str(exc_info.value)
+
+    def test_poll_sync_wraps_http_error_as_base_llm_exception(self):
+        """_poll_sync wraps httpx.HTTPStatusError in BaseLLMException."""
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        mock_http_resp = Mock(spec=httpx.Response)
+        mock_http_resp.status_code = 403
+        mock_http_resp.text = "Forbidden"
+        mock_http_resp.headers = {}
+
+        mock_client = Mock()
+        mock_client.post.side_effect = httpx.HTTPStatusError(
+            "403 Forbidden",
+            request=Mock(),
+            response=mock_http_resp,
+        )
+
+        with patch(
+            "litellm.llms.modelslab.videos.transformation._get_httpx_client",
+            return_value=mock_client,
+        ):
+            with pytest.raises(BaseLLMException) as exc_info:
+                self.config._poll_sync("req_403", timeout=10, interval=0)
+
+        assert exc_info.value.status_code == 403
+        assert "ModelsLab poll request failed" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_async_transform_video_create_response_success(self):
+        """async_transform_video_create_response returns completed VideoObject on immediate success."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.json.return_value = {
+            "status": "success",
+            "request_id": "req_async_ok",
+            "output": ["https://cdn.modelslab.com/output/async_video.mp4"],
+        }
+
+        result = await self.config.async_transform_video_create_response(
+            model="i2vgen-xl",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="modelslab",
+        )
+
+        assert isinstance(result, VideoObject)
+        assert result.status == "completed"
+        assert result._hidden_params.get("output_url") == "https://cdn.modelslab.com/output/async_video.mp4"
+
+    @pytest.mark.asyncio
+    async def test_async_transform_video_create_response_polls_with_asyncio_sleep(self):
+        """async_transform_video_create_response uses _poll_async (asyncio.sleep, not time.sleep)."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.json.return_value = {
+            "status": "processing",
+            "request_id": "req_async_poll",
+        }
+
+        poll_result = {
+            "status": "success",
+            "request_id": "req_async_poll",
+            "output": ["https://cdn.modelslab.com/output/polled.mp4"],
+        }
+
+        with patch.object(self.config, "_poll_async", new=AsyncMock(return_value=poll_result)) as mock_poll:
+            result = await self.config.async_transform_video_create_response(
+                model="i2vgen-xl",
+                raw_response=mock_response,
+                logging_obj=self.mock_logging_obj,
+            )
+            mock_poll.assert_awaited_once_with("req_async_poll")
+
+        assert result.status == "completed"
+        assert result._hidden_params.get("output_url") == "https://cdn.modelslab.com/output/polled.mp4"
+
+    @pytest.mark.asyncio
+    async def test_async_transform_video_create_response_poll_error_surfaces_message(self):
+        """async path: when _poll_async returns status=error, error message is raised."""
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.json.return_value = {
+            "status": "processing",
+            "request_id": "req_async_err",
+        }
+
+        poll_result = {
+            "status": "error",
+            "message": "Model overloaded",
+        }
+
+        with patch.object(self.config, "_poll_async", new=AsyncMock(return_value=poll_result)):
+            with pytest.raises(BaseLLMException) as exc_info:
+                await self.config.async_transform_video_create_response(
+                    model="i2vgen-xl",
+                    raw_response=mock_response,
+                    logging_obj=self.mock_logging_obj,
+                )
+
+        assert "Model overloaded" in str(exc_info.value)
