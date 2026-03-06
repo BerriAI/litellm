@@ -109,6 +109,7 @@ class ModelsLabVideoConfig(BaseVideoConfig):
         """
         Validate environment. ModelsLab uses key-in-body — only Content-Type goes in headers.
         """
+        # Priority: explicit api_key arg > litellm_params.api_key > litellm.api_key > env var
         if litellm_params and litellm_params.api_key:
             api_key = api_key or litellm_params.api_key
 
@@ -164,29 +165,20 @@ class ModelsLabVideoConfig(BaseVideoConfig):
         files_list: List[Tuple[str, Any]] = []
         return request_data, files_list, api_base
 
-    def transform_video_create_response(
+    def _build_video_object(
         self,
+        response_data: Dict,
+        request_id: str,
         model: str,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        raw_response_status_code: int,
+        raw_response_headers: dict,
         custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict] = None,
     ) -> VideoObject:
-        response_data = raw_response.json()
+        """
+        Shared result-building logic for sync and async video transform paths.
+        Both paths share identical success/error handling after polling completes.
+        """
         status = response_data.get("status", "")
-        request_id = str(response_data.get("request_id", response_data.get("id", "")))
-
-        if status == "error":
-            raise BaseLLMException(
-                status_code=raw_response.status_code,
-                message=response_data.get("message", "ModelsLab video generation failed"),
-                headers=dict(raw_response.headers),
-            )
-
-        if status == "processing":
-            # Poll until done
-            response_data = self._poll_sync(request_id)
-            status = response_data.get("status", "")
 
         if status == "error":
             raise BaseLLMException(
@@ -213,9 +205,41 @@ class ModelsLabVideoConfig(BaseVideoConfig):
             return video_obj
 
         raise BaseLLMException(
-            status_code=raw_response.status_code,
+            status_code=raw_response_status_code,
             message=f"Unexpected ModelsLab video status: {status}",
-            headers=dict(raw_response.headers),
+            headers=raw_response_headers,
+        )
+
+    def transform_video_create_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
+    ) -> VideoObject:
+        response_data = raw_response.json()
+        status = response_data.get("status", "")
+        request_id = str(response_data.get("request_id", response_data.get("id", "")))
+
+        if status == "error":
+            raise BaseLLMException(
+                status_code=raw_response.status_code,
+                message=response_data.get("message", "ModelsLab video generation failed"),
+                headers=dict(raw_response.headers),
+            )
+
+        if status == "processing":
+            # Poll until done
+            response_data = self._poll_sync(request_id)
+
+        return self._build_video_object(
+            response_data=response_data,
+            request_id=request_id,
+            model=model,
+            raw_response_status_code=raw_response.status_code,
+            raw_response_headers=dict(raw_response.headers),
+            custom_llm_provider=custom_llm_provider,
         )
 
     def _poll_sync(
@@ -302,6 +326,7 @@ class ModelsLabVideoConfig(BaseVideoConfig):
         Async version of transform_video_create_response.
         Uses asyncio.sleep in the poll loop instead of time.sleep, so it does
         not block the event loop during long-running video generation jobs.
+        Shared result-building is delegated to _build_video_object to avoid duplication.
         """
         response_data = raw_response.json()
         status = response_data.get("status", "")
@@ -316,36 +341,14 @@ class ModelsLabVideoConfig(BaseVideoConfig):
 
         if status == "processing":
             response_data = await self._poll_async(request_id)
-            status = response_data.get("status", "")
 
-        if status == "error":
-            raise BaseLLMException(
-                status_code=500,
-                message=response_data.get("message", "ModelsLab video generation failed"),
-                headers={},
-            )
-
-        if status == "success":
-            output = response_data.get("output", [])
-            output_url = output[0] if output else None
-            video_obj = VideoObject(
-                id=request_id,
-                object="video",
-                status="completed",
-                created_at=int(time.time()),
-            )  # type: ignore[arg-type]
-            if output_url:
-                video_obj._hidden_params["output_url"] = output_url
-            if custom_llm_provider and video_obj.id:
-                video_obj.id = encode_video_id_with_provider(
-                    video_obj.id, custom_llm_provider, model
-                )
-            return video_obj
-
-        raise BaseLLMException(
-            status_code=raw_response.status_code,
-            message=f"Unexpected ModelsLab video status: {status}",
-            headers=dict(raw_response.headers),
+        return self._build_video_object(
+            response_data=response_data,
+            request_id=request_id,
+            model=model,
+            raw_response_status_code=raw_response.status_code,
+            raw_response_headers=dict(raw_response.headers),
+            custom_llm_provider=custom_llm_provider,
         )
 
     def transform_video_status_retrieve_request(
@@ -481,7 +484,8 @@ class ModelsLabVideoConfig(BaseVideoConfig):
         status_code: int,
         headers: Union[dict, httpx.Headers],
     ) -> BaseLLMException:
-        raise BaseLLMException(
+        # Return the exception object — callers use `raise provider.get_error_class(...)`
+        return BaseLLMException(
             status_code=status_code,
             message=error_message,
             headers=headers,
