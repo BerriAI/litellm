@@ -1472,6 +1472,82 @@ Your WIF credentials JSON file typically looks like this (for AWS federation):
 
 For more details on setting up Workload Identity Federation, see [Google Cloud WIF documentation](https://cloud.google.com/iam/docs/workload-identity-federation).
 
+#### Explicit AWS Credentials for WIF
+
+By default, AWS-based WIF relies on the EC2 instance metadata service to obtain AWS credentials. This works when LiteLLM runs on an EC2 instance or ECS task with an IAM role attached.
+
+If your environment **does not have access to the EC2 metadata service** (e.g., running on-premises, in a container without host networking, or in a different cloud with security restrictions), you can provide explicit AWS credentials directly in the WIF credential JSON file. LiteLLM will use these to authenticate to AWS before performing the GCP token exchange.
+
+Add the `aws_*` keys at the **top level** of your WIF credential JSON (alongside `type`, `audience`, etc.):
+
+```json
+{
+  "type": "external_account",
+  "audience": "//iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID",
+  "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/SERVICE_ACCOUNT_EMAIL:generateAccessToken",
+  "token_url": "https://sts.googleapis.com/v1/token",
+  "credential_source": {
+    "environment_id": "aws1",
+    "region_url": "http://169.254.169.254/latest/meta-data/placement/availability-zone",
+    "url": "http://169.254.169.254/latest/meta-data/iam/security-credentials",
+    "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
+  },
+  "aws_role_name": "arn:aws:iam::123456789012:role/MyWifRole",
+  "aws_region_name": "us-east-1"
+}
+```
+
+**Supported `aws_*` parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `aws_region_name` | Yes | AWS region for credential verification (e.g. `us-east-1`) |
+| `aws_role_name` | No | IAM role ARN for STS AssumeRole |
+| `aws_access_key_id` | No | Static AWS access key ID |
+| `aws_secret_access_key` | No | Static AWS secret access key |
+| `aws_session_token` | No | Temporary session token |
+| `aws_profile_name` | No | AWS CLI profile name |
+| `aws_session_name` | No | Session name for AssumeRole |
+| `aws_web_identity_token` | No | Web identity token for STS |
+| `aws_sts_endpoint` | No | Custom STS endpoint URL |
+| `aws_external_id` | No | External ID for cross-account AssumeRole |
+
+`aws_region_name` is always required when using explicit AWS credentials. The other parameters follow the same authentication flows as [Bedrock AWS auth](/docs/providers/bedrock#authentication) -- you can use role assumption, static keys, profiles, or web identity tokens.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-1.5-pro",
+    messages=[{"role": "user", "content": "Hello!"}],
+    vertex_credentials="/path/to/wif-credentials-with-aws.json",  # WIF JSON with aws_* keys
+    vertex_project="your-gcp-project-id",
+    vertex_location="us-central1"
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gemini-model
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      vertex_project: your-gcp-project-id
+      vertex_location: us-central1
+      vertex_credentials: /path/to/wif-credentials-with-aws.json  # WIF JSON with aws_* keys
+```
+
+</TabItem>
+</Tabs>
+
+When `aws_*` keys are present in the JSON, LiteLLM automatically uses explicit AWS authentication instead of the EC2 metadata service. When they are absent, the standard metadata-based flow is used unchanged.
+
 ### **Environment Variables**
 
 You can set:
