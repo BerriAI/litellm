@@ -377,7 +377,17 @@ async def test_thinking_stream_no_content_loss_async():
     assert len(thinking_deltas) >= 1, "Should have at least one thinking/signature delta"
     assert len(text_deltas) >= 1, "Should have at least one text delta"
 
-    # Verify full accumulated text content matches expected output (no dropped deltas)
+    # Verify full accumulated thinking content (no dropped deltas)
+    full_thinking = "".join(
+        d.get("delta", {}).get("thinking", "")
+        for d in thinking_deltas
+        if d.get("delta", {}).get("type") == "thinking_delta"
+    )
+    assert full_thinking == "Let me think... about this problem.", (
+        f"Expected accumulated thinking 'Let me think... about this problem.', got {full_thinking!r}"
+    )
+
+    # Verify full accumulated text content (no dropped deltas)
     accumulated_text = "".join(
         d.get("delta", {}).get("text", "") for d in text_deltas
     )
@@ -407,7 +417,17 @@ def test_thinking_stream_no_content_loss_sync():
     assert len(thinking_deltas) >= 1, "Should have at least one thinking/signature delta"
     assert len(text_deltas) >= 1, "Should have at least one text delta"
 
-    # Verify full accumulated text content matches expected output (no dropped deltas)
+    # Verify full accumulated thinking content (no dropped deltas)
+    full_thinking = "".join(
+        d.get("delta", {}).get("thinking", "")
+        for d in thinking_deltas
+        if d.get("delta", {}).get("type") == "thinking_delta"
+    )
+    assert full_thinking == "Let me think... about this problem.", (
+        f"Expected accumulated thinking 'Let me think... about this problem.', got {full_thinking!r}"
+    )
+
+    # Verify full accumulated text content (no dropped deltas)
     accumulated_text = "".join(
         d.get("delta", {}).get("text", "") for d in text_deltas
     )

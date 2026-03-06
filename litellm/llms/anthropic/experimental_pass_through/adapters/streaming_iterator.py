@@ -33,7 +33,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_content_block_finish: bool = False
     current_content_block_type: Literal["text", "tool_use", "thinking"] = "text"
     sent_last_message: bool = False
-    holding_chunk: Optional[Any] = None
     holding_stop_reason_chunk: Optional[Any] = None
     queued_usage_chunk: bool = False
     current_content_block_index: int = 0
