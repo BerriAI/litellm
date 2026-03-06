@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from contextlib import contextmanager
 
 import pytest
 
@@ -483,6 +484,33 @@ class TestVoyage4LargeTextEmbedding:
 
 
 # Tests for Voyage multimodal embeddings (voyage-multimodal-3, voyage-multimodal-3.5)
+@contextmanager
+def _ensure_multimodal_registry():
+    """Ensure voyage multimodal models have supports_multimodal_embedding in registry.
+    Needed because the cost map may be loaded from a remote URL that does not yet
+    include the flag (e.g. before PR merge). Restores state after the test.
+    """
+    to_restore = {}
+    for key in ("voyage/voyage-multimodal-3", "voyage/voyage-multimodal-3.5"):
+        if key in litellm.model_cost:
+            to_restore[key] = dict(litellm.model_cost[key])
+            litellm.model_cost[key]["supports_multimodal_embedding"] = True
+        else:
+            to_restore[key] = None
+            litellm.model_cost[key] = {
+                "supports_multimodal_embedding": True,
+                "litellm_provider": "voyage",
+            }
+    try:
+        yield
+    finally:
+        for k, v in to_restore.items():
+            if v is None:
+                litellm.model_cost.pop(k, None)
+            else:
+                litellm.model_cost[k] = v
+
+
 class TestVoyageMultimodalEmbeddings:
     """Test suite for Voyage multimodal embedding models (VoyageMultimodalEmbeddingConfig)."""
 
@@ -492,8 +520,9 @@ class TestVoyageMultimodalEmbeddings:
             VoyageMultimodalEmbeddingConfig,
         )
 
-        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-multimodal-3") is True
-        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-multimodal-3.5") is True
+        with _ensure_multimodal_registry():
+            assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-multimodal-3") is True
+            assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-multimodal-3.5") is True
         assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-3-lite") is False
         assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-4-large") is False
 
@@ -502,12 +531,13 @@ class TestVoyageMultimodalEmbeddings:
         from litellm.utils import ProviderConfigManager
         from litellm.types.utils import LlmProviders
 
-        for model in ("voyage-multimodal-3", "voyage-multimodal-3.5"):
-            config = ProviderConfigManager.get_provider_embedding_config(
-                model, LlmProviders.VOYAGE
-            )
-            assert config is not None
-            assert type(config).__name__ == "VoyageMultimodalEmbeddingConfig"
+        with _ensure_multimodal_registry():
+            for model in ("voyage-multimodal-3", "voyage-multimodal-3.5"):
+                config = ProviderConfigManager.get_provider_embedding_config(
+                    model, LlmProviders.VOYAGE
+                )
+                assert config is not None
+                assert type(config).__name__ == "VoyageMultimodalEmbeddingConfig"
 
     def test_multimodal_embedding_url(self):
         """Multimodal models must use /v1/multimodalembeddings URL."""
