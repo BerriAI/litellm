@@ -413,6 +413,75 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     assert data["data"][0]["user"] == "test_user_1"
 
 
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_session_id(client, monkeypatch):
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user",
+            "session_id": "sess-abc-123",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user",
+            "session_id": "sess-xyz-456",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_by_session(where):
+        if "session_id" in where and where["session_id"] == "sess-abc-123":
+            return [mock_spend_logs[0]]
+        return mock_spend_logs
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_session),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+
+        response = client.get(
+            "/spend/logs/v2",
+            params={
+                "session_id": "sess-abc-123",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "data" in data
+        assert "total" in data
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["session_id"] == "sess-abc-123"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 # Mock spend logs with distinct values for sorting tests.
 # req_a: spend=0.10, tokens=500, start/end earliest
 # req_b: spend=0.05, tokens=200, start/end 2nd
