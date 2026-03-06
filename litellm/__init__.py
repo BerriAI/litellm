@@ -1449,6 +1449,7 @@ if TYPE_CHECKING:
     from .llms.perplexity.responses.transformation import PerplexityResponsesConfig as PerplexityResponsesConfig
     from .llms.databricks.responses.transformation import DatabricksResponsesAPIConfig as DatabricksResponsesAPIConfig
     from .llms.openrouter.responses.transformation import OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig
+    from .llms.ovhcloud.responses.transformation import OVHCloudResponsesAPIConfig as OVHCloudResponsesAPIConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig

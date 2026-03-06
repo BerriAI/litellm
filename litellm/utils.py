@@ -8353,6 +8353,8 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
+        elif litellm.LlmProviders.OVHCLOUD == provider:
+            return litellm.OVHCloudResponsesAPIConfig()
         return None
 
     @staticmethod
