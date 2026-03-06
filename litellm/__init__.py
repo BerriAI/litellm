@@ -1236,16 +1236,6 @@ from .responses.main import *
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
 from . import interactions
-from .skills.main import (
-    create_skill,
-    acreate_skill,
-    list_skills,
-    alist_skills,
-    get_skill,
-    aget_skill,
-    delete_skill,
-    adelete_skill,
-)
 from .containers.main import *
 from .ocr.main import *
 from .rag.main import *
