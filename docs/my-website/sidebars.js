@@ -539,6 +539,7 @@ const sidebars = {
           items: [
             "a2a",
             "a2a_invoking_agents",
+            "a2a_agent_headers",
             "a2a_cost_tracking",
             "a2a_agent_permissions"
           ],
