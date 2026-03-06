@@ -2506,5 +2506,175 @@
       "Content Safety"
     ],
     "estimated_latency_ms": 1
+  },
+  {
+    "id": "canadian-pii-protection",
+    "title": "Canadian PII Protection (PIPEDA)",
+    "description": "Protects Canadian personal identifiers under PIPEDA and provincial privacy legislation. Masks Social Insurance Numbers (SIN), Ontario Health Insurance Plan (OHIP) numbers, Ontario driver's licence numbers, Canadian passport numbers, IRCC immigration documents, Canadian bank account routing information, postal codes, email addresses, and phone numbers.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "ca-pii-government-identifiers",
+      "ca-pii-health-drivers",
+      "ca-pii-immigration",
+      "ca-pii-financial",
+      "ca-pii-contact-information"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "ca-pii-government-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "ca_sin",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_canada",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Canadian Social Insurance Numbers (SIN) and Canadian passport numbers"
+        }
+      },
+      {
+        "guardrail_name": "ca-pii-health-drivers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "ca_ohip",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "ca_on_drivers_licence",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Ontario Health Insurance Plan (OHIP) numbers and Ontario driver's licence numbers"
+        }
+      },
+      {
+        "guardrail_name": "ca-pii-immigration",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "ca_immigration_doc",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks IRCC immigration document numbers including UCI, work/study permits, and IMM references"
+        }
+      },
+      {
+        "guardrail_name": "ca-pii-financial",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "ca_bank_account",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "credit_card",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "visa",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "mastercard",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "amex",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "iban",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Canadian bank account routing information (transit-institution-account) and payment cards"
+        }
+      },
+      {
+        "guardrail_name": "ca-pii-contact-information",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "email",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "us_phone",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "ca_postal_code",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks email addresses, phone numbers (North American format), and Canadian postal codes"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "canadian-pii-protection",
+      "description": "Canadian PII protection policy under PIPEDA and provincial privacy legislation. Masks SIN, OHIP, Ontario driver's licence, passport, IRCC immigration documents, bank account routing info, postal codes, email, and phone numbers.",
+      "guardrails_add": [
+        "ca-pii-government-identifiers",
+        "ca-pii-health-drivers",
+        "ca-pii-immigration",
+        "ca-pii-financial",
+        "ca-pii-contact-information"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "PII Protection",
+      "Canada"
+    ],
+    "estimated_latency_ms": 1
   }
 ]
