@@ -262,3 +262,82 @@ class TestLoggingInitCallbackDuration:
         # Should still be set (deep copy of None is essentially a no-op)
         assert hasattr(obj, "callback_duration_ms")
         assert obj.callback_duration_ms >= 0
+
+
+class TestDictResponseHiddenParams:
+    """Tests that dict-based responses (e.g. AnthropicMessagesResponse TypedDict) get _hidden_params populated."""
+
+    def _make_logging_obj(self):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"llm_api_duration_ms": 500.0}
+        logging_obj.caching_details = None
+        logging_obj._response_cost_calculator = MagicMock(return_value=0.0025)
+        logging_obj.litellm_call_id = "test-dict-call"
+        logging_obj.callback_duration_ms = 1.0
+        return logging_obj
+
+    def test_apply_sets_hidden_params_on_dict_response(self):
+        """ResponseMetadata.apply() should store _hidden_params as a dict key on dict responses."""
+        result = {"id": "msg_123", "type": "message", "content": []}
+
+        metadata = ResponseMetadata(result)
+        metadata._hidden_params = {"response_cost": 0.005}
+        metadata.apply()
+
+        assert "_hidden_params" in result
+        assert result["_hidden_params"]["response_cost"] == 0.005
+
+    def test_update_response_metadata_works_for_dict_response(self):
+        """End-to-end: update_response_metadata should populate _hidden_params on a dict response."""
+        result = {"id": "msg_456", "type": "message", "usage": {"input_tokens": 10, "output_tokens": 20}}
+        logging_obj = self._make_logging_obj()
+
+        start = datetime.datetime(2025, 1, 1, 0, 0, 0)
+        end = datetime.datetime(2025, 1, 1, 0, 0, 1)
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="anthropic/claude-sonnet-4-20250514",
+            kwargs={},
+            start_time=start,
+            end_time=end,
+        )
+
+        assert "_hidden_params" in result
+        hidden = result["_hidden_params"]
+        assert hidden["response_cost"] == 0.0025
+        assert hidden["litellm_call_id"] == "test-dict-call"
+
+    def test_init_reads_existing_hidden_params_from_dict(self):
+        """ResponseMetadata.__init__ should read pre-existing _hidden_params from dict responses."""
+        result = {"id": "msg_789", "_hidden_params": {"existing_key": "value"}}
+
+        metadata = ResponseMetadata(result)
+        assert metadata._hidden_params == {"existing_key": "value"}
+
+    def test_init_handles_none_hidden_params_in_dict_response(self):
+        """When _hidden_params key exists but is None, should fall back to empty dict."""
+        response = {
+            "id": "msg_none",
+            "_hidden_params": None,
+        }
+
+        metadata = ResponseMetadata(response)
+
+        assert metadata._hidden_params == {}
+
+    def test_proxy_reads_hidden_params_from_dict_response(self):
+        """ResponseMetadata.__init__ should extract _hidden_params from dict responses (same path proxy relies on)."""
+        response = {
+            "id": "msg_abc",
+            "_hidden_params": {
+                "response_cost": 0.01,
+                "api_base": "https://api.anthropic.com",
+            },
+        }
+
+        metadata = ResponseMetadata(response)
+
+        assert metadata._hidden_params["response_cost"] == 0.01
+        assert metadata._hidden_params["api_base"] == "https://api.anthropic.com"
