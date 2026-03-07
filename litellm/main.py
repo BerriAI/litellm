@@ -7031,6 +7031,39 @@ def speech(  # noqa: PLR0915
             **kwargs,
         )
 
+    elif custom_llm_provider == "modelslab":
+        from litellm.llms.modelslab.text_to_speech.transformation import (
+            ModelsLabTextToSpeechConfig,
+        )
+
+        # ModelsLab Text-to-Speech
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = ModelsLabTextToSpeechConfig()
+
+        modelslab_tts_config = cast(ModelsLabTextToSpeechConfig, text_to_speech_provider_config)
+
+        # Convert voice to string if it is a dict
+        modelslab_voice_str: Optional[str] = None
+        if isinstance(voice, str):
+            modelslab_voice_str = voice
+        elif isinstance(voice, dict):
+            modelslab_voice_str = voice.get("voice_id") or voice.get("id") or voice.get("name")
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=modelslab_voice_str,
+            text_to_speech_provider_config=modelslab_tts_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
+
     if response is None:
         raise Exception(
             "Unable to map the custom llm provider={} to a known provider={}.".format(
