@@ -66,15 +66,12 @@ def _purge_expired_states() -> None:
         del _pending_oauth2_states[k]
 
 
-def _make_state_token(server_id: str, user_id: str, timestamp: float, master_key: str) -> str:
+def _make_state_token() -> str:
     """Return a cryptographically random opaque state token.
 
-    The token is looked up in `_pending_oauth2_states` by the callback — it is
-    never used to carry or verify signed data.  A 32-byte (256-bit) random value
-    is therefore sufficient and makes the intent explicit.
-
-    Parameters are accepted for API compatibility with existing tests; they are
-    not used in the generated token.
+    The token is a dict key in `_pending_oauth2_states` — it is never used to
+    carry or verify signed data, so a 32-byte (256-bit) random value is
+    sufficient and makes the intent explicit.
     """
     return secrets.token_urlsafe(32)
 
@@ -187,7 +184,7 @@ async def openapi_oauth2_connect(
         raise HTTPException(status_code=503, detail="Too many pending OAuth2 flows")
 
     timestamp = time.time()
-    state = _make_state_token(server_id, user_id, timestamp, master_key)
+    state = _make_state_token()
     _pending_oauth2_states[state] = {
         "server_id": server_id,
         "user_id": user_id,
@@ -212,7 +209,9 @@ async def openapi_oauth2_connect(
     if server.scopes:
         params["scope"] = " ".join(server.scopes)
 
-    authorization_url = f"{server.authorization_url}?{urlencode(params)}"
+    # Use "&" if the base URL already contains query parameters, otherwise "?"
+    sep = "&" if "?" in server.authorization_url else "?"
+    authorization_url = f"{server.authorization_url}{sep}{urlencode(params)}"
     server_name = server.server_name or server.name or server_id
 
     verbose_proxy_logger.debug(
@@ -505,6 +504,33 @@ async def openapi_oauth2_status(
         return JSONResponse(
             {"connected": False, "server_id": server_id, "server_name": server_name}
         )
+
+    # Check the shared credential cache before issuing a DB query.
+    # The frontend polls this endpoint every 2 s; the cache avoids a raw DB
+    # hit on each poll.  The callback explicitly invalidates the cache entry
+    # via _invalidate_byok_cred_cache, so the next poll after a successful
+    # authorization always falls through to the DB and returns connected=True.
+    try:
+        import time as _time
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _BYOK_CRED_CACHE_TTL,
+            _byok_cred_cache,
+        )
+
+        cached = _byok_cred_cache.get((user_id, server_id))
+        if cached is not None:
+            cached_cred, ts = cached
+            if _time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
+                return JSONResponse(
+                    {
+                        "connected": cached_cred is not None,
+                        "server_id": server_id,
+                        "server_name": server_name,
+                    }
+                )
+    except Exception:
+        pass  # If cache import fails, fall through to DB
 
     try:
         connected = await has_user_credential(

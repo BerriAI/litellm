@@ -23,22 +23,21 @@ from litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints import (
 
 
 def test_make_state_token_returns_string():
-    token = _make_state_token("server1", "user1", time.time(), "master-key")
+    token = _make_state_token()
     assert isinstance(token, str)
     assert len(token) > 0
 
 
 def test_make_state_token_is_unique():
     """Every call produces a unique token (cryptographically random)."""
-    ts = time.time()
-    t1 = _make_state_token("server1", "user1", ts, "master-key")
-    t2 = _make_state_token("server1", "user1", ts, "master-key")
+    t1 = _make_state_token()
+    t2 = _make_state_token()
     assert t1 != t2, "Tokens should differ on each call"
 
 
 def test_make_state_token_has_sufficient_entropy():
     """Token must be at least 32 url-safe characters (≥192 bits of entropy)."""
-    token = _make_state_token("server1", "user1", time.time(), "master-key")
+    token = _make_state_token()
     # secrets.token_urlsafe(32) produces at least 43 url-safe characters
     assert len(token) >= 32
 
