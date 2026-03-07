@@ -950,7 +950,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Helper to recursively process a ModelResponse for PII.
         Handles all choices and tool calls.
         """
-        metadata = request_data.get("metadata", {}) if request_data else {}
+        metadata = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens = metadata.get("pii_tokens", {})
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
@@ -1113,7 +1113,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return
 
         # --- PII unmasking path (output_parse_pii=True) ---
-        metadata = request_data.get("metadata", {}) if request_data else {}
+        metadata = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens = metadata.get("pii_tokens", {})
         if not pii_tokens and request_data:
             verbose_proxy_logger.debug(
