@@ -39,13 +39,12 @@ import UserDashboard from "@/components/user_dashboard";
 import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
 import { ProjectsPage } from "@/components/Projects/ProjectsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
-import ToolPolicies from "@/components/ToolPolicies";
+import ToolPoliciesView from "@/components/ToolPoliciesView";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { isAdminRole } from "@/utils/roles";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -102,8 +101,6 @@ interface ProxySettings {
   PROXY_LOGOUT_URL: string;
   LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
-
-const queryClient = new QueryClient();
 
 function CreateKeyPageContent() {
   const [userRole, setUserRole] = useState("");
@@ -372,8 +369,7 @@ function CreateKeyPageContent() {
 
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <QueryClientProvider client={queryClient}>
-        <ConfigProvider theme={{
+      <ConfigProvider theme={{
           algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
         }}>
           <ThemeProvider accessToken={accessToken}>
@@ -553,7 +549,7 @@ function CreateKeyPageContent() {
                   ) : page == "vector-stores" ? (
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tool-policies" ? (
-                    <ToolPolicies accessToken={accessToken} userRole={userRole} />
+                    <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
                   ) : page == "guardrails-monitor" ? (
                     <GuardrailsMonitorView accessToken={accessToken} />
                   ) : page == "new_usage" ? (
@@ -600,7 +596,6 @@ function CreateKeyPageContent() {
             )}
           </ThemeProvider>
         </ConfigProvider>
-      </QueryClientProvider>
     </Suspense>
   );
 }

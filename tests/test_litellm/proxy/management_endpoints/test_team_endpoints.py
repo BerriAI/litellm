@@ -5379,10 +5379,10 @@ async def test_get_team_daily_activity_non_admin_filters_by_user_api_keys(
 
         # Mock get_daily_activity to capture the api_key parameter
         with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
             new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        ) as mock_get_daily_activity_agg:
+            mock_get_daily_activity_agg.return_value = MagicMock()
 
             # Call the endpoint
             await get_team_daily_activity(
@@ -5398,8 +5398,8 @@ async def test_get_team_daily_activity_non_admin_filters_by_user_api_keys(
             )
 
             # Verify get_daily_activity was called with user's API keys as filter
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
+            mock_get_daily_activity_agg.assert_called_once()
+            call_kwargs = mock_get_daily_activity_agg.call_args[1]
             assert call_kwargs["api_key"] == ["user_key_1", "user_key_2"]
             assert call_kwargs["entity_id"] == [team_id]
 
@@ -5464,10 +5464,10 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
 
         # Mock get_daily_activity to capture the api_key parameter
         with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
             new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        ) as mock_get_daily_activity_agg:
+            mock_get_daily_activity_agg.return_value = MagicMock()
 
             # Call the endpoint
             await get_team_daily_activity(
@@ -5483,8 +5483,8 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
             )
 
             # Verify get_daily_activity was called WITHOUT API key filtering
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
+            mock_get_daily_activity_agg.assert_called_once()
+            call_kwargs = mock_get_daily_activity_agg.call_args[1]
             assert call_kwargs["api_key"] is None
             assert call_kwargs["entity_id"] == [team_id]
 
@@ -5553,10 +5553,10 @@ async def test_get_team_daily_activity_member_with_permission_sees_all_spend(
 
         # Mock get_daily_activity to capture the api_key parameter
         with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
             new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        ) as mock_get_daily_activity_agg:
+            mock_get_daily_activity_agg.return_value = MagicMock()
 
             # Call the endpoint
             await get_team_daily_activity(
@@ -5572,8 +5572,8 @@ async def test_get_team_daily_activity_member_with_permission_sees_all_spend(
             )
 
             # Verify get_daily_activity was called WITHOUT API key filtering
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
+            mock_get_daily_activity_agg.assert_called_once()
+            call_kwargs = mock_get_daily_activity_agg.call_args[1]
             assert call_kwargs["api_key"] is None
             assert call_kwargs["entity_id"] == [team_id]
 
@@ -5652,10 +5652,10 @@ async def test_get_team_daily_activity_member_without_permission_filters_by_keys
 
         # Mock get_daily_activity to capture the api_key parameter
         with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
             new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        ) as mock_get_daily_activity_agg:
+            mock_get_daily_activity_agg.return_value = MagicMock()
 
             # Call the endpoint
             await get_team_daily_activity(
@@ -5671,8 +5671,8 @@ async def test_get_team_daily_activity_member_without_permission_filters_by_keys
             )
 
             # Verify get_daily_activity was called WITH API key filtering
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
+            mock_get_daily_activity_agg.assert_called_once()
+            call_kwargs = mock_get_daily_activity_agg.call_args[1]
             assert call_kwargs["api_key"] == ["user_key_abc", "user_key_def"]
             assert call_kwargs["entity_id"] == [team_id]
 
@@ -5822,10 +5822,10 @@ async def test_get_team_daily_activity_non_admin_filters_by_user_api_keys(
 
         # Mock get_daily_activity to capture the api_key parameter
         with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
             new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        ) as mock_get_daily_activity_agg:
+            mock_get_daily_activity_agg.return_value = MagicMock()
 
             # Call the endpoint
             await get_team_daily_activity(
@@ -5841,8 +5841,8 @@ async def test_get_team_daily_activity_non_admin_filters_by_user_api_keys(
             )
 
             # Verify get_daily_activity was called with user's API keys as filter
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
+            mock_get_daily_activity_agg.assert_called_once()
+            call_kwargs = mock_get_daily_activity_agg.call_args[1]
             assert call_kwargs["api_key"] == ["user_key_1", "user_key_2"]
             assert call_kwargs["entity_id"] == [team_id]
 
@@ -5907,10 +5907,10 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
 
         # Mock get_daily_activity to capture the api_key parameter
         with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
             new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        ) as mock_get_daily_activity_agg:
+            mock_get_daily_activity_agg.return_value = MagicMock()
 
             # Call the endpoint
             await get_team_daily_activity(
@@ -5926,8 +5926,8 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
             )
 
             # Verify get_daily_activity was called WITHOUT API key filtering
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
+            mock_get_daily_activity_agg.assert_called_once()
+            call_kwargs = mock_get_daily_activity_agg.call_args[1]
             assert call_kwargs["api_key"] is None
             assert call_kwargs["entity_id"] == [team_id]
 
@@ -5937,6 +5937,56 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
             ) and mock_db_client.db.litellm_verificationtoken.find_many.called:
                 # If it was called, that's unexpected for admin users
                 assert False, "API keys should not be fetched for team admin users"
+
+
+@pytest.mark.asyncio
+async def test_get_team_daily_activity_uses_aggregated_with_entity_breakdown(
+    mock_db_client,
+):
+    """
+    Test that /team/daily/activity calls get_daily_activity_aggregated
+    with include_entity_breakdown=True, timezone, and correct parameters.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Mock the team table query for fetching team aliases
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_get_daily_activity_agg:
+        mock_get_daily_activity_agg.return_value = MagicMock()
+
+        await get_team_daily_activity(
+            team_ids="team_1,team_2",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids="litellm-dashboard",
+            timezone=480,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_get_daily_activity_agg.assert_called_once()
+        call_kwargs = mock_get_daily_activity_agg.call_args[1]
+        assert call_kwargs["table_name"] == "litellm_dailyteamspend"
+        assert call_kwargs["entity_id_field"] == "team_id"
+        assert call_kwargs["entity_id"] == ["team_1", "team_2"]
+        assert call_kwargs["exclude_entity_ids"] == ["litellm-dashboard"]
+        assert call_kwargs["start_date"] == "2024-01-01"
+        assert call_kwargs["end_date"] == "2024-01-31"
+        assert call_kwargs["timezone_offset_minutes"] == 480
+        assert call_kwargs["include_entity_breakdown"] is True
 
 
 @pytest.mark.asyncio

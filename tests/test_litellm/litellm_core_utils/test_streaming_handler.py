@@ -1267,6 +1267,94 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
     )
 
 
+def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
+    """
+    Test that provider-reported usage from a post-finish_reason chunk
+    is surfaced in _hidden_params even when stream_options is NOT set.
+
+    Reproduces issue #20760: OpenRouter sends a final chunk with usage data
+    after the finish_reason chunk.  The hidden_params["usage"] on the last
+    user-visible chunk was being calculated before this usage chunk arrived,
+    resulting in zeros.  The fix recalculates it in the StopIteration handler
+    after stream_chunk_builder processes all chunks.
+    """
+    # Simulate OpenRouter's actual streaming pattern:
+    # 1) content chunk
+    # 2) finish_reason chunk  (content="")
+    # 3) usage chunk  (content="", finish_reason=None, usage={...})
+    chunks = [
+        ModelResponseStream(
+            id="gen-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="openrouter/openai/gpt-4o-mini",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", content="Hello"),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="gen-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="openrouter/openai/gpt-4o-mini",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=""),
+                    finish_reason="stop",
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="gen-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="openrouter/openai/gpt-4o-mini",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", content=""),
+                    finish_reason=None,
+                )
+            ],
+            usage=Usage(
+                prompt_tokens=20,
+                completion_tokens=135,
+                total_tokens=155,
+            ),
+        ),
+    ]
+
+    # Create a CustomStreamWrapper with NO stream_options
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="openrouter/openai/gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openrouter",
+        stream_options=None,
+    )
+
+    # Consume the stream
+    collected = []
+    for chunk in wrapper:
+        collected.append(chunk)
+
+    # The last user-visible chunk's _hidden_params["usage"] should
+    # contain the provider-reported values, not zeros.
+    last_chunk = collected[-1]
+    hidden_usage = last_chunk._hidden_params.get("usage")
+    assert hidden_usage is not None, "Expected usage in _hidden_params"
+    assert hidden_usage.prompt_tokens == 20, (
+        f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
+    )
+    assert hidden_usage.completion_tokens == 135, (
+        f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
+    )
+
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_aclose():
     """Test that aclose() delegates to the underlying completion_stream's aclose()"""
@@ -1312,3 +1400,94 @@ async def test_custom_stream_wrapper_aclose_none_stream():
 
     # Should not raise
     await wrapper.aclose()
+
+
+def test_content_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #22098: Vertex AI Claude streaming truncation.
+
+    When content_block_delta and message_delta arrive in rapid succession,
+    received_finish_reason can be set BEFORE the last content chunk is
+    processed. The old code raised StopIteration unconditionally, dropping
+    content. The fix checks for text/tool_use content before stopping.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    content_chunk = {
+        "text": "world!",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=content_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None — content was dropped (issue #22098)"
+    )
+    assert result.choices[0].delta.content == "world!"
+
+
+def test_empty_chunk_still_stops_after_finish_reason_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Companion test for #22098: an empty GenericStreamingChunk must still
+    raise StopIteration when received_finish_reason is already set.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    empty_chunk = {
+        "text": "",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    with pytest.raises(StopIteration):
+        initialized_custom_stream_wrapper.chunk_creator(chunk=empty_chunk)
+
+
+def test_tool_use_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #22098: tool_use-only chunks must not be dropped
+    when received_finish_reason is already set.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    tool_chunk = {
+        "text": "",
+        "tool_use": {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+        },
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=tool_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None — tool_use data was dropped"
+    )
+
+    tool_calls = result.choices[0].delta.tool_calls
+    assert tool_calls is not None and len(tool_calls) > 0, (
+        "tool_calls should contain at least one tool call"
+    )
+    assert tool_calls[0].id == "call_1"
+    assert tool_calls[0].function.name == "get_weather"
