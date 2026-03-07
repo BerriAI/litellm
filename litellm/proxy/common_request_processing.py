@@ -63,7 +63,11 @@ from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
-    """Parses an event line and returns an error code if present, else None."""
+    """Parses an event line and returns an error code if present, else None.
+
+    Note: some providers emit error objects without an explicit numeric code. In that case
+    we still want to treat the first chunk as an error and return a JSON error response.
+    """
     event_line = (
         event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
     )
@@ -92,16 +96,20 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
                         )
                         # Not a valid integer string, treat as if no valid code was found for this check
                         pass
+                # NOTE: if `code` is missing or null, treat it as "no parsable HTTP status".
+                # The caller may still choose to return a generic error response by inspecting
+                # the payload separately.
 
                 # Ensure error_code is a valid HTTP status code
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
-                elif (
-                    error_code_raw is not None
-                ):  # Log if original code was present but not valid
-                    verbose_proxy_logger.warning(
-                        f"Error has invalid or non-convertible code: {error_code_raw}"
-                    )
+
+                # At this point, the chunk contains an error object but we couldn't parse a valid HTTP status code.
+                # Returning 500 ensures callers can still treat the first chunk as an error and return JSON.
+                verbose_proxy_logger.warning(
+                    f"Error has missing/invalid/unparseable HTTP status code: {error_code_raw}"
+                )
+                return status.HTTP_500_INTERNAL_SERVER_ERROR
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
