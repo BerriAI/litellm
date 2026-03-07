@@ -2,16 +2,19 @@
 Test suite for AWS Bedrock extended beta model support
 Tests model configuration, pricing, and regional availability for:
 - DeepSeek V3.2
+- Mistral Devstral 2 123B
 - Minimax M2.1
 - Moonshot AI Kimi K2.5
 - Qwen3 Coder Next
 """
 
+import json
 import os
 
 # Set env var to use local model cost map instead of fetching from remote
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "true"
 
+import litellm
 import pytest
 
 from litellm import get_model_info
@@ -168,3 +171,38 @@ class TestModelSpecificFeatures:
         model_info = get_model_info("bedrock/us-east-1/qwen.qwen3-coder-next")
         assert model_info["max_input_tokens"] == 262144
         assert model_info["max_output_tokens"] == 8192
+
+    def test_devstral_2_bedrock_converse_metadata(self):
+        """Devstral 2 metadata should be region-complete and auto-registered."""
+        json_path = os.path.join(
+            os.path.dirname(__file__), "../../model_prices_and_context_window.json"
+        )
+        constants_path = os.path.join(
+            os.path.dirname(__file__), "../../litellm/constants.py"
+        )
+        with open(json_path) as f:
+            model_data = json.load(f)
+        with open(constants_path) as f:
+            constants_text = f.read()
+
+        regions = [
+            "ap-northeast-1",
+            "ap-southeast-1",
+            "ap-southeast-2",
+            "ap-south-1",
+            "eu-central-1",
+            "eu-north-1",
+            "eu-south-1",
+            "eu-west-1",
+            "eu-west-2",
+            "sa-east-1",
+            "us-east-1",
+            "us-west-2",
+        ]
+
+        for region in regions:
+            model = f"bedrock/{region}/mistral.devstral-2-123b"
+            assert model_data[model]["supports_system_messages"] is True
+
+        assert '"mistral.devstral-2-123b"' not in constants_text
+        assert "mistral.devstral-2-123b" in litellm.bedrock_converse_models

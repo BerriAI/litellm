@@ -6419,6 +6419,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -6515,6 +6516,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -6533,6 +6535,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -6582,6 +6585,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -6735,6 +6739,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -6867,6 +6872,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -6929,6 +6935,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -6991,6 +6998,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -7065,6 +7073,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -7158,6 +7167,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -7363,6 +7373,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -7927,6 +7938,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
