@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import sys
@@ -6,7 +7,6 @@ from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -22,7 +22,6 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
     clear_cache,
 )
-from litellm.proxy.utils import PrismaClient
 from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
 
 
@@ -247,7 +246,6 @@ class MockPrismaDB:
         self.update_calls = []
 
     async def find_many(self, include=None):
-        print(f"self.model_aliases_list: {self.model_aliases_list}")
         return [LiteLLM_ModelTable(**aliases) for aliases in self.model_aliases_list]
 
     async def update(self, where, data):
@@ -258,6 +256,396 @@ class MockPrismaDB:
 class MockPrismaWrapper:
     def __init__(self, model_aliases_list):
         self.litellm_modeltable = MockPrismaDB(model_aliases_list)
+
+
+class MockTeamModelTableForUpdate:
+    def __init__(self, existing_aliases: Optional[object] = None):
+        self.existing_aliases = existing_aliases
+        self.upsert_payload = None
+
+    async def find_unique(self, where):
+        if self.existing_aliases is None:
+            return None
+        return LiteLLM_ModelTable(
+            id=where["id"],
+            model_aliases=self.existing_aliases,
+            created_by="test_user",
+            updated_by="test_user",
+        )
+
+    async def upsert(self, where, data):
+        self.upsert_payload = {"where": where, "data": data}
+        return LiteLLM_ModelTable(
+            id=where["id"],
+            model_aliases=data["update"]["model_aliases"],
+            created_by="test_user",
+            updated_by="test_user",
+        )
+
+    async def create(self, data):
+        return LiteLLM_ModelTable(
+            id=1,
+            model_aliases=data["model_aliases"],
+            created_by=data["created_by"],
+            updated_by=data["updated_by"],
+        )
+
+
+class MockDeletedProxyModel:
+    def __init__(self, model_id: str):
+        self.model_id = model_id
+
+    def model_dump_json(self, exclude_none: bool = True):
+        return json.dumps({"model_id": self.model_id})
+
+
+class MockTxSession:
+    def __init__(
+        self,
+        state: dict,
+        fail_after_team_update: bool = False,
+        fail_model_delete: bool = False,
+    ):
+        self.state = state
+        self.fail_after_team_update = fail_after_team_update
+        self.fail_model_delete = fail_model_delete
+        self.litellm_teamtable = self
+        self.litellm_modeltable = self
+        self.litellm_proxymodeltable = self
+
+    async def find_unique(self, where):
+        if "team_id" in where:
+            return LiteLLM_TeamTable(
+                team_id=where["team_id"],
+                models=list(self.state.get("models", [])),
+                model_id=self.state.get("model_id"),
+            )
+        if "id" in where:
+            model_id = self.state.get("model_id")
+            if model_id is None or where["id"] != model_id:
+                return None
+            return LiteLLM_ModelTable(
+                id=model_id,
+                model_aliases=self.state.get("aliases"),
+                created_by="test_user",
+                updated_by="test_user",
+            )
+        return None
+
+    async def update(self, where, data):
+        if "team_id" in where:
+            self.state["models"] = list(data["models"])
+            if self.fail_after_team_update:
+                raise RuntimeError("forced failure")
+            return None
+        if "id" in where:
+            self.state["aliases"] = data["model_aliases"]
+            return None
+        return None
+
+    async def upsert(self, where, data):
+        self.state["aliases"] = data["update"]["model_aliases"]
+        return LiteLLM_ModelTable(
+            id=where["id"],
+            model_aliases=self.state["aliases"],
+            created_by="test_user",
+            updated_by="test_user",
+        )
+
+    async def create(self, data):
+        model_id = self.state.get("model_id") or 999
+        self.state["model_id"] = model_id
+        self.state["aliases"] = data["model_aliases"]
+        return LiteLLM_ModelTable(
+            id=model_id,
+            model_aliases=data["model_aliases"],
+            created_by=data["created_by"],
+            updated_by=data["updated_by"],
+        )
+
+    async def delete(self, where):
+        proxy_model_id = where.get("model_id")
+        deployments = self.state.get("deployments", {})
+        if proxy_model_id not in deployments:
+            return None
+        if self.fail_model_delete:
+            raise RuntimeError("forced model delete failure")
+
+        del deployments[proxy_model_id]
+        self.state["deployments"] = deployments
+        return MockDeletedProxyModel(model_id=proxy_model_id)
+
+
+class MockTxContextManager:
+    def __init__(self, db):
+        self.db = db
+
+    async def __aenter__(self):
+        self.working_state = copy.deepcopy(self.db.state)
+        self.session = MockTxSession(
+            state=self.working_state,
+            fail_after_team_update=self.db.fail_after_team_update,
+            fail_model_delete=self.db.fail_model_delete,
+        )
+        return self.session
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.db.state = self.working_state
+        return False
+
+
+class MockTransactionalDB:
+    def __init__(
+        self,
+        state: dict,
+        fail_after_team_update: bool = False,
+        fail_model_delete: bool = False,
+    ):
+        self.state = state
+        self.fail_after_team_update = fail_after_team_update
+        self.fail_model_delete = fail_model_delete
+
+    def tx(self):
+        return MockTxContextManager(self)
+
+
+class TestTeamModelAliasConsistency:
+    @pytest.mark.asyncio
+    async def test_update_model_table_merges_aliases(self):
+        from litellm.proxy._types import UpdateTeamRequest
+        from litellm.proxy.management_endpoints.team_endpoints import _update_model_table
+
+        model_table = MockTeamModelTableForUpdate(
+            existing_aliases=json.dumps({"model1": "unique_1"})
+        )
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_modeltable = model_table
+
+        await _update_model_table(
+            data=UpdateTeamRequest(
+                team_id="team-1",
+                model_aliases={"model2": "unique_2"},
+            ),
+            model_id=123,
+            prisma_client=prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(user_id="test_user"),
+            litellm_proxy_admin_name="proxy_admin",
+        )
+
+        assert model_table.upsert_payload is not None
+        stored_aliases = json.loads(
+            model_table.upsert_payload["data"]["update"]["model_aliases"]
+        )
+        assert stored_aliases == {"model1": "unique_1", "model2": "unique_2"}
+
+    @pytest.mark.asyncio
+    async def test_cleanup_team_model_references_removes_public_name_when_alias_missing(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _cleanup_team_model_references,
+        )
+
+        db_state = {
+            "model_id": 1,
+            "models": ["model1", "model2"],
+            "aliases": json.dumps({"model2": "internal_2"}),
+        }
+        prisma_client = MagicMock()
+        prisma_client.db = MockTransactionalDB(state=db_state)
+
+        await _cleanup_team_model_references(
+            team_id="team-1",
+            internal_model_name="internal_1",
+            public_model_name="model1",
+            prisma_client=prisma_client,
+        )
+
+        assert prisma_client.db.state["models"] == ["model2"]
+        assert json.loads(prisma_client.db.state["aliases"]) == {"model2": "internal_2"}
+
+    @pytest.mark.asyncio
+    async def test_update_existing_team_model_assignment_syncs_team_models_and_aliases(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_state = {
+            "model_id": 1,
+            "models": ["old-public"],
+            "aliases": json.dumps({"old-public": "internal-1"}),
+        }
+        prisma_client = MagicMock()
+        prisma_client.db = MockTransactionalDB(state=db_state)
+
+        db_model = Deployment(
+            model_name="internal-1",
+            litellm_params=LiteLLM_Params(model="gpt-4o"),
+            model_info=ModelInfo(team_id="team-1", team_public_model_name="old-public"),
+        )
+        patch_data = updateDeployment(model_name="new-public")
+
+        await _update_existing_team_model_assignment(
+            team_id="team-1",
+            public_model_name="new-public",
+            db_model=db_model,
+            patch_data=patch_data,
+            user_api_key_dict=UserAPIKeyAuth(user_id="test_user"),
+            prisma_client=prisma_client,
+        )
+
+        assert prisma_client.db.state["models"] == ["new-public"]
+        assert json.loads(prisma_client.db.state["aliases"]) == {
+            "new-public": "internal-1"
+        }
+        assert patch_data.model_name is None
+
+    @pytest.mark.asyncio
+    async def test_update_existing_team_model_assignment_rolls_back_on_failure(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_state = {
+            "model_id": 1,
+            "models": ["old-public"],
+            "aliases": json.dumps({"old-public": "internal-1"}),
+        }
+        prisma_client = MagicMock()
+        prisma_client.db = MockTransactionalDB(
+            state=db_state,
+            fail_after_team_update=True,
+        )
+
+        db_model = Deployment(
+            model_name="internal-1",
+            litellm_params=LiteLLM_Params(model="gpt-4o"),
+            model_info=ModelInfo(team_id="team-1", team_public_model_name="old-public"),
+        )
+        patch_data = updateDeployment(model_name="new-public")
+
+        with pytest.raises(RuntimeError):
+            await _update_existing_team_model_assignment(
+                team_id="team-1",
+                public_model_name="new-public",
+                db_model=db_model,
+                patch_data=patch_data,
+                user_api_key_dict=UserAPIKeyAuth(user_id="test_user"),
+                prisma_client=prisma_client,
+            )
+
+        # Transaction rollback keeps original state intact.
+        assert prisma_client.db.state["models"] == ["old-public"]
+        assert json.loads(prisma_client.db.state["aliases"]) == {
+            "old-public": "internal-1"
+        }
+
+    @pytest.mark.asyncio
+    async def test_update_existing_team_model_assignment_preserves_all_model_access(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_state = {
+            "model_id": 1,
+            "models": [],  # empty => all-model access
+            "aliases": json.dumps({"old-public": "internal-1"}),
+        }
+        prisma_client = MagicMock()
+        prisma_client.db = MockTransactionalDB(state=db_state)
+
+        db_model = Deployment(
+            model_name="internal-1",
+            litellm_params=LiteLLM_Params(model="gpt-4o"),
+            model_info=ModelInfo(team_id="team-1", team_public_model_name="old-public"),
+        )
+        patch_data = updateDeployment(model_name="new-public")
+
+        await _update_existing_team_model_assignment(
+            team_id="team-1",
+            public_model_name="new-public",
+            db_model=db_model,
+            patch_data=patch_data,
+            user_api_key_dict=UserAPIKeyAuth(user_id="test_user"),
+            prisma_client=prisma_client,
+        )
+
+        # Keep unrestricted team access unchanged.
+        assert prisma_client.db.state["models"] == []
+        # Alias should still track the renamed public model.
+        assert json.loads(prisma_client.db.state["aliases"]) == {
+            "new-public": "internal-1"
+        }
+        assert patch_data.model_name is None
+
+    @pytest.mark.asyncio
+    async def test_delete_model_and_team_references_atomically_success(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _delete_model_and_team_references_atomically,
+        )
+
+        db_state = {
+            "model_id": 1,
+            "models": ["model1", "model2"],
+            "aliases": json.dumps({"model1": "internal_1", "model2": "internal_2"}),
+            "deployments": {"delete-model-id": {"model_id": "delete-model-id"}},
+        }
+        prisma_client = MagicMock()
+        prisma_client.db = MockTransactionalDB(state=db_state)
+
+        result = await _delete_model_and_team_references_atomically(
+            model_id="delete-model-id",
+            team_id="team-1",
+            internal_model_name="internal_1",
+            public_model_name="model1",
+            prisma_client=prisma_client,
+        )
+
+        assert result is not None
+        assert prisma_client.db.state["models"] == ["model2"]
+        assert json.loads(prisma_client.db.state["aliases"]) == {
+            "model2": "internal_2"
+        }
+        assert "delete-model-id" not in prisma_client.db.state["deployments"]
+
+    @pytest.mark.asyncio
+    async def test_delete_model_and_team_references_atomically_rolls_back_on_delete_failure(
+        self,
+    ):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _delete_model_and_team_references_atomically,
+        )
+
+        db_state = {
+            "model_id": 1,
+            "models": ["model1", "model2"],
+            "aliases": json.dumps({"model1": "internal_1", "model2": "internal_2"}),
+            "deployments": {"delete-model-id": {"model_id": "delete-model-id"}},
+        }
+        prisma_client = MagicMock()
+        prisma_client.db = MockTransactionalDB(
+            state=db_state,
+            fail_model_delete=True,
+        )
+
+        with pytest.raises(RuntimeError):
+            await _delete_model_and_team_references_atomically(
+                model_id="delete-model-id",
+                team_id="team-1",
+                internal_model_name="internal_1",
+                public_model_name="model1",
+                prisma_client=prisma_client,
+            )
+
+        # Team aliases/model list are unchanged because delete is in same tx.
+        assert prisma_client.db.state["models"] == ["model1", "model2"]
+        assert json.loads(prisma_client.db.state["aliases"]) == {
+            "model1": "internal_1",
+            "model2": "internal_2",
+        }
+        assert "delete-model-id" in prisma_client.db.state["deployments"]
 
 
 class TestDeleteTeamModelAlias:
@@ -482,9 +870,9 @@ class TestTeamModelUpdate:
         )
         prisma_client = MockPrismaClient(team_exists=True)
 
-        with patch(
-            "litellm.proxy.proxy_server.premium_user",
-            True,
+        with patch.dict(
+            sys.modules,
+            {"litellm.proxy.proxy_server": MagicMock(premium_user=True)},
         ), patch(
             "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
         ) as mock_update_team, patch(
@@ -525,9 +913,9 @@ class TestTeamModelUpdate:
         )
         prisma_client = MockPrismaClient(team_exists=True, user_admin=False)
 
-        with patch(
-            "litellm.proxy.proxy_server.premium_user",
-            True,
+        with patch.dict(
+            sys.modules,
+            {"litellm.proxy.proxy_server": MagicMock(premium_user=True)},
         ):
             with pytest.raises(Exception) as exc_info:
                 await _update_team_model_in_db(
