@@ -1,4 +1,4 @@
-import { getHashicorpVaultConfig } from "@/components/networking";
+import { getHashicorpVaultConfig } from "./hashicorpVaultApi";
 import { useQuery } from "@tanstack/react-query";
 import useAuthorized from "../useAuthorized";
 import { createQueryKeys } from "../common/queryKeysFactory";
