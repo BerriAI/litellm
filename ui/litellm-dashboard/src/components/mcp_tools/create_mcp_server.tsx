@@ -4,6 +4,162 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
 import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
+
+const WELL_KNOWN_OPENAPI_SERVERS: DiscoverableMCPServer[] = [
+  {
+    name: "github_openapi",
+    title: "GitHub",
+    description: "Repos, issues, PRs, and code search",
+    icon_url: "https://cdn.simpleicons.org/github/black",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions-next/api.github.com/api.github.com.json",
+    auth_type: "oauth2",
+    authorization_url: "https://github.com/login/oauth/authorize",
+    token_url: "https://github.com/login/oauth/access_token",
+    default_scopes: ["repo", "user"],
+  },
+  {
+    name: "figma_openapi",
+    title: "Figma",
+    description: "Files, comments, and components",
+    icon_url: "https://cdn.simpleicons.org/figma",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://raw.githubusercontent.com/figma/rest-api-spec/main/openapi/openapi.yaml",
+    auth_type: "oauth2",
+    authorization_url: "https://www.figma.com/oauth",
+    token_url: "https://api.figma.com/v1/oauth/token",
+    default_scopes: ["file_read"],
+  },
+  {
+    name: "jira_openapi",
+    title: "Jira",
+    description: "Issues, sprints, and projects",
+    icon_url: "https://cdn.simpleicons.org/jira",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    auth_type: "oauth2",
+    authorization_url: "https://auth.atlassian.com/authorize",
+    token_url: "https://auth.atlassian.com/oauth/token",
+    default_scopes: ["read:jira-work", "write:jira-work"],
+  },
+  {
+    name: "confluence_openapi",
+    title: "Confluence",
+    description: "Pages, spaces, and search",
+    icon_url: "https://cdn.simpleicons.org/confluence",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://developer.atlassian.com/cloud/confluence/swagger.v3.json",
+    auth_type: "oauth2",
+    authorization_url: "https://auth.atlassian.com/authorize",
+    token_url: "https://auth.atlassian.com/oauth/token",
+    default_scopes: ["read:confluence-content.all"],
+  },
+  {
+    name: "slack_openapi",
+    title: "Slack",
+    description: "Messages, channels, and files",
+    icon_url: "https://cdn.simpleicons.org/slack",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://raw.githubusercontent.com/slackapi/slack-api-specs/master/web-api/slack_web_openapi_v2.json",
+    auth_type: "oauth2",
+    authorization_url: "https://slack.com/oauth/v2/authorize",
+    token_url: "https://slack.com/api/oauth.v2.access",
+    default_scopes: ["channels:read", "chat:write"],
+  },
+  {
+    name: "stripe_openapi",
+    title: "Stripe",
+    description: "Payments, subscriptions, and invoices",
+    icon_url: "https://cdn.simpleicons.org/stripe",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json",
+    auth_type: "bearer_token",
+  },
+  {
+    name: "notion_openapi",
+    title: "Notion",
+    description: "Pages, databases, and search",
+    icon_url: "https://cdn.simpleicons.org/notion/black",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://developers.notion.com",
+    auth_type: "oauth2",
+    authorization_url: "https://api.notion.com/v1/oauth/authorize",
+    token_url: "https://api.notion.com/v1/oauth/token",
+    default_scopes: [],
+  },
+  {
+    name: "linear_openapi",
+    title: "Linear",
+    description: "Issues, projects, and teams",
+    icon_url: "https://cdn.simpleicons.org/linear",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://api.linear.app/graphql",
+    auth_type: "oauth2",
+    authorization_url: "https://linear.app/oauth/authorize",
+    token_url: "https://api.linear.app/oauth/token",
+    default_scopes: ["read", "write"],
+  },
+  {
+    name: "hubspot_openapi",
+    title: "HubSpot",
+    description: "Contacts, deals, and marketing",
+    icon_url: "https://cdn.simpleicons.org/hubspot",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://api.hubspot.com/api-catalog-public/v1/apis",
+    auth_type: "oauth2",
+    authorization_url: "https://app.hubspot.com/oauth/authorize",
+    token_url: "https://api.hubspot.com/oauth/v1/token",
+    default_scopes: ["crm.objects.contacts.read"],
+  },
+  {
+    name: "salesforce_openapi",
+    title: "Salesforce",
+    description: "Leads, opportunities, and accounts",
+    icon_url: "https://cdn.simpleicons.org/salesforce",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://developer.salesforce.com/docs/platform/rest/guide/intro_rest_resources.htm",
+    auth_type: "oauth2",
+    authorization_url: "https://login.salesforce.com/services/oauth2/authorize",
+    token_url: "https://login.salesforce.com/services/oauth2/token",
+    default_scopes: ["api"],
+  },
+  {
+    name: "zendesk_openapi",
+    title: "Zendesk",
+    description: "Tickets, users, and support workflows",
+    icon_url: "https://cdn.simpleicons.org/zendesk",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://developer.zendesk.com/api-reference/ticketing/introduction/",
+    auth_type: "oauth2",
+    authorization_url: "https://{subdomain}.zendesk.com/oauth/authorizations/new",
+    token_url: "https://{subdomain}.zendesk.com/oauth/tokens",
+    default_scopes: ["read", "write"],
+  },
+  {
+    name: "snowflake_openapi",
+    title: "Snowflake",
+    description: "Queries and data warehouses",
+    icon_url: "https://cdn.simpleicons.org/snowflake",
+    category: "REST APIs",
+    transport: TRANSPORT.OPENAPI,
+    openapi_spec_url: "https://docs.snowflake.com/en/_downloads/openapi.json",
+    auth_type: "oauth2",
+    authorization_url: "https://<account>.snowflakecomputing.com/oauth/authorize",
+    token_url: "https://<account>.snowflakecomputing.com/oauth/token-request",
+    default_scopes: ["session:role:SYSADMIN"],
+  },
+];
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -59,6 +215,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [transportType, setTransportType] = useState<string>("");
   const [searchValue, setSearchValue] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
+  const [openApiServers] = useState<DiscoverableMCPServer[]>(WELL_KNOWN_OPENAPI_SERVERS);
+  const [selectedOpenApiServer, setSelectedOpenApiServer] = useState<DiscoverableMCPServer | null>(null);
+  const [showCustomUrl, setShowCustomUrl] = useState(false);
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
@@ -242,6 +401,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       if (Object.keys(stdioObj).length > 0) {
         prefillValues.stdio_config = JSON.stringify(stdioObj, null, 2);
       }
+    } else if (transport === TRANSPORT.OPENAPI) {
+      if (prefillData.openapi_spec_url) prefillValues.spec_path = prefillData.openapi_spec_url;
+      if (prefillData.auth_type) prefillValues.auth_type = prefillData.auth_type;
+      if (prefillData.authorization_url) prefillValues.authorization_url = prefillData.authorization_url;
+      if (prefillData.token_url) prefillValues.token_url = prefillData.token_url;
+      if (prefillData.default_scopes && prefillData.default_scopes.length > 0) {
+        prefillValues.credentials = { scopes: prefillData.default_scopes };
+      }
     } else if (prefillData.url) {
       prefillValues.url = prefillData.url;
     }
@@ -403,6 +570,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   const handleTransportChange = (value: string) => {
     setTransportType(value);
+    setSelectedOpenApiServer(null);
+    setShowCustomUrl(false);
     // Clear fields that are not relevant for the selected transport
     if (value === "stdio") {
       form.setFieldsValue({ url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined });
@@ -458,8 +627,34 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   React.useEffect(() => {
     if (!isModalVisible) {
       setFormValues({});
+      setSelectedOpenApiServer(null);
+      setShowCustomUrl(false);
     }
   }, [isModalVisible]);
+
+  const handleSelectOpenApiServer = (server: DiscoverableMCPServer) => {
+    setSelectedOpenApiServer(server);
+    setShowCustomUrl(false);
+    const sanitizedName = (server.name || "")
+      .replace(/[^a-zA-Z0-9_]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "");
+    const updates: Record<string, any> = {
+      server_name: sanitizedName,
+      alias: sanitizedName,
+      description: server.description || "",
+    };
+    if (server.openapi_spec_url) updates.spec_path = server.openapi_spec_url;
+    if (server.auth_type) updates.auth_type = server.auth_type;
+    if (server.authorization_url) updates.authorization_url = server.authorization_url;
+    if (server.token_url) updates.token_url = server.token_url;
+    if (server.default_scopes && server.default_scopes.length > 0) {
+      updates.credentials = { scopes: server.default_scopes };
+    }
+    form.setFieldsValue(updates);
+    setFormValues((prev) => ({ ...prev, ...updates }));
+    setAliasManuallyEdited(false);
+  };
 
   // rendering
   if (!isAdminRole(userRole)) {
@@ -603,25 +798,95 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {/* OpenAPI Spec URL - only show for OpenAPI transport */}
+            {/* OpenAPI: gallery of well-known APIs + custom URL */}
             {transportType === TRANSPORT.OPENAPI && (
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    OpenAPI Spec URL
-                    <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                    </Tooltip>
-                  </span>
-                }
-                name="spec_path"
-                rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
-              >
-                <Input
-                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
+              <>
+                {openApiServers.length > 0 && (
+                  <div>
+                    <div className="text-sm font-medium text-gray-700 mb-3">Popular APIs</div>
+                    <div className="grid grid-cols-3 gap-3 mb-4">
+                      {openApiServers.map((server) => {
+                        const isSelected = selectedOpenApiServer?.name === server.name;
+                        return (
+                          <button
+                            key={server.name}
+                            type="button"
+                            onClick={() => handleSelectOpenApiServer(server)}
+                            className="text-left p-3 rounded-lg border transition-all"
+                            style={{
+                              border: isSelected ? "2px solid #2563eb" : "1px solid #e5e7eb",
+                              background: isSelected ? "#eff6ff" : "#fff",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <div className="flex items-center gap-2 mb-1">
+                              {server.icon_url ? (
+                                <img
+                                  src={server.icon_url}
+                                  alt={server.title}
+                                  className="w-5 h-5 object-contain flex-shrink-0"
+                                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                                />
+                              ) : (
+                                <div
+                                  className="w-5 h-5 rounded flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
+                                  style={{ background: "#6366f1" }}
+                                >
+                                  {server.title.charAt(0)}
+                                </div>
+                              )}
+                              <span className="text-sm font-semibold text-gray-900 truncate">{server.title}</span>
+                            </div>
+                            <p className="text-xs text-gray-500 line-clamp-2 leading-snug">{server.description}</p>
+                            {server.auth_type === "oauth2" && (
+                              <span className="mt-1 inline-block text-xs text-blue-600 font-medium">OAuth 2.0</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Divider */}
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="flex-1 border-t border-gray-200" />
+                      <span className="text-xs text-gray-400">or</span>
+                      <div className="flex-1 border-t border-gray-200" />
+                    </div>
+                  </div>
+                )}
+
+                {/* Custom URL toggle */}
+                {!showCustomUrl && !selectedOpenApiServer && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomUrl(true)}
+                    className="text-sm text-blue-600 hover:text-blue-800 font-medium mb-2 bg-transparent border-none cursor-pointer p-0"
+                  >
+                    + Custom OpenAPI URL
+                  </button>
+                )}
+
+                {/* Spec URL field: shown when custom or after selecting a server */}
+                {(showCustomUrl || selectedOpenApiServer) && (
+                  <Form.Item
+                    label={
+                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                        OpenAPI Spec URL
+                        <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
+                          <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="spec_path"
+                    rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
+                  >
+                    <Input
+                      placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  </Form.Item>
+                )}
+              </>
             )}
 
             {/* BYOK toggle - only for OpenAPI */}

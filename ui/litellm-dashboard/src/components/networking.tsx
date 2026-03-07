@@ -6810,6 +6810,36 @@ export const callMCPTool = async (
   }
 };
 
+export const checkMCPUserCredential = async (
+  accessToken: string,
+  serverId: string,
+): Promise<{ has_credential: boolean }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/user/credential/${serverId}`
+    : `/v1/mcp/user/credential/${serverId}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    return { has_credential: false };
+  }
+  return response.json();
+};
+
+export const deleteMCPUserCredential = async (
+  accessToken: string,
+  serverId: string,
+): Promise<void> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-credential`
+    : `/v1/mcp/server/${serverId}/user-credential`;
+  await fetch(url, {
+    method: "DELETE",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+};
+
 export const tagCreateCall = async (accessToken: string, formValues: TagNewRequest): Promise<void> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/new` : `/tag/new`;

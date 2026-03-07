@@ -205,6 +205,12 @@ export interface DiscoverableMCPServer {
   command?: string | null;
   args?: string[] | null;
   env_vars?: Array<{ name: string; description?: string; secret?: boolean }> | null;
+  // OpenAPI-specific fields
+  openapi_spec_url?: string | null;
+  auth_type?: string | null;
+  authorization_url?: string | null;
+  token_url?: string | null;
+  default_scopes?: string[] | null;
 }
 
 export interface DiscoverMCPServersResponse {
