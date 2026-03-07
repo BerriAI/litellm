@@ -126,7 +126,7 @@ RUN for i in 1 2 3; do \
   && find / -path "*/node_modules/npm/package.json" -exec \
         sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null \
   && npm cache clean --force \
-  && apk del --no-cache npm 2>/dev/null || true
+  && { apk del --no-cache npm 2>/dev/null || true; }
 
 # Copy artifacts from builder
 COPY --from=builder /app/requirements.txt /app/requirements.txt
