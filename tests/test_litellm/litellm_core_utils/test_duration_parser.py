@@ -191,6 +191,7 @@ class TestStandardizedResetTime(unittest.TestCase):
         with patch("litellm.litellm_core_utils.duration_parser.verbose_logger") as mock_logger:
             get_next_standardized_reset_time("1d", base_time, "NonExistentTimeZone")
             mock_logger.warning.assert_called_once()
+            assert "NonExistentTimeZone" in mock_logger.warning.call_args.args[1]
 
 
 if __name__ == "__main__":
