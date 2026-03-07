@@ -50,7 +50,7 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({
   const [form] = Form.useForm();
   const { accessToken } = useAuthorized();
   const { data } = useHashicorpVaultConfig();
-  const { mutateAsync, isPending } = useUpdateHashicorpVaultConfig(accessToken);
+  const { mutate, isPending } = useUpdateHashicorpVaultConfig(accessToken);
 
   const schema = data?.field_schema;
   const properties = schema?.properties ?? {};
@@ -70,7 +70,7 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({
     }
   }, [isVisible, data, form]);
 
-  const handleSubmit = async (formValues: Record<string, any>) => {
+  const handleSubmit = (formValues: Record<string, any>) => {
     const config: Record<string, any> = {};
     for (const [key, value] of Object.entries(formValues)) {
       if (value !== undefined && value !== null && value !== "") {
@@ -83,7 +83,7 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({
       // Sensitive field left blank → omit from payload (keep existing)
     }
 
-    await mutateAsync(config, {
+    mutate(config, {
       onSuccess: () => {
         NotificationManager.success("Hashicorp Vault configuration updated successfully");
         onSuccess();

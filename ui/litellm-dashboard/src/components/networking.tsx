@@ -8893,11 +8893,7 @@ export const getHashicorpVaultConfig = async (accessToken: string) => {
   });
   if (!response.ok) {
     const errorData = await response.json();
-    const detail = errorData?.detail;
-    const errorMessage =
-      (typeof detail === "object" && detail?.error) ||
-      (typeof detail === "string" && detail) ||
-      deriveErrorMessage(errorData);
+    const errorMessage = deriveErrorMessage(errorData);
     throw new Error(errorMessage);
   }
   const data = await response.json();

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import useAuthorized from "../useAuthorized";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
-const hashicorpVaultKeys = createQueryKeys("hashicorpVaultConfig");
+export const hashicorpVaultKeys = createQueryKeys("hashicorpVaultConfig");
 
 export const useHashicorpVaultConfig = () => {
   const { accessToken } = useAuthorized();

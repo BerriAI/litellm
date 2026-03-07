@@ -1,8 +1,6 @@
 import { deleteHashicorpVaultConfig } from "@/components/networking";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { createQueryKeys } from "../common/queryKeysFactory";
-
-const hashicorpVaultKeys = createQueryKeys("hashicorpVaultConfig");
+import { hashicorpVaultKeys } from "./useHashicorpVaultConfig";
 
 export const useDeleteHashicorpVaultConfig = (accessToken: string | null) => {
   const queryClient = useQueryClient();
