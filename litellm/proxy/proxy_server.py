@@ -772,6 +772,10 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             if not _hook_spec:
                 continue
             try:
+                if ":" not in _hook_spec:
+                    raise ValueError(
+                        f"Invalid hook spec '{_hook_spec}': expected format is 'module.path:function_name'"
+                    )
                 _module_path, _func_name = _hook_spec.rsplit(":", 1)
                 _module = importlib.import_module(_module_path)
                 _hook_fn = getattr(_module, _func_name)
