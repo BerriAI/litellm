@@ -646,7 +646,7 @@ class TestAsyncPostCallSuccessHook:
         handler.tool_blocking_client = mock_client
 
         result = await handler.async_post_call_success_hook(
-            data={},
+            data=create_openai_request_data(),
             user_api_key_dict={},
             response=mock_response_with_tools,
         )
@@ -655,6 +655,7 @@ class TestAsyncPostCallSuccessHook:
         choices = result.choices
         tool_calls = choices[0]["message"]["tool_calls"]
         assert len(tool_calls) == 2
+        mock_client.post.assert_called_once()
 
 
 @pytest.mark.asyncio
