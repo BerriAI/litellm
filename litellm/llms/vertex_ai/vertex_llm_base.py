@@ -312,7 +312,7 @@ class VertexBase:
         """
         Returns auth token and project id
         """
-        if custom_llm_provider == "gemini":
+        if custom_llm_provider == "gemini" or credentials is None:
             return "", ""
         else:
             return self.get_access_token(
@@ -664,7 +664,7 @@ class VertexBase:
         """
         Async version of _ensure_access_token
         """
-        if custom_llm_provider == "gemini":
+        if custom_llm_provider == "gemini" or credentials is None:
             return "", ""
         else:
             try:
