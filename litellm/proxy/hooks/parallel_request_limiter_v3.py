@@ -20,8 +20,10 @@ from typing import (
     cast,
 )
 
+import httpx
 from fastapi import HTTPException
 
+import litellm
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
@@ -1079,7 +1081,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         response: RateLimitResponse,
         descriptors: List[RateLimitDescriptor],
     ) -> None:
-        """Handle rate limit exceeded error by raising HTTPException."""
+        """Handle rate limit exceeded error by raising litellm.RateLimitError."""
         for status in response["statuses"]:
             if status["code"] == "OVER_LIMIT":
                 descriptor_key = status["descriptor_key"]
@@ -1110,14 +1112,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"Limit resets at: {reset_time_formatted}"
                 )
 
-                raise HTTPException(
-                    status_code=429,
-                    detail=detail,
-                    headers={
-                        "retry-after": str(self.window_size),
-                        "rate_limit_type": str(status["rate_limit_type"]),
-                        "reset_at": reset_time_formatted,
-                    },
+                raise litellm.RateLimitError(
+                    message=detail,
+                    llm_provider="",
+                    model="",
+                    response=httpx.Response(
+                        status_code=429,
+                        headers={
+                            "retry-after": str(self.window_size),
+                            "rate_limit_type": str(status["rate_limit_type"]),
+                            "reset_at": reset_time_formatted,
+                        },
+                        request=httpx.Request(
+                            method="POST",
+                            url="https://litellm.ai",
+                        ),
+                    ),
                 )
 
     async def async_pre_call_hook(
