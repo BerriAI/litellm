@@ -1438,6 +1438,7 @@ if TYPE_CHECKING:
     from .llms.a2a.chat.transformation import A2AConfig as A2AConfig
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
+    from .llms.voyage.embedding.transformation_multimodal import VoyageMultimodalEmbeddingConfig as VoyageMultimodalEmbeddingConfig
     from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
     from .llms.perplexity.embedding.transformation import PerplexityEmbeddingConfig as PerplexityEmbeddingConfig
     from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as AzureAIStudioConfig

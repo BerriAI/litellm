@@ -147,6 +147,24 @@ model_list:
     litellm_params:
       model: gpt-4o
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: voyage-4-large
+    litellm_params:
+      model: voyage/voyage-4-large
+      api_key: os.environ/VOYAGE_API_KEY
+    model_info:
+      mode: embedding
+  - model_name: voyage-multimodal-3
+    litellm_params:
+      model: voyage/voyage-multimodal-3
+      api_key: os.environ/VOYAGE_API_KEY
+    model_info:
+      mode: embedding
+  - model_name: voyage-multimodal-3.5
+    litellm_params:
+      model: voyage/voyage-multimodal-3.5
+      api_key: os.environ/VOYAGE_API_KEY
+    model_info:
+      mode: embedding
 
 
 litellm_settings:
