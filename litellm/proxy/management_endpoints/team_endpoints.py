@@ -2892,9 +2892,16 @@ async def team_info(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"message": f"Team not found, passed team id: {team_id}."},
             )
+        team_table = LiteLLM_TeamTable(**team_info.model_dump())
         validate_membership(
             user_api_key_dict=user_api_key_dict,
-            team_table=LiteLLM_TeamTable(**team_info.model_dump()),
+            team_table=team_table,
+        )
+        
+        is_authorized = (
+            _user_has_admin_view(user_api_key_dict) or 
+            user_api_key_dict.user_role == LitellmUserRoles.ORG_ADMIN or
+            _is_user_team_admin(user_api_key_dict, team_table)
         )
 
         ## GET ALL KEYS ##
@@ -2952,6 +2959,13 @@ async def team_info(
         # ## UNFURL 'all-proxy-models' into the team_info.models list ##
         # if llm_router is not None:
         #     _team_info = _unfurl_all_proxy_models(_team_info, llm_router)
+        
+        if not is_authorized:
+            keys = []
+            returned_tm = []
+            _team_info.members_with_roles = []
+            _team_info.team_member_permissions = None
+        
         response_object = TeamInfoResponseObject(
             team_id=team_id,
             team_info=_team_info,
@@ -3183,7 +3197,7 @@ async def _build_team_list_where_conditions(
 
 
 def _convert_teams_to_response(
-    teams: List[Any], use_deleted_table: bool
+    teams: List[Any], use_deleted_table: bool, user_api_key_dict: UserAPIKeyAuth
 ) -> List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]:
     """Convert Prisma models to Pydantic models."""
     team_list: List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]] = []
@@ -3195,6 +3209,19 @@ def _convert_teams_to_response(
             except Exception:
                 # Fallback for Pydantic v1 compatibility
                 team_dict = team.dict()
+            
+            # Check authorization for sensitive fields
+            team_table = LiteLLM_TeamTable(**team_dict)
+            is_authorized = (
+                _user_has_admin_view(user_api_key_dict) or 
+                user_api_key_dict.user_role == LitellmUserRoles.ORG_ADMIN or
+                _is_user_team_admin(user_api_key_dict, team_table)
+            )
+            
+            if not is_authorized:
+                team_dict.pop("members_with_roles", None)
+                team_dict.pop("team_member_permissions", None)
+            
             if use_deleted_table:
                 # Use deleted team type to preserve deleted_at, deleted_by, etc.
                 team_list.append(LiteLLM_DeletedTeamTable(**team_dict))
@@ -3347,7 +3374,7 @@ async def list_team_v2(
     total_pages = -(-total_count // page_size)  # Ceiling division
 
     # Convert Prisma models to Pydantic models, preserving deleted fields when applicable
-    team_list = _convert_teams_to_response(teams, use_deleted_table)
+    team_list = _convert_teams_to_response(teams, use_deleted_table, user_api_key_dict)
 
     return {
         "teams": team_list,
@@ -3439,9 +3466,23 @@ async def list_team(
         )
 
         try:
+            team_table = LiteLLM_TeamTable(**team.model_dump())
+            is_authorized = (
+                _user_has_admin_view(user_api_key_dict) or 
+                user_api_key_dict.user_role == LitellmUserRoles.ORG_ADMIN or
+                _is_user_team_admin(user_api_key_dict, team_table)
+            )
+            
+            team_data = team.model_dump()
+            if not is_authorized:
+                team_data.pop("members_with_roles", None)
+                team_data.pop("team_member_permissions", None)
+                _team_memberships = []
+                keys = []
+            
             returned_responses.append(
                 TeamListResponseObject(
-                    **team.model_dump(),
+                    **team_data,
                     team_memberships=_team_memberships,
                     keys=keys,
                 )
