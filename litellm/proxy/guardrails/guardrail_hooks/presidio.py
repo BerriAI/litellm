@@ -1122,17 +1122,106 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 yield chunk
             return
 
+        # Buffer ALL chunks to detect format (bytes = Anthropic native SSE)
+        all_chunks: list = []
+        is_anthropic_native = False
+        async for chunk in response:
+            all_chunks.append(chunk)
+            if isinstance(chunk, bytes) and not is_anthropic_native:
+                is_anthropic_native = True
+
+        if not all_chunks:
+            return
+
+        if is_anthropic_native:
+            # --- Anthropic native SSE unmask path ---
+            import json as _json
+
+            try:
+                # 1. Join all bytes into complete SSE stream
+                raw = b"".join(
+                    c if isinstance(c, bytes) else str(c).encode()
+                    for c in all_chunks
+                )
+                sse_text = raw.decode("utf-8", errors="replace")
+
+                # 2. Parse SSE events (double-newline separated)
+                events = sse_text.split("\n\n")
+                parsed = []
+                text_event_indices = []
+                text_fragments = []
+
+                for i, event_str in enumerate(events):
+                    lines = event_str.split("\n")
+                    entry = {"lines": lines, "data": None, "data_idx": None}
+                    for j, line in enumerate(lines):
+                        if line.startswith("data: "):
+                            try:
+                                data = _json.loads(line[6:])
+                                entry["data"] = data
+                                entry["data_idx"] = j
+                                if (data.get("type") == "content_block_delta"
+                                        and data.get("delta", {}).get("type") == "text_delta"):
+                                    text_event_indices.append(i)
+                                    text_fragments.append(data["delta"].get("text", ""))
+                            except (_json.JSONDecodeError, ValueError):
+                                pass
+                    parsed.append(entry)
+
+                # 3. Assemble full text and unmask PII tokens
+                full_text = "".join(text_fragments)
+                unmasked = self._unmask_pii_text(full_text, pii_tokens)
+
+                # 4. If nothing changed, yield original bytes unchanged
+                if unmasked == full_text:
+                    yield raw
+                    return
+
+                # 5. Redistribute unmasked text across original text_delta events
+                n = len(text_event_indices)
+                if n > 0:
+                    chunk_size = max(1, len(unmasked) // n)
+                    pos = 0
+                    for k, evt_idx in enumerate(text_event_indices):
+                        pe = parsed[evt_idx]
+                        if k < n - 1:
+                            fragment = unmasked[pos:pos + chunk_size]
+                            pos += chunk_size
+                        else:
+                            fragment = unmasked[pos:]
+                        pe["data"]["delta"]["text"] = fragment
+                        pe["lines"][pe["data_idx"]] = "data: " + _json.dumps(
+                            pe["data"], ensure_ascii=False
+                        )
+
+                # 6. Rebuild SSE and yield as bytes
+                rebuilt = "\n\n".join("\n".join(pe["lines"]) for pe in parsed)
+                yield rebuilt.encode("utf-8")
+                return
+
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Error in Anthropic SSE PII streaming unmask: {str(e)}"
+                )
+                for c in all_chunks:
+                    yield c
+                return
+
+        # --- OpenAI ModelResponseStream path ---
         remaining_chunks: List[ModelResponseStream] = []
         try:
-            async for chunk in response:
+            for chunk in all_chunks:
                 if isinstance(chunk, ModelResponseStream):
                     remaining_chunks.append(chunk)
 
             if not remaining_chunks:
+                for c in all_chunks:
+                    yield c
                 return
 
             assembled_model_response = stream_chunk_builder(
-                chunks=remaining_chunks, messages=request_data.get("messages")
+                chunks=remaining_chunks,
+                messages=request_data.get("messages") if request_data else None,
             )
 
             if not isinstance(assembled_model_response, ModelResponse):
