@@ -725,6 +725,11 @@ class BaseAWSLLM:
             session = boto3.Session(**iam_creds_dict)
 
         iam_creds = session.get_credentials()
+        if iam_creds is None:
+            raise AwsAuthError(
+                message="Could not resolve AWS credentials from web identity session.",
+                status_code=401,
+            )
         return iam_creds, self._get_default_ttl_for_boto3_credentials()
 
     def _handle_irsa_cross_account(
@@ -1032,7 +1037,13 @@ class BaseAWSLLM:
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
         with tracer.trace("boto3.Session(profile_name=aws_profile_name)"):
             client = boto3.Session(profile_name=aws_profile_name)
-            return client.get_credentials(), None
+            credentials = client.get_credentials()
+            if credentials is None:
+                raise AwsAuthError(
+                    message=f"Could not resolve AWS credentials for profile '{aws_profile_name}'.",
+                    status_code=401,
+                )
+            return credentials, None
 
     @tracer.wrap()
     def _auth_with_aws_session_token(
@@ -1078,6 +1089,11 @@ class BaseAWSLLM:
             )
 
         credentials = session.get_credentials()
+        if credentials is None:
+            raise AwsAuthError(
+                message="Could not resolve AWS credentials from access key/secret key session.",
+                status_code=401,
+            )
         return credentials, self._get_default_ttl_for_boto3_credentials()
 
     @tracer.wrap()
@@ -1090,6 +1106,11 @@ class BaseAWSLLM:
         with tracer.trace("boto3.Session()"):
             session = boto3.Session()
             credentials = session.get_credentials()
+            if credentials is None:
+                raise AwsAuthError(
+                    message="Could not resolve AWS credentials from environment/session.",
+                    status_code=401,
+                )
             return credentials, None
 
     @tracer.wrap()
@@ -1389,4 +1410,15 @@ class BaseAWSLLM:
         ):  # prevent sigv4 from overwriting the auth header
             request_headers_dict["Authorization"] = headers["Authorization"]
 
-        return request_headers_dict, request.body
+        request_body = request.body
+        normalized_body: Optional[bytes]
+        if request_body is None:
+            normalized_body = None
+        elif isinstance(request_body, bytes):
+            normalized_body = request_body
+        elif isinstance(request_body, str):
+            normalized_body = request_body.encode("utf-8")
+        else:
+            normalized_body = bytes(request_body)
+
+        return request_headers_dict, normalized_body
