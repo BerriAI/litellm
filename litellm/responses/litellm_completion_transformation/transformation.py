@@ -434,7 +434,51 @@ class LiteLLMCompletionResponsesConfig:
                     messages.extend(deduped_in_place)
                     continue
 
-                messages.extend(chat_completion_messages)
+                ###########################################################
+                # Merge consecutive function_call items into a single
+                # assistant message.  Providers like Gemini require that
+                # parallel tool calls that were issued in one model turn
+                # appear as *one* assistant message with multiple
+                # tool_calls, not as separate assistant messages.
+                ###########################################################
+                for m in chat_completion_messages:
+                    role = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
+                    if role != "assistant":
+                        messages.append(m)
+                        continue
+
+                    new_tcs: Any = (
+                        m.get("tool_calls")
+                        if isinstance(m, dict)
+                        else getattr(m, "tool_calls", None)
+                    ) or []
+
+                    # Try to merge into the last message if it is an
+                    # assistant message that already carries tool_calls.
+                    merged = False
+                    if messages:
+                        last = messages[-1]
+                        last_role = last.get("role") if isinstance(last, dict) else getattr(last, "role", "")
+                        if last_role == "assistant":
+                            existing_tcs: Any = (
+                                last.get("tool_calls")
+                                if isinstance(last, dict)
+                                else getattr(last, "tool_calls", None)
+                            )
+                            if existing_tcs is not None:
+                                # Re-index and append
+                                for tc in new_tcs:
+                                    idx = len(existing_tcs)
+                                    if isinstance(tc, dict):
+                                        tc["index"] = idx
+                                    elif hasattr(tc, "index"):
+                                        tc.index = idx
+                                    existing_tcs.append(tc)
+                                merged = True
+
+                    if not merged:
+                        messages.append(m)
+
         return messages
 
     @staticmethod
