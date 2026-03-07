@@ -1711,6 +1711,42 @@ async def _lookup_end_user_and_apply_budget(
     return valid_token, end_user_object
 
 
+def _apply_custom_auth_team_overrides(
+    team_obj: LiteLLM_TeamTableCachedObj,
+    valid_token: UserAPIKeyAuth,
+) -> LiteLLM_TeamTableCachedObj:
+    """
+    When custom auth sets team-level fields on the token, apply them to the
+    DB team object if the DB has default/empty values.
+
+    Priority:
+    - DB explicit values win (DB is source of truth)
+    - If DB has default (empty models [], None budgets), custom auth values are used
+    - If neither has values, defaults are preserved (empty = all access)
+    """
+    team_obj = team_obj.model_copy(deep=True)
+
+    if len(team_obj.models) == 0 and len(valid_token.team_models) > 0:
+        team_obj.models = valid_token.team_models
+
+    if team_obj.max_budget is None and valid_token.team_max_budget is not None:
+        team_obj.max_budget = valid_token.team_max_budget
+
+    if team_obj.tpm_limit is None and valid_token.team_tpm_limit is not None:
+        team_obj.tpm_limit = valid_token.team_tpm_limit
+
+    if team_obj.rpm_limit is None and valid_token.team_rpm_limit is not None:
+        team_obj.rpm_limit = valid_token.team_rpm_limit
+
+    if team_obj.soft_budget is None and valid_token.team_soft_budget is not None:
+        team_obj.soft_budget = valid_token.team_soft_budget
+
+    if team_obj.blocked is False and valid_token.team_blocked is True:
+        team_obj.blocked = valid_token.team_blocked
+
+    return team_obj
+
+
 async def _run_post_custom_auth_checks(
     valid_token: UserAPIKeyAuth,
     request: Request,
@@ -1839,6 +1875,13 @@ async def _run_post_custom_auth_checks(
             )
     else:
         _team_obj = None
+
+    # Apply custom auth team overrides when DB has default values
+    if _team_obj is not None:
+        _team_obj = _apply_custom_auth_team_overrides(
+            team_obj=_team_obj,
+            valid_token=valid_token,
+        )
 
     _project_obj = None
     if valid_token.project_id is not None:
