@@ -174,3 +174,135 @@ class TestAnthropicStructuredOutput:
         assert "description" in age_schema
         assert "minimum value: 0" in age_schema["description"]
         assert "maximum value: 150" in age_schema["description"]
+
+
+class TestAnthropicToolBasedStructuredOutput:
+    """
+    Test that structured output via the tool-based path (older models) also
+    filters unsupported JSON schema constraints.
+
+    The output_format path (newer models like Sonnet 4.5+) already filters
+    constraints via filter_anthropic_output_schema(). The tool-based path
+    for older models was missing this filtering, causing Anthropic API errors
+    like: "For 'integer' type, properties maximum, minimum are not supported"
+
+    Related issue: https://github.com/BerriAI/litellm/issues/21016
+    """
+
+    def test_numeric_constraints_filtered_in_tool_path(self):
+        """
+        Test that ge/le/gt/lt constraints on numeric fields are stripped
+        when using the tool-based response_format path (older models).
+        """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        class Rating(BaseModel):
+            score: int = Field(ge=1, le=10, description="Rating score")
+            confidence: float = Field(gt=0.0, lt=1.0, description="Confidence")
+
+        config = AnthropicConfig()
+        json_schema = config.get_json_schema_from_pydantic_object(Rating)
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": json_schema["json_schema"],
+        }
+
+        tool = config.map_response_format_to_anthropic_tool(
+            value=response_format, optional_params={}, is_thinking_enabled=False
+        )
+
+        assert tool is not None
+        tool_schema = tool["input_schema"]
+
+        # Numeric constraints should be stripped
+        score_schema = tool_schema["properties"]["score"]
+        assert "minimum" not in score_schema
+        assert "maximum" not in score_schema
+
+        confidence_schema = tool_schema["properties"]["confidence"]
+        assert "exclusiveMinimum" not in confidence_schema
+        assert "exclusiveMaximum" not in confidence_schema
+
+    def test_numeric_constraints_moved_to_description_in_tool_path(self):
+        """
+        Test that stripped numeric constraints are added to the description
+        in the tool-based path, matching the output_format path behavior.
+        """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        class Rating(BaseModel):
+            score: int = Field(ge=1, le=10, description="Rating score")
+
+        config = AnthropicConfig()
+        json_schema = config.get_json_schema_from_pydantic_object(Rating)
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": json_schema["json_schema"],
+        }
+
+        tool = config.map_response_format_to_anthropic_tool(
+            value=response_format, optional_params={}, is_thinking_enabled=False
+        )
+
+        assert tool is not None
+        score_schema = tool["input_schema"]["properties"]["score"]
+        assert "minimum value: 1" in score_schema["description"]
+        assert "maximum value: 10" in score_schema["description"]
+
+    def test_string_constraints_filtered_in_tool_path(self):
+        """
+        Test that minLength/maxLength constraints on string fields are
+        stripped in the tool-based path.
+        """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        class UserInput(BaseModel):
+            name: str = Field(min_length=1, max_length=100, description="User name")
+
+        config = AnthropicConfig()
+        json_schema = config.get_json_schema_from_pydantic_object(UserInput)
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": json_schema["json_schema"],
+        }
+
+        tool = config.map_response_format_to_anthropic_tool(
+            value=response_format, optional_params={}, is_thinking_enabled=False
+        )
+
+        assert tool is not None
+        name_schema = tool["input_schema"]["properties"]["name"]
+        assert "minLength" not in name_schema
+        assert "maxLength" not in name_schema
+        assert "minimum length: 1" in name_schema["description"]
+        assert "maximum length: 100" in name_schema["description"]
+
+    def test_array_constraints_filtered_in_tool_path(self):
+        """
+        Test that minItems/maxItems constraints on list fields are
+        stripped in the tool-based path.
+        """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        class ItemList(BaseModel):
+            items: List[str] = Field(min_length=1, max_length=10, description="Items")
+
+        config = AnthropicConfig()
+        json_schema = config.get_json_schema_from_pydantic_object(ItemList)
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": json_schema["json_schema"],
+        }
+
+        tool = config.map_response_format_to_anthropic_tool(
+            value=response_format, optional_params={}, is_thinking_enabled=False
+        )
+
+        assert tool is not None
+        items_schema = tool["input_schema"]["properties"]["items"]
+        assert "minItems" not in items_schema
+        assert "maxItems" not in items_schema
