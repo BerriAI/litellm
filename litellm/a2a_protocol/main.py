@@ -656,11 +656,17 @@ async def create_a2a_client(
     # (with different extra_headers) get separate cached clients.  The params
     # dict is hashed into the cache key, keeping agent auth isolated while
     # still reusing connections within the same agent.
+    #
+    # Only pass params that AsyncHTTPHandler.__init__ accepts (e.g. timeout).
+    # Use "disable_aiohttp_transport" key for cache-key-only data (it's
+    # filtered out before reaching the constructor).
     _client_params: dict = {"timeout": timeout}
     if extra_headers:
-        # Include sorted header keys in params so each unique header set
-        # produces a distinct cache key.
-        _client_params["extra_headers"] = str(sorted(extra_headers.items()))
+        # Encode headers into a cache-key-only param so each unique header
+        # set produces a distinct cache key.
+        _client_params["disable_aiohttp_transport"] = str(
+            sorted(extra_headers.items())
+        )
     _async_handler = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.A2AProvider,
         params=_client_params,
