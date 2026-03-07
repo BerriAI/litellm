@@ -9,6 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    _build_aggregated_sql_query,
     _is_user_agent_tag,
     compute_tag_metadata_totals,
     get_api_key_metadata,
@@ -469,3 +470,273 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metadata.key_alias == "toto-test-2"
     assert key_data.metadata.team_id == "69cd4b77-b095-4489-8c46-4f2f31d840a2"
     assert key_data.metrics.spend == 10.0
+
+
+class TestBuildAggregatedSqlQuery:
+    """Tests for _build_aggregated_sql_query conditional GROUP BY behavior."""
+
+    def test_include_entity_id_true_no_group_by(self):
+        """When include_entity_id=True, skip GROUP BY (it's a no-op on unique constraint)."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            include_entity_id=True,
+        )
+        assert "GROUP BY" not in sql
+        assert "SUM(" not in sql
+        assert '"team_id",' in sql
+        assert "spend::float AS spend" in sql
+        assert "ORDER BY date DESC" in sql
+        assert '"LiteLLM_DailyTeamSpend"' in sql
+        assert params == ["2024-01-01", "2024-01-31"]
+
+    def test_include_entity_id_false_uses_group_by(self):
+        """When include_entity_id=False (default), use GROUP BY to collapse across entities."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            include_entity_id=False,
+        )
+        assert "GROUP BY" in sql
+        assert "SUM(spend)" in sql
+        assert '"team_id",' not in sql
+        assert "ORDER BY date DESC" in sql
+        assert params == ["2024-01-01", "2024-01-31"]
+
+    def test_group_by_excludes_model_group(self):
+        """GROUP BY should not include model_group (uses MAX instead)."""
+        sql, _ = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            include_entity_id=False,
+        )
+        assert "MAX(model_group)" in sql
+        # model_group should not appear in GROUP BY clause
+        group_by_clause = sql.split("GROUP BY")[1].split("ORDER BY")[0]
+        assert "model_group" not in group_by_clause
+
+    def test_include_entity_id_true_selects_columns_directly(self):
+        """With include_entity_id=True, metric columns are selected directly (no SUM)."""
+        sql, _ = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            include_entity_id=True,
+        )
+        assert "spend::float AS spend" in sql
+        assert "prompt_tokens::bigint AS prompt_tokens" in sql
+        assert "completion_tokens::bigint AS completion_tokens" in sql
+        assert "api_requests::bigint AS api_requests" in sql
+
+    def test_entity_id_single_value_filter(self):
+        """Single entity_id value should produce an = condition."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id="team-abc",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+        )
+        assert '"team_id" = $3' in sql
+        assert params == ["2024-01-01", "2024-01-31", "team-abc"]
+
+    def test_entity_id_list_filter(self):
+        """List of entity_ids should produce an IN condition."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=["team-a", "team-b"],
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+        )
+        assert '"team_id" IN ($3, $4)' in sql
+        assert params == ["2024-01-01", "2024-01-31", "team-a", "team-b"]
+
+    def test_exclude_entity_ids(self):
+        """exclude_entity_ids should produce a NOT IN condition."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            exclude_entity_ids=["team-x", "team-y"],
+        )
+        assert '"team_id" NOT IN ($3, $4)' in sql
+        assert params == ["2024-01-01", "2024-01-31", "team-x", "team-y"]
+
+    def test_model_filter(self):
+        """model filter should add a model = condition."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model="gpt-4",
+            api_key=None,
+        )
+        assert "model = $3" in sql
+        assert params == ["2024-01-01", "2024-01-31", "gpt-4"]
+
+    def test_api_key_single_filter(self):
+        """Single api_key should produce an = condition."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key="key-123",
+        )
+        assert "api_key = $3" in sql
+        assert params == ["2024-01-01", "2024-01-31", "key-123"]
+
+    def test_api_key_list_filter(self):
+        """List of api_keys should produce an IN condition."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=["key-1", "key-2"],
+        )
+        assert "api_key IN ($3, $4)" in sql
+        assert params == ["2024-01-01", "2024-01-31", "key-1", "key-2"]
+
+    def test_all_filters_combined(self):
+        """All filters together should produce correct parameter ordering."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id="team-abc",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model="gpt-4",
+            api_key="key-1",
+            exclude_entity_ids=["team-x"],
+        )
+        assert params == [
+            "2024-01-01",
+            "2024-01-31",
+            "team-abc",
+            "team-x",
+            "gpt-4",
+            "key-1",
+        ]
+        assert '"team_id" = $3' in sql
+        assert '"team_id" NOT IN ($4)' in sql
+        assert "model = $5" in sql
+        assert "api_key = $6" in sql
+
+    def test_timezone_offset_positive(self):
+        """Positive timezone offset (west of UTC) should extend end_date by 1 day."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=480,  # PST
+        )
+        assert params == ["2024-01-01", "2024-02-01"]
+
+    def test_timezone_offset_negative(self):
+        """Negative timezone offset (east of UTC) should extend start_date by -1 day."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=-330,  # IST
+        )
+        assert params == ["2023-12-31", "2024-01-31"]
+
+    def test_unknown_table_name_raises(self):
+        """Unknown table name should raise ValueError."""
+        with pytest.raises(ValueError, match="Unknown table name"):
+            _build_aggregated_sql_query(
+                table_name="nonexistent_table",
+                entity_id_field="team_id",
+                entity_id=None,
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                model=None,
+                api_key=None,
+            )
+
+    def test_all_table_names_supported(self):
+        """All known table names should produce valid queries in both modes."""
+        tables = [
+            ("litellm_dailyuserspend", "user_id", "LiteLLM_DailyUserSpend"),
+            ("litellm_dailyteamspend", "team_id", "LiteLLM_DailyTeamSpend"),
+            (
+                "litellm_dailyorganizationspend",
+                "organization_id",
+                "LiteLLM_DailyOrganizationSpend",
+            ),
+            ("litellm_dailyenduserspend", "end_user_id", "LiteLLM_DailyEndUserSpend"),
+            ("litellm_dailyagentspend", "agent_id", "LiteLLM_DailyAgentSpend"),
+            ("litellm_dailytagspend", "tag", "LiteLLM_DailyTagSpend"),
+        ]
+        for table_name, entity_field, pg_table in tables:
+            # include_entity_id=True: no GROUP BY
+            sql, _ = _build_aggregated_sql_query(
+                table_name=table_name,
+                entity_id_field=entity_field,
+                entity_id=None,
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                model=None,
+                api_key=None,
+                include_entity_id=True,
+            )
+            assert f'FROM "{pg_table}"' in sql
+            assert "GROUP BY" not in sql
+
+            # include_entity_id=False: uses GROUP BY
+            sql, _ = _build_aggregated_sql_query(
+                table_name=table_name,
+                entity_id_field=entity_field,
+                entity_id=None,
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                model=None,
+                api_key=None,
+                include_entity_id=False,
+            )
+            assert f'FROM "{pg_table}"' in sql
+            assert "GROUP BY" in sql

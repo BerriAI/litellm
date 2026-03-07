@@ -479,16 +479,18 @@ def _build_aggregated_sql_query(
     timezone_offset_minutes: Optional[int] = None,
     include_entity_id: bool = False,
 ) -> Tuple[str, List[Any]]:
-    """Build a parameterized SQL GROUP BY query for aggregated daily activity.
+    """Build a parameterized SQL query for aggregated daily activity.
 
-    Groups by (date, api_key, model, model_group, custom_llm_provider,
-    mcp_namespaced_tool_name, endpoint) with SUMs on all metric columns.
+    When include_entity_id is True (e.g. team endpoint), the entity_id column
+    is included in SELECT. In this case GROUP BY is skipped because the
+    table's unique constraint already covers (entity_id, date, api_key, model,
+    custom_llm_provider, mcp_namespaced_tool_name, endpoint) — making the
+    GROUP BY a no-op that wastes CPU on hash/sort for zero row reduction.
+    The Python _aggregate_spend_records function handles the final rollup.
 
-    When include_entity_id is False (default), the entity_id column is omitted
-    from GROUP BY to collapse rows across entities.
-
-    When include_entity_id is True, the entity_id column is included in both
-    SELECT and GROUP BY, preserving per-entity breakdown in the results.
+    When include_entity_id is False (e.g. user/org endpoints), GROUP BY is
+    used to collapse rows across entities, which meaningfully reduces the
+    number of rows returned.
 
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
@@ -556,32 +558,59 @@ def _build_aggregated_sql_query(
     where_clause = " AND ".join(sql_conditions)
 
     entity_select = f'"{entity_id_field}",' if include_entity_id else ""
-    entity_group_by = f'"{entity_id_field}",' if include_entity_id else ""
 
-    sql_query = f"""
-        SELECT
-            {entity_select}
-            date,
-            api_key,
-            model,
-            model_group,
-            custom_llm_provider,
-            mcp_namespaced_tool_name,
-            endpoint,
-            SUM(spend)::float AS spend,
-            SUM(prompt_tokens)::bigint AS prompt_tokens,
-            SUM(completion_tokens)::bigint AS completion_tokens,
-            SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
-            SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
-            SUM(api_requests)::bigint AS api_requests,
-            SUM(successful_requests)::bigint AS successful_requests,
-            SUM(failed_requests)::bigint AS failed_requests
-        FROM "{pg_table}"
-        WHERE {where_clause}
-        GROUP BY {entity_group_by} date, api_key, model, model_group, custom_llm_provider,
-                 mcp_namespaced_tool_name, endpoint
-        ORDER BY date DESC
-    """
+    if include_entity_id:
+        # When entity_id is in the result set, the GROUP BY columns would
+        # match the table's unique constraint — making aggregation a no-op.
+        # Skip GROUP BY entirely and let Python handle the rollup.
+        sql_query = f"""
+            SELECT
+                "{entity_id_field}",
+                date,
+                api_key,
+                model,
+                model_group,
+                custom_llm_provider,
+                mcp_namespaced_tool_name,
+                endpoint,
+                spend::float AS spend,
+                prompt_tokens::bigint AS prompt_tokens,
+                completion_tokens::bigint AS completion_tokens,
+                cache_read_input_tokens::bigint AS cache_read_input_tokens,
+                cache_creation_input_tokens::bigint AS cache_creation_input_tokens,
+                api_requests::bigint AS api_requests,
+                successful_requests::bigint AS successful_requests,
+                failed_requests::bigint AS failed_requests
+            FROM "{pg_table}"
+            WHERE {where_clause}
+            ORDER BY date DESC
+        """
+    else:
+        # When entity_id is excluded, GROUP BY collapses rows across
+        # entities, meaningfully reducing the result set.
+        sql_query = f"""
+            SELECT
+                date,
+                api_key,
+                model,
+                MAX(model_group) AS model_group,
+                custom_llm_provider,
+                mcp_namespaced_tool_name,
+                endpoint,
+                SUM(spend)::float AS spend,
+                SUM(prompt_tokens)::bigint AS prompt_tokens,
+                SUM(completion_tokens)::bigint AS completion_tokens,
+                SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
+                SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
+                SUM(api_requests)::bigint AS api_requests,
+                SUM(successful_requests)::bigint AS successful_requests,
+                SUM(failed_requests)::bigint AS failed_requests
+            FROM "{pg_table}"
+            WHERE {where_clause}
+            GROUP BY date, api_key, model, custom_llm_provider,
+                     mcp_namespaced_tool_name, endpoint
+            ORDER BY date DESC
+        """
 
     return sql_query, sql_params
 
