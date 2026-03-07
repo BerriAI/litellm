@@ -585,8 +585,22 @@ def test_spec_path_server_uses_tool_registry():
 
     assert server.spec_path == "https://example.com/openapi.json"
     assert server.is_byok is True
-    # The spec_path short-circuit in _get_tools_from_server is conditional on this field
-    assert manager is not None
+
+    # Verify the manager's short-circuit path: _get_tools_from_server checks
+    # spec_path before attempting MCP client creation.  We confirm this by
+    # patching _create_mcp_client and asserting it is NOT called when spec_path is set.
+    from unittest.mock import AsyncMock, patch
+
+    with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock) as mock_create:
+        # _get_tools_from_server is async but returns early for spec_path servers
+        import asyncio
+
+        async def _run():
+            return await manager._get_tools_from_server(server)
+
+        asyncio.get_event_loop().run_until_complete(_run())
+
+    mock_create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

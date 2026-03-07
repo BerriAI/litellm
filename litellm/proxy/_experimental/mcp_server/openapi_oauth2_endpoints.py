@@ -125,6 +125,10 @@ def _build_error_html(title: str, message: str) -> str:
   h2 {{ color: #dc2626; font-size: 20px; margin-bottom: 12px; }}
   p {{ color: #475569; font-size: 14px; line-height: 1.6; }}
 </style>
+<script>
+  // Auto-close error popup so the polling loop stops and the spinner clears
+  if (window.opener) {{ setTimeout(function() {{ window.close(); }}, 4000); }}
+</script>
 </head>
 <body>
 <div class="card">
