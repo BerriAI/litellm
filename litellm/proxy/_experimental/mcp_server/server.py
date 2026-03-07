@@ -1651,11 +1651,16 @@ if MCP_AVAILABLE:
         if prisma_client is None:
             return
 
-        credential = await get_user_credential(
+        raw_credential = await get_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
+        # Apply _extract_access_token so the cache always stores a plain token
+        # string.  Without this, a JSON blob {"access_token": ..., "refresh_token": ...}
+        # stored by the OAuth2 callback would be returned as-is by _get_byok_credential
+        # on the next request, causing Bearer-header corruption and silent 401s.
+        credential = _extract_access_token(raw_credential)
         _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
         if credential is None:
             raise HTTPException(
