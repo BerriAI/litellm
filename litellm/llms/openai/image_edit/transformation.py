@@ -14,7 +14,7 @@ from litellm.types.images.main import (
 )
 from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ImageResponse
+from litellm.utils import ImageResponse, LiteLLMResponseObjectHandler
 
 from ..common_utils import OpenAIError
 
@@ -157,7 +157,9 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        return ImageResponse(**raw_response_json)
+        return LiteLLMResponseObjectHandler.convert_to_image_response(
+            response_object=raw_response_json,
+        )
 
     def validate_environment(
         self,
