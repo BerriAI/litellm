@@ -355,6 +355,38 @@ class LiteLLM_Proxy_MCP_Handler:
         return openai_tools
 
     @staticmethod
+    def _transform_self_referencing_mcp_tools(
+        tools: Optional[List[Any]],
+        proxy_base_url: str,
+    ) -> Optional[List[Any]]:
+        """
+        Transform MCP tools with server_url pointing to this proxy into 'litellm_proxy' format.
+
+        When users specify server_url as a full HTTP URL pointing to this proxy's own MCP
+        endpoint (e.g. https://myproxy.com/my_server/mcp), we transform it to
+        'litellm_proxy/mcp/my_server' so LiteLLM handles it natively instead of passing
+        the URL to OpenAI, which would then try to call back to the proxy without auth.
+        """
+        if not tools or not proxy_base_url:
+            return tools
+
+        base_url = proxy_base_url.rstrip("/")
+        result: List[Any] = []
+        for tool in tools:
+            if isinstance(tool, dict) and tool.get("type") == "mcp":
+                server_url = tool.get("server_url", "")
+                if isinstance(server_url, str) and server_url.startswith(base_url + "/"):
+                    # Extract path after base URL e.g. "my_server/mcp"
+                    path = server_url[len(base_url) + 1 :]
+                    parts = path.rstrip("/").split("/")
+                    # Pattern: <server_name>/mcp
+                    if len(parts) >= 2 and parts[-1] == "mcp":
+                        server_name = "/".join(parts[:-1])
+                        tool = {**tool, "server_url": f"litellm_proxy/mcp/{server_name}"}
+            result.append(tool)
+        return result
+
+    @staticmethod
     def _should_auto_execute_tools(
         mcp_tools_with_litellm_proxy: Union[List[Dict[str, Any]], List[ToolParam]],
     ) -> bool:
