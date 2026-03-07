@@ -141,6 +141,7 @@ async def test_callback_provider_error_in_json_body():
         "user_id": "user1",
         "timestamp": now,
         "expires_at": now + 600,
+        "callback_url": "http://localhost:4000/v1/mcp/oauth2/callback",
     }
 
     mock_server = MagicMock()
@@ -246,6 +247,7 @@ async def test_callback_stores_refresh_token_as_json():
         "user_id": "user1",
         "timestamp": now,
         "expires_at": now + 600,
+        "callback_url": "http://localhost:4000/v1/mcp/oauth2/callback",
     }
 
     mock_server = MagicMock()
@@ -322,6 +324,7 @@ async def test_callback_stores_plain_token_when_no_refresh_token():
         "user_id": "user1",
         "timestamp": now,
         "expires_at": now + 600,
+        "callback_url": "http://localhost:4000/v1/mcp/oauth2/callback",
     }
 
     mock_server = MagicMock()
@@ -379,6 +382,84 @@ async def test_callback_stores_plain_token_when_no_refresh_token():
     assert len(stored_credentials) == 1
     # Plain string — NOT a JSON blob
     assert stored_credentials[0] == "ghu_only_access"
+
+
+@pytest.mark.asyncio
+async def test_callback_uses_basic_auth_when_token_endpoint_auth_method_is_basic():
+    """When token_endpoint_auth_method='basic', credentials go in HTTP Basic header, not body."""
+    import base64
+
+    from litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints import (
+        _pending_oauth2_states,
+        openapi_oauth2_callback,
+    )
+
+    state = "test-state-basic-auth"
+    now = time.time()
+    _pending_oauth2_states[state] = {
+        "server_id": "server1",
+        "user_id": "user1",
+        "timestamp": now,
+        "expires_at": now + 600,
+        "callback_url": "http://localhost:4000/v1/mcp/oauth2/callback",
+    }
+
+    mock_server = MagicMock()
+    mock_server.token_url = "https://provider.example/token"
+    mock_server.client_id = "my_client_id"
+    mock_server.client_secret = "my_client_secret"
+    mock_server.token_endpoint_auth_method = "basic"
+    mock_server.server_name = "BasicProvider"
+    mock_server.name = "test"
+
+    mock_response = MagicMock()
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"access_token": "tok_basic", "token_type": "bearer"}
+    mock_response.raise_for_status = MagicMock()
+
+    captured_calls: list = []
+
+    async def fake_post(url, data=None, headers=None, timeout=None):
+        captured_calls.append({"url": url, "data": data, "headers": headers})
+        return mock_response
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.global_mcp_server_manager"
+    ) as mock_mgr, patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.store_user_credential",
+        side_effect=AsyncMock(),
+    ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+        create=True,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+        MagicMock(),
+    ), patch(
+        "httpx.AsyncClient"
+    ) as mock_client_cls:
+        mock_mgr.get_mcp_server_by_id.return_value = mock_server
+        mock_async_client = AsyncMock()
+        mock_async_client.post = AsyncMock(side_effect=fake_post)
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await openapi_oauth2_callback(
+            request=MagicMock(),
+            code="auth-code",
+            state=state,
+            error=None,
+            error_description=None,
+        )
+
+    assert len(captured_calls) == 1
+    call = captured_calls[0]
+    # Credentials must be in the Authorization header
+    expected_basic = base64.b64encode(b"my_client_id:my_client_secret").decode()
+    assert call["headers"].get("Authorization") == f"Basic {expected_basic}"
+    # client_id and client_secret must NOT appear in the POST body
+    assert "client_id" not in (call["data"] or {})
+    assert "client_secret" not in (call["data"] or {})
 
 
 # ---------------------------------------------------------------------------
@@ -537,17 +618,14 @@ async def test_check_byok_credential_raises_503_when_no_db():
 
     import litellm
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client",
-        None,
-        create=True,
-    ):
-        litellm.require_byok_credential_store = True  # type: ignore[attr-defined]
-        try:
+    with patch.object(litellm, "require_byok_credential_store", True):
+        with patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            None,
+            create=True,
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await _check_byok_credential(mock_server, mock_user)
-        finally:
-            litellm.require_byok_credential_store = False  # type: ignore[attr-defined]
 
     assert exc_info.value.status_code == 503
     assert "byok_store_unavailable" in str(exc_info.value.detail)
@@ -629,17 +707,14 @@ async def test_get_byok_credential_raises_503_when_no_db():
 
     import litellm
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client",
-        None,
-        create=True,
-    ):
-        litellm.require_byok_credential_store = True  # type: ignore[attr-defined]
-        try:
+    with patch.object(litellm, "require_byok_credential_store", True):
+        with patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            None,
+            create=True,
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await _get_byok_credential(mock_server, mock_user)
-        finally:
-            litellm.require_byok_credential_store = False  # type: ignore[attr-defined]
 
     assert exc_info.value.status_code == 503
     assert "byok_store_unavailable" in str(exc_info.value.detail)

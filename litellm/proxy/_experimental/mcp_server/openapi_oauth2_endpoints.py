@@ -10,6 +10,7 @@ Endpoints:
   GET  /v1/mcp/server/{server_id}/oauth2/status    — check if user is connected
 """
 
+import base64
 import html as _html_module
 import json
 import secrets
@@ -346,19 +347,31 @@ async def openapi_oauth2_callback(
     )
 
     token_request_data = {
-        "client_id": server.client_id or "",
-        "client_secret": server.client_secret or "",
         "code": code,
         "redirect_uri": callback_url,
         "grant_type": "authorization_code",
     }
+
+    # RFC 6749 §2.3: client credentials can be sent as POST body
+    # (client_secret_post, the default) or as HTTP Basic auth
+    # (client_secret_basic, required by some providers like Okta/Auth0).
+    auth_method = getattr(server, "token_endpoint_auth_method", "post")
+    token_headers: Dict[str, str] = {"Accept": "application/json"}
+    if auth_method == "basic":
+        basic_creds = base64.b64encode(
+            f"{server.client_id or ''}:{server.client_secret or ''}".encode()
+        ).decode()
+        token_headers["Authorization"] = f"Basic {basic_creds}"
+    else:
+        token_request_data["client_id"] = server.client_id or ""
+        token_request_data["client_secret"] = server.client_secret or ""
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 server.token_url,
                 data=token_request_data,
-                headers={"Accept": "application/json"},
+                headers=token_headers,
                 timeout=30.0,
             )
         response.raise_for_status()

@@ -48,6 +48,9 @@ class MCPServer(BaseModel):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    # "post" (default, RFC 6749 §2.3.1 client_secret_post) or
+    # "basic" (HTTP Basic auth via Authorization header, required by some providers)
+    token_endpoint_auth_method: str = "post"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
