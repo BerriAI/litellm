@@ -10,7 +10,40 @@ sys.path.insert(
 
 from unittest.mock import MagicMock
 
-from litellm.proxy.route_llm_request import route_request
+import litellm.proxy.route_llm_request as route_llm_request_module
+from litellm.proxy.route_llm_request import (
+    _clear_user_config_router_cache,
+    _kwargs_for_llm,
+    route_request,
+)
+
+
+@pytest.fixture(autouse=True)
+def clear_user_config_router_cache():
+    _clear_user_config_router_cache()
+    yield
+    _clear_user_config_router_cache()
+
+
+def test_kwargs_for_llm_strips_presidio_pii_tokens():
+    """_kwargs_for_llm removes _presidio_pii_tokens so it is not sent to the LLM provider."""
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "_presidio_pii_tokens": {"guardrail_1": {"<PERSON>": "Jane"}},
+    }
+    result = _kwargs_for_llm(data)
+    assert "model" in result
+    assert "messages" in result
+    assert "_presidio_pii_tokens" not in result
+    assert result.get("_presidio_pii_tokens") is None
+
+
+def test_kwargs_for_llm_preserves_other_keys():
+    """_kwargs_for_llm leaves all other keys unchanged."""
+    data = {"model": "gpt-4", "temperature": 0.7, "api_key": "sk-xxx"}
+    result = _kwargs_for_llm(data)
+    assert result == data
 
 
 @pytest.mark.parametrize(
@@ -237,3 +270,297 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["num_retries"] == 10
     # Key/team timeout should be applied since not in request
     assert call_kwargs["timeout"] == 30
+
+
+@pytest.mark.asyncio
+async def test_route_request_user_config_filters_router_args_and_reuses_cached_router(
+    monkeypatch,
+):
+    import litellm
+
+    state = {"init_kwargs": None, "init_count": 0, "discard_called": False}
+
+    class _FakeRouter:
+        @staticmethod
+        def get_valid_args():
+            return ["model_list", "routing_strategy"]
+
+        def __init__(self, **kwargs):
+            state["init_count"] += 1
+            state["init_kwargs"] = kwargs
+
+        async def acompletion(self, **kwargs):
+            return {"ok": True, "kwargs": kwargs}
+
+        def discard(self):
+            state["discard_called"] = True
+
+    monkeypatch.setattr(litellm, "Router", _FakeRouter)
+
+    data_1 = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "_presidio_pii_tokens": {"guardrail": {"<PERSON>": "Jane"}},
+        "user_config": {
+            "model_list": [
+                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}}
+            ],
+            "routing_strategy": "least-busy",
+            "invalid_key": "should_be_ignored",
+        },
+    }
+
+    data_2 = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello again"}],
+        "_presidio_pii_tokens": {"guardrail": {"<PERSON>": "Bob"}},
+        "user_config": {
+            "model_list": [
+                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}}
+            ],
+            "routing_strategy": "least-busy",
+            "invalid_key": "should_be_ignored",
+        },
+    }
+
+    llm_call_1 = await route_request(data_1, None, None, "acompletion")
+    result_1 = await llm_call_1
+    llm_call_2 = await route_request(data_2, None, None, "acompletion")
+    result_2 = await llm_call_2
+
+    assert result_1["ok"] is True
+    assert result_2["ok"] is True
+    assert "_presidio_pii_tokens" not in result_1["kwargs"]
+    assert "_presidio_pii_tokens" not in result_2["kwargs"]
+    assert state["init_kwargs"] == {
+        "model_list": [
+            {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}}
+        ],
+        "routing_strategy": "least-busy",
+    }
+    assert state["init_count"] == 1
+    assert state["discard_called"] is False
+
+
+@pytest.mark.asyncio
+async def test_route_request_user_config_batch_does_not_forward_model_kwarg(monkeypatch):
+    import litellm
+
+    state = {"models": None, "kwargs": None}
+
+    class _FakeRouter:
+        @staticmethod
+        def get_valid_args():
+            return []
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def abatch_completion(self, models, **kwargs):
+            state["models"] = models
+            state["kwargs"] = kwargs
+            return "ok"
+
+        def discard(self):
+            pass
+
+    monkeypatch.setattr(litellm, "Router", _FakeRouter)
+
+    data = {
+        "model": "gpt-4o-mini, claude-3-haiku",
+        "messages": [{"role": "user", "content": "hi"}],
+        "user_config": {},
+    }
+
+    llm_call = await route_request(data, None, None, "acompletion")
+    result = await llm_call
+
+    assert result == "ok"
+    assert state["models"] == ["gpt-4o-mini", "claude-3-haiku"]
+    assert "model" not in (state["kwargs"] or {})
+
+
+@pytest.mark.asyncio
+async def test_route_request_user_config_router_cache_evicts_lru(monkeypatch):
+    import litellm
+
+    state = {"init_count": 0, "discard_count": 0}
+
+    class _FakeRouter:
+        @staticmethod
+        def get_valid_args():
+            return ["model_list"]
+
+        def __init__(self, **kwargs):
+            state["init_count"] += 1
+
+        async def acompletion(self, **kwargs):
+            return {"ok": True}
+
+        def discard(self):
+            state["discard_count"] += 1
+
+    monkeypatch.setattr(litellm, "Router", _FakeRouter)
+    monkeypatch.setattr(route_llm_request_module, "_USER_CONFIG_ROUTER_CACHE_MAX_SIZE", 1)
+    monkeypatch.setattr(
+        route_llm_request_module, "_USER_CONFIG_ROUTER_CACHE_TTL_SECONDS", 3600
+    )
+
+    data_a_1 = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "a1"}],
+        "user_config": {"model_list": [{"model_name": "a"}]},
+    }
+    data_b = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "b"}],
+        "user_config": {"model_list": [{"model_name": "b"}]},
+    }
+    data_a_2 = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "a2"}],
+        "user_config": {"model_list": [{"model_name": "a"}]},
+    }
+
+    llm_call = await route_request(data_a_1, None, None, "acompletion")
+    await llm_call
+    llm_call = await route_request(data_b, None, None, "acompletion")
+    await llm_call
+    llm_call = await route_request(data_a_2, None, None, "acompletion")
+    await llm_call
+
+    assert state["init_count"] == 3
+    assert state["discard_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_route_request_user_config_router_cache_expires_by_ttl(monkeypatch):
+    import litellm
+
+    state = {"init_count": 0, "discard_count": 0}
+    clock = {"t": 1000.0}
+
+    class _FakeRouter:
+        @staticmethod
+        def get_valid_args():
+            return ["model_list"]
+
+        def __init__(self, **kwargs):
+            state["init_count"] += 1
+
+        async def acompletion(self, **kwargs):
+            return {"ok": True}
+
+        def discard(self):
+            state["discard_count"] += 1
+
+    def _fake_monotonic():
+        return clock["t"]
+
+    monkeypatch.setattr(litellm, "Router", _FakeRouter)
+    monkeypatch.setattr(
+        route_llm_request_module, "_USER_CONFIG_ROUTER_CACHE_MAX_SIZE", 16
+    )
+    monkeypatch.setattr(
+        route_llm_request_module, "_USER_CONFIG_ROUTER_CACHE_TTL_SECONDS", 1
+    )
+    monkeypatch.setattr(route_llm_request_module.time, "monotonic", _fake_monotonic)
+
+    data_1 = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "first"}],
+        "user_config": {"model_list": [{"model_name": "same"}]},
+    }
+    data_2 = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "second"}],
+        "user_config": {"model_list": [{"model_name": "same"}]},
+    }
+
+    llm_call = await route_request(data_1, None, None, "acompletion")
+    await llm_call
+
+    clock["t"] = 1002.0  # beyond ttl
+    llm_call = await route_request(data_2, None, None, "acompletion")
+    await llm_call
+
+    assert state["init_count"] == 2
+    assert state["discard_count"] == 1
+
+
+def test_user_config_router_cache_discards_new_router_on_cache_block_exception(
+    monkeypatch,
+):
+    import litellm
+
+    state = {"init_count": 0, "discard_count": 0}
+    call_count = {"n": 0}
+
+    class _FakeRouter:
+        def __init__(self, **kwargs):
+            state["init_count"] += 1
+
+        def discard(self):
+            state["discard_count"] += 1
+
+    def _failing_prune(now: float):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("cache prune failed")
+
+    monkeypatch.setattr(litellm, "Router", _FakeRouter)
+    monkeypatch.setattr(
+        route_llm_request_module,
+        "_prune_expired_user_config_routers",
+        _failing_prune,
+    )
+
+    with pytest.raises(RuntimeError, match="cache prune failed"):
+        route_llm_request_module._get_or_create_user_config_router(
+            {"model_list": [{"model_name": "x"}]}
+        )
+
+    assert state["init_count"] == 1
+    assert state["discard_count"] == 1
+    assert len(route_llm_request_module._USER_CONFIG_ROUTER_CACHE) == 0
+
+
+@pytest.mark.asyncio
+async def test_route_request_batch_with_router_does_not_forward_model_kwarg():
+    data = {
+        "model": "gpt-4o-mini, claude-3-haiku",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    llm_router = MagicMock()
+    llm_router.model_names = []
+    llm_router.abatch_completion.return_value = "ok"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "ok"
+    call_kwargs = llm_router.abatch_completion.call_args[1]
+    assert call_kwargs["models"] == ["gpt-4o-mini", "claude-3-haiku"]
+    assert "model" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_route_request_evals_path_strips_internal_keys():
+    import litellm
+
+    data = {
+        "name": "eval-test",
+        "_presidio_pii_tokens": {"guardrail": {"<PERSON>": "Alice"}},
+    }
+    llm_router = MagicMock()
+
+    original_func = litellm.acreate_eval
+    mock_create_eval = MagicMock(return_value={"ok": True})
+    litellm.acreate_eval = mock_create_eval
+    try:
+        response = await route_request(data, llm_router, None, "acreate_eval")
+        assert response == {"ok": True}
+        call_kwargs = mock_create_eval.call_args[1]
+        assert "_presidio_pii_tokens" not in call_kwargs
+        assert call_kwargs["name"] == "eval-test"
+    finally:
+        litellm.acreate_eval = original_func
