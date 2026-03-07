@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
@@ -466,6 +467,123 @@ def _build_where_conditions(
     return where_conditions
 
 
+# ---------------------------------------------------------------------------
+# Helpers for the optimized multi-query aggregation
+# ---------------------------------------------------------------------------
+
+# SQL SUM expressions reused across all aggregation queries.
+_METRIC_SUM_EXPR = (
+    "SUM(spend)::float AS spend, "
+    "SUM(prompt_tokens)::bigint AS prompt_tokens, "
+    "SUM(completion_tokens)::bigint AS completion_tokens, "
+    "SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens, "
+    "SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens, "
+    "SUM(api_requests)::bigint AS api_requests, "
+    "SUM(successful_requests)::bigint AS successful_requests, "
+    "SUM(failed_requests)::bigint AS failed_requests"
+)
+
+
+def _build_base_where_clause_sql(
+    *,
+    entity_id_field: str,
+    entity_id: Optional[Union[str, List[str]]],
+    start_date: str,
+    end_date: str,
+    model: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
+    exclude_entity_ids: Optional[List[str]],
+) -> Tuple[str, List[Any]]:
+    """Build a parameterised SQL WHERE clause shared by all aggregation queries.
+
+    Returns (where_clause_str, params_list).  The same clause and params are
+    reused across every GROUP BY query so that only the SELECT / GROUP BY
+    portion differs.
+    """
+    conditions: List[str] = []
+    params: List[Any] = []
+    p = 1  # 1-based for PostgreSQL $N placeholders
+
+    # Date range (always present)
+    conditions.append(f"date >= ${p}")
+    params.append(start_date)
+    p += 1
+    conditions.append(f"date <= ${p}")
+    params.append(end_date)
+    p += 1
+
+    # Entity filter
+    if entity_id is not None:
+        if isinstance(entity_id, list):
+            placeholders = ", ".join(f"${p + i}" for i in range(len(entity_id)))
+            conditions.append(f'"{entity_id_field}" IN ({placeholders})')
+            params.extend(entity_id)
+            p += len(entity_id)
+        else:
+            conditions.append(f'"{entity_id_field}" = ${p}')
+            params.append(entity_id)
+            p += 1
+
+    # Exclude specific entities
+    if exclude_entity_ids:
+        placeholders = ", ".join(
+            f"${p + i}" for i in range(len(exclude_entity_ids))
+        )
+        conditions.append(f'"{entity_id_field}" NOT IN ({placeholders})')
+        params.extend(exclude_entity_ids)
+        p += len(exclude_entity_ids)
+
+    # Optional model filter
+    if model:
+        conditions.append(f"model = ${p}")
+        params.append(model)
+        p += 1
+
+    # Optional api_key filter
+    if api_key:
+        if isinstance(api_key, list):
+            placeholders = ", ".join(f"${p + i}" for i in range(len(api_key)))
+            conditions.append(f"api_key IN ({placeholders})")
+            params.extend(api_key)
+            p += len(api_key)
+        else:
+            conditions.append(f"api_key = ${p}")
+            params.append(api_key)
+            p += 1
+
+    return " AND ".join(conditions), params
+
+
+def _row_to_spend_metrics(row: dict) -> SpendMetrics:
+    """Convert a SQL result dict to a SpendMetrics instance."""
+    pt = row.get("prompt_tokens") or 0
+    ct = row.get("completion_tokens") or 0
+    return SpendMetrics(
+        spend=row.get("spend") or 0.0,
+        prompt_tokens=pt,
+        completion_tokens=ct,
+        total_tokens=pt + ct,
+        cache_read_input_tokens=row.get("cache_read_input_tokens") or 0,
+        cache_creation_input_tokens=row.get("cache_creation_input_tokens") or 0,
+        api_requests=row.get("api_requests") or 0,
+        successful_requests=row.get("successful_requests") or 0,
+        failed_requests=row.get("failed_requests") or 0,
+    )
+
+
+def _add_metrics(target: SpendMetrics, source: SpendMetrics) -> None:
+    """Accumulate *source* metrics into *target* in-place."""
+    target.spend += source.spend
+    target.prompt_tokens += source.prompt_tokens
+    target.completion_tokens += source.completion_tokens
+    target.total_tokens += source.total_tokens
+    target.cache_read_input_tokens += source.cache_read_input_tokens
+    target.cache_creation_input_tokens += source.cache_creation_input_tokens
+    target.api_requests += source.api_requests
+    target.successful_requests += source.successful_requests
+    target.failed_requests += source.failed_requests
+
+
 def _build_aggregated_sql_query(
     *,
     table_name: str,
@@ -592,18 +710,25 @@ async def _aggregate_spend_records(
     records: List[Any],
     entity_id_field: Optional[str],
     entity_metadata_field: Optional[Dict[str, dict]],
+    api_key_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Aggregate rows into DailySpendData list and total metrics."""
-    api_keys: Set[str] = set()
-    for record in records:
-        if record.api_key:
-            api_keys.add(record.api_key)
+    """Aggregate rows into DailySpendData list and total metrics.
 
-    api_key_metadata: Dict[str, Dict[str, Any]] = {}
+    If *api_key_metadata* is provided it will be used directly, avoiding a
+    redundant DB round-trip when the caller already fetched it.
+    """
+    if api_key_metadata is None:
+        api_keys: Set[str] = set()
+        for record in records:
+            if record.api_key:
+                api_keys.add(record.api_key)
+
+        api_key_metadata = {}
+        if api_keys:
+            api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
+
     model_metadata: Dict[str, Dict[str, Any]] = {}
     provider_metadata: Dict[str, Dict[str, Any]] = {}
-    if api_keys:
-        api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
 
     results: List[DailySpendData] = []
     total_metrics = SpendMetrics()
@@ -741,6 +866,173 @@ async def get_daily_activity(
         )
 
 
+async def _get_aggregated_with_entity_breakdown(
+    *,
+    prisma_client: PrismaClient,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: Optional[Union[str, List[str]]],
+    entity_metadata_field: Optional[Dict[str, dict]],
+    start_date: str,
+    end_date: str,
+    model: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
+    exclude_entity_ids: Optional[List[str]],
+) -> SpendAnalyticsPaginatedResponse:
+    """Multi-query aggregation for entity-breakdown views (e.g. team usage).
+
+    Runs 3 concurrent queries:
+
+      Q0 — detail without entity_id (~5-10k rows) for model/key/provider/endpoint breakdowns
+      Q1 — per-entity per-date (~entities × days rows) for entity daily chart
+      Q2 — entity × API key for entity → key correlation
+    """
+    pg_table = _PRISMA_TO_PG_TABLE.get(table_name)
+    if pg_table is None:
+        raise ValueError(f"Unknown table name: {table_name}")
+
+    where_clause, params = _build_base_where_clause_sql(
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+    )
+
+    m = _METRIC_SUM_EXPR
+    base = f'FROM "{pg_table}" WHERE {where_clause}'
+
+    # Q0 — collapse across entities for model/key/provider/endpoint breakdowns
+    q_detail = (
+        f"SELECT date, api_key, model, model_group, custom_llm_provider, "
+        f"mcp_namespaced_tool_name, endpoint, {m} {base} "
+        f"GROUP BY date, api_key, model, model_group, custom_llm_provider, "
+        f"mcp_namespaced_tool_name, endpoint ORDER BY date DESC"
+    )
+    # Q1 — per-entity per-date
+    q_entity_daily = (
+        f'SELECT "{entity_id_field}", date, {m} {base} '
+        f'GROUP BY "{entity_id_field}", date ORDER BY date DESC'
+    )
+    # Q2 — entity × API key (cross-date totals)
+    q_entity_key = (
+        f'SELECT "{entity_id_field}", api_key, {m} {base} '
+        f'GROUP BY "{entity_id_field}", api_key'
+    )
+
+    raw_detail, raw_entity_daily, raw_entity_key = await asyncio.gather(
+        prisma_client.db.query_raw(q_detail, *params),
+        prisma_client.db.query_raw(q_entity_daily, *params),
+        prisma_client.db.query_raw(q_entity_key, *params),
+    )
+
+    detail_records = [SimpleNamespace(**row) for row in (raw_detail or [])]
+
+    # Collect all API keys from Q0 + Q2 for a single metadata fetch
+    all_api_keys: Set[str] = set()
+    for record in detail_records:
+        if record.api_key:
+            all_api_keys.add(record.api_key)
+    for row in (raw_entity_key or []):
+        ak = row.get("api_key")
+        if ak:
+            all_api_keys.add(ak)
+
+    api_key_metadata: Dict[str, Dict[str, Any]] = {}
+    if all_api_keys:
+        api_key_metadata = await get_api_key_metadata(prisma_client, all_api_keys)
+
+    # Process Q0 through _aggregate_spend_records (model/key/provider/endpoint breakdowns)
+    aggregated = await _aggregate_spend_records(
+        prisma_client=prisma_client,
+        records=detail_records,
+        entity_id_field=None,
+        entity_metadata_field=None,
+        api_key_metadata=api_key_metadata,
+    )
+    detail_by_date: Dict[str, DailySpendData] = {
+        d.date.strftime("%Y-%m-%d"): d for d in aggregated["results"]
+    }
+
+    # Build entity → key map from Q2
+    entity_key_map: Dict[str, Dict[str, SpendMetrics]] = {}
+    for row in (raw_entity_key or []):
+        eid = row.get(entity_id_field) or "Unassigned"
+        ak = row.get("api_key")
+        if ak:
+            entity_key_map.setdefault(eid, {})[ak] = _row_to_spend_metrics(row)
+
+    # Group Q1 by date
+    date_entity_rows: Dict[str, List[dict]] = {}
+    for row in (raw_entity_daily or []):
+        date_entity_rows.setdefault(row["date"], []).append(row)
+
+    # Merge entity data into per-date breakdowns from Q0
+    total_metrics = SpendMetrics()
+    results: List[DailySpendData] = []
+    entities_with_key_breakdown: Set[str] = set()
+
+    all_dates = set(detail_by_date.keys()) | set(date_entity_rows.keys())
+    for date_str in sorted(all_dates, reverse=True):
+        day_data = detail_by_date.get(date_str)
+        breakdown = day_data.breakdown if day_data else BreakdownMetrics()
+
+        day_metrics = SpendMetrics()
+        for row in date_entity_rows.get(date_str, []):
+            eid = row.get(entity_id_field) or "Unassigned"
+            entity_metrics = _row_to_spend_metrics(row)
+            _add_metrics(day_metrics, entity_metrics)
+
+            entity_meta = (
+                entity_metadata_field.get(eid, {}) if entity_metadata_field else {}
+            )
+            entity_entry = MetricWithMetadata(metrics=entity_metrics, metadata=entity_meta)
+
+            # Attach api_key_breakdown on the first (most recent) date each entity appears
+            if eid not in entities_with_key_breakdown:
+                for ak, ak_metrics in entity_key_map.get(eid, {}).items():
+                    meta = api_key_metadata.get(ak, {})
+                    entity_entry.api_key_breakdown[ak] = KeyMetricWithMetadata(
+                        metrics=ak_metrics,
+                        metadata=KeyMetadata(
+                            key_alias=meta.get("key_alias"),
+                            team_id=meta.get("team_id"),
+                        ),
+                    )
+                entities_with_key_breakdown.add(eid)
+
+            breakdown.entities[eid] = entity_entry
+
+        _add_metrics(total_metrics, day_metrics)
+        results.append(
+            DailySpendData(
+                date=datetime.strptime(date_str, "%Y-%m-%d").date(),
+                metrics=day_metrics,
+                breakdown=breakdown,
+            )
+        )
+
+    return SpendAnalyticsPaginatedResponse(
+        results=results,
+        metadata=DailySpendMetadata(
+            total_spend=total_metrics.spend,
+            total_prompt_tokens=total_metrics.prompt_tokens,
+            total_completion_tokens=total_metrics.completion_tokens,
+            total_tokens=total_metrics.total_tokens,
+            total_api_requests=total_metrics.api_requests,
+            total_successful_requests=total_metrics.successful_requests,
+            total_failed_requests=total_metrics.failed_requests,
+            total_cache_read_input_tokens=total_metrics.cache_read_input_tokens,
+            total_cache_creation_input_tokens=total_metrics.cache_creation_input_tokens,
+            page=1,
+            total_pages=1,
+            has_more=False,
+        ),
+    )
+
+
 async def get_daily_activity_aggregated(
     prisma_client: Optional[PrismaClient],
     table_name: str,
@@ -757,16 +1049,23 @@ async def get_daily_activity_aggregated(
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
-    Uses SQL GROUP BY to aggregate rows in the database rather than fetching
-    all individual rows into Python. This collapses rows across entities
-    (users/teams/orgs), reducing ~150k rows to ~2-3k grouped rows.
+    When *include_entity_breakdown* is **False** the entity column is dropped
+    from the GROUP BY, collapsing rows across entities.  This already reduces
+    ~150k raw rows to ~5-10k, so we process them with the standard
+    ``_aggregate_spend_records`` helper.
 
-    When include_entity_breakdown is True, the entity_id column is included
-    in the GROUP BY so that per-entity breakdown data is preserved in the
-    response (e.g. per-team spend). This is needed for entity-specific views
-    like the team usage dashboard.
+    When *include_entity_breakdown* is **True** (e.g. team usage) the entity
+    column would be added back to the GROUP BY, matching the table's unique
+    key and returning all ~150k rows — far too slow.  Instead we run three
+    concurrent queries with coarser GROUP BYs:
 
-    Matches the response model of the paginated endpoint so the UI does not need to transform.
+      1. A *detail* query **without** the entity column (~5-10k rows) to
+         produce model / key / provider / endpoint breakdowns.
+      2. A per-entity-per-date query (~teams × days rows) for the daily
+         chart and entity table.
+      3. A per-entity-per-key query for the entity → key correlation.
+
+    Both paths produce the same ``SpendAnalyticsPaginatedResponse`` shape.
     """
     if prisma_client is None:
         raise HTTPException(
@@ -781,50 +1080,64 @@ async def get_daily_activity_aggregated(
         )
 
     try:
-        sql_query, sql_params = _build_aggregated_sql_query(
+        adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+            start_date, end_date, timezone_offset_minutes
+        )
+
+        if not include_entity_breakdown:
+            # ---- Original single-query path (already fast) ----
+            sql_query, sql_params = _build_aggregated_sql_query(
+                table_name=table_name,
+                entity_id_field=entity_id_field,
+                entity_id=entity_id,
+                start_date=adjusted_start,
+                end_date=adjusted_end,
+                model=model,
+                api_key=api_key,
+                exclude_entity_ids=exclude_entity_ids,
+                include_entity_id=False,
+            )
+
+            rows = await prisma_client.db.query_raw(sql_query, *sql_params)
+            records = [SimpleNamespace(**row) for row in (rows or [])]
+
+            aggregated = await _aggregate_spend_records(
+                prisma_client=prisma_client,
+                records=records,
+                entity_id_field=None,
+                entity_metadata_field=None,
+            )
+
+            return SpendAnalyticsPaginatedResponse(
+                results=aggregated["results"],
+                metadata=DailySpendMetadata(
+                    total_spend=aggregated["totals"].spend,
+                    total_prompt_tokens=aggregated["totals"].prompt_tokens,
+                    total_completion_tokens=aggregated["totals"].completion_tokens,
+                    total_tokens=aggregated["totals"].total_tokens,
+                    total_api_requests=aggregated["totals"].api_requests,
+                    total_successful_requests=aggregated["totals"].successful_requests,
+                    total_failed_requests=aggregated["totals"].failed_requests,
+                    total_cache_read_input_tokens=aggregated["totals"].cache_read_input_tokens,
+                    total_cache_creation_input_tokens=aggregated["totals"].cache_creation_input_tokens,
+                    page=1,
+                    total_pages=1,
+                    has_more=False,
+                ),
+            )
+
+        # ---- Optimised multi-query path (entity breakdown) ----
+        return await _get_aggregated_with_entity_breakdown(
+            prisma_client=prisma_client,
             table_name=table_name,
             entity_id_field=entity_id_field,
             entity_id=entity_id,
-            start_date=start_date,
-            end_date=end_date,
+            entity_metadata_field=entity_metadata_field,
+            start_date=adjusted_start,
+            end_date=adjusted_end,
             model=model,
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
-            timezone_offset_minutes=timezone_offset_minutes,
-            include_entity_id=include_entity_breakdown,
-        )
-
-        # Execute GROUP BY query — returns pre-aggregated dicts
-        rows = await prisma_client.db.query_raw(sql_query, *sql_params)
-        if rows is None:
-            rows = []
-
-        # Convert dicts to objects for compatibility with _aggregate_spend_records
-        records = [SimpleNamespace(**row) for row in rows]
-
-        aggregated = await _aggregate_spend_records(
-            prisma_client=prisma_client,
-            records=records,
-            entity_id_field=entity_id_field if include_entity_breakdown else None,
-            entity_metadata_field=entity_metadata_field if include_entity_breakdown else None,
-        )
-
-        return SpendAnalyticsPaginatedResponse(
-            results=aggregated["results"],
-            metadata=DailySpendMetadata(
-                total_spend=aggregated["totals"].spend,
-                total_prompt_tokens=aggregated["totals"].prompt_tokens,
-                total_completion_tokens=aggregated["totals"].completion_tokens,
-                total_tokens=aggregated["totals"].total_tokens,
-                total_api_requests=aggregated["totals"].api_requests,
-                total_successful_requests=aggregated["totals"].successful_requests,
-                total_failed_requests=aggregated["totals"].failed_requests,
-                total_cache_read_input_tokens=aggregated["totals"].cache_read_input_tokens,
-                total_cache_creation_input_tokens=aggregated["totals"].cache_creation_input_tokens,
-                page=1,
-                total_pages=1,
-                has_more=False,
-            ),
         )
 
     except Exception as e:
