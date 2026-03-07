@@ -35,6 +35,8 @@ def get_response_headers(_response_headers: Optional[dict] = None) -> dict:
         openai_headers["x-ratelimit-remaining-tokens"] = _response_headers[
             "x-ratelimit-remaining-tokens"
         ]
+    if "retry-after" in _response_headers:
+        openai_headers["retry-after"] = _response_headers["retry-after"]
     llm_provider_headers = _get_llm_provider_headers(_response_headers)
     return {**llm_provider_headers, **openai_headers}
 
