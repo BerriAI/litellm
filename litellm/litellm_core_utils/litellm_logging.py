@@ -3031,6 +3031,15 @@ class Logging(LiteLLMLoggingBaseClass):
 
         result = None  # result sent to all loggers, init this to None incase it's not created
 
+        result = redact_message_input_output_from_logging(
+            model_call_details=(
+                self.model_call_details
+                if hasattr(self, "model_call_details")
+                else {}
+            ),
+            result=result,
+        )
+
         self.has_run_logging(event_type="async_failure")
         for callback in callbacks:
             try:
