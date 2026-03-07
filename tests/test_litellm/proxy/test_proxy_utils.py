@@ -190,6 +190,60 @@ def test_get_custom_url_proxy_base_url_takes_priority(monkeypatch):
     assert url == "https://configured.company.com/ui/"
 
 
+@pytest.mark.asyncio
+async def test_forwarded_host_middleware_rewrites_host():
+    """Test that ForwardedHostMiddleware rewrites scope host from X-Forwarded-Host"""
+    from litellm.proxy.proxy_server import ForwardedHostMiddleware
+
+    captured_scope = {}
+
+    async def mock_app(scope, receive, send):
+        captured_scope.update(scope)
+
+    middleware = ForwardedHostMiddleware(mock_app)
+    scope = {
+        "type": "http",
+        "headers": [
+            (b"host", b"100.64.1.22:4000"),
+            (b"x-forwarded-host", b"external.company.com"),
+            (b"x-forwarded-proto", b"https"),
+        ],
+        "server": ("100.64.1.22", 4000),
+    }
+    await middleware(scope, None, None)
+
+    # Verify host header was rewritten
+    host_values = [v for k, v in captured_scope["headers"] if k == b"host"]
+    assert host_values == [b"external.company.com"]
+    assert captured_scope["server"] == ("external.company.com", None)
+
+
+@pytest.mark.asyncio
+async def test_forwarded_host_middleware_no_forwarded_host():
+    """Test that middleware is a no-op without X-Forwarded-Host"""
+    from litellm.proxy.proxy_server import ForwardedHostMiddleware
+
+    captured_scope = {}
+
+    async def mock_app(scope, receive, send):
+        captured_scope.update(scope)
+
+    middleware = ForwardedHostMiddleware(mock_app)
+    scope = {
+        "type": "http",
+        "headers": [
+            (b"host", b"100.64.1.22:4000"),
+        ],
+        "server": ("100.64.1.22", 4000),
+    }
+    await middleware(scope, None, None)
+
+    # Verify host header was NOT rewritten
+    host_values = [v for k, v in captured_scope["headers"] if k == b"host"]
+    assert host_values == [b"100.64.1.22:4000"]
+    assert captured_scope["server"] == ("100.64.1.22", 4000)
+
+
 def _patch_today(monkeypatch, year, month, day):
     class PatchedDate(real_datetime.date):
         @classmethod
