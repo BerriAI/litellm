@@ -240,6 +240,71 @@ async def get_allowed_mcp_access_groups_for_user(
     return allowed_groups
 
 
+async def get_team_mcp_permissions(
+    team_id: str,
+    prisma_client: Optional[PrismaClient],
+) -> Optional[Dict[str, Any]]:
+    """
+    Return the MCP servers and access groups that a team is explicitly permitted to use.
+
+    Returns a dict:
+        {
+            "mcp_servers": List[str],        # expanded server IDs (direct + access-group-resolved + tool perm keys)
+            "mcp_access_groups": List[str],  # team's raw access group names
+        }
+
+    Returns None when the team has no object_permission (meaning no restrictions configured).
+    Callers treat None as "no restriction" (show/allow all servers).
+    """
+    try:
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+    except ImportError:
+        return None
+
+    if prisma_client is None or user_api_key_cache is None:
+        return None
+
+    try:
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException:
+        return None
+
+    if team_obj is None or team_obj.object_permission is None:
+        return None
+
+    obj_perm = team_obj.object_permission
+    server_ids: List[str] = list(obj_perm.mcp_servers or [])
+
+    if obj_perm.mcp_access_groups:
+        try:
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                MCPRequestHandler,
+            )
+
+            resolved = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                obj_perm.mcp_access_groups
+            )
+            server_ids.extend(resolved)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"get_team_mcp_permissions: failed to resolve access groups: {e}"
+            )
+
+    if obj_perm.mcp_tool_permissions:
+        server_ids.extend(obj_perm.mcp_tool_permissions.keys())
+
+    return {
+        "mcp_servers": list(set(server_ids)),
+        "mcp_access_groups": list(obj_perm.mcp_access_groups or []),
+    }
+
+
 async def validate_key_mcp_servers_against_team(
     object_permission: Optional[Union[Dict, Any]],
     team_obj: Optional[LiteLLM_TeamTableCachedObj],
@@ -247,11 +312,14 @@ async def validate_key_mcp_servers_against_team(
     """
     Validate that a key's requested MCP servers/access groups are allowed by its team.
 
-    Mirrors the runtime intersection logic: only restricts when the team has restrictions
-    configured (non-empty). allow_all_keys servers always pass validation.
+    Security model:
+    - Team has explicit MCP config → key must be a subset of team's servers/groups
+    - Team has no MCP config (object_permission is None) → only allow_all_keys servers pass;
+      all other MCP server assignments are denied (deny-by-default)
+    - allow_all_keys servers always pass regardless of team config
 
-    Raises HTTPException(403) if the key requests MCP servers or access groups that
-    the team does not allow.
+    Raises HTTPException(403) if the key requests MCP servers or access groups the team
+    does not allow.
     """
     if object_permission is None or team_obj is None:
         return
@@ -267,16 +335,49 @@ async def validate_key_mcp_servers_against_team(
     if not key_mcp_servers and not key_mcp_access_groups:
         return
 
+    # Get allow_all_keys server IDs - these bypass all per-key restrictions
+    allow_all_server_ids: Set[str] = set()
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        allow_all_server_ids = set(global_mcp_server_manager.get_allow_all_keys_server_ids())
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"validate_key_mcp_servers_against_team: failed to get allow_all_keys servers: {e}"
+        )
+
     team_object_permission = team_obj.object_permission
     if team_object_permission is None:
-        # Team has no MCP config - no restriction
+        # Team has no MCP config: deny-by-default — only allow_all_keys servers are permitted
+        disallowed = [s for s in key_mcp_servers if s not in allow_all_server_ids]
+        if disallowed:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        f"MCP servers not allowed: {disallowed}. "
+                        "The key's team has no MCP servers configured. "
+                        "Ask an admin to add MCP servers to the team."
+                    )
+                },
+            )
+        if key_mcp_access_groups:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        f"MCP access groups not allowed: {key_mcp_access_groups}. "
+                        "The key's team has no MCP access groups configured. "
+                        "Ask an admin to add MCP access groups to the team."
+                    )
+                },
+            )
         return
 
-    # Build the team's allowed server set from direct servers + access group resolution + tool permissions
-    team_allowed_servers: List[str] = []
-
-    if team_object_permission.mcp_servers:
-        team_allowed_servers.extend(team_object_permission.mcp_servers)
+    # Team has MCP config — build its allowed server set
+    team_allowed_servers: List[str] = list(team_object_permission.mcp_servers or [])
 
     if team_object_permission.mcp_access_groups:
         try:
@@ -296,21 +397,8 @@ async def validate_key_mcp_servers_against_team(
     if team_object_permission.mcp_tool_permissions:
         team_allowed_servers.extend(team_object_permission.mcp_tool_permissions.keys())
 
-    # Get allow_all_keys server IDs - these bypass per-key restrictions
-    allow_all_server_ids: set = set()
-    try:
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-
-        allow_all_server_ids = set(global_mcp_server_manager.get_allow_all_keys_server_ids())
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            f"validate_key_mcp_servers_against_team: failed to get allow_all_keys servers: {e}"
-        )
-
-    # Validate key's mcp_servers only when the team has server restrictions configured
-    if key_mcp_servers and team_allowed_servers:
+    # Validate mcp_servers
+    if key_mcp_servers:
         team_allowed_set = set(team_allowed_servers)
         disallowed = [
             s for s in key_mcp_servers
@@ -327,9 +415,9 @@ async def validate_key_mcp_servers_against_team(
                 },
             )
 
-    # Validate key's mcp_access_groups only when the team has access group restrictions configured
-    if key_mcp_access_groups and team_object_permission.mcp_access_groups:
-        team_access_group_set = set(team_object_permission.mcp_access_groups)
+    # Validate mcp_access_groups
+    if key_mcp_access_groups:
+        team_access_group_set = set(team_object_permission.mcp_access_groups or [])
         disallowed_groups = [
             g for g in key_mcp_access_groups if g not in team_access_group_set
         ]

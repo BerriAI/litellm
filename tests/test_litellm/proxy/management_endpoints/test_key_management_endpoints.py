@@ -6515,8 +6515,10 @@ async def test_mcp_validation_key_creation_allows_permitted_server():
 
 
 @pytest.mark.asyncio
-async def test_mcp_validation_no_restriction_when_team_has_no_mcp_config():
-    """When the team has no object_permission, any MCP server is allowed."""
+async def test_mcp_validation_deny_by_default_when_team_has_no_mcp_config():
+    """When team has no object_permission, non-allow_all_keys servers are denied (deny-by-default)."""
+    from fastapi import HTTPException
+
     from litellm.proxy.management_helpers.object_permission_utils import (
         validate_key_mcp_servers_against_team,
     )
@@ -6524,8 +6526,11 @@ async def test_mcp_validation_no_restriction_when_team_has_no_mcp_config():
     team_obj = _make_team_obj_with_mcp_servers()  # no object_permission
     object_permission = {"mcp_servers": ["any-server"]}
 
-    # Should not raise
-    await validate_key_mcp_servers_against_team(object_permission, team_obj)
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(object_permission, team_obj)
+
+    assert exc_info.value.status_code == 403
+    assert "team has no MCP servers configured" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
