@@ -1093,7 +1093,12 @@ def test_create_file_with_deep_nested_litellm_metadata(
     Regression test for: litellm_metadata[a][b][c] format should be correctly parsed.
     """
     from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+    import litellm.proxy.proxy_server as ps
     from litellm.types.llms.openai import OpenAIFileObject
+    
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     
     proxy_logging_obj = ProxyLogging(
         user_api_key_cache=DualCache(default_in_memory_ttl=1)
@@ -1140,38 +1145,43 @@ def test_create_file_with_deep_nested_litellm_metadata(
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
-    # Disable auth so the test doesn't depend on master_key state from other tests
-    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     
-    test_file_content = b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo"}}'
-    test_file = ("nested.jsonl", test_file_content, "application/jsonl")
-    
-    # Test with deeply nested metadata
-    response = client.post(
-        "/v1/files",
-        files={"file": test_file},
-        data={
-            "purpose": "batch",
-            "target_model_names": "gpt-3.5-turbo",
-            "litellm_metadata[config][database][host]": "localhost",
-            "litellm_metadata[config][database][port]": "5432",
-            "litellm_metadata[config][cache][enabled]": "true",
-        },
-        headers={"Authorization": "Bearer test-key"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
     )
     
-    # Verify success
-    assert response.status_code == 200
-    result = response.json()
-    assert result["id"] == "file-test-456"
-    
-    # Verify deeply nested metadata was correctly parsed
-    assert "config" in captured_litellm_metadata
-    assert "database" in captured_litellm_metadata["config"]
-    assert captured_litellm_metadata["config"]["database"]["host"] == "localhost"
-    assert captured_litellm_metadata["config"]["database"]["port"] == "5432"
-    assert "cache" in captured_litellm_metadata["config"]
-    assert captured_litellm_metadata["config"]["cache"]["enabled"] == "true"
+    try:
+        test_file_content = b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo"}}'
+        test_file = ("nested.jsonl", test_file_content, "application/jsonl")
+        
+        # Test with deeply nested metadata
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data={
+                "purpose": "batch",
+                "target_model_names": "gpt-3.5-turbo",
+                "litellm_metadata[config][database][host]": "localhost",
+                "litellm_metadata[config][database][port]": "5432",
+                "litellm_metadata[config][cache][enabled]": "true",
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
+        
+        # Verify success
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["id"] == "file-test-456"
+        
+        # Verify deeply nested metadata was correctly parsed
+        assert "config" in captured_litellm_metadata
+        assert "database" in captured_litellm_metadata["config"]
+        assert captured_litellm_metadata["config"]["database"]["host"] == "localhost"
+        assert captured_litellm_metadata["config"]["database"]["port"] == "5432"
+        assert "cache" in captured_litellm_metadata["config"]
+        assert captured_litellm_metadata["config"]["cache"]["enabled"] == "true"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 # ---------------------------------------------------------------------------
