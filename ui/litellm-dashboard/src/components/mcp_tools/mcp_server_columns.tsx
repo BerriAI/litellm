@@ -58,14 +58,8 @@ export const mcpServerColumns = (
       const specPath = row.original.spec_path;
       const displayTransport = specPath && transport !== "stdio" ? "OPENAPI" : transport;
       const label = displayTransport.toUpperCase();
-      const colorClass =
-        label === "HTTP" ? "bg-blue-50 text-blue-700 border-blue-200" :
-        label === "SSE" ? "bg-purple-50 text-purple-700 border-purple-200" :
-        label === "STDIO" ? "bg-amber-50 text-amber-700 border-amber-200" :
-        label === "OPENAPI" ? "bg-teal-50 text-teal-700 border-teal-200" :
-        "bg-gray-50 text-gray-700 border-gray-200";
       return (
-        <span className={`inline-flex items-center text-xs font-medium px-2 py-0.5 rounded border ${colorClass}`}>
+        <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded border bg-gray-50 text-gray-700 border-gray-200">
           {label}
         </span>
       );
@@ -77,14 +71,8 @@ export const mcpServerColumns = (
     enableSorting: true,
     cell: ({ getValue }) => {
       const authType = (getValue() as string) || "none";
-      const colorClass =
-        authType === "oauth2" ? "bg-indigo-50 text-indigo-700 border-indigo-200" :
-        authType === "bearer_token" ? "bg-sky-50 text-sky-700 border-sky-200" :
-        authType === "api_key" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
-        authType === "basic" ? "bg-orange-50 text-orange-700 border-orange-200" :
-        "bg-gray-50 text-gray-500 border-gray-200";
       return (
-        <span className={`inline-flex items-center text-xs font-medium px-2 py-0.5 rounded border ${colorClass}`}>
+        <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded border bg-gray-50 text-gray-700 border-gray-200">
           {authType}
         </span>
       );
