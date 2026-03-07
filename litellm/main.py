@@ -5208,6 +5208,7 @@ def embedding(  # noqa: PLR0915
                     vertex_project=vertex_ai_project,
                     vertex_location=vertex_ai_location,
                     vertex_credentials=vertex_credentials,
+                    headers=headers,
                     aembedding=aembedding,
                     print_verbose=print_verbose,
                     custom_llm_provider="vertex_ai",
@@ -5230,6 +5231,7 @@ def embedding(  # noqa: PLR0915
                     aembedding=aembedding,
                     print_verbose=print_verbose,
                     api_key=api_key,
+                    extra_headers=headers,
                     api_base=api_base,
                     client=client,
                 )
