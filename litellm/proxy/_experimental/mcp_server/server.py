@@ -25,6 +25,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
+from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
@@ -44,7 +45,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_name,
     get_server_prefix,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth, ProxyException
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
@@ -424,6 +425,12 @@ if MCP_AVAILABLE:
             verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
             return CallToolResult(
                 content=[TextContent(text=f"Error: {str(e.detail)}", type="text")],
+                isError=True,
+            )
+        except ProxyException as e:
+            verbose_logger.error(f"ProxyException in MCP tool call: {str(e)}")
+            return CallToolResult(
+                content=[TextContent(text=f"Error: {str(e.message)}", type="text")],
                 isError=True,
             )
         except Exception as e:
@@ -2341,13 +2348,26 @@ if MCP_AVAILABLE:
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
+        except ProxyException as e:
+            try:
+                status_code = int(e.code)
+            except (ValueError, TypeError):
+                status_code = 500
+            try:
+                error_response = JSONResponse(
+                    status_code=status_code,
+                    content={"error": e.message, "type": e.type},
+                )
+                await error_response(scope, receive, send)
+            except Exception as response_error:
+                verbose_logger.exception(
+                    f"Failed to send ProxyException error response: {response_error}"
+                )
+                raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions
             try:
-                from starlette.responses import JSONResponse
-                from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
-
                 error_response = JSONResponse(
                     status_code=HTTP_500_INTERNAL_SERVER_ERROR,
                     content={"error": "MCP request failed", "details": str(e)},
@@ -2397,14 +2417,27 @@ if MCP_AVAILABLE:
                 await asyncio.sleep(0.1)
 
             await sse_session_manager.handle_request(scope, receive, send)
+
+        except ProxyException as e:
+            try:
+                status_code = int(e.code)
+            except (ValueError, TypeError):
+                status_code = 500
+            try:
+                error_response = JSONResponse(
+                    status_code=status_code,
+                    content={"error": e.message, "type": e.type},
+                )
+                await error_response(scope, receive, send)
+            except Exception as response_error:
+                verbose_logger.exception(
+                    f"Failed to send ProxyException error response: {response_error}"
+                )
+                raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            # Instead of re-raising, try to send a graceful error response
+            # Try to send a graceful error response for non-HTTP exceptions
             try:
-                # Send a proper HTTP error response instead of letting the exception bubble up
-                from starlette.responses import JSONResponse
-                from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
-
                 error_response = JSONResponse(
                     status_code=HTTP_500_INTERNAL_SERVER_ERROR,
                     content={"error": "MCP request failed", "details": str(e)},

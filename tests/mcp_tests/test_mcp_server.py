@@ -14,7 +14,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServer,
     MCPTransport,
 )
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from mcp.types import Tool as MCPTool, CallToolResult, ListToolsResult
 from mcp.types import TextContent
 
@@ -419,6 +419,9 @@ async def test_streamable_http_mcp_handler_mock():
     ), patch(
         "litellm.proxy._experimental.mcp_server.server.session_manager",
         mock_session_manager,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        new=AsyncMock(return_value=(UserAPIKeyAuth(), None, [], {}, {}, {})),
     ):
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
