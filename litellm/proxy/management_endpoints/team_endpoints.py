@@ -708,6 +708,8 @@ async def new_team(  # noqa: PLR0915
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
+    - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
+    - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
