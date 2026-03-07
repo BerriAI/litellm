@@ -1058,3 +1058,70 @@ async def test_batch_logging_azure_credentials_regression():
     print("✓ Batch output files can be fetched with Azure credentials")
     print("✓ Cost and usage tracking works for Azure batches")
     print("✓ Backwards compatibility maintained\n")
+
+
+@pytest.mark.asyncio()
+async def test_skip_batch_token_counting_for_providers():
+    """
+    Test that batch token counting can be skipped for configured providers.
+
+    When skip_batch_token_counting_providers includes a provider, the batch rate limiter
+    should return zero tokens and requests without attempting to download the file.
+    This is useful for providers like vertex_ai where batch files are stored in GCS
+    and downloading large files for token counting is impractical.
+    """
+    import litellm
+
+    original_value = litellm.skip_batch_token_counting_providers
+
+    try:
+        litellm.skip_batch_token_counting_providers = ["vertex_ai"]
+
+        batch_limiter = _PROXY_BatchRateLimiter(
+            internal_usage_cache=None,
+            parallel_request_limiter=None,
+        )
+
+        result = await batch_limiter.count_input_file_usage(
+            file_id="gs://test-bucket/test.jsonl",
+            custom_llm_provider="vertex_ai",
+        )
+
+        assert result.total_tokens == 0, "Should return 0 tokens when provider is in skip list"
+        assert result.request_count == 0, "Should return 0 requests when provider is in skip list"
+    finally:
+        litellm.skip_batch_token_counting_providers = original_value
+
+
+@pytest.mark.asyncio()
+async def test_skip_batch_token_counting_multiple_providers():
+    """
+    Test that multiple providers can be configured in skip list.
+    """
+    import litellm
+
+    original_value = litellm.skip_batch_token_counting_providers
+
+    try:
+        litellm.skip_batch_token_counting_providers = ["vertex_ai", "azure"]
+
+        batch_limiter = _PROXY_BatchRateLimiter(
+            internal_usage_cache=None,
+            parallel_request_limiter=None,
+        )
+
+        result_vertex = await batch_limiter.count_input_file_usage(
+            file_id="gs://test-bucket/test.jsonl",
+            custom_llm_provider="vertex_ai",
+        )
+        assert result_vertex.total_tokens == 0
+        assert result_vertex.request_count == 0
+
+        result_azure = await batch_limiter.count_input_file_usage(
+            file_id="azure-file-id",
+            custom_llm_provider="azure",
+        )
+        assert result_azure.total_tokens == 0
+        assert result_azure.request_count == 0
+    finally:
+        litellm.skip_batch_token_counting_providers = original_value
