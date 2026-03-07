@@ -1836,6 +1836,10 @@ async def ui_view_users(
     user_email: Optional[str] = fastapi.Query(
         default=None, description="User email in the request parameters"
     ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Team ID — used when a team admin searches for users to add to their team",
+    ),
     page: int = fastapi.Query(
         default=1, description="Page number for pagination", ge=1
     ),
@@ -1847,20 +1851,19 @@ async def ui_view_users(
     """
     Filter users based on partial match of user_id or email with pagination.
 
-    - Proxy admins: receive all matching users.
-    - Organization admins: receive only users in their own organization(s).
-    - Other roles: access denied (403).
+    Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
+    (stored in the ``litellm_uisettings`` table):
 
-    Args:
-        user_id (Optional[str]): Partial user ID to search for
-        user_email (Optional[str]): Partial email to search for
-        page (int): Page number for pagination (starts at 1)
-        page_size (int): Number of items per page (max 100)
-        user_api_key_dict (UserAPIKeyAuth): User authentication information
-
-    Returns:
-        List of matching user records (LiteLLM_UserTableFiltered), scoped by org for org admins.
+    * **Flag OFF (default):** any authenticated user can search all users.
+    * **Flag ON:**
+      - Proxy admins see all users.
+      - Org admins see only users in their org(s).
+      - Team admins for an org-bound team see users in that org.
+      - Others receive a 403.
     """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_admin,
+    )
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
@@ -1871,51 +1874,84 @@ async def ui_view_users(
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     try:
-        # Restrict by caller role: proxy admin sees all; org admin sees only their org(s); others 403
-        is_proxy_admin = _user_has_admin_view(user_api_key_dict)
-        if not is_proxy_admin:
-            if user_api_key_dict.user_id is None:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "Only proxy admins and organization admins can search users."
-                    },
-                )
-            try:
-                caller_user = await get_user_object(
-                    user_id=user_api_key_dict.user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=False,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-            except ValueError:
-                # get_user_object raises ValueError when user not found (user_id_upsert=False)
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "Only proxy admins and organization admins can search users."
-                    },
-                )
-            if caller_user is None:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "Only proxy admins and organization admins can search users."
-                    },
-                )
-            org_admin_org_ids = [
-                m.organization_id
-                for m in (caller_user.organization_memberships or [])
-                if m.user_role == LitellmUserRoles.ORG_ADMIN.value
-            ]
-            if not org_admin_org_ids:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "Only proxy admins and organization admins can search users."
-                    },
-                )
+        # Read the scope_user_search_to_org flag from the DB
+        ui_settings_row = (
+            await prisma_client.db.litellm_uisettings.find_unique(
+                where={"id": "ui_settings"}
+            )
+        )
+        scope_flag = False
+        if ui_settings_row is not None:
+            settings_json = ui_settings_row.settings or {}  # type: ignore[union-attr]
+            scope_flag = bool(settings_json.get("scope_user_search_to_org", False))
+
+        org_filter_ids: Optional[List[str]] = None
+
+        if scope_flag:
+            is_proxy_admin = _user_has_admin_view(user_api_key_dict)
+            if not is_proxy_admin:
+                # Try to resolve org admin memberships
+                caller_user = None
+                if user_api_key_dict.user_id is not None:
+                    try:
+                        caller_user = await get_user_object(
+                            user_id=user_api_key_dict.user_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            user_id_upsert=False,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    except ValueError:
+                        caller_user = None
+
+                org_admin_org_ids: List[str] = []
+                if caller_user is not None:
+                    org_admin_org_ids = [
+                        m.organization_id
+                        for m in (caller_user.organization_memberships or [])
+                        if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+                    ]
+
+                if org_admin_org_ids:
+                    org_filter_ids = org_admin_org_ids
+                elif team_id is not None:
+                    # Look up the team to check if it belongs to an org
+                    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+                        where={"team_id": team_id}
+                    )
+                    if team_row is not None:
+                        team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+                        if _is_user_team_admin(user_api_key_dict, team_obj):
+                            if team_obj.organization_id:
+                                org_filter_ids = [team_obj.organization_id]
+                            else:
+                                raise HTTPException(
+                                    status_code=403,
+                                    detail={
+                                        "error": "scope_user_search_to_org is enabled and this team is not part of an organization. Contact your proxy admin to adjust this setting."
+                                    },
+                                )
+                        else:
+                            raise HTTPException(
+                                status_code=403,
+                                detail={
+                                    "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
+                                },
+                            )
+                    else:
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
+                            },
+                        )
+                else:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
+                        },
+                    )
 
         # Calculate offset for pagination
         skip = (page - 1) * page_size
@@ -1935,10 +1971,10 @@ async def ui_view_users(
                 "mode": "insensitive",  # Case-insensitive search
             }
 
-        # Org admins: only users in their org(s)
-        if not is_proxy_admin:
+        # Apply org filter when scope_user_search_to_org is ON and caller is not proxy admin
+        if org_filter_ids is not None:
             where_conditions["organization_memberships"] = {
-                "some": {"organization_id": {"in": org_admin_org_ids}}
+                "some": {"organization_id": {"in": org_filter_ids}}
             }
 
         # Query users with pagination and filters
