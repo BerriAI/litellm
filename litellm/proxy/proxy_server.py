@@ -5638,14 +5638,15 @@ class ProxyStartupEvent:
         - The pod lock manager cannot acquire locks for DB commits
         - No fallback to direct DB writes occurs
         """
-        from litellm.proxy.db.db_transaction_queue.redis_update_buffer import (
-            RedisUpdateBuffer,
-        )
+        from litellm.secret_managers.main import str_to_bool
 
-        if (
-            RedisUpdateBuffer._should_commit_spend_updates_to_redis()
-            and redis_usage_cache is None
-        ):
+        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
+            general_settings.get("use_redis_transaction_buffer", False)
+        )
+        if isinstance(_use_redis_transaction_buffer, str):
+            _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
+
+        if _use_redis_transaction_buffer and redis_usage_cache is None:
             raise ValueError(
                 "`use_redis_transaction_buffer` is enabled in general_settings, "
                 "but no Redis cache is configured. Spend tracking will silently "
