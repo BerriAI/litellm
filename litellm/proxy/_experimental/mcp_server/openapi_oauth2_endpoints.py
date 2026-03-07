@@ -273,6 +273,12 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
     from litellm.proxy.proxy_server import prisma_client
 
     if error:
+        # Consume the state on denial/error so orphaned entries don't fill the store.
+        # RFC 6749 §4.1.2.1 requires the provider to echo back the state in error
+        # redirects, so it is safe to delete it here.  There is no authorization code
+        # in an error redirect, so the state cannot be used for token exchange.
+        if state and state in _pending_oauth2_states:
+            del _pending_oauth2_states[state]
         msg = error_description or error
         return HTMLResponse(
             content=_build_error_html(

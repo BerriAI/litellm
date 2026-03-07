@@ -82,8 +82,15 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
         if (status.connected) {
           handleConnected();
         }
-      } catch {
-        // Ignore polling errors; keep trying until popup is closed or timeout
+      } catch (err: any) {
+        // Surface auth failures immediately (session expired); swallow transient errors
+        const msg = err?.message || "";
+        if (msg.includes("401") || msg.includes("403")) {
+          stopPolling();
+          setLoading(false);
+          setError("Session expired. Please refresh the page and try again.");
+        }
+        // Otherwise keep polling until popup closes or timeout
       }
     }, POLL_INTERVAL_MS);
   };

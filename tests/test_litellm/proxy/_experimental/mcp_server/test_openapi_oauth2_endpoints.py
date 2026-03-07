@@ -187,7 +187,7 @@ async def test_callback_provider_error_in_json_body():
     assert isinstance(result, HTMLResponse)
     assert result.status_code == 502
     body_bytes = bytes(result.body) if not isinstance(result.body, bytes) else result.body
-    assert b"invalid_grant" in body_bytes or b"provider" in body_bytes.lower()
+    assert b"invalid_grant" in body_bytes
 
 
 # ---------------------------------------------------------------------------
