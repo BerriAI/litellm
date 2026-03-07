@@ -139,18 +139,29 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         """
         Support translating:
         - video files from file_id or file_data to video_url
-        - thinking_blocks on assistant messages to content blocks
+        - thinking_blocks on assistant messages to text content blocks
+
+        Thinking blocks are converted to standard text content blocks because
+        vLLM/sglang only accept standard OpenAI content types (text, image_url,
+        video_url, audio_url). Redacted thinking blocks are dropped since they
+        contain opaque data with no value for the downstream model.
+
+        Relevant issue: https://github.com/BerriAI/litellm/issues/22997
         """
         for message in messages:
             if message["role"] == "assistant":
                 thinking_blocks = message.pop("thinking_blocks", None)  # type: ignore
                 if thinking_blocks:
-                    new_content: list = [
-                        {"type": block["type"], "thinking": block.get("thinking", "")}
-                        if block.get("type") == "thinking"
-                        else {"type": block["type"], "data": block.get("data", "")}
-                        for block in thinking_blocks
-                    ]
+                    new_content: list = []
+                    for block in thinking_blocks:
+                        if block.get("type") == "thinking":
+                            thinking_text = block.get("thinking", "")
+                            if thinking_text:
+                                new_content.append(
+                                    {"type": "text", "text": thinking_text}
+                                )
+                        # Drop redacted_thinking blocks — opaque data,
+                        # no value for non-Anthropic providers
                     existing_content = message.get("content")
                     if isinstance(existing_content, str):
                         new_content.append(
@@ -158,7 +169,8 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                         )
                     elif isinstance(existing_content, list):
                         new_content.extend(existing_content)
-                    message["content"] = new_content  # type: ignore
+                    if new_content:
+                        message["content"] = new_content  # type: ignore
             elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):
