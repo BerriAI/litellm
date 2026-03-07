@@ -426,7 +426,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         analyze_results: Any,
         output_parse_pii: bool,
         masked_entity_count: Dict[str, int],
-        request_data: Optional[Dict] = None,
     ) -> str:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
@@ -475,6 +474,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             new_text = text
             if redacted_text is not None:
                 verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
+                # Sort analyze_results right-to-left (Presidio processes entities
+                # right-to-left, so redacted_text["items"] is also right-to-left).
+                # We match by entity_type to get the original text positions from
+                # the Analyzer response, not the Anonymizer response (which returns
+                # positions in the *anonymized* text's coordinate space).
+                def _ar_val(ar, key, default=None):
+                    return ar.get(key, default) if isinstance(ar, dict) else getattr(ar, key, default)
+                _sorted_ar = sorted(
+                    analyze_results if isinstance(analyze_results, list) else [],
+                    key=lambda x: -(_ar_val(x, "start") or 0),
+                )
+                _ar_used: set = set()
                 for item in redacted_text["items"]:
                     start = item["start"]
                     end = item["end"]
@@ -482,24 +493,23 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if item["operator"] == "replace" and output_parse_pii is True:
                         # check if token in dict
                         # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
-                        if request_data is None:
-                            verbose_proxy_logger.warning(
-                                "Presidio anonymize_text called without request_data — "
-                                "PII tokens cannot be stored per-request. "
-                                "This may indicate a missing caller update."
-                            )
-                            request_data = {}
-                        if "pii_tokens" not in request_data:
-                            request_data["pii_tokens"] = {}
-                        pii_tokens = request_data["pii_tokens"]
+                        if replacement in self.pii_tokens:
+                            replacement = replacement + str(uuid.uuid4())
 
-                        # Always append a UUID to ensure the replacement token is unique to this request and session.
-                        # This prevents collisions where the LLM might hallucinate a generic token like [PHONE_NUMBER].
-                        replacement = f"{replacement}_{str(uuid.uuid4())[:12]}"
-
-                        pii_tokens[replacement] = new_text[
-                            start:end
-                        ]  # get text it'll replace
+                        # Use analyze_results (original text positions), not item
+                        # positions (anonymized text). Presidio's anonymizer returns
+                        # start/end in the *anonymized* coordinate space, not the
+                        # original. Match by entity_type consuming right-to-left.
+                        _orig_val = None
+                        for _ar_i, _ar in enumerate(_sorted_ar):
+                            if _ar_i not in _ar_used and _ar_val(_ar, "entity_type") == item.get("entity_type"):
+                                _s = _ar_val(_ar, "start")
+                                _e = _ar_val(_ar, "end")
+                                if _s is not None and _e is not None:
+                                    _orig_val = text[_s:_e]
+                                _ar_used.add(_ar_i)
+                                break
+                        self.pii_tokens[replacement] = _orig_val if _orig_val is not None else new_text[start:end]
 
                     new_text = new_text[:start] + replacement + new_text[end:]
                     entity_type = item.get("entity_type", None)
@@ -507,13 +517,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         masked_entity_count[entity_type] = (
                             masked_entity_count.get(entity_type, 0) + 1
                         )
-                # When output_parse_pii is True, new_text contains UUID-suffixed
-                # tokens that match the keys in pii_tokens.  Returning
-                # redacted_text["text"] (Presidio's original output) would send
-                # un-suffixed tokens to the LLM, making unmasking impossible.
-                # When output_parse_pii is False, new_text == redacted_text["text"]
-                # because no UUID suffix is appended.
-                return new_text
+                return redacted_text["text"]
             else:
                 raise Exception("Invalid anonymizer response: received None")
         except Exception as e:
@@ -648,7 +652,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     analyze_results=analyze_results,
                     output_parse_pii=output_parse_pii,
                     masked_entity_count=masked_entity_count,
-                    request_data=request_data,
                 )
                 return anonymized_text
             return redacted_text["text"]
