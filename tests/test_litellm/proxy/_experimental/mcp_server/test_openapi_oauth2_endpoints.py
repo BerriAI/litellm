@@ -536,13 +536,19 @@ async def test_check_byok_credential_raises_503_when_no_db():
     # Ensure no cache hit
     _byok_cred_cache.pop(("user1", "byok-server"), None)
 
+    import litellm
+
     with patch(
         "litellm.proxy.proxy_server.prisma_client",
         None,
         create=True,
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await _check_byok_credential(mock_server, mock_user)
+        litellm.require_byok_credential_store = True  # type: ignore[attr-defined]
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                await _check_byok_credential(mock_server, mock_user)
+        finally:
+            litellm.require_byok_credential_store = False  # type: ignore[attr-defined]
 
     assert exc_info.value.status_code == 503
     assert "byok_store_unavailable" in str(exc_info.value.detail)
@@ -613,13 +619,19 @@ async def test_get_byok_credential_raises_503_when_no_db():
     mock_user = MagicMock(spec=UserAPIKeyAuth)
     mock_user.user_id = "user-db-unavail"
 
+    import litellm
+
     with patch(
         "litellm.proxy.proxy_server.prisma_client",
         None,
         create=True,
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await _get_byok_credential(mock_server, mock_user)
+        litellm.require_byok_credential_store = True  # type: ignore[attr-defined]
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_byok_credential(mock_server, mock_user)
+        finally:
+            litellm.require_byok_credential_store = False  # type: ignore[attr-defined]
 
     assert exc_info.value.status_code == 503
     assert "byok_store_unavailable" in str(exc_info.value.detail)

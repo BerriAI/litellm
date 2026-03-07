@@ -1602,6 +1602,10 @@ if MCP_AVAILABLE:
                     },
                 )
             return None
+        # `get_user_credential` is the centralized data-access helper for the
+        # LiteLLM_MCPUserCredentials table (defined in mcp_server/db.py).
+        # The 60-second in-memory cache (_byok_cred_cache) ensures this is
+        # called at most once per TTL window, keeping the hot path DB-free.
         raw = await get_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
