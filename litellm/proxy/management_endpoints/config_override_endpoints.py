@@ -3,6 +3,9 @@ import json
 import os
 from typing import Any, Dict, Set
 
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
 from fastapi import APIRouter, Depends, HTTPException
 from prisma.errors import RecordNotFoundError
 from pydantic import TypeAdapter
@@ -10,7 +13,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.custom_httpx.httpx_handler import httpxSpecialProvider
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -99,7 +102,7 @@ def _build_field_schema(model_class: type) -> Dict[str, Any]:
 def _parse_config_value(raw: Any) -> Dict[str, Any]:
     """Parse a config_value from DB (may be JSON string or dict)."""
     if isinstance(raw, str):
-        return json.loads(raw)
+        return safe_json_loads(raw, default={})
     return dict(raw)
 
 
@@ -222,7 +225,7 @@ async def update_hashicorp_vault_config(
 
     # Only persist to DB after successful init
     encrypted_data = proxy_config._encrypt_env_variables(config_data)
-    config_value = json.dumps(encrypted_data)
+    config_value = safe_dumps(encrypted_data)
     await prisma_client.db.litellm_configoverrides.upsert(
         where={"config_type": "hashicorp_vault"},
         data={
@@ -237,7 +240,7 @@ async def update_hashicorp_vault_config(
     )
 
     # Update change-detection cache so the background reload doesn't redundantly re-init
-    proxy_config._last_hashicorp_vault_config = json.loads(config_value)
+    proxy_config._last_hashicorp_vault_config = safe_json_loads(config_value)
 
     return {
         "message": "Hashicorp Vault configuration updated successfully",
@@ -388,7 +391,7 @@ async def test_hashicorp_vault_connection(
 
     # Step 2: Verify the token is valid via token/lookup-self
     try:
-        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.ProxyServer)
+        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.SecretManager)
         lookup_url = f"{client.vault_addr}/v1/auth/token/lookup-self"
         if client.vault_namespace:
             headers["X-Vault-Namespace"] = client.vault_namespace
