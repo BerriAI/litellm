@@ -31,7 +31,10 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
 )
 from litellm.proxy.auth.auth_checks import get_user_object
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _user_has_admin_view,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
@@ -1871,14 +1874,16 @@ async def ui_view_users(
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     try:
-        # Restrict by caller role: proxy admin sees all; org admin sees only their org(s); others 403
+        # Restrict by caller role: proxy admin sees all; org admin sees only their org(s);
+        # team admin sees all (needed to add members to their teams); others 403
         is_proxy_admin = _user_has_admin_view(user_api_key_dict)
+        is_team_admin = False
         if not is_proxy_admin:
             if user_api_key_dict.user_id is None:
                 raise HTTPException(
                     status_code=403,
                     detail={
-                        "error": "Only proxy admins and organization admins can search users."
+                        "error": "Only proxy admins, organization admins, and team admins can search users."
                     },
                 )
             try:
@@ -1890,18 +1895,17 @@ async def ui_view_users(
                     proxy_logging_obj=proxy_logging_obj,
                 )
             except ValueError:
-                # get_user_object raises ValueError when user not found (user_id_upsert=False)
                 raise HTTPException(
                     status_code=403,
                     detail={
-                        "error": "Only proxy admins and organization admins can search users."
+                        "error": "Only proxy admins, organization admins, and team admins can search users."
                     },
                 )
             if caller_user is None:
                 raise HTTPException(
                     status_code=403,
                     detail={
-                        "error": "Only proxy admins and organization admins can search users."
+                        "error": "Only proxy admins, organization admins, and team admins can search users."
                     },
                 )
             org_admin_org_ids = [
@@ -1909,13 +1913,26 @@ async def ui_view_users(
                 for m in (caller_user.organization_memberships or [])
                 if m.user_role == LitellmUserRoles.ORG_ADMIN.value
             ]
+
             if not org_admin_org_ids:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "Only proxy admins and organization admins can search users."
-                    },
-                )
+                caller_team_ids = caller_user.teams or []
+                if caller_team_ids:
+                    teams = await prisma_client.db.litellm_teamtable.find_many(
+                        where={"team_id": {"in": caller_team_ids}}
+                    )
+                    for team in teams:
+                        team_obj = LiteLLM_TeamTable(**team.model_dump())
+                        if _is_user_team_admin(user_api_key_dict, team_obj):
+                            is_team_admin = True
+                            break
+
+                if not is_team_admin:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "Only proxy admins, organization admins, and team admins can search users."
+                        },
+                    )
 
         # Calculate offset for pagination
         skip = (page - 1) * page_size
@@ -1935,8 +1952,8 @@ async def ui_view_users(
                 "mode": "insensitive",  # Case-insensitive search
             }
 
-        # Org admins: only users in their org(s)
-        if not is_proxy_admin:
+        # Org admins: only users in their org(s); team admins can see all users
+        if not is_proxy_admin and not is_team_admin:
             where_conditions["organization_memberships"] = {
                 "some": {"organization_id": {"in": org_admin_org_ids}}
             }

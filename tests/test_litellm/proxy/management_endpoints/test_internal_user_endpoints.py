@@ -151,9 +151,9 @@ async def test_ui_view_users_org_admin_filtered_by_org(mocker):
 
 
 @pytest.mark.asyncio
-async def test_ui_view_users_non_org_admin_returns_403(mocker):
+async def test_ui_view_users_non_org_admin_non_team_admin_returns_403(mocker):
     """
-    Caller is not proxy admin and not org admin: endpoint returns 403.
+    Caller is not proxy admin, not org admin, and not team admin: endpoint returns 403.
     """
     from fastapi import HTTPException
 
@@ -162,9 +162,10 @@ async def test_ui_view_users_non_org_admin_returns_403(mocker):
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
     mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mocker.MagicMock())
 
-    # Caller has no org admin membership
+    # Caller has no org admin membership and no teams
     caller_user = mocker.MagicMock()
     caller_user.organization_memberships = []  # not an org admin
+    caller_user.teams = []  # not on any teams
 
     async def mock_get_user_object(*args, **kwargs):
         return caller_user
@@ -184,7 +185,73 @@ async def test_ui_view_users_non_org_admin_returns_403(mocker):
         )
 
     assert exc_info.value.status_code == 403
-    assert "Only proxy admins and organization admins" in str(exc_info.value.detail)
+    assert "team admins" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_users_team_admin_allowed(mocker):
+    """
+    Team admin: endpoint allows access and does not apply org filtering.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+
+    mock_prisma_client = mocker.MagicMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mocker.MagicMock())
+
+    # Caller has no org admin membership but is a team admin
+    caller_user = mocker.MagicMock()
+    caller_user.organization_memberships = []
+    caller_user.teams = ["team-123"]
+
+    async def mock_get_user_object(*args, **kwargs):
+        return caller_user
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_object",
+        side_effect=mock_get_user_object,
+    )
+
+    # Mock the team lookup returning a team where the caller is admin
+    team_mock = mocker.MagicMock()
+    team_mock.model_dump.return_value = {
+        "team_id": "team-123",
+        "team_alias": "TestTeam",
+        "members_with_roles": [
+            {"user_id": "team-admin-user", "user_email": "admin@test.com", "role": "admin"}
+        ],
+        "metadata": {},
+        "blocked": False,
+    }
+
+    async def mock_find_many_teams(*args, **kwargs):
+        return [team_mock]
+
+    mock_prisma_client.db.litellm_teamtable.find_many = mock_find_many_teams
+
+    # Mock user search results
+    user_result = mocker.MagicMock()
+    user_result.model_dump.return_value = {
+        "user_id": "found-user",
+        "user_email": "found@test.com",
+    }
+
+    async def mock_find_many_users(*args, **kwargs):
+        return [user_result]
+
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many_users
+
+    response = await ui_view_users(
+        user_api_key_dict=UserAPIKeyAuth(user_id="team-admin-user", user_role=None),
+        user_id=None,
+        user_email="found",
+        page=1,
+        page_size=50,
+    )
+
+    assert len(response) == 1
+    assert response[0].user_email == "found@test.com"
 
 
 def test_user_daily_activity_types():
