@@ -25,6 +25,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 
 
@@ -462,6 +463,53 @@ class TestResponsePollingHandler:
         result = await handler.get_state("litellm_poll_test")
         
         assert result == cached_state
+
+    @pytest.mark.asyncio
+    async def test_update_state_handles_dict_cached_state(self):
+        """Test update_state handles already-parsed dict state from cache backend"""
+        mock_redis = AsyncMock()
+        mock_redis.async_get_cache.return_value = {
+            "id": "litellm_poll_test",
+            "object": "response",
+            "status": "queued",
+            "output": [],
+            "created_at": 1234567890,
+        }
+
+        handler = ResponsePollingHandler(redis_cache=mock_redis, ttl=3600)
+
+        await handler.update_state(
+            polling_id="litellm_poll_test",
+            status="in_progress",
+        )
+
+        mock_redis.async_set_cache.assert_called_once()
+        call_args = mock_redis.async_set_cache.call_args
+        stored = json.loads(call_args.kwargs["value"])
+        assert stored["status"] == "in_progress"
+
+    @pytest.mark.asyncio
+    async def test_update_state_with_inmemory_cache(self):
+        """Test create->update->get flow works with InMemoryCache backend"""
+        in_memory_cache = InMemoryCache()
+        handler = ResponsePollingHandler(redis_cache=in_memory_cache, ttl=3600)
+        polling_id = "litellm_poll_test_inmemory"
+
+        await handler.create_initial_state(
+            polling_id=polling_id,
+            request_data={"model": "gpt-4o", "input": "Hello"},
+        )
+        await handler.update_state(
+            polling_id=polling_id,
+            status="in_progress",
+            output=[{"id": "item_1", "type": "message"}],
+        )
+
+        state = await handler.get_state(polling_id)
+
+        assert state is not None
+        assert state["status"] == "in_progress"
+        assert state["output"] == [{"id": "item_1", "type": "message"}]
 
     @pytest.mark.asyncio
     async def test_get_state_returns_none_for_missing_state(self):
