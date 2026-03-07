@@ -463,3 +463,49 @@ def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch):
         supports_function_calling("testmodel-abc", custom_llm_provider="test_provider")
         is True
     )
+
+
+def test_custom_model_function_calling_via_model_cost():
+    """
+    Test the custom models added to model_cost should expose function calling support.
+
+    This test verifies that when users add custom models via litellm.model_cost,
+    the function calling support is properly detected by external frameworks like llama-index.
+    """
+    import litellm
+    from litellm.litellm_core_utils.get_supported_openai_params import (
+        get_supported_openai_params,
+    )
+
+    custom_model = "my-company/custom-gpt-model"
+    litellm.model_cost[custom_model] = {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.0001,
+        "output_cost_per_token": 0.0002,
+        "supports_function_calling": True,
+        "supports_system_messages": True,
+        "supported_openai_params": [
+            "tools",
+            "tool_choice",
+            "functions",
+            "function_call",
+            "temperature",
+            "max_tokens",
+            "stream",
+        ],
+    }
+
+    try:
+        supported_params = get_supported_openai_params(custom_model)
+        assert supported_params is not None, "Should return params for custom model"
+        assert "tools" in supported_params, "Should include tools param"
+        assert "tool_choice" in supported_params, "Should include tool_choice param"
+        assert litellm.supports_function_calling(custom_model) is True, \
+            "Custom model with supports_function_calling=True should return True"
+        model_info = litellm.get_model_info(custom_model)
+        assert model_info["supports_function_calling"] is True, \
+            "Model info should include supports_function_calling flag"
+
+    finally:
+        # Cleanup
+        del litellm.model_cost[custom_model]
