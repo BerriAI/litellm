@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { Modal, Form, Button, Select, Tooltip } from "antd";
+import { UserAddOutlined } from "@ant-design/icons";
 import debounce from "lodash/debounce";
 import { userFilterUICall } from "@/components/networking";
 interface User {
@@ -29,7 +30,7 @@ interface FormValues {
 interface UserSearchModalProps {
   isVisible: boolean;
   onCancel: () => void;
-  onSubmit: (values: FormValues) => void;
+  onSubmit: (values: FormValues) => void | Promise<void>;
   accessToken: string | null;
   title?: string;
   roles?: Role[];
@@ -56,6 +57,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedField, setSelectedField] = useState<"user_email" | "user_id">("user_email");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const fetchUsers = async (searchText: string, fieldName: "user_email" | "user_id"): Promise<void> => {
     if (!searchText) {
@@ -105,6 +107,15 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     });
   };
 
+  const handleSubmit = async (values: FormValues): Promise<void> => {
+    setIsSubmitting(true);
+    try {
+      await onSubmit(values);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleClose = (): void => {
     form.resetFields();
     setUserOptions([]);
@@ -112,10 +123,10 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   return (
-    <Modal title={title} open={isVisible} onCancel={handleClose} footer={null} width={800}>
+    <Modal title={title} open={isVisible} onCancel={handleClose} footer={null} width={800} maskClosable={!isSubmitting}>
       <Form<FormValues>
         form={form}
-        onFinish={onSubmit}
+        onFinish={handleSubmit}
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
@@ -167,8 +178,8 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
         </Form.Item>
 
         <div className="text-right mt-4">
-          <Button type="default" htmlType="submit">
-            Add Member
+          <Button type="primary" htmlType="submit" icon={<UserAddOutlined />} loading={isSubmitting}>
+            {isSubmitting ? "Adding..." : "Add Member"}
           </Button>
         </div>
       </Form>
