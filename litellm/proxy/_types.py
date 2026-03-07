@@ -782,8 +782,8 @@ class ModelInfoDelete(LiteLLMPydanticObjectBase):
 class ModelInfo(LiteLLMPydanticObjectBase):
     id: Optional[str]
     mode: Optional[Literal["embedding", "chat", "completion"]]
-    input_cost_per_token: Optional[float] = 0.0
-    output_cost_per_token: Optional[float] = 0.0
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
     max_tokens: Optional[int] = 2048  # assume 2048 if not set
 
     # for azure models we need users to specify the base model, one azure you can call deployments - azure/my-random-model
