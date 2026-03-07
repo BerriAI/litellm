@@ -561,9 +561,22 @@ Use these metrics to monitor the health of the DB Transaction Queue. Eg. Monitor
 | `litellm_in_memory_spend_update_queue_size`         | In-memory aggregate spend values for keys, users, teams, team members, etc.| In-Memory    |
 | `litellm_redis_spend_update_queue_size`             | Redis aggregate spend values for keys, users, teams, etc.                  | Redis        |
 
+#### DB Connection Pool and Engine Health Metrics
 
+Monitor PostgreSQL connection pool utilization and Prisma query engine health. These metrics are collected every 30 seconds by default.
 
-## 🔥 LiteLLM Maintained Grafana Dashboards 
+| Metric Name                              | Type    | Labels  | Description                                                |
+|------------------------------------------|---------|---------|-----------------------------------------------------------|
+| `litellm_db_pool_connections`            | Gauge   | `state` | Number of DB connections by state (active, idle, etc.)    |
+| `litellm_db_pool_lock_waiting_connections`    | Gauge   |         | Number of connections blocked on row/table locks           |
+| `litellm_db_engine_up`                   | Gauge   |         | Whether the Prisma query engine is alive (1=up, 0=down)   |
+| `litellm_db_engine_restarts_total`       | Counter |         | Total number of Prisma query engine restarts               |
+
+The `state` label values come from PostgreSQL's `pg_stat_activity.state` column: `active`, `idle`, `idle in transaction`, `idle in transaction (aborted)`, `fastpath function call`, `disabled`.
+
+The collection interval can be configured via the `PRISMA_METRICS_COLLECTION_INTERVAL_SECONDS` environment variable (default: 30, minimum: 5).
+
+## 🔥 LiteLLM Maintained Grafana Dashboards
 
 Link to Grafana Dashboards maintained by LiteLLM
 
