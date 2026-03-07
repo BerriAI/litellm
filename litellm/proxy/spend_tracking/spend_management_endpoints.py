@@ -1680,6 +1680,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     end_user: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by end user"
     ),
+    session_id: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by session_id"
+    ),
     error_code: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by error code (e.g., '404', '500')"
     ),
@@ -1823,6 +1826,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
+        if session_id is not None:
+            where_conditions["session_id"] = session_id
+
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
             if min_spend is not None:
@@ -1887,6 +1893,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             ("model", "model"),
             ("model_id", "model_id"),
             ("end_user", "end_user"),
+            ("session_id", "session_id"),
         ]:
             val = where_conditions.get(wc_key)
             if val is not None and isinstance(val, str):
