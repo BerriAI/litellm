@@ -6860,6 +6860,44 @@ def speech(  # noqa: PLR0915
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "camb_ai":
+        from litellm.llms.camb_ai.text_to_speech.transformation import (
+            CambAITextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = CambAITextToSpeechConfig()
+
+        camb_ai_config = cast(
+            CambAITextToSpeechConfig, text_to_speech_provider_config
+        )
+
+        voice_id = voice if isinstance(voice, str) else None
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        # Pass language through litellm_params if provided in kwargs
+        language = kwargs.pop("language", None)
+        if language is not None:
+            litellm_params_dict["language"] = language
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice_id,
+            text_to_speech_provider_config=camb_ai_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
             VertexAITextToSpeechConfig,

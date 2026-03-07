@@ -12136,6 +12136,33 @@
             "/v1/audio/speech"
         ]
     },
+    "camb_ai/mars-pro": {
+        "input_cost_per_character": 0.0,
+        "litellm_provider": "camb_ai",
+        "mode": "audio_speech",
+        "source": "https://camb.ai",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "camb_ai/mars-flash": {
+        "input_cost_per_character": 0.0,
+        "litellm_provider": "camb_ai",
+        "mode": "audio_speech",
+        "source": "https://camb.ai",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "camb_ai/mars-instruct": {
+        "input_cost_per_character": 0.0,
+        "litellm_provider": "camb_ai",
+        "mode": "audio_speech",
+        "source": "https://camb.ai",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "embed-english-light-v2.0": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "cohere",

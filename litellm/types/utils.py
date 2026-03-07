@@ -3211,6 +3211,7 @@ class LlmProviders(str, Enum):
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
     LITELLM_AGENT = "litellm_agent"
+    CAMB_AI = "camb_ai"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
 
