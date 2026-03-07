@@ -1644,7 +1644,7 @@ if MCP_AVAILABLE:
                 },
             )
 
-    async def execute_mcp_tool(
+    async def execute_mcp_tool(  # noqa: PLR0915
         name: str,
         arguments: Dict[str, Any],
         allowed_mcp_servers: List[MCPServer],

@@ -81,7 +81,6 @@ if MCP_AVAILABLE:
         delete_user_credential,
         get_all_mcp_servers_for_user,
         get_mcp_server,
-        get_user_credential,
         store_user_credential,
         update_mcp_server,
     )

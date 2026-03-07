@@ -317,6 +317,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else:
                 result[key] = value
 
+        # Anthropic requires additionalProperties=false for object schemas
+        # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
+        if result.get("type") == "object" and "additionalProperties" not in result:
+            result["additionalProperties"] = False
+
         return result
 
     def get_json_schema_from_pydantic_object(
@@ -769,6 +774,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         if json_schema is None:
             return None
+
+        # Resolve $ref/$defs before filtering — Anthropic doesn't support
+        # external schema references (e.g., /$defs/CalendarEvent).
+        import copy
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        json_schema = copy.deepcopy(json_schema)
+        defs = json_schema.pop("$defs", json_schema.pop("definitions", {}))
+        if defs:
+            unpack_defs(json_schema, defs)
 
         # Filter out unsupported fields for Anthropic's output_format API
         filtered_schema = self.filter_anthropic_output_schema(json_schema)

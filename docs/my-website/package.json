@@ -93,6 +93,8 @@
     "axios": ">=0.30.2",
     "webpack": ">=5.94.0",
     "serve-static": ">=1.16.0",
-    "path-to-regexp": ">=0.1.12"
+    "path-to-regexp": ">=0.1.12",
+    "dompurify": ">=3.3.2",
+    "svgo": ">=3.3.3"
   }
 }

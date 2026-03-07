@@ -16,6 +16,21 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     GPT5_SERIES_ROUTE = "gpt5_series/"
 
     @classmethod
+    def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
+        """Override to handle gpt5_series/ prefix used for Azure routing.
+
+        The parent class calls ``_supports_factory(model, custom_llm_provider=None)``
+        which fails to resolve ``gpt5_series/gpt-5.1`` to the correct Azure model
+        entry. Strip the prefix and prepend ``azure/`` so the lookup finds
+        ``azure/gpt-5.1`` in model_prices_and_context_window.json.
+        """
+        if model.startswith(cls.GPT5_SERIES_ROUTE):
+            model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
+        elif not model.startswith("azure/"):
+            model = "azure/" + model
+        return super()._supports_reasoning_effort_level(model, level)
+
+    @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
         """Check if the Azure model string refers to a gpt-5 variant.
 
