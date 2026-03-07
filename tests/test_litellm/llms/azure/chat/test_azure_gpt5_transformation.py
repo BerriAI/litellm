@@ -274,3 +274,157 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
 
+
+# ===== Azure GPT-5.4 specific tests =====
+
+
+def test_azure_gpt5_4_model_detection(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 models are correctly detected."""
+    assert config.is_model_gpt_5_model("gpt-5.4")
+    assert config.is_model_gpt_5_model("azure/gpt-5.4")
+    assert config.is_model_gpt_5_model("gpt-5.4-pro")
+    assert config.is_model_gpt_5_model("gpt5_series/gpt-5.4")
+    assert config.is_model_gpt_5_4_model("gpt-5.4")
+    assert config.is_model_gpt_5_4_model("azure/gpt-5.4")
+    assert config.is_model_gpt_5_4_model("gpt-5.4-pro")
+    assert not config.is_model_gpt_5_4_model("gpt-5.2")
+
+
+def test_azure_gpt5_4_maps_max_tokens(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 correctly maps max_tokens to max_completion_tokens."""
+    params = config.map_openai_params(
+        non_default_params={"max_tokens": 32000},
+        optional_params={},
+        model="azure/gpt-5.4",
+        drop_params=False,
+        api_version="2025-04-01-preview",
+    )
+    assert params["max_completion_tokens"] == 32000
+    assert "max_tokens" not in params
+
+
+def test_azure_gpt5_4_supports_logprobs(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 supports logprobs (inherited from gpt-5.2+ logic)."""
+    supported_params = config.get_supported_openai_params(model="azure/gpt-5.4")
+    assert "logprobs" in supported_params
+    assert "top_logprobs" in supported_params
+
+
+def test_azure_gpt5_4_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 supports reasoning_effort parameter."""
+    assert "reasoning_effort" in config.get_supported_openai_params(model="azure/gpt-5.4")
+
+
+def test_azure_gpt5_4_supports_verbosity(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 supports verbosity parameter."""
+    supported_params = config.get_supported_openai_params(model="azure/gpt-5.4")
+    assert "verbosity" in supported_params
+
+
+def test_azure_gpt5_4_verbosity_passthrough(config: AzureOpenAIGPT5Config):
+    """Test that verbosity parameter passes through for Azure GPT-5.4."""
+    for level in ["low", "medium", "high"]:
+        params = config.map_openai_params(
+            non_default_params={"verbosity": level},
+            optional_params={},
+            model="azure/gpt-5.4",
+            drop_params=False,
+            api_version="2025-04-01-preview",
+        )
+        assert params["verbosity"] == level
+
+
+def test_azure_gpt5_4_reasoning_effort_none(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 supports reasoning_effort='none'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="azure/gpt-5.4",
+        drop_params=False,
+        api_version="2025-04-01-preview",
+    )
+    assert params.get("reasoning_effort") == "none"
+
+
+def test_azure_gpt5_4_reasoning_effort_xhigh(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 supports reasoning_effort='xhigh'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="azure/gpt-5.4",
+        drop_params=False,
+        api_version="2025-04-01-preview",
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_azure_gpt5_4_reasoning_effort_minimal(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 supports reasoning_effort='minimal'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="azure/gpt-5.4",
+        drop_params=False,
+        api_version="2025-04-01-preview",
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
+def test_azure_gpt5_4_drops_reasoning_effort_when_tools_present(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 drops reasoning_effort when tools are present."""
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high", "tools": tools},
+        optional_params={},
+        model="azure/gpt-5.4",
+        drop_params=False,
+        api_version="2025-04-01-preview",
+    )
+    assert "reasoning_effort" not in params
+    assert params["tools"] == tools
+
+
+def test_azure_gpt5_4_keeps_reasoning_effort_none_with_tools(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 keeps reasoning_effort='none' when tools are present."""
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none", "tools": tools},
+        optional_params={},
+        model="azure/gpt-5.4",
+        drop_params=False,
+        api_version="2025-04-01-preview",
+    )
+    assert params["reasoning_effort"] == "none"
+    assert params["tools"] == tools
+
+
+def test_azure_gpt5_4_temperature_with_reasoning_effort_none(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 supports any temperature when reasoning_effort='none'."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "reasoning_effort": "none"},
+        optional_params={},
+        model="azure/gpt-5.4",
+        drop_params=False,
+        api_version="2025-04-01-preview",
+    )
+    assert params["temperature"] == 0.5
+    assert params["reasoning_effort"] == "none"
+
+
+def test_azure_gpt5_4_series_transform_request(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 with gpt5_series prefix routes correctly."""
+    request = config.transform_request(
+        model="gpt5_series/gpt-5.4",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert request["model"] == "gpt-5.4"
+
+
+def test_azure_gpt5_4_supports_tool_choice(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.4 supports tool_choice parameter."""
+    supported_params = config.get_supported_openai_params(model="azure/gpt-5.4")
+    assert "tool_choice" in supported_params
+
