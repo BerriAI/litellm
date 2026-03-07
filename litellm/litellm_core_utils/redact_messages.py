@@ -85,19 +85,22 @@ def perform_redaction(model_call_details: dict, result):
     model_call_details["input"] = ""
 
     # Redact streaming response
-    if (
-        model_call_details.get("stream", False) is True
-        and "complete_streaming_response" in model_call_details
-    ):
-        _streaming_response = model_call_details["complete_streaming_response"]
-        if hasattr(_streaming_response, "choices"):
-            for choice in _streaming_response.choices:
-                _redact_choice_content(choice)
-        elif hasattr(_streaming_response, "output"):
-            _redact_responses_api_output(_streaming_response.output)
-            # Redact reasoning field in ResponsesAPIResponse
-            if hasattr(_streaming_response, "reasoning") and _streaming_response.reasoning is not None:
-                _streaming_response.reasoning = None
+    for _streaming_key in ("complete_streaming_response", "async_complete_streaming_response"):
+        if (
+            model_call_details.get("stream", False) is True
+            and _streaming_key in model_call_details
+        ):
+            _streaming_response = model_call_details[_streaming_key]
+            if _streaming_response is None:
+                continue
+            if hasattr(_streaming_response, "choices"):
+                for choice in _streaming_response.choices:
+                    _redact_choice_content(choice)
+            elif hasattr(_streaming_response, "output"):
+                _redact_responses_api_output(_streaming_response.output)
+                # Redact reasoning field in ResponsesAPIResponse
+                if hasattr(_streaming_response, "reasoning") and _streaming_response.reasoning is not None:
+                    _streaming_response.reasoning = None   
 
     # Redact result
     if result is not None:
