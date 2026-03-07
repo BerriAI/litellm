@@ -1136,6 +1136,7 @@ model LiteLLM_ToolTable {
   team_id        String?            // team that first called this tool
   key_alias      String?            // human-readable alias of the virtual key
   user_agent     String?            // user-agent of the first request that discovered this tool
+  agent_id       String?            // agent that first triggered this tool call
   last_used_at   DateTime?          // timestamp of the most recent call
   created_at     DateTime @default(now())
   created_by     String?

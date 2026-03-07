@@ -244,7 +244,7 @@ Start the proxy with a config file:
 poetry run litellm --config dev_config.yaml --port 4000
 ```
 
-The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
+The proxy takes ~60-90 seconds to fully start when using the default Neon dev database (it runs Prisma migrations and a sanity-check diff on boot). Wait for `/health/liveliness` to return `"I'm alive!"` before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
 
 ### Running tests
 
@@ -270,3 +270,4 @@ Ruff is the primary fast linter. For the full lint suite (including mypy, black,
 - SVGs used as provider logos (loaded via `<img>` tags) must NOT use `fill="currentColor"` — replace with an explicit color like `#000000` or use the `-color` variant from lobehub icons, since CSS color inheritance does not work inside `<img>` elements.
 - Provider logos live in `ui/litellm-dashboard/public/assets/logos/` (source) and `litellm/proxy/_experimental/out/assets/logos/` (pre-built). Both locations must have the file for it to work in dev and proxy-served modes.
 - UI Vitest tests: `cd ui/litellm-dashboard && npx vitest run`
+- The full vitest suite is large and can take 10+ minutes. To test specific files: `npx vitest run src/components/path/to/file.test.tsx`

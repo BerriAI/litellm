@@ -9219,6 +9219,7 @@ export interface ToolRow {
   created_by?: string;
   updated_by?: string;
   user_agent?: string;
+  agent_id?: string;
   last_used_at?: string;
 }
 
