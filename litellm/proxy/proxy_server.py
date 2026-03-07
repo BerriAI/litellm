@@ -873,8 +873,19 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    ## Start standalone health check server (QW-4: crash isolation)
+    from litellm.proxy.health_endpoints.standalone_health_server import (
+        start_standalone_health_server,
+        stop_standalone_health_server,
+    )
+
+    start_standalone_health_server()
+
     # End of startup event
     yield
+
+    # Shutdown event - stop standalone health server
+    stop_standalone_health_server()
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:
