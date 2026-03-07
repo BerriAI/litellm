@@ -680,6 +680,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors: List of rate limit descriptors to append to
         """
         from litellm.proxy.auth.auth_utils import (
+            get_key_model_max_parallel_requests,
             get_key_model_rpm_limit,
             get_key_model_tpm_limit,
         )
@@ -689,17 +690,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
         _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
+        _max_parallel_for_key_model = get_key_model_max_parallel_requests(
+            user_api_key_dict
+        )
 
-        if _tpm_limit_for_key_model is None and _rpm_limit_for_key_model is None:
+        if (
+            _tpm_limit_for_key_model is None
+            and _rpm_limit_for_key_model is None
+            and _max_parallel_for_key_model is None
+        ):
             return
 
         _tpm_limit_for_key_model = _tpm_limit_for_key_model or {}
         _rpm_limit_for_key_model = _rpm_limit_for_key_model or {}
+        _max_parallel_for_key_model = _max_parallel_for_key_model or {}
 
         # Check if model has any rate limits configured
         should_check_rate_limit = (
             requested_model in _tpm_limit_for_key_model
             or requested_model in _rpm_limit_for_key_model
+            or requested_model in _max_parallel_for_key_model
         )
 
         if not should_check_rate_limit:
@@ -712,6 +722,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model_specific_rpm_limit: Optional[int] = _rpm_limit_for_key_model.get(
             requested_model
         )
+        model_specific_max_parallel: Optional[int] = _max_parallel_for_key_model.get(
+            requested_model
+        )
 
         descriptors.append(
             RateLimitDescriptor(
@@ -720,6 +733,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 rate_limit={
                     "requests_per_unit": model_specific_rpm_limit,
                     "tokens_per_unit": model_specific_tpm_limit,
+                    "max_parallel_requests": model_specific_max_parallel,
                     "window_size": self.window_size,
                 },
             )
