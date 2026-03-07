@@ -1138,6 +1138,8 @@ def test_create_file_with_deep_nested_litellm_metadata(
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
+    # Disable auth so the test doesn't depend on master_key state from other tests
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     
     test_file_content = b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo"}}'
     test_file = ("nested.jsonl", test_file_content, "application/jsonl")
