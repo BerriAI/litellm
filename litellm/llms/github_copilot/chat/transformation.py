@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import LlmProviders
 
 from ..authenticator import Authenticator
 from ..common_utils import (
@@ -14,14 +15,46 @@ from ..common_utils import (
 
 
 class GithubCopilotConfig(OpenAIConfig):
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        custom_llm_provider: str = "openai",
-    ) -> None:
+    GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com/"
+
+    def __init__(self) -> None:
         super().__init__()
         self.authenticator = Authenticator()
+
+    @property
+    def custom_llm_provider(self) -> LlmProviders:
+        """Return the GitHub Copilot provider identifier."""
+        return LlmProviders.GITHUB_COPILOT
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Get the complete URL for GitHub Copilot chat completions endpoint.
+
+        Returns: https://api.githubcopilot.com/chat/completions
+        (or dynamic api_base from authenticator + /chat/completions)
+
+        This method is used by base_llm_http_handler to construct the full URL.
+        """
+        # Use provided api_base or fall back to authenticator's base or default
+        api_base = (
+            api_base
+            or self.authenticator.get_api_base()
+            or self.GITHUB_COPILOT_API_BASE
+        )
+
+        # Remove trailing slashes for consistent URL construction
+        api_base = api_base.rstrip("/")
+
+        # Return the chat completions endpoint
+        return f"{api_base}/chat/completions"
 
     def _get_openai_compatible_provider_info(
         self,
