@@ -701,8 +701,6 @@ async def test_execute_mcp_tool_uses_user_api_key_dict_as_fallback():
     Patches execute_mcp_tool and verifies the fallback passes the correct
     user_api_key_auth through when data["user_api_key_auth"] is None.
     """
-    from unittest.mock import AsyncMock, patch
-
     from litellm.proxy._types import UserAPIKeyAuth
 
     mock_user = MagicMock(spec=UserAPIKeyAuth)
