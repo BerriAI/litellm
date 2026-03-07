@@ -1,0 +1,40 @@
+name: Update Duplicate Detection Index
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"  # Weekly on Sunday at 3am UTC
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  update-index:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install litellm
+
+      - name: Build/update vector index
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          LITELLM_EMBEDDING_MODEL: ${{ vars.LITELLM_EMBEDDING_MODEL || 'text-embedding-3-small' }}
+        run: python .github/scripts/vector_duplicate_detection.py index --repo ${{ github.repository }}
+
+      - name: Upload index as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vector-index
+          path: .github/vector_index.json
+          retention-days: 30

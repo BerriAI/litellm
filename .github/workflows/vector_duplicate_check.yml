@@ -1,0 +1,69 @@
+name: Check Semantic Duplicates
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened]
+
+jobs:
+  check-duplicates:
+    # Skip core team and bots
+    if: |
+      (github.event_name == 'issues' ||
+       (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.user.login != 'ishaan-jaff' &&
+        github.event.pull_request.user.login != 'krrishdholakia' &&
+        !endsWith(github.event.pull_request.user.login, '[bot]')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install litellm
+
+      - name: Download vector index
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vector-index
+          path: .github/
+          workflow: vector_duplicate_index.yml
+          if_no_artifact_found: warn
+
+      - name: Check for duplicates (Issue)
+        if: github.event_name == 'issues'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          LITELLM_EMBEDDING_MODEL: ${{ vars.LITELLM_EMBEDDING_MODEL || 'text-embedding-3-small' }}
+          SIMILARITY_THRESHOLD: "0.82"
+        run: |
+          python .github/scripts/vector_duplicate_detection.py query \
+            --repo ${{ github.repository }} \
+            --type issue \
+            --number ${{ github.event.issue.number }} \
+            --comment
+
+      - name: Check for duplicates (PR)
+        if: github.event_name == 'pull_request_target'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          LITELLM_EMBEDDING_MODEL: ${{ vars.LITELLM_EMBEDDING_MODEL || 'text-embedding-3-small' }}
+          SIMILARITY_THRESHOLD: "0.82"
+        run: |
+          python .github/scripts/vector_duplicate_detection.py query \
+            --repo ${{ github.repository }} \
+            --type pr \
+            --number ${{ github.event.pull_request.number }} \
+            --comment
