@@ -1694,6 +1694,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default="desc",
         description="Sort order: asc or desc",
     ),
+    call_type: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by call type (e.g., 'call_mcp_tool', 'list_mcp_tools', 'completion')",
+    ),
+    mcp_tool_name: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by MCP namespaced tool name (e.g., 'github-mcp/list_repos'). Supports partial match.",
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -1823,6 +1831,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
+        if call_type is not None:
+            where_conditions["call_type"] = call_type
+
+        if mcp_tool_name is not None:
+            where_conditions["mcp_namespaced_tool_name"] = {
+                "contains": mcp_tool_name
+            }
+
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
             if min_spend is not None:
@@ -1911,6 +1927,18 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if max_spend is not None:
             sql_conditions.append(f"spend <= ${p}")
             sql_params.append(max_spend)
+            p += 1
+
+        # Call type filter
+        if call_type is not None:
+            sql_conditions.append(f"call_type = ${p}")
+            sql_params.append(call_type)
+            p += 1
+
+        # MCP tool name filter (partial match)
+        if mcp_tool_name is not None:
+            sql_conditions.append(f"mcp_namespaced_tool_name LIKE ${p}")
+            sql_params.append(f"%{mcp_tool_name}%")
             p += 1
 
         # Metadata JSON filters (PostgreSQL JSONB operators)

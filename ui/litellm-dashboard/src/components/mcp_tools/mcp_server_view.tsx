@@ -7,6 +7,8 @@ import { MCPServer, handleTransport, handleAuth } from "./types";
 import { MCPToolsViewer } from ".";
 import MCPServerEdit from "./mcp_server_edit";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
+import MCPServerLogs from "./mcp_server_logs";
+import MCPServerDiagnostics from "./mcp_server_diagnostics";
 import { getMaskedAndFullUrl } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -120,6 +122,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           {[
             <Tab key="overview">Overview</Tab>,
             <Tab key="tools">MCP Tools</Tab>,
+            <Tab key="logs">Logs</Tab>,
+            <Tab key="diagnostics">Diagnostics</Tab>,
             ...(isProxyAdmin ? [<Tab key="settings">Settings</Tab>] : []),
           ]}
         </TabList>
@@ -172,6 +176,22 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               userID={userID}
               serverAlias={mcpServer.alias}
               extraHeaders={mcpServer.extra_headers}
+            />
+          </TabPanel>
+
+          {/* Logs Panel */}
+          <TabPanel>
+            <MCPServerLogs
+              serverId={mcpServer.server_id}
+              accessToken={accessToken}
+            />
+          </TabPanel>
+
+          {/* Diagnostics Panel */}
+          <TabPanel>
+            <MCPServerDiagnostics
+              serverId={mcpServer.server_id}
+              accessToken={accessToken}
             />
           </TabPanel>
 

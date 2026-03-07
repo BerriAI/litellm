@@ -2524,6 +2524,10 @@ interface UiSpendLogsParams {
   sort_order?: "asc" | "desc";
   min_spend?: number;
   max_spend?: number;
+  /** Filter by call type (e.g. "call_mcp_tool", "completion") */
+  call_type?: string;
+  /** Filter by MCP namespaced tool name (partial match) */
+  mcp_tool_name?: string;
 }
 
 interface UiSpendLogsCallOptions {
@@ -9400,6 +9404,57 @@ export const deleteToolPolicyOverride = async (
     method: "DELETE",
     headers: {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
+};
+
+export const fetchMCPServerLogs = async (
+  accessToken: string,
+  serverId: string,
+  startDate: string,
+  endDate: string,
+  page: number = 1,
+  pageSize: number = 25,
+) => {
+  const q = new URLSearchParams();
+  q.set("start_date", startDate);
+  q.set("end_date", endDate);
+  q.set("page", page.toString());
+  q.set("page_size", pageSize.toString());
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/logs?${q.toString()}`
+    : `/v1/mcp/server/${serverId}/logs?${q.toString()}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
+};
+
+export const fetchMCPServerDiagnostics = async (
+  accessToken: string,
+  serverId: string,
+) => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/diagnose`
+    : `/v1/mcp/server/${serverId}/diagnose`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
     },
   });
   if (!response.ok) {

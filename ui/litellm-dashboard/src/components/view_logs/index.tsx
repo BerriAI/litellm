@@ -466,6 +466,22 @@ export default function SpendLogsTable({
       label: "Error Message",
       isSearchable: false,
     },
+    {
+      name: "Call Type",
+      label: "Call Type",
+      isSearchable: false,
+      options: [
+        { label: "All", value: "" },
+        { label: "MCP Tool Call", value: "call_mcp_tool" },
+        { label: "MCP List Tools", value: "list_mcp_tools" },
+        { label: "Completion", value: "completion" },
+        { label: "Embedding", value: "embedding" },
+        { label: "Image Generation", value: "image_generation" },
+        { label: "Audio Transcription", value: "audio_transcription" },
+        { label: "Text to Speech", value: "speech" },
+        { label: "Rerank", value: "rerank" },
+      ],
+    },
   ];
 
   const formatTimeUnit = (value: number, unit: string) => {

@@ -1362,3 +1362,257 @@ if MCP_AVAILABLE:
             "servers": servers,
             "categories": categories,
         }
+
+    @router.get(
+        "/server/{server_id}/logs",
+        description="Returns invocation logs for a specific MCP server",
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def get_mcp_server_logs(
+        server_id: str,
+        start_date: Optional[str] = Query(
+            None, description="Start date in YYYY-MM-DD HH:MM:SS format"
+        ),
+        end_date: Optional[str] = Query(
+            None, description="End date in YYYY-MM-DD HH:MM:SS format"
+        ),
+        page: int = Query(default=1, ge=1, description="Page number"),
+        page_size: int = Query(
+            default=25, ge=1, le=100, description="Items per page"
+        ),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Returns paginated invocation logs for a specific MCP server.
+
+        Queries spend logs where mcp_namespaced_tool_name starts with the
+        server's prefix (server_name or alias).
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail="Database not connected"
+            )
+
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+            server_id
+        )
+        if mcp_server is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"MCP server {server_id} not found",
+            )
+
+        server_prefix = get_server_prefix(mcp_server)
+
+        now = datetime.utcnow()
+        if start_date is None:
+            start_dt = now - timedelta(days=7)
+        else:
+            try:
+                start_dt = datetime.strptime(
+                    start_date.strip(), "%Y-%m-%d %H:%M:%S"
+                )
+            except ValueError:
+                start_dt = datetime.strptime(
+                    start_date.strip(), "%Y-%m-%d"
+                )
+
+        if end_date is None:
+            end_dt = now
+        else:
+            try:
+                end_dt = datetime.strptime(
+                    end_date.strip(), "%Y-%m-%d %H:%M:%S"
+                )
+            except ValueError:
+                end_dt = datetime.strptime(
+                    end_date.strip(), "%Y-%m-%d"
+                )
+
+        skip = (page - 1) * page_size
+        like_pattern = f"{server_prefix}/%"
+
+        total = await prisma_client.db.query_raw(
+            """
+            SELECT COUNT(*)::int AS cnt
+            FROM "LiteLLM_SpendLogs"
+            WHERE mcp_namespaced_tool_name LIKE $1
+              AND "startTime" >= $2::timestamptz
+              AND "startTime" <= $3::timestamptz
+            """,
+            like_pattern,
+            start_dt,
+            end_dt,
+        )
+        total_count = total[0]["cnt"] if total else 0
+
+        rows = await prisma_client.db.query_raw(
+            """
+            SELECT
+                request_id, call_type, api_key, spend, total_tokens,
+                prompt_tokens, completion_tokens, "startTime", "endTime",
+                model, model_id, "user", metadata, team_id,
+                end_user, status, mcp_namespaced_tool_name,
+                COALESCE(request_duration_ms,
+                    (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER
+                ) AS request_duration_ms
+            FROM "LiteLLM_SpendLogs"
+            WHERE mcp_namespaced_tool_name LIKE $1
+              AND "startTime" >= $2::timestamptz
+              AND "startTime" <= $3::timestamptz
+            ORDER BY "startTime" DESC
+            LIMIT $4 OFFSET $5
+            """,
+            like_pattern,
+            start_dt,
+            end_dt,
+            page_size,
+            skip,
+        )
+
+        total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
+
+        return {
+            "data": rows,
+            "total": total_count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "server_id": server_id,
+            "server_name": mcp_server.server_name,
+        }
+
+    @router.get(
+        "/server/{server_id}/diagnose",
+        description="Run connection diagnostics for an MCP server",
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def diagnose_mcp_server(
+        server_id: str,
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Run connection diagnostics for an MCP server and return structured results.
+
+        Returns auth resolution, connectivity status, and actionable suggestions.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
+
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+            server_id
+        )
+        if mcp_server is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"MCP server {server_id} not found",
+            )
+
+        checks: List[Dict[str, Any]] = []
+
+        # Check 1: Server configuration
+        config_ok = bool(mcp_server.url or mcp_server.command)
+        checks.append({
+            "name": "configuration",
+            "status": "pass" if config_ok else "fail",
+            "message": "Server URL or command is configured"
+            if config_ok
+            else "No URL or command configured",
+        })
+
+        # Check 2: Auth configuration
+        auth_type = mcp_server.auth_type or "none"
+        auth_resolution = MCPDebug.resolve_auth_resolution(
+            server=mcp_server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+        )
+        checks.append({
+            "name": "auth_type",
+            "status": "pass",
+            "message": f"Auth type: {auth_type}, resolution: {auth_resolution}",
+            "details": {
+                "auth_type": auth_type,
+                "auth_resolution": auth_resolution,
+                "has_credentials": bool(mcp_server.authentication_token),
+                "has_client_credentials": mcp_server.has_client_credentials,
+            },
+        })
+
+        # Check 3: Connectivity (health check)
+        health_status = "unknown"
+        health_error = None
+        try:
+            tool_result = await global_mcp_server_manager._get_tools_from_server(
+                mcp_server
+            )
+            if tool_result is not None:
+                health_status = "healthy"
+                tool_count = len(tool_result)
+            else:
+                health_status = "unhealthy"
+                health_error = "No tools returned"
+                tool_count = 0
+        except Exception as e:
+            health_status = "unhealthy"
+            health_error = str(e)
+            tool_count = 0
+
+        checks.append({
+            "name": "connectivity",
+            "status": "pass" if health_status == "healthy" else "fail",
+            "message": f"Server is {health_status}"
+            + (f": {health_error}" if health_error else f" ({tool_count} tools available)"),
+            "details": {
+                "health_status": health_status,
+                "tool_count": tool_count,
+                "error": health_error,
+            },
+        })
+
+        # Check 4: Network accessibility
+        checks.append({
+            "name": "network",
+            "status": "pass",
+            "message": "Available on public internet"
+            if mcp_server.available_on_public_internet
+            else "Restricted to internal network",
+            "details": {
+                "available_on_public_internet": mcp_server.available_on_public_internet,
+            },
+        })
+
+        # Build suggestions
+        suggestions: List[str] = []
+        if health_status == "unhealthy":
+            if auth_resolution == "no-auth" and auth_type != "none":
+                suggestions.append(
+                    "Auth type is set to '{}' but no credentials are configured. "
+                    "Add credentials in the server settings.".format(auth_type)
+                )
+            if health_error and "timeout" in health_error.lower():
+                suggestions.append(
+                    "Connection timed out. Check that the MCP server URL is reachable "
+                    "from the LiteLLM proxy network."
+                )
+            if health_error and ("401" in health_error or "unauthorized" in health_error.lower()):
+                suggestions.append(
+                    "Authentication failed. Verify credentials and auth type configuration."
+                )
+            if not suggestions:
+                suggestions.append(
+                    "Check the MCP server logs and verify the URL is correct."
+                )
+
+        all_passing = all(c["status"] == "pass" for c in checks)
+
+        return {
+            "server_id": server_id,
+            "server_name": mcp_server.server_name,
+            "overall_status": "healthy" if all_passing else "unhealthy",
+            "checks": checks,
+            "suggestions": suggestions,
+        }

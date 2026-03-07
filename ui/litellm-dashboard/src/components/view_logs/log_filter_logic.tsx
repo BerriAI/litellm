@@ -20,6 +20,7 @@ const FILTER_KEYS = {
   KEY_ALIAS: "Key Alias",
   ERROR_CODE: "Error Code",
   ERROR_MESSAGE: "Error Message",
+  CALL_TYPE: "Call Type",
 } as const;
 
 export type FilterKey = keyof typeof FILTER_KEYS;
@@ -64,6 +65,7 @@ export function useLogFilterLogic({
       [FILTER_KEYS.KEY_ALIAS]: "",
       [FILTER_KEYS.ERROR_CODE]: "",
       [FILTER_KEYS.ERROR_MESSAGE]: "",
+      [FILTER_KEYS.CALL_TYPE]: "",
     }),
     [],
   );
@@ -108,6 +110,7 @@ export function useLogFilterLogic({
             key_alias: filters[FILTER_KEYS.KEY_ALIAS] || undefined,
             error_code: filters[FILTER_KEYS.ERROR_CODE] || undefined,
             error_message: filters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
+            call_type: filters[FILTER_KEYS.CALL_TYPE] || undefined,
             sort_by: sortBy,
             sort_order: sortOrder,
           },
@@ -143,7 +146,8 @@ export function useLogFilterLogic({
         filters[FILTER_KEYS.END_USER] ||
         filters[FILTER_KEYS.ERROR_CODE] ||
         filters[FILTER_KEYS.ERROR_MESSAGE] ||
-        filters[FILTER_KEYS.MODEL]
+        filters[FILTER_KEYS.MODEL] ||
+        filters[FILTER_KEYS.CALL_TYPE]
       ),
     [filters],
   );

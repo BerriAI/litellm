@@ -1512,3 +1512,193 @@ class TestManagementPayloadValidation:
             assert len(result) == 1
             assert result[0]["server_id"] == "server-1"
             assert result[0]["status"] == "healthy"
+
+
+class TestMCPServerLogs:
+    """Tests for the GET /v1/mcp/server/{server_id}/logs endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_get_mcp_server_logs_server_not_found(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_mcp_server_logs,
+        )
+
+        mock_user_auth = generate_mock_user_api_key_auth()
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = None
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            MagicMock(),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_mcp_server_logs(
+                    server_id="nonexistent",
+                    start_date=None,
+                    end_date=None,
+                    page=1,
+                    page_size=25,
+                    user_api_key_dict=mock_user_auth,
+                )
+            assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_mcp_server_logs_returns_paginated_results(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_mcp_server_logs,
+        )
+
+        mock_server = generate_mock_mcp_server_config_record(
+            server_id="test-server-1", name="github-mcp"
+        )
+        mock_user_auth = generate_mock_user_api_key_auth()
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = mock_server
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.query_raw = AsyncMock(
+            side_effect=[
+                [{"cnt": 2}],
+                [
+                    {
+                        "request_id": "req-1",
+                        "call_type": "call_mcp_tool",
+                        "mcp_namespaced_tool_name": "github-mcp/list_repos",
+                        "status": "success",
+                        "spend": 0.001,
+                    },
+                    {
+                        "request_id": "req-2",
+                        "call_type": "call_mcp_tool",
+                        "mcp_namespaced_tool_name": "github-mcp/get_file",
+                        "status": "success",
+                        "spend": 0.002,
+                    },
+                ],
+            ]
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma,
+        ):
+            result = await get_mcp_server_logs(
+                server_id="test-server-1",
+                start_date="2025-01-01 00:00:00",
+                end_date="2025-12-31 23:59:59",
+                page=1,
+                page_size=25,
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert result["total"] == 2
+            assert result["page"] == 1
+            assert result["server_id"] == "test-server-1"
+            assert len(result["data"]) == 2
+            assert result["data"][0]["request_id"] == "req-1"
+
+
+class TestMCPServerDiagnose:
+    """Tests for the GET /v1/mcp/server/{server_id}/diagnose endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_diagnose_server_not_found(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            diagnose_mcp_server,
+        )
+
+        mock_user_auth = generate_mock_user_api_key_auth()
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = None
+
+        mock_request = MagicMock()
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await diagnose_mcp_server(
+                    server_id="nonexistent",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_auth,
+                )
+            assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_diagnose_healthy_server(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            diagnose_mcp_server,
+        )
+
+        mock_server = generate_mock_mcp_server_config_record(
+            server_id="test-srv", name="test-mcp"
+        )
+        mock_user_auth = generate_mock_user_api_key_auth()
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = mock_server
+
+        mock_tools = [MagicMock(), MagicMock()]
+        mock_manager._get_tools_from_server = AsyncMock(
+            return_value=mock_tools
+        )
+
+        mock_request = MagicMock()
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            result = await diagnose_mcp_server(
+                server_id="test-srv",
+                request=mock_request,
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert result["overall_status"] == "healthy"
+            assert result["server_id"] == "test-srv"
+            assert len(result["checks"]) == 4
+            assert all(c["status"] == "pass" for c in result["checks"])
+            assert len(result["suggestions"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_diagnose_unhealthy_server(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            diagnose_mcp_server,
+        )
+
+        mock_server = generate_mock_mcp_server_config_record(
+            server_id="bad-srv", name="bad-mcp"
+        )
+        mock_user_auth = generate_mock_user_api_key_auth()
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = mock_server
+
+        mock_manager._get_tools_from_server = AsyncMock(
+            side_effect=Exception("Connection timed out")
+        )
+
+        mock_request = MagicMock()
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            result = await diagnose_mcp_server(
+                server_id="bad-srv",
+                request=mock_request,
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert result["overall_status"] == "unhealthy"
+            connectivity_check = next(
+                c for c in result["checks"] if c["name"] == "connectivity"
+            )
+            assert connectivity_check["status"] == "fail"
+            assert len(result["suggestions"]) > 0
