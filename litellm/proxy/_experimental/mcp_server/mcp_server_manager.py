@@ -31,6 +31,12 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_HEALTH_CHECK_TIMEOUT,
+    MCP_METADATA_TIMEOUT,
+    MCP_TOOL_LISTING_TIMEOUT,
+)
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -636,7 +642,17 @@ class MCPServerManager:
             available_on_public_internet=bool(
                 getattr(mcp_server, "available_on_public_internet", True)
             ),
+            created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
+            tool_name_to_display_name=_deserialize_json_dict(
+                getattr(mcp_server, "tool_name_to_display_name", None)
+            ),
+            tool_name_to_description=_deserialize_json_dict(
+                getattr(mcp_server, "tool_name_to_description", None)
+            ),
+            is_byok=bool(getattr(mcp_server, "is_byok", False)),
+            byok_description=getattr(mcp_server, "byok_description", None) or [],
+            byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
         )
         return new_server
 
@@ -943,7 +959,7 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=60.0,
+                timeout=MCP_CLIENT_TIMEOUT,
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
             )
@@ -955,7 +971,7 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=60.0,
+                timeout=MCP_CLIENT_TIMEOUT,
                 extra_headers=extra_headers,
             )
 
@@ -1334,7 +1350,7 @@ class MCPServerManager:
         try:
             client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": 10.0},
+                params={"timeout": MCP_METADATA_TIMEOUT},
             )
             response = await client.get(resource_metadata_url)
             response.raise_for_status()
@@ -1430,7 +1446,7 @@ class MCPServerManager:
             try:
                 client = get_async_httpx_client(
                     llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": 10.0},
+                    params={"timeout": MCP_METADATA_TIMEOUT},
                 )
                 response = await client.get(url)
                 response.raise_for_status()
@@ -1489,7 +1505,7 @@ class MCPServerManager:
             List of tools from the server
         """
         try:
-            with anyio.fail_after(30.0):
+            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
@@ -2508,10 +2524,14 @@ class MCPServerManager:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=10.0)
+                await asyncio.wait_for(
+                    client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
+                )
                 status = "healthy"
             except asyncio.TimeoutError:
-                health_check_error = "Health check timed out after 10 seconds"
+                health_check_error = (
+                    f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"
+                )
                 status = "unhealthy"
             except asyncio.CancelledError:
                 health_check_error = "Health check was cancelled"
@@ -2530,8 +2550,8 @@ class MCPServerManager:
             url=server.url,
             transport=server.transport,
             auth_type=server.auth_type,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=server.created_at,
+            updated_at=server.updated_at,
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],
@@ -2610,8 +2630,6 @@ class MCPServerManager:
         return list_mcp_servers
 
     def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
-        from datetime import datetime
-
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
             server_name=server.server_name,
@@ -2623,8 +2641,8 @@ class MCPServerManager:
             spec_path=server.spec_path,
             transport=server.transport,
             auth_type=server.auth_type,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=server.created_at,
+            updated_at=server.updated_at,
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],
@@ -2642,6 +2660,9 @@ class MCPServerManager:
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
+            is_byok=server.is_byok,
+            byok_description=server.byok_description,
+            byok_api_key_help_url=server.byok_api_key_help_url,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:

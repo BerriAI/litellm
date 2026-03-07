@@ -136,6 +136,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
     supports_url_context: Optional[bool]
+    supports_none_reasoning_effort: Optional[bool]
+    supports_xhigh_reasoning_effort: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -181,12 +183,16 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # OpenAI priority service tier pricing
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
+    cache_read_input_token_cost_above_272k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    input_cost_per_token_above_272k_tokens: Optional[
+        float
+    ]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -211,6 +217,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    output_cost_per_token_above_272k_tokens: Optional[
+        float
+    ]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -291,6 +300,7 @@ class CallTypes(str, Enum):
     search = "search"
     asearch = "asearch"
     arealtime = "_arealtime"
+    aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
@@ -1682,6 +1692,7 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
+
 class ModelResponseBase(OpenAIObject):
     id: str
     """A unique identifier for the completion."""
@@ -1790,7 +1801,7 @@ class ModelResponseStream(ModelResponseBase):
 
 
 class ModelResponse(ModelResponseBase):
-    choices: List[Union[Choices, StreamingChoices]]
+    choices: List[Choices]
     """The list of completion choices the model generated for the input prompt."""
 
     def __init__(  # noqa: PLR0915
@@ -1809,44 +1820,27 @@ class ModelResponse(ModelResponseBase):
         _response_headers=None,
         **params,
     ) -> None:
-        if stream is not None and stream is True:
-            object = "chat.completion.chunk"
-            if choices is not None and isinstance(choices, list):
-                new_choices = []
-                for choice in choices:
-                    _new_choice = None
-                    if isinstance(choice, StreamingChoices):
-                        _new_choice = choice
-                    elif isinstance(choice, dict):
-                        _new_choice = StreamingChoices(**choice)
-                    elif isinstance(choice, BaseModel):
-                        _new_choice = StreamingChoices(**choice.model_dump())
-                    new_choices.append(_new_choice)
-                choices = new_choices
-            else:
-                choices = [StreamingChoices()]
+        object = "chat.completion"
+        if choices is not None and isinstance(choices, list):
+            new_choices = []
+            for choice in choices:
+                if isinstance(choice, Choices):
+                    _new_choice = choice  # type: ignore
+                elif isinstance(choice, dict):
+                    _new_choice = Choices(**choice)  # type: ignore
+                elif isinstance(choice, BaseModel):
+                    dump = (
+                        choice.model_dump()
+                        if hasattr(choice, "model_dump")
+                        else choice.dict()
+                    )
+                    _new_choice = Choices(**dump)  # type: ignore
+                else:
+                    _new_choice = choice
+                new_choices.append(_new_choice)
+            choices = new_choices
         else:
-            object = "chat.completion"
-            if choices is not None and isinstance(choices, list):
-                new_choices = []
-                for choice in choices:
-                    if isinstance(choice, Choices):
-                        _new_choice = choice  # type: ignore
-                    elif isinstance(choice, dict):
-                        _new_choice = Choices(**choice)  # type: ignore
-                    elif isinstance(choice, BaseModel):
-                        dump = (
-                            choice.model_dump()
-                            if hasattr(choice, "model_dump")
-                            else choice.dict()
-                        )
-                        _new_choice = Choices(**dump)  # type: ignore
-                    else:
-                        _new_choice = choice
-                    new_choices.append(_new_choice)
-                choices = new_choices
-            else:
-                choices = [Choices()]
+            choices = [Choices()]
         if id is None:
             id = _generate_id()
         else:
@@ -3042,6 +3036,7 @@ all_litellm_params = (
         "shared_session",
         "search_tool_name",
         "order",
+        "enable_json_schema_validation",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -3217,6 +3212,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
+    BEDROCK_MANTLE = "bedrock_mantle"
 
 
 # Create a set of all provider values for quick lookup
@@ -3252,6 +3248,7 @@ class SearchProviders(str, Enum):
     SEARXNG = "searxng"
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
+    SEARCHAPI = "searchapi"
 
 
 # Create a set of all search provider values for quick lookup

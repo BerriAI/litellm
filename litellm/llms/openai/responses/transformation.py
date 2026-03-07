@@ -344,6 +344,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 )
         return False
 
+    def supports_native_websocket(self) -> bool:
+        """OpenAI supports native WebSocket for Responses API"""
+        return True
+
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
     #########################################################
@@ -524,7 +528,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - POST /v1/responses/compact
         """
-        url = f"{api_base}/compact"
+        # Preserve query params (e.g., api-version) while appending /compact.
+        parsed_url = httpx.URL(api_base)
+        compact_path = parsed_url.path.rstrip("/") + "/compact"
+        url = str(parsed_url.copy_with(path=compact_path))
         
         input = self._validate_input_param(input)
         data = dict(

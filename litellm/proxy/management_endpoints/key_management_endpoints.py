@@ -534,8 +534,8 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                         upperbound_duration = duration_in_seconds(
                             duration=upperbound_value
                         )
-                        # Handle special case where duration is "-1" (never expires)
-                        if value == "-1":
+                        # Handle special case where duration is None or "-1" (never expires)
+                        if value is None or value == "-1":
                             user_duration = float("inf")  # Infinite duration
                         else:
                             user_duration = duration_in_seconds(duration=value)
@@ -1462,7 +1462,7 @@ async def prepare_key_update_data(
 
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        if duration == "-1":
+        if duration is None or duration == "-1":
             # Set expires to None to indicate the key never expires
             non_default_values["expires"] = None
         elif duration and (isinstance(duration, str)) and len(duration) > 0:
@@ -1786,7 +1786,7 @@ async def update_key_fn(
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
-    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.) or "-1" to never expire
+    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
@@ -4991,7 +4991,7 @@ async def test_key_logging(
         )
 
 
-_KEY_ALIAS_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.]{0,253}[a-zA-Z0-9]$")
+_KEY_ALIAS_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.@]{0,253}[a-zA-Z0-9]$")
 
 
 def _validate_key_alias_format(key_alias: Optional[str]) -> None:
@@ -5009,7 +5009,7 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
 
     if not _KEY_ALIAS_PATTERN.match(key_alias):
         raise ProxyException(
-            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.",
+            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.@.",
             type=ProxyErrorTypes.bad_request_error,
             param="key_alias",
             code=400,

@@ -14,6 +14,7 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Type,
     Union,
     cast,
 )
@@ -106,6 +107,8 @@ from .transformation import (
 )
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import ModelResponseStream, StreamingChoices
 
@@ -225,6 +228,47 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    def get_json_schema_from_pydantic_object(
+        self, response_format: Optional[Union[Type["BaseModel"], dict]]
+    ) -> Optional[dict]:
+        """
+        Override to use Pydantic's model_json_schema() instead of OpenAI's
+        to_strict_json_schema().
+
+        OpenAI's to_strict_json_schema() inlines all $ref references, which
+        dramatically increases schema nesting depth and causes Gemini to reject
+        schemas with 'exceeds maximum allowed nesting depth' errors.
+
+        Pydantic's model_json_schema() preserves $ref/$defs, keeping the schema
+        compact. Gemini 2.0+ (responseJsonSchema) natively supports $ref, and
+        Gemini 1.5 (responseSchema) handles unpacking via _build_vertex_schema.
+
+        See: https://github.com/BerriAI/litellm/issues/21014
+        """
+        from pydantic import BaseModel as _BaseModel
+
+        if response_format is None:
+            return None
+
+        if isinstance(response_format, dict):
+            return response_format
+
+        if isinstance(response_format, type) and issubclass(
+            response_format, _BaseModel
+        ):
+            schema = response_format.model_json_schema()
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": schema,
+                    "name": response_format.__name__,
+                    "strict": True,
+                },
+            }
+
+        # Fallback: delegate to parent for unknown types
+        return super().get_json_schema_from_pydantic_object(response_format)
 
     @staticmethod
     def _is_gemini_3_or_newer(model: str) -> bool:
@@ -756,9 +800,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
+        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview, etc.
         is_gemini3flash = model and (
-            "gemini-3-flash-preview" in model.lower()
-            or "gemini-3-flash" in model.lower()
+            "gemini-3-flash" in model.lower()
+            or "gemini-3.1-flash" in model.lower()
         )
         is_gemini31pro = model and (
             "gemini-3.1-pro-preview" in model.lower()
@@ -1092,23 +1137,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
-            # Only add thinkingLevel if model supports it (exclude image models)
-            if "image" not in model.lower():
-                thinking_config = optional_params.get("thinkingConfig", {})
-                if (
-                    "thinkingLevel" not in thinking_config
-                    and "thinkingBudget" not in thinking_config
-                ):
-                    # For gemini-3-flash-preview, default to "minimal" to match Gemini 2.5 Flash behavior
-                    # For other Gemini 3 models, default to "low"
-                    is_gemini3flash = (
-                        "gemini-3-flash-preview" in model.lower()
-                        or "gemini-3-flash" in model.lower()
-                    )
-                    thinking_config["thinkingLevel"] = (
-                        "minimal" if is_gemini3flash else "low"
-                    )
-                    optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
 
@@ -2114,7 +2142,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     chat_completion_logprobs=chat_completion_logprobs,
                     image_response=image_response,
                 )
-                model_response.choices.append(choice)
+                model_response.choices.append(choice)  # type: ignore[arg-type]
             elif isinstance(model_response, ModelResponse):
                 choice = litellm.Choices(
                     finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -2125,7 +2153,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
                 )
-                model_response.choices.append(choice)
+                model_response.choices.append(choice)  # type: ignore[arg-type]
 
         return (
             grounding_metadata,
@@ -2878,6 +2906,7 @@ class ModelResponseIterator:
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
         self.cumulative_tool_call_index: int = 0
+        self.has_seen_tool_calls: bool = False
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -2915,6 +2944,40 @@ class ModelResponseIterator:
                     self.logging_obj.optional_params,
                     cumulative_tool_call_index=self.cumulative_tool_call_index,
                 )
+
+                # Track whether tool_calls have been seen across streaming chunks.
+                # Gemini sends tool_calls and finishReason in separate chunks,
+                # so we need to remember if earlier chunks contained tool_calls
+                # to correctly set finish_reason="tool_calls" per the OpenAI spec.
+                if not self.has_seen_tool_calls:
+                    for choice in model_response.choices:
+                        if hasattr(choice, "delta") and choice.delta and choice.delta.tool_calls:
+                            self.has_seen_tool_calls = True
+                            break
+
+                # Handle final chunk with finishReason but no content.
+                # _process_candidates skips candidates without "content",
+                # so the finish_reason from the final chunk is lost.
+                if not model_response.choices and _candidates:
+                    from litellm.types.utils import Delta, StreamingChoices
+
+                    for candidate in _candidates:
+                        finish_reason_str = candidate.get("finishReason")
+                        if finish_reason_str is not None:
+                            if self.has_seen_tool_calls:
+                                mapped_finish_reason = "tool_calls"
+                            else:
+                                mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
+                                    None, finish_reason_str
+                                )
+                            choice = StreamingChoices(
+                                finish_reason=mapped_finish_reason,
+                                index=candidate.get("index", 0),
+                                delta=Delta(content=None, role=None),
+                                logprobs=None,
+                                enhancements=None,
+                            )
+                            model_response.choices.append(choice)
 
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
