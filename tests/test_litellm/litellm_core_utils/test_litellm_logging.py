@@ -1680,3 +1680,64 @@ async def test_async_success_handler_preserves_response_cost_for_pass_through_en
     slo = logging_obj.model_call_details.get("standard_logging_object")
     assert slo is not None
     assert slo["response_cost"] > 0
+
+
+def test_transform_usage_objects_non_streaming_preserves_prompt_and_completion_tokens():
+    """
+    Regression test: _transform_usage_objects for non-streaming /v1/responses
+    must convert the Usage object to a dict before setting it on the
+    ResponsesAPIResponse. Otherwise, model_dump() drops prompt_tokens and
+    completion_tokens because they don't match the ResponseAPIUsage schema.
+
+    The streaming path already did this correctly; this test ensures the
+    non-streaming path behaves the same way.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    # Build a ResponsesAPIResponse with ResponseAPIUsage (as returned by providers)
+    response = ResponsesAPIResponse(
+        id="resp-test-001",
+        created_at=1700000000,
+        output=[],
+        usage=ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+        ),
+    )
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="responses",
+        start_time=time.time(),
+        litellm_call_id="test-usage-preservation",
+        function_id="test-fn-usage",
+    )
+
+    # Call the method under test
+    result = logging_obj._transform_usage_objects(response)
+
+    # The usage should now be a dict (not a Pydantic Usage object)
+    assert isinstance(result.usage, dict), \
+        f"Expected usage to be a dict after transformation, got {type(result.usage)}"
+
+    # All token fields must be present
+    assert result.usage.get("prompt_tokens") == 100, \
+        f"prompt_tokens should be 100, got {result.usage.get('prompt_tokens')}"
+    assert result.usage.get("completion_tokens") == 50, \
+        f"completion_tokens should be 50, got {result.usage.get('completion_tokens')}"
+    assert result.usage.get("total_tokens") == 150, \
+        f"total_tokens should be 150, got {result.usage.get('total_tokens')}"
+
+    # Crucially, model_dump() must also preserve these fields (this is the actual bug scenario)
+    dumped = result.model_dump()
+    dumped_usage = dumped.get("usage", {})
+    assert dumped_usage.get("prompt_tokens") == 100, \
+        f"prompt_tokens lost after model_dump(): {dumped_usage}"
+    assert dumped_usage.get("completion_tokens") == 50, \
+        f"completion_tokens lost after model_dump(): {dumped_usage}"
+    assert dumped_usage.get("total_tokens") == 150, \
+        f"total_tokens lost after model_dump(): {dumped_usage}"
