@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.exceptions import ContentPolicyViolationError
+from litellm.exceptions import ContentPolicyViolationError, ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 
 
@@ -418,6 +418,37 @@ class TestAzureExceptionMapping:
         assert "enable_pre_call_checks" in error.message
         assert "optional_pre_call_checks" in error.message
         assert "docs.litellm.ai" in error.message
+
+    def test_azure_context_length_exceeded_via_error_code(self):
+        """Azure Responses API returns context_length_exceeded in the error code
+        with a different message format than the chat completions API. This
+        should still be mapped to ContextWindowExceededError."""
+
+        mock_exception = Exception(
+            "Your input exceeds the context window of this model. "
+            "Please adjust your input and try again."
+        )
+        mock_exception.body = {
+            "error": {
+                "message": (
+                    "Your input exceeds the context window of this model. "
+                    "Please adjust your input and try again."
+                ),
+                "type": "invalid_request_error",
+                "param": "input",
+                "code": "context_length_exceeded",
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_exception.response = mock_response
+
+        with pytest.raises(ContextWindowExceededError):
+            exception_type(
+                model="azure/gpt-4o",
+                original_exception=mock_exception,
+                custom_llm_provider="azure",
+            )
 
     def test_openai_invalid_encrypted_content_error(self):
         """Test that OpenAI invalid_encrypted_content errors also get helpful guidance."""
