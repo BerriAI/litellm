@@ -73,6 +73,20 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             litellm_params,
             headers,
         )
+
+        def _normalize_system_roles(value: Any) -> Any:
+            if isinstance(value, dict):
+                normalized = dict(value)
+                if normalized.get("role") == "system":
+                    normalized["role"] = "user"
+                for k, v in list(normalized.items()):
+                    normalized[k] = _normalize_system_roles(v)
+                return normalized
+            if isinstance(value, list):
+                return [_normalize_system_roles(v) for v in value]
+            return value
+
+        request["input"] = _normalize_system_roles(request.get("input"))
         base_instructions = get_chatgpt_default_instructions()
         existing_instructions = request.get("instructions")
         if existing_instructions:
