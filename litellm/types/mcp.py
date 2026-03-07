@@ -35,6 +35,7 @@ class MCPAuth(str, enum.Enum):
     basic = "basic"
     authorization = "authorization"
     oauth2 = "oauth2"
+    aws_sigv4 = "aws_sigv4"
 
 
 # MCP Literals
@@ -50,6 +51,7 @@ MCPAuthType = Optional[
         MCPAuth.basic,
         MCPAuth.authorization,
         MCPAuth.oauth2,
+        MCPAuth.aws_sigv4,
     ]
 ]
 
