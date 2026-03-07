@@ -835,7 +835,7 @@ clarifai_models: set = set(
         "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Instruct-2507",
         "clarifai/qwen.qwen3.qwen3-next-80B-A3B-Thinking",
         "clarifai/openai.chat-completion.gpt-oss-120b",
-        "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Thinking-2507"
+        "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Thinking-2507",
         "clarifai/openai.chat-completion.gpt-5-nano",
         "clarifai/openai.chat-completion.gpt-4o",
         "clarifai/gcp.generate.gemini-2_5-pro",
