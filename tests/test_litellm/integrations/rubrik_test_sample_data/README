@@ -1,0 +1,28 @@
+This directory contains sample responses from LiteLLM requests for testing the tool blocking plugin.
+
+## OpenAI Format Samples
+
+Files prefixed with `openai_` contain OpenAI-format responses:
+
+**Non-streaming:**
+- `openai_text_response.json` - Text-only response (no tool calls)
+- `openai_tool_call_response.json` - Single tool call
+- `openai_multiple_tool_call_response.json` - Multiple tool calls
+
+**Streaming:**
+- `openai_streaming_text_response` - Streaming text-only response
+- `openai_streaming_tool_call_response` - Streaming with single tool call
+- `openai_streaming_multiple_tool_call_response` - Streaming with multiple tool calls
+
+## Anthropic Format Samples
+
+Files prefixed with `anthropic_` contain real Anthropic-format responses from Claude:
+
+- `anthropic_text_response.json` - Text-only response (no tool calls)
+- `anthropic_tool_call_response.json` - Single tool use
+- `anthropic_multiple_tool_call_response.json` - Multiple tool uses
+
+**Streaming:**
+- `anthropic_streaming_text_response` - Streaming text-only response
+- `anthropic_streaming_tool_call_response` - Streaming with single tool call
+- `anthropic_streaming_multiple_tool_call_response` - Streaming with multiple tool calls
