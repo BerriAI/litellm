@@ -73,7 +73,7 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
     # SECURITY FIX: patch npm's own package.json metadata so scanners see the
     # actual installed versions instead of the stale declared dependencies.
     find / -path "*/node_modules/npm/package.json" -exec \
-        sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null && \
+sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null && \
     npm cache clean --force && \
     # Remove the apk-tracked npm so its stale SBOM metadata (tar 7.5.9) is
     # no longer visible to image scanners.  The globally installed npm@latest
