@@ -909,6 +909,49 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
+        # Agent rate limits
+        _agent_id = user_api_key_dict.agent_id
+        if _agent_id is not None:
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+            )
+
+            _agent = global_agent_registry.get_agent_by_id(agent_id=_agent_id)
+            if _agent is not None and (
+                _agent.tpm_limit is not None or _agent.rpm_limit is not None
+            ):
+                descriptors.append(
+                    RateLimitDescriptor(
+                        key="agent",
+                        value=_agent_id,
+                        rate_limit={
+                            "requests_per_unit": _agent.rpm_limit,
+                            "tokens_per_unit": _agent.tpm_limit,
+                            "window_size": self.window_size,
+                        },
+                    )
+                )
+
+            # Session-level rate limits (per agent + session_id)
+            if _agent is not None and (
+                _agent.session_tpm_limit is not None
+                or _agent.session_rpm_limit is not None
+            ):
+                _metadata = data.get("metadata") or data.get("litellm_metadata") or {}
+                _session_id = _metadata.get("session_id")
+                if _session_id is not None:
+                    descriptors.append(
+                        RateLimitDescriptor(
+                            key="agent_session",
+                            value=f"{_agent_id}:{_session_id}",
+                            rate_limit={
+                                "requests_per_unit": _agent.session_rpm_limit,
+                                "tokens_per_unit": _agent.session_tpm_limit,
+                                "window_size": self.window_size,
+                            },
+                        )
+                    )
+
         # Model rate limits
         requested_model = data.get("model", None)
         self._add_model_per_key_rate_limit_descriptor(
@@ -1382,7 +1425,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return "total"  # default to total
         return specified_rate_limit_type
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs, response_obj, start_time, end_time
+    ):  # noqa: PLR0915
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
         """
@@ -1503,6 +1548,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 )
 
+            # Agent TPM + Agent session TPM
+            user_api_key_agent_id = standard_logging_metadata.get(
+                "user_api_key_agent_id"
+            )
+            if user_api_key_agent_id:
+                pipeline_operations.extend(
+                    self._create_pipeline_operations(
+                        key="agent",
+                        value=user_api_key_agent_id,
+                        rate_limit_type="tokens",
+                        total_tokens=total_tokens,
+                    )
+                )
+                # Per-session token tracking (keyed by agent_id:session_id)
+                _lp = kwargs.get("litellm_params") or {}
+                _session_id = (
+                    _lp.get("metadata") or _lp.get("litellm_metadata") or {}
+                ).get("session_id")
+                if _session_id:
+                    pipeline_operations.extend(
+                        self._create_pipeline_operations(
+                            key="agent_session",
+                            value=f"{user_api_key_agent_id}:{_session_id}",
+                            rate_limit_type="tokens",
+                            total_tokens=total_tokens,
+                        )
+                    )
+
             # Model-specific TPM
             if model_group and user_api_key:
                 pipeline_operations.extend(
@@ -1555,9 +1628,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[Span, None] = (
-                _get_parent_otel_span_from_kwargs(kwargs)
-            )
+            litellm_parent_otel_span: Union[
+                Span, None
+            ] = _get_parent_otel_span_from_kwargs(kwargs)
             # Get metadata from standard_logging_object - this correctly handles both
             # 'metadata' and 'litellm_metadata' fields from litellm_params
             standard_logging_object = kwargs.get("standard_logging_object") or {}

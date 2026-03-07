@@ -79,7 +79,7 @@ async def get_agents(
 
     try:
         returned_agents: List[AgentResponse] = []
-        
+
         # Admin users get all agents
         if (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
@@ -91,7 +91,7 @@ async def get_agents(
             allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(
                 user_api_key_auth=user_api_key_dict
             )
-            
+
             # If no restrictions (empty list), return all agents
             if len(allowed_agent_ids) == 0:
                 returned_agents = global_agent_registry.get_agent_list()
@@ -99,17 +99,17 @@ async def get_agents(
                 # Filter agents by allowed IDs
                 all_agents = global_agent_registry.get_agent_list()
                 returned_agents = [
-                    agent for agent in all_agents
-                    if agent.agent_id in allowed_agent_ids
+                    agent for agent in all_agents if agent.agent_id in allowed_agent_ids
                 ]
 
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params["is_public"] = (
-                litellm.public_agent_groups is not None
-                and (agent.agent_id in litellm.public_agent_groups)
+            agent.litellm_params[
+                "is_public"
+            ] = litellm.public_agent_groups is not None and (
+                agent.agent_id in litellm.public_agent_groups
             )
 
         return returned_agents
@@ -266,14 +266,21 @@ async def get_agent_by_id(
                 include={"object_permission": True},
             )
             if agent_row is not None:
-                agent_dict = agent_row.model_dump()
+                from litellm.proxy.agent_endpoints.agent_registry import (
+                    _parse_json_fields,
+                )
+
+                agent_dict = _parse_json_fields(agent_row.model_dump())
                 if agent_row.object_permission is not None:
                     try:
-                        agent_dict["object_permission"] = agent_row.object_permission.model_dump()
+                        agent_dict[
+                            "object_permission"
+                        ] = agent_row.object_permission.model_dump()
                     except Exception:
-                        agent_dict["object_permission"] = agent_row.object_permission.dict()
+                        agent_dict[
+                            "object_permission"
+                        ] = agent_row.object_permission.dict()
                 agent = AgentResponse(**agent_dict)  # type: ignore
-
         if agent is None:
             raise HTTPException(
                 status_code=404, detail=f"Agent with ID {agent_id} not found"
@@ -603,7 +610,11 @@ async def make_agent_public(
                 where={"agent_id": agent_id}
             )
             if agent is not None:
-                agent = AgentResponse(**agent.model_dump())  # type: ignore
+                from litellm.proxy.agent_endpoints.agent_registry import (
+                    _parse_json_fields,
+                )
+
+                agent = AgentResponse(**_parse_json_fields(agent.model_dump()))  # type: ignore
 
             if agent is None:
                 raise HTTPException(
@@ -726,7 +737,11 @@ async def make_agents_public(
                     where={"agent_id": agent_id}
                 )
                 if agent is not None:
-                    agent = AgentResponse(**agent.model_dump())  # type: ignore
+                    from litellm.proxy.agent_endpoints.agent_registry import (
+                        _parse_json_fields,
+                    )
+
+                    agent = AgentResponse(**_parse_json_fields(agent.model_dump()))  # type: ignore
 
                 if agent is None:
                     raise HTTPException(
@@ -758,6 +773,7 @@ async def make_agents_public(
     except Exception as e:
         verbose_proxy_logger.exception(f"Error making agent public: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get(
     "/agent/daily/activity",
