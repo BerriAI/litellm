@@ -4,6 +4,7 @@ import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
+import { CheckOutlined } from "@ant-design/icons";
 
 export const mcpServerColumns = (
   userRole: string,
@@ -11,10 +12,12 @@ export const mcpServerColumns = (
   onEdit: (serverId: string) => void,
   onDelete: (serverId: string) => void,
   isLoadingHealth?: boolean,
+  onByokConnect?: (server: MCPServer) => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
     header: "Server ID",
+    enableSorting: true,
     cell: ({ row }) => (
       <button
         onClick={() => onView(row.original.server_id)}
@@ -27,10 +30,12 @@ export const mcpServerColumns = (
   {
     accessorKey: "server_name",
     header: "Name",
+    enableSorting: true,
   },
   {
     accessorKey: "alias",
     header: "Alias",
+    enableSorting: true,
   },
   {
     id: "url",
@@ -47,6 +52,7 @@ export const mcpServerColumns = (
   {
     accessorKey: "transport",
     header: "Transport",
+    enableSorting: true,
     cell: ({ row }) => {
       const transport = row.original.transport || "http";
       const specPath = row.original.spec_path;
@@ -58,6 +64,7 @@ export const mcpServerColumns = (
   {
     accessorKey: "auth_type",
     header: "Auth Type",
+    enableSorting: true,
     cell: ({ getValue }) => <span>{(getValue() as string) || "none"}</span>,
   },
   {
@@ -157,15 +164,16 @@ export const mcpServerColumns = (
     cell: ({ row }) => {
       const isPublic = row.original.available_on_public_internet;
       return isPublic ? (
-        <span className="px-2 py-0.5 bg-green-50 text-green-700 rounded text-xs font-medium">Public</span>
+        <span className="px-2 py-0.5 bg-green-50 text-green-700 rounded text-xs font-medium">All networks</span>
       ) : (
-        <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs font-medium">Internal</span>
+        <span className="px-2 py-0.5 bg-orange-50 text-orange-700 rounded text-xs font-medium">Internal only</span>
       );
     },
   },
   {
     header: "Created At",
     accessorKey: "created_at",
+    enableSorting: true,
     sortingFn: "datetime",
     cell: ({ row }) => {
       const server = row.original;
@@ -177,12 +185,48 @@ export const mcpServerColumns = (
   {
     header: "Updated At",
     accessorKey: "updated_at",
+    enableSorting: true,
     sortingFn: "datetime",
     cell: ({ row }) => {
       const server = row.original;
       return (
         <span className="text-xs">{server.updated_at ? new Date(server.updated_at).toLocaleDateString() : "-"}</span>
       );
+    },
+  },
+  {
+    id: "byok_credential",
+    header: "Credential",
+    cell: ({ row }) => {
+      const server = row.original;
+      if (!server.is_byok) {
+        return <span className="text-gray-300 text-xs">—</span>;
+      }
+      if (server.has_user_credential) {
+        return (
+          <div className="flex items-center gap-2">
+            <span className="text-green-600 text-xs font-medium flex items-center gap-1">
+              <CheckOutlined /> Connected
+            </span>
+            {onByokConnect && (
+              <button
+                className="text-xs text-gray-400 hover:text-blue-500 underline"
+                onClick={() => onByokConnect(server)}
+              >
+                Reconnect
+              </button>
+            )}
+          </div>
+        );
+      }
+      return onByokConnect ? (
+        <button
+          className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg font-medium"
+          onClick={() => onByokConnect(server)}
+        >
+          Connect
+        </button>
+      ) : null;
     },
   },
   {

@@ -35,6 +35,10 @@ def _clear_proxy_database_env() -> typing.Iterator[None]:
     """Ensure local proxy DB settings don't leak into tests."""
     mp = pytest.MonkeyPatch()
     mp.delenv("DATABASE_URL", raising=False)
+    # The FastAPI lifespan event (proxy_startup_event) re-reads master_key from
+    # the LITELLM_MASTER_KEY env var, overriding whatever initialize() set from
+    # the config file. We must set it here so the lifespan doesn't reset it to None.
+    mp.setenv("LITELLM_MASTER_KEY", "sk-1234")
     try:
         yield
     finally:
@@ -273,6 +277,11 @@ class TestProxyMcpStatelessBehavior:
                     assert result_a.content
                     text_a = getattr(result_a.content[0], "text", None)
                     assert text_a == "30"
+
+            # Allow proxy and MCP SDK to fully clean up the first connection before
+            # opening the second. Without this, the SDK's TaskGroup can raise
+            # ExceptionGroup when the server closes the connection (see MCP SDK #915).
+            await asyncio.sleep(0.5)
 
             # --- Client B: completely independent connection ---
             async with streamablehttp_client(

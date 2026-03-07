@@ -16,6 +16,7 @@ from litellm.proxy.health_endpoints.health_app_factory import build_health_app
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 
+@pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
     @patch("click.echo")

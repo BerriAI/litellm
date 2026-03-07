@@ -3,6 +3,7 @@ This module is used to generate MCP tools from OpenAPI specs.
 """
 
 import asyncio
+import contextvars
 import json
 import os
 from pathlib import PurePosixPath
@@ -21,6 +22,13 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 # Store the base URL and headers globally
 BASE_URL = ""
 HEADERS: Dict[str, str] = {}
+
+# Per-request auth header override for BYOK servers.
+# Set this ContextVar before calling a local tool handler to inject the user's
+# stored credential into the HTTP request made by the tool function closure.
+_request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_request_auth_header", default=None
+)
 
 
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
@@ -116,6 +124,8 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
     # OpenAPI 3.x and 2.x parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             if param.get("in") == "path":
                 path_params.append(param_name)
@@ -139,6 +149,8 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     # Process parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             param_schema = param.get("schema", {})
             param_type = param_schema.get("type", "string")
@@ -211,6 +223,15 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
+        # Allow per-request auth override (e.g. BYOK credential set via ContextVar).
+        # The ContextVar holds the full Authorization header value, including the
+        # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
+        # server.py based on the server's configured auth_type.
+        effective_headers = dict(headers)
+        override_auth = _request_auth_header.get()
+        if override_auth:
+            effective_headers["Authorization"] = override_auth
+
         # Build URL from base_url and path
         url = base_url + path
 
@@ -263,20 +284,20 @@ def create_tool_function(
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
         if original_method == "get":
-            response = await client.get(url, params=params, headers=headers)
+            response = await client.get(url, params=params, headers=effective_headers)
         elif original_method == "post":
             response = await client.post(
-                url, params=params, json=json_body, headers=headers
+                url, params=params, json=json_body, headers=effective_headers
             )
         elif original_method == "put":
             response = await client.put(
-                url, params=params, json=json_body, headers=headers
+                url, params=params, json=json_body, headers=effective_headers
             )
         elif original_method == "delete":
-            response = await client.delete(url, params=params, headers=headers)
+            response = await client.delete(url, params=params, headers=effective_headers)
         elif original_method == "patch":
             response = await client.patch(
-                url, params=params, json=json_body, headers=headers
+                url, params=params, json=json_body, headers=effective_headers
             )
         else:
             return f"Unsupported HTTP method: {original_method}"
