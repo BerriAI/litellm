@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from litellm.litellm_core_utils.prompt_templates.image_handling import (
-    convert_url_to_base64,
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_to_anthropic_image_obj,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -171,30 +171,22 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
                     if isinstance(source, dict) and source.get("type") == "url":
                         url = source.get("url")
                         if url:
-                            # Convert URL to base64
-                            base64_data_url = convert_url_to_base64(url=url)
-                            # Parse the data URL: data:image/jpeg;base64,<data>
-                            if base64_data_url.startswith("data:"):
-                                # Extract media type and data
-                                parts = base64_data_url.split(";base64,", 1)
-                                if len(parts) == 2:
-                                    media_type = parts[0].replace("data:", "")
-                                    data = parts[1]
-                                    new_block = {
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": media_type,
-                                            "data": data,
-                                        },
-                                    }
-                                    # Preserve cache_control if present
-                                    if "cache_control" in block:
-                                        new_block["cache_control"] = block[
-                                            "cache_control"
-                                        ]
-                                    new_content.append(new_block)
-                                    continue
+                            # Convert URL to base64 using existing utility
+                            image_obj = convert_to_anthropic_image_obj(
+                                openai_image_url=url, format=None
+                            )
+                            # Preserve all original block fields (e.g., cache_control)
+                            # while replacing the source
+                            new_block = {
+                                **block,
+                                "source": {
+                                    "type": image_obj["type"],
+                                    "media_type": image_obj["media_type"],
+                                    "data": image_obj["data"],
+                                },
+                            }
+                            new_content.append(new_block)
+                            continue
 
                 new_content.append(block)
 

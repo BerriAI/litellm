@@ -392,10 +392,10 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
     """
 
     @patch(
-        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_url_to_base64"
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_to_anthropic_image_obj"
     )
     def test_vertex_ai_messages_converts_image_url_to_base64(
-        self, mock_convert_url: MagicMock
+        self, mock_convert_obj: MagicMock
     ):
         """
         Test that the /v1/messages endpoint converts image URLs to base64 for Vertex AI.
@@ -403,9 +403,11 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
         When using Anthropic native format with URL source type,
         Vertex AI should convert it to base64.
         """
-        mock_convert_url.return_value = (
-            "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ=="
-        )
+        mock_convert_obj.return_value = {
+            "type": "base64",
+            "media_type": "image/jpeg",
+            "data": "/9j/4AAQSkZJRgABAQAAAQ==",
+        }
 
         messages = [
             {
@@ -426,8 +428,10 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
         config = VertexAIPartnerModelsAnthropicMessagesConfig()
         converted = config._convert_image_urls_to_base64(messages)
 
-        # Verify convert_url_to_base64 was called
-        mock_convert_url.assert_called_once_with(url="https://example.com/image.jpg")
+        # Verify convert_to_anthropic_image_obj was called
+        mock_convert_obj.assert_called_once_with(
+            openai_image_url="https://example.com/image.jpg", format=None
+        )
 
         # Check the result has base64 source type
         user_message = converted[0]
@@ -439,7 +443,7 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
         assert image_content["source"]["data"] == "/9j/4AAQSkZJRgABAQAAAQ=="
 
     @patch(
-        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_url_to_base64"
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_to_anthropic_image_obj"
     )
     def test_vertex_ai_messages_preserves_base64_images(
         self, mock_convert_url: MagicMock
@@ -477,17 +481,19 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
         assert image_content["source"]["data"] == "iVBORw0KGgo="
 
     @patch(
-        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_url_to_base64"
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_to_anthropic_image_obj"
     )
     def test_vertex_ai_messages_preserves_cache_control(
-        self, mock_convert_url: MagicMock
+        self, mock_convert_obj: MagicMock
     ):
         """
         Test that cache_control is preserved when converting image URLs.
         """
-        mock_convert_url.return_value = (
-            "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ=="
-        )
+        mock_convert_obj.return_value = {
+            "type": "base64",
+            "media_type": "image/jpeg",
+            "data": "/9j/4AAQSkZJRgABAQAAAQ==",
+        }
 
         messages = [
             {
@@ -514,7 +520,7 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
         assert image_content["cache_control"] == {"type": "ephemeral"}
 
     @patch(
-        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_url_to_base64"
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_to_anthropic_image_obj"
     )
     def test_vertex_ai_messages_handles_text_only_messages(
         self, mock_convert_url: MagicMock
@@ -542,7 +548,7 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
         assert converted[0]["content"][0]["text"] == "Hello, how are you?"
 
     @patch(
-        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_url_to_base64"
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_to_anthropic_image_obj"
     )
     def test_vertex_ai_messages_handles_string_content(
         self, mock_convert_url: MagicMock
@@ -567,17 +573,17 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
         assert converted[0]["content"] == "Hello, how are you?"
 
     @patch(
-        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_url_to_base64"
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.convert_to_anthropic_image_obj"
     )
     def test_vertex_ai_messages_converts_multiple_images(
-        self, mock_convert_url: MagicMock
+        self, mock_convert_obj: MagicMock
     ):
         """
         Test that multiple image URLs in a message are all converted.
         """
-        mock_convert_url.side_effect = [
-            "data:image/jpeg;base64,/9j/image1",
-            "data:image/png;base64,iVBORw0image2",
+        mock_convert_obj.side_effect = [
+            {"type": "base64", "media_type": "image/jpeg", "data": "/9j/image1"},
+            {"type": "base64", "media_type": "image/png", "data": "iVBORw0image2"},
         ]
 
         messages = [
@@ -607,7 +613,7 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
         converted = config._convert_image_urls_to_base64(messages)
 
         # Verify both URLs were converted
-        assert mock_convert_url.call_count == 2
+        assert mock_convert_obj.call_count == 2
 
         # Check both images are converted to base64
         image1 = converted[0]["content"][1]

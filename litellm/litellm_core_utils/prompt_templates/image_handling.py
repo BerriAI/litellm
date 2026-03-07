@@ -16,6 +16,56 @@ MAX_IMGS_IN_MEMORY = 10
 in_memory_cache = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
 
 
+# Supported image media types for Anthropic/Vertex AI
+SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+# Mapping from file extensions to media types
+EXTENSION_TO_MEDIA_TYPE = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
+def _infer_media_type_from_url(url: str) -> str:
+    """
+    Infer media type from URL extension.
+    Handles signed URLs by stripping query parameters before extracting extension.
+    """
+    # Strip query parameters for signed URLs (e.g., ?x-oss-signature=...)
+    url_without_query = url.split("?")[0]
+    extension = url_without_query.split(".")[-1].lower()
+    media_type = EXTENSION_TO_MEDIA_TYPE.get(extension)
+    if media_type is None:
+        raise Exception(
+            f"Error: Unsupported image format. Extension={extension}. "
+            f"Supported types = {list(SUPPORTED_IMAGE_TYPES)}"
+        )
+    return media_type
+
+
+def _get_valid_media_type(content_type: str | None, url: str) -> str:
+    """
+    Get a valid media type from Content-Type header, falling back to URL extension.
+
+    - Strips Content-Type parameters (e.g., 'image/png; charset=utf-8' -> 'image/png')
+    - Validates against supported types
+    - Falls back to URL extension inference if Content-Type is missing or invalid
+    """
+    if content_type is not None:
+        # Strip parameters (e.g., "image/png; charset=utf-8" -> "image/png")
+        media_type = content_type.split(";")[0].strip()
+        if media_type in SUPPORTED_IMAGE_TYPES:
+            return media_type
+        # Content-Type is invalid (e.g., application/octet-stream, application/x-www-form-urlencoded)
+        # Fall through to URL extension inference
+
+    # Fallback to URL extension
+    return _infer_media_type_from_url(url)
+
+
 def _process_image_response(response: Response, url: str) -> str:
     if response.status_code != 200:
         raise litellm.ImageFetchError(
@@ -35,7 +85,7 @@ def _process_image_response(response: Response, url: str) -> str:
     max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
     image_bytes = bytearray()
     bytes_downloaded = 0
-    
+
     for chunk in response.iter_bytes(chunk_size=8192):
         bytes_downloaded += len(chunk)
         if bytes_downloaded > max_bytes:
@@ -44,28 +94,13 @@ def _process_image_response(response: Response, url: str) -> str:
                 f"Error: Image size ({size_mb:.2f}MB) exceeds maximum allowed size ({MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB). url={url}"
             )
         image_bytes.extend(chunk)
-    
+
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-    image_type = response.headers.get("Content-Type")
-    if image_type is None:
-        img_type = url.split(".")[-1].lower()
-        _img_type = {
-            "jpg": "image/jpeg",
-            "jpeg": "image/jpeg",
-            "png": "image/png",
-            "gif": "image/gif",
-            "webp": "image/webp",
-        }.get(img_type)
-        if _img_type is None:
-            raise Exception(
-                f"Error: Unsupported image format. Format={_img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
-            )
-        img_type = _img_type
-    else:
-        img_type = image_type
+    content_type = response.headers.get("Content-Type")
+    media_type = _get_valid_media_type(content_type, url)
 
-    result = f"data:{img_type};base64,{base64_image}"
+    result = f"data:{media_type};base64,{base64_image}"
     in_memory_cache.set_cache(url, result)
     return result
 
