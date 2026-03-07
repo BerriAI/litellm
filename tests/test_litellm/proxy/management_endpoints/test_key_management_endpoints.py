@@ -6673,11 +6673,16 @@ async def test_key_aliases_admin_sees_all():
 
 
 class TestValidateKeyAliasFormat:
+    @pytest.fixture(autouse=True)
+    def reset_key_alias_flag(self):
+        litellm.enable_key_alias_format_validation = False
+        yield
+        litellm.enable_key_alias_format_validation = False
+
     def test_validation_skipped_when_flag_disabled(self):
         """When enable_key_alias_format_validation is False (default), no validation occurs."""
         from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
 
-        litellm.enable_key_alias_format_validation = False
         # Even invalid aliases should pass silently when the flag is off
         _validate_key_alias_format(None)
         _validate_key_alias_format("")
@@ -6698,7 +6703,6 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("my-key-123")
         _validate_key_alias_format("user/user@example.com")
         _validate_key_alias_format("team/user@example.com")
-        litellm.enable_key_alias_format_validation = False
 
     def test_validate_key_alias_format_invalid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
@@ -6723,4 +6727,3 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
-        litellm.enable_key_alias_format_validation = False
