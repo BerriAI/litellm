@@ -384,7 +384,7 @@
             "refId": "A"
           }
         ],
-        "title": "Faild Requests",
+        "title": "Failed Requests",
         "type": "stat"
       },
       {
