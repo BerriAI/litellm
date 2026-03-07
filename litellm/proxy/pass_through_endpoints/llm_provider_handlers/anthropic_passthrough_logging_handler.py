@@ -83,6 +83,7 @@ class AnthropicPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=logging_obj,
+            request_body=request_body,
         )
 
         return {
@@ -107,6 +108,7 @@ class AnthropicPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
+        request_body: Optional[dict] = None,
     ):
         """
         Create the standard logging object for Anthropic passthrough
@@ -114,6 +116,11 @@ class AnthropicPassthroughLoggingHandler:
         handles streaming and non-streaming responses
         """
         try:
+            # Propagate request body messages to kwargs so that
+            # get_standard_logging_object_payload() can populate the messages field
+            if request_body and "messages" in request_body:
+                kwargs["messages"] = request_body["messages"]
+
             # Get custom_llm_provider from logging object if available (e.g., azure_ai for Azure Anthropic)
             custom_llm_provider = logging_obj.model_call_details.get(
                 "custom_llm_provider"
@@ -216,6 +223,7 @@ class AnthropicPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,
+            request_body=request_body,
         )
 
         return {
