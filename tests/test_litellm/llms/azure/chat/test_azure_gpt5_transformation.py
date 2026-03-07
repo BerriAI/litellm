@@ -116,7 +116,7 @@ def test_azure_gpt5_codex_series_transform_request(config: AzureOpenAIGPT5Config
 def test_azure_gpt5_strips_output_config(config: AzureOpenAIGPT5Config):
     """Test that Azure GPT-5 strips output_config with effort parameter.
 
-    See: https://github.com/BerriAI/litellm/issues/22797
+    See: https://github.com/BerriAI/litellm/issues/22963
     """
     request = config.transform_request(
         model="gpt-5.2",

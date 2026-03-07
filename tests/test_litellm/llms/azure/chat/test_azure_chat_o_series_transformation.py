@@ -33,7 +33,7 @@ async def test_azure_chat_o_series_transformation():
 def test_azure_o_series_strips_output_config():
     """Test that Azure O-series strips output_config with effort parameter.
 
-    See: https://github.com/BerriAI/litellm/issues/22797
+    See: https://github.com/BerriAI/litellm/issues/22963
     """
     config = AzureOpenAIO1Config()
     request = config.transform_request(

@@ -60,7 +60,7 @@ def test_map_openai_params_with_preview_api_version():
 def test_azure_strips_output_config_with_effort():
     """Test that Azure strips output_config containing effort parameter.
 
-    See: https://github.com/BerriAI/litellm/issues/22797
+    See: https://github.com/BerriAI/litellm/issues/22963
     """
     config = AzureOpenAIConfig()
     request = config.transform_request(
@@ -80,7 +80,7 @@ def test_azure_strips_output_config_with_effort():
 def test_azure_strips_output_config_with_format():
     """Test that Azure strips output_config containing format/schema.
 
-    See: https://github.com/BerriAI/litellm/issues/22797
+    See: https://github.com/BerriAI/litellm/issues/22963
     """
     config = AzureOpenAIConfig()
     request = config.transform_request(
