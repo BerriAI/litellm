@@ -804,7 +804,11 @@ class ResponsesWebSocketStreaming:
             asyncio.create_task(
                 self.logging_obj.async_success_handler(self.messages)
             )
-            _ws_executor.submit(self.logging_obj.success_handler, self.messages)
+            _ws_executor.submit(
+                self.logging_obj.success_handler,
+                self.messages,
+                called_from_async=True,
+            )
 
     async def backend_to_client(self) -> None:
         """Forward events from backend WebSocket to the client."""
