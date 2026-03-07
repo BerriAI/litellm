@@ -49,10 +49,18 @@ function getGreeting(): string {
   return "Good evening";
 }
 
-// Build the chat UI URL respecting server root path (e.g. /litellm/ui/chat)
+// Build the chat UI URL respecting server root path and basePath.
+// In dev mode (Next.js dev server), routes live at /chat directly.
+// When served by the proxy, static export is mounted under /ui, so the path
+// becomes {serverRootPath}/ui/chat. Use NEXT_PUBLIC_BASE_URL to detect the
+// prefix so the same code works in both environments.
 function getChatUrl(id?: string): string {
+  const base = process.env.NEXT_PUBLIC_BASE_URL ?? "";
+  const trimmed = base.replace(/^\/+|\/+$/g, "");
+  const uiPath = trimmed ? `/${trimmed}` : "";
   const root = serverRootPath && serverRootPath !== "/" ? serverRootPath.replace(/\/+$/, "") : "";
-  return id ? `${root}/ui/chat?id=${id}` : `${root}/ui/chat`;
+  const prefix = `${root}${uiPath}`;
+  return id ? `${prefix}/chat?id=${id}` : `${prefix}/chat`;
 }
 
 // Build the dashboard root URL
