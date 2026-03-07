@@ -1530,7 +1530,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
         # guarantee prompt_token_details is always a PromptTokensDetailsWrapper
         if prompt_tokens_details:
-            if isinstance(prompt_tokens_details, dict):
+            if isinstance(prompt_tokens_details, PromptTokensDetailsWrapper):
+                _prompt_tokens_details = prompt_tokens_details
+            elif isinstance(prompt_tokens_details, dict):
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
                     **prompt_tokens_details
                 )
@@ -1538,8 +1540,6 @@ class Usage(SafeAttributeModel, CompletionUsage):
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
                     **prompt_tokens_details.model_dump()
                 )
-            elif isinstance(prompt_tokens_details, PromptTokensDetailsWrapper):
-                _prompt_tokens_details = prompt_tokens_details
 
         ## DEEPSEEK MAPPING ##
         if "prompt_cache_hit_tokens" in params and isinstance(
