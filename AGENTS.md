@@ -270,3 +270,9 @@ Ruff is the primary fast linter. For the full lint suite (including mypy, black,
 - SVGs used as provider logos (loaded via `<img>` tags) must NOT use `fill="currentColor"` — replace with an explicit color like `#000000` or use the `-color` variant from lobehub icons, since CSS color inheritance does not work inside `<img>` elements.
 - Provider logos live in `ui/litellm-dashboard/public/assets/logos/` (source) and `litellm/proxy/_experimental/out/assets/logos/` (pre-built). Both locations must have the file for it to work in dev and proxy-served modes.
 - UI Vitest tests: `cd ui/litellm-dashboard && npx vitest run`
+
+### Gotchas
+
+- If `poetry install` fails with "pyproject.toml changed significantly since poetry.lock was last generated", run `poetry lock` first. This can happen after upstream merges that update `pyproject.toml`.
+- The `responses` library may show `AttributeError: module 'responses' has no attribute 'activate'` when collected by `pytest-xdist` workers, but tests pass when run without `-n`. This is a known xdist collection race condition; the tests themselves are fine.
+- The pre-built UI served by the proxy at `/ui` has a `basePath`/`assetPrefix` mismatch that prevents it from loading in dev. For UI development, use the Next.js dev server (`npm run dev` in `ui/litellm-dashboard/`) instead.
