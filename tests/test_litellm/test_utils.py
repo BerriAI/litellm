@@ -2703,18 +2703,11 @@ def test_generate_gcp_iam_access_token_import_error():
     """
     Test that _generate_gcp_iam_access_token raises ImportError when google-cloud-iam is not available.
     """
-    # Import the function first, before mocking
     from litellm._redis import _generate_gcp_iam_access_token
 
-    # Mock the import to fail when the function tries to import google.cloud.iam_credentials_v1
-    original_import = __builtins__["__import__"]
-
-    def mock_import(name, *args, **kwargs):
-        if name == "google.cloud.iam_credentials_v1":
-            raise ImportError("No module named 'google.cloud.iam_credentials_v1'")
-        return original_import(name, *args, **kwargs)
-
-    with patch("builtins.__import__", side_effect=mock_import):
+    # Setting module to None in sys.modules forces ImportError on next import attempt,
+    # even if the module was previously cached
+    with patch.dict("sys.modules", {"google.cloud.iam_credentials_v1": None}):
         with pytest.raises(ImportError) as exc_info:
             _generate_gcp_iam_access_token("test-service-account")
 
@@ -2795,14 +2788,9 @@ def test_generate_azure_ad_redis_token_import_error():
     from unittest.mock import patch
     from litellm._redis import _generate_azure_ad_redis_token
 
-    original_import = __builtins__["__import__"]
-
-    def mock_import(name, *args, **kwargs):
-        if name == "azure.identity":
-            raise ImportError("No module named 'azure.identity'")
-        return original_import(name, *args, **kwargs)
-
-    with patch("builtins.__import__", side_effect=mock_import):
+    # Setting module to None in sys.modules forces ImportError on next import attempt,
+    # even if the module was previously cached
+    with patch.dict("sys.modules", {"azure.identity": None}):
         with pytest.raises(ImportError) as exc_info:
             _generate_azure_ad_redis_token()
 
