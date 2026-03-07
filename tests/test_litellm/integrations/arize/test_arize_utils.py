@@ -84,7 +84,7 @@ def test_arize_set_attributes():
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
 
     # Validate that the expected number of attributes were set
-    assert span.set_attribute.call_count == 26
+    assert span.set_attribute.call_count == 27
 
     # Metadata attached to the span
     span.set_attribute.assert_any_call(
@@ -170,6 +170,109 @@ def test_arize_set_attributes():
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 100)
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 60)
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 40)
+
+    # Finish reason (Choices defaults to "stop" if not specified)
+    span.set_attribute.assert_any_call(
+        "gen_ai.response.finish_reasons",
+        '["stop"]'
+    )
+
+
+def test_arize_set_attributes_with_finish_reason():
+    """
+    Test that finish_reason is correctly extracted and set as a span attribute.
+    This is important for both streaming and non-streaming responses.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import ModelResponse
+
+    span = MagicMock()
+
+    # Construct kwargs to simulate a real LLM request scenario
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "standard_logging_object": {
+            "model_parameters": {},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+
+    # Simulated LLM response object with finish_reason
+    response_obj = ModelResponse(
+        usage={"total_tokens": 50, "completion_tokens": 30, "prompt_tokens": 20},
+        choices=[
+            Choices(
+                message={"role": "assistant", "content": "Hello! How can I help?"},
+                finish_reason="stop"
+            )
+        ],
+        model="gpt-4o",
+        id="chatcmpl-test",
+    )
+
+    # Apply attribute setting via ArizeLogger
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    # Verify finish_reasons attribute was set
+    span.set_attribute.assert_any_call(
+        "gen_ai.response.finish_reasons",
+        '["stop"]'  # JSON serialized list
+    )
+
+
+def test_arize_set_attributes_with_multiple_choices_finish_reasons():
+    """
+    Test that finish_reasons are correctly extracted from multiple choices.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import ModelResponse
+
+    span = MagicMock()
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "standard_logging_object": {
+            "model_parameters": {},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {"n": 2},  # Request multiple completions
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+
+    # Response with multiple choices, each with a finish_reason
+    response_obj = ModelResponse(
+        usage={"total_tokens": 100, "completion_tokens": 60, "prompt_tokens": 40},
+        choices=[
+            Choices(
+                message={"role": "assistant", "content": "Response 1"},
+                finish_reason="stop",
+                index=0
+            ),
+            Choices(
+                message={"role": "assistant", "content": "Response 2"},
+                finish_reason="length",
+                index=1
+            )
+        ],
+        model="gpt-4o",
+        id="chatcmpl-test",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    # Verify finish_reasons contains both reasons
+    span.set_attribute.assert_any_call(
+        "gen_ai.response.finish_reasons",
+        '["stop", "length"]'
+    )
 
 
 def test_arize_set_attributes_responses_api():
