@@ -28,6 +28,7 @@ vi.mock("./ContentFilterConfiguration", () => ({
     onPatternRemove,
     onBlockedWordAdd,
     onBlockedWordRemove,
+    onFileUpload,
     selectedPatterns,
     blockedWords,
   }: {
@@ -35,6 +36,7 @@ vi.mock("./ContentFilterConfiguration", () => ({
     onPatternRemove: (id: string) => void;
     onBlockedWordAdd: (w: object) => void;
     onBlockedWordRemove: (id: string) => void;
+    onFileUpload: (content: string) => void;
     selectedPatterns: { id: string }[];
     blockedWords: { id: string }[];
   }) => (
@@ -63,6 +65,16 @@ vi.mock("./ContentFilterConfiguration", () => ({
         }
       >
         Add keyword
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onFileUpload(
+            "blocked_words:\n  - keyword: badword\n    action: BLOCK\n  - keyword: secret\n    action: MASK\n    description: sensitive info"
+          )
+        }
+      >
+        Upload YAML
       </button>
       {selectedPatterns[0] && (
         <button
@@ -385,6 +397,98 @@ describe("ContentFilterManager", () => {
 
     await waitFor(() => {
       expect(mockOnDataChange).toHaveBeenCalledWith([], [], [], false, null);
+    });
+  });
+
+  it("should add blocked words from uploaded YAML file to state", async () => {
+    const mockOnDataChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <ContentFilterManager
+        guardrailData={CONTENT_FILTER_GUARDRAIL_DATA}
+        guardrailSettings={GUARDRAIL_SETTINGS}
+        isEditing={true}
+        accessToken="test-token"
+        onDataChange={mockOnDataChange}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("content-filter-config")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /upload yaml/i }));
+
+    await waitFor(() => {
+      const lastCall = mockOnDataChange.mock.calls[mockOnDataChange.mock.calls.length - 1];
+      const blockedWords = lastCall[1];
+      expect(blockedWords).toContainEqual(
+        expect.objectContaining({ keyword: "badword", action: "BLOCK" })
+      );
+      expect(blockedWords).toContainEqual(
+        expect.objectContaining({ keyword: "secret", action: "MASK", description: "sensitive info" })
+      );
+    });
+  });
+
+  it("should append uploaded YAML keywords to existing blocked words", async () => {
+    const mockOnDataChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <ContentFilterManager
+        guardrailData={CONTENT_FILTER_GUARDRAIL_DATA}
+        guardrailSettings={GUARDRAIL_SETTINGS}
+        isEditing={true}
+        accessToken="test-token"
+        onDataChange={mockOnDataChange}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("content-filter-config")).toBeInTheDocument();
+    });
+
+    // CONTENT_FILTER_GUARDRAIL_DATA already has one blocked word ("test")
+    await user.click(screen.getByRole("button", { name: /upload yaml/i }));
+
+    await waitFor(() => {
+      const lastCall = mockOnDataChange.mock.calls[mockOnDataChange.mock.calls.length - 1];
+      const blockedWords = lastCall[1];
+      // original word is preserved
+      expect(blockedWords).toContainEqual(
+        expect.objectContaining({ keyword: "test", action: "BLOCK" })
+      );
+      // uploaded words are appended
+      expect(blockedWords).toContainEqual(
+        expect.objectContaining({ keyword: "badword", action: "BLOCK" })
+      );
+    });
+  });
+
+  it("should mark unsaved changes after YAML file upload", async () => {
+    const mockOnUnsavedChanges = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <ContentFilterManager
+        guardrailData={CONTENT_FILTER_GUARDRAIL_DATA}
+        guardrailSettings={GUARDRAIL_SETTINGS}
+        isEditing={true}
+        accessToken="test-token"
+        onUnsavedChanges={mockOnUnsavedChanges}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("content-filter-config")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /upload yaml/i }));
+
+    await waitFor(() => {
+      expect(mockOnUnsavedChanges).toHaveBeenCalledWith(true);
     });
   });
 
