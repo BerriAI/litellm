@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
@@ -1002,5 +1003,86 @@ describe("OldTeams - organization alias display", () => {
     );
 
     expect(screen.getByText("N/A")).toBeInTheDocument();
+  });
+});
+
+describe("OldTeams - single organization create team behavior", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    mockUseOrganizations.mockReturnValue({
+      data: [{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }],
+    });
+  });
+
+  it("should allow Admin users to change a preselected single organization", async () => {
+    const user = userEvent.setup();
+
+    renderWithQueryClient(
+      <OldTeams
+        teams={[]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /create new team/i }));
+
+    const modal = await screen.findByRole("dialog", { name: /create team/i });
+    expect(within(modal).queryByText("You can only create teams within this organization")).not.toBeInTheDocument();
+
+    const organizationFormItem = within(modal).getByText("Organization").closest(".ant-form-item");
+    expect(organizationFormItem).not.toBeNull();
+
+    const organizationSelect = within(organizationFormItem as HTMLElement).getByRole("combobox");
+    const organizationSelectContainer = organizationSelect.closest(".ant-select");
+    expect(organizationSelectContainer).not.toBeNull();
+    expect(organizationSelectContainer).not.toHaveClass("ant-select-disabled");
+  });
+
+  it("should lock the organization selection for Org Admin users with one organization", async () => {
+    const user = userEvent.setup();
+    const orgAdminOrganizations = [
+      {
+        organization_id: "org-1",
+        organization_alias: "Org 1",
+        models: [],
+        members: [{ user_id: "user-123", user_role: "org_admin" }],
+      },
+    ];
+
+    mockUseOrganizations.mockReturnValue({ data: orgAdminOrganizations });
+
+    renderWithQueryClient(
+      <OldTeams
+        teams={[]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Org Admin"
+        organizations={orgAdminOrganizations as any}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /create new team/i }));
+
+    const modal = await screen.findByRole("dialog", { name: /create team/i });
+    expect(within(modal).getByText("You can only create teams within this organization")).toBeInTheDocument();
+
+    const organizationFormItem = within(modal).getByText("Organization").closest(".ant-form-item");
+    expect(organizationFormItem).not.toBeNull();
+
+    const organizationSelect = within(organizationFormItem as HTMLElement).getByRole("combobox");
+    const organizationSelectContainer = organizationSelect.closest(".ant-select");
+    expect(organizationSelectContainer).not.toBeNull();
+    expect(organizationSelectContainer).toHaveClass("ant-select-disabled");
   });
 });
