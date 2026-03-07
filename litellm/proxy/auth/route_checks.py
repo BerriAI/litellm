@@ -169,6 +169,9 @@ class RouteChecks:
             if route == "/key/info":
                 # handled by function itself
                 pass
+            elif route == "/v2/user/info":
+                # handled by endpoint itself (supports team-admin access)
+                pass
             elif route == "/user/info":
                 # check if user can access this route
                 query_params = request.query_params

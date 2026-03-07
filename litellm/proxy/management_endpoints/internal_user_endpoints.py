@@ -30,7 +30,10 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     get_daily_activity_aggregated,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _user_has_admin_view,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
@@ -43,6 +46,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
+    UserInfoV2Response,
     UserListResponse,
     UserUpdateResult,
 )
@@ -579,6 +583,7 @@ def get_user_id_from_request(request: Request) -> Optional[str]:
 @management_endpoint_wrapper
 async def user_info(
     request: Request,
+    response: fastapi.Response,
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
@@ -614,6 +619,8 @@ async def user_info(
             user_id is None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
+            response.headers["Deprecation"] = "true"
+            response.headers["Link"] = '</v2/user/info>; rel="successor-version"'
             return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
         elif user_id is None:
             user_id = user_api_key_dict.user_id
@@ -704,6 +711,8 @@ async def user_info(
             user_id=user_id, user_info=_user_info, keys=returned_keys, teams=team_list
         )
 
+        response.headers["Deprecation"] = "true"
+        response.headers["Link"] = '</v2/user/info>; rel="successor-version"'
         return response_data
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -712,6 +721,124 @@ async def user_info(
             )
         )
         raise handle_exception_on_proxy(e)
+
+
+@router.get(
+    "/v2/user/info",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=UserInfoV2Response,
+)
+@management_endpoint_wrapper
+async def user_info_v2(
+    request: Request,
+    user_id: Optional[str] = fastapi.Query(
+        default=None, description="User ID in the request parameters"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Lightweight endpoint that returns only the user profile.
+
+    Use /key/list?user_id=<user_id> for keys and
+    /v2/team/list?user_id=<user_id> for teams.
+
+    Example request:
+    ```
+    curl -X GET 'http://localhost:4000/v2/user/info?user_id=krrish7%40berri.ai' \
+    --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if user_id is not None and " " in user_id:
+            user_id = get_user_id_from_request(request=request)
+
+        if prisma_client is None:
+            raise Exception(
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        if user_id is None:
+            user_id = user_api_key_dict.user_id
+
+        if user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="user_id is required",
+            )
+
+        # Access control check before DB query to avoid information disclosure
+        # (different error codes for "not found" vs "not authorized")
+        is_proxy_admin = user_api_key_dict.user_role in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        )
+        is_self = user_id == user_api_key_dict.user_id
+
+        if not is_proxy_admin and not is_self:
+            # Need to check team admin status — fetch user first
+            user_info = await prisma_client.get_data(user_id=user_id)
+            if user_info is None or not await _is_team_admin_for_user(
+                user_api_key_dict=user_api_key_dict,
+                target_user_teams=user_info.teams,
+                prisma_client=prisma_client,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not allowed to access other user's info. Your user_id={}, requested user_id={}".format(
+                        user_api_key_dict.user_id, user_id
+                    ),
+                )
+        else:
+            user_info = await prisma_client.get_data(user_id=user_id)
+            if user_info is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"User {user_id} not found",
+                )
+
+        return UserInfoV2Response(
+            user_info=user_info,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.user_info_v2(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        raise handle_exception_on_proxy(e)
+
+
+async def _is_team_admin_for_user(
+    user_api_key_dict: UserAPIKeyAuth,
+    target_user_teams: list,
+    prisma_client: "PrismaClient",
+) -> bool:
+    """
+    Check if the caller is a team admin for any team that the target user belongs to.
+
+    Batch-fetches all teams in a single query to avoid N+1 DB calls.
+    """
+    if not target_user_teams:
+        return False
+
+    try:
+        team_rows = await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": target_user_teams}}
+        )
+        for row in team_rows:
+            team_obj = LiteLLM_TeamTable(**row.model_dump())
+            if _is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=team_obj
+            ):
+                return True
+    except Exception:
+        verbose_proxy_logger.exception(
+            "_is_team_admin_for_user: failed to fetch teams for user"
+        )
+    return False
 
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):

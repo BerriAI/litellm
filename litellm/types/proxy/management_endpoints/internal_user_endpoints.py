@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr, field_validator
 
 from litellm.proxy._types import (
+    LiteLLM_UserTable,
     LiteLLM_UserTableWithKeyCount,
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
@@ -20,6 +21,17 @@ class UserListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class UserInfoV2Response(BaseModel):
+    """
+    Response model for the /v2/user/info endpoint.
+
+    Returns only the user profile. Keys and teams should be fetched
+    via /key/list and /v2/team/list respectively.
+    """
+
+    user_info: LiteLLM_UserTable
 
 
 class BulkUpdateUserRequest(BaseModel):

@@ -451,10 +451,14 @@ async def test_user_info_url_encoding_plus_character(mocker):
     )
     expected_user_id = "machine-user+alp-air-admin-b58-b@tempus.com"
     
+    from fastapi import Response
+
+    mock_response = Response()
     response = await user_info(
         user_id=decoded_user_id,
         user_api_key_dict=mock_user_api_key_dict,
         request=mock_request,
+        response=mock_response,
     )
 
     # Verify that the response contains the correct user data
@@ -506,12 +510,16 @@ async def test_user_info_nonexistent_user(mocker):
     # Call user_info function with a non-existent user_id
     nonexistent_user_id = "nonexistent-user@example.com"
     
+    from fastapi import Response
+
+    mock_response = Response()
     # Should raise ProxyException with 404 status code (HTTPException is converted by decorator)
     with pytest.raises(ProxyException) as exc_info:
         await user_info(
             user_id=nonexistent_user_id,
             user_api_key_dict=mock_user_api_key_dict,
             request=mock_request,
+            response=mock_response,
         )
 
     # Verify the exception details
@@ -1282,3 +1290,373 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         api_key=None,
         timezone_offset_minutes=480,
     )
+
+
+# ===================== /v2/user/info tests =====================
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_returns_user_profile(mocker):
+    """
+    Test that /v2/user/info returns only the user profile (no keys or teams).
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user = LiteLLM_UserTable(
+        user_id="test-user-123",
+        user_email="test@example.com",
+        user_role="internal_user",
+        teams=["team-1", "team-2"],
+    )
+
+    async def mock_get_data(*args, **kwargs):
+        if kwargs.get("user_id") == "test-user-123":
+            return mock_user
+        return None
+
+    mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user-123", user_role="internal_user"
+    )
+
+    response = await user_info_v2(
+        user_id="test-user-123",
+        user_api_key_dict=mock_user_api_key_dict,
+        request=mock_request,
+    )
+
+    assert response.user_info.user_id == "test-user-123"
+    assert response.user_info.user_email == "test@example.com"
+    assert response.user_info.teams == ["team-1", "team-2"]
+    # Verify no keys or teams fields on the response
+    assert not hasattr(response, "keys")
+    assert not hasattr(response, "teams")
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_falls_back_to_caller_user_id(mocker):
+    """
+    Test that /v2/user/info uses the caller's user_id when no user_id param is provided.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user = LiteLLM_UserTable(
+        user_id="caller-user-id",
+        user_email="caller@example.com",
+    )
+
+    async def mock_get_data(*args, **kwargs):
+        if kwargs.get("user_id") == "caller-user-id":
+            return mock_user
+        return None
+
+    mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="caller-user-id", user_role="internal_user"
+    )
+
+    response = await user_info_v2(
+        user_id=None,
+        user_api_key_dict=mock_user_api_key_dict,
+        request=mock_request,
+    )
+
+    assert response.user_info.user_id == "caller-user-id"
+    assert response.user_info.user_email == "caller@example.com"
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_404_for_unknown_user(mocker):
+    """
+    Test that /v2/user/info returns 404 for a non-existent user.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_get_data(*args, **kwargs):
+        return None
+
+    mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin-user", user_role="proxy_admin"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            user_id="nonexistent-user",
+            user_api_key_dict=mock_user_api_key_dict,
+            request=mock_request,
+        )
+
+    assert exc_info.value.code == "404"
+    assert "nonexistent-user" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_400_when_no_user_id(mocker):
+    """
+    Test that /v2/user/info returns 400 when no user_id is provided and
+    the caller's token has no user_id either.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id=None, user_role="proxy_admin"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict,
+            request=mock_request,
+        )
+
+    assert exc_info.value.code == "400"
+
+
+@pytest.mark.asyncio
+async def test_user_info_v1_has_deprecation_header(mocker):
+    """
+    Test that the old /user/info endpoint returns Deprecation headers.
+    """
+    from fastapi import Request, Response
+
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user = LiteLLM_UserTable(
+        user_id="test-user",
+        user_email="test@example.com",
+        teams=[],
+    )
+
+    async def mock_get_data(*args, **kwargs):
+        if kwargs.get("table_name") == "key":
+            return []
+        elif kwargs.get("table_name") == "team":
+            return []
+        elif kwargs.get("user_id") is not None:
+            return mock_user
+        return None
+
+    mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
+
+    mock_list_team = mocker.AsyncMock(return_value=None)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.team_endpoints.list_team",
+        mock_list_team,
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_response = Response()
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user", user_role="proxy_admin"
+    )
+
+    result = await user_info(
+        user_id="test-user",
+        user_api_key_dict=mock_user_api_key_dict,
+        request=mock_request,
+        response=mock_response,
+    )
+
+    # The result should be a UserInfoResponse (Pydantic model), not JSONResponse
+    assert result.user_id == "test-user"
+    # Deprecation headers should be set on the response object
+    assert mock_response.headers.get("Deprecation") == "true"
+    assert "successor-version" in mock_response.headers.get("Link", "")
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_non_admin_cannot_query_other_user(mocker):
+    """
+    Test that a non-admin, non-team-admin user gets 403 when querying
+    another user's info via /v2/user/info.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_UserTable, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_target_user = LiteLLM_UserTable(
+        user_id="user-B",
+        teams=[],
+    )
+
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=mock_target_user)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="user-A", user_role="internal_user"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            user_id="user-B",
+            user_api_key_dict=mock_user_api_key_dict,
+            request=mock_request,
+        )
+
+    assert exc_info.value.code == "403"
+    assert "Not allowed" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_team_admin_can_query_team_member(mocker):
+    """
+    Test that a team admin can query info for a user in their team.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_UserTable,
+        Member,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    # Target user is in team-1
+    mock_target_user = LiteLLM_UserTable(
+        user_id="user-B",
+        user_email="userB@example.com",
+        teams=["team-1"],
+    )
+
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=mock_target_user)
+
+    # Caller (user-A) is admin of team-1
+    mock_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        members_with_roles=[
+            Member(user_id="user-A", role="admin"),
+            Member(user_id="user-B", role="user"),
+        ],
+    )
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[mock_team]
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="user-A", user_role="internal_user"
+    )
+
+    result = await user_info_v2(
+        user_id="user-B",
+        user_api_key_dict=mock_user_api_key_dict,
+        request=mock_request,
+    )
+
+    assert result.user_info.user_id == "user-B"
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_team_member_cannot_query_other_team_member(mocker):
+    """
+    Test that a non-admin team member cannot query another member's info.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_UserTable,
+        Member,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        user_info_v2,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_target_user = LiteLLM_UserTable(
+        user_id="user-B",
+        teams=["team-1"],
+    )
+
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=mock_target_user)
+
+    # Caller (user-A) is a regular member, NOT admin
+    mock_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        members_with_roles=[
+            Member(user_id="user-A", role="user"),
+            Member(user_id="user-B", role="user"),
+        ],
+    )
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[mock_team]
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="user-A", user_role="internal_user"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            user_id="user-B",
+            user_api_key_dict=mock_user_api_key_dict,
+            request=mock_request,
+        )
+
+    assert exc_info.value.code == "403"

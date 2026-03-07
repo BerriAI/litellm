@@ -1190,3 +1190,33 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
             request_data={},
         )
     assert "Only proxy admin can be used to generate" in str(exc_info.value)
+
+
+def test_v2_user_info_passes_through_route_check():
+    """
+    Test that /v2/user/info passes through the route-level check for all users,
+    even when querying another user. The endpoint handles its own access control
+    (including team-admin logic).
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="user-A",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        user_id="user-A",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"user_id": "user-B"}
+
+    # Should not raise — endpoint handles access control itself
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/v2/user/info",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
