@@ -17,7 +17,6 @@ import {
 import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
-import { ChartLoader } from "../../../shared/chart_loader";
 
 interface ProviderSpendData {
   provider: string;
@@ -29,12 +28,10 @@ interface ProviderSpendData {
 }
 
 interface SpendByProviderProps {
-  loading: boolean;
-  isDateChanging: boolean;
   providerSpend: ProviderSpendData[];
 }
 
-const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChanging, providerSpend }) => {
+const SpendByProvider: React.FC<SpendByProviderProps> = ({ providerSpend }) => {
   const [includeZeroSpend, setIncludeZeroSpend] = useState(false);
   const [includeUnknown, setIncludeUnknown] = useState(false);
 
@@ -75,10 +72,7 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
           </div>
         </div>
       </div>
-      {loading ? (
-        <ChartLoader isDateChanging={isDateChanging} />
-      ) : (
-        <Grid numItems={2}>
+      <Grid numItems={2}>
           <Col numColSpan={1}>
             <DonutChart
               className="mt-4 h-40"
@@ -123,7 +117,6 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
             </Table>
           </Col>
         </Grid>
-      )}
     </Card>
   );
 };
