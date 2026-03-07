@@ -683,7 +683,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Check assessments to determine if any actions were BLOCKED (vs ANONYMIZED)
         assessments = response.get("assessments", [])
         if not assessments:
-            return False
+            # Bedrock indicated GUARDRAIL_INTERVENED but provided no assessments.
+            # Treat as blocked — the safe default when we cannot distinguish
+            # BLOCKED from ANONYMIZED.
+            # Relevant issue: https://github.com/BerriAI/litellm/issues/22949
+            return True
 
         for assessment in assessments:
             # Check topic policy
