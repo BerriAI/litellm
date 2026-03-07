@@ -13,66 +13,76 @@ After ingesting documents, use [/rag/query](./rag_query.md) to search and genera
 
 ## Quick Start
 
+First, encode your file to base64:
+
+```bash
+# On macOS
+base64 -i document.txt > document_base64.txt
+
+# On Linux
+base64 document.txt > document_base64.txt
+```
+
 ### OpenAI
 
 ```bash showLineNumbers title="Ingest to OpenAI vector store"
 curl -X POST "http://localhost:4000/v1/rag/ingest" \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"file\": {
-            \"filename\": \"document.txt\",
-            \"content\": \"$(base64 -i document.txt)\",
-            \"content_type\": \"text/plain\"
-        },
-        \"ingest_options\": {
-            \"vector_store\": {
-                \"custom_llm_provider\": \"openai\"
-            }
-        }
-    }"
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": {
+      "filename": "document.txt",
+      "content": "<base64-encoded-content>",
+      "content_type": "text/plain"
+    },
+    "ingest_options": {
+      "vector_store": {
+        "custom_llm_provider": "openai"
+      }
+    }
+  }'
 ```
 
 ### Bedrock
 
 ```bash showLineNumbers title="Ingest to Bedrock Knowledge Base"
 curl -X POST "http://localhost:4000/v1/rag/ingest" \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"file\": {
-            \"filename\": \"document.txt\",
-            \"content\": \"$(base64 -i document.txt)\",
-            \"content_type\": \"text/plain\"
-        },
-        \"ingest_options\": {
-            \"vector_store\": {
-                \"custom_llm_provider\": \"bedrock\"
-            }
-        }
-    }"
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": {
+      "filename": "document.txt",
+      "content": "<base64-encoded-content>",
+      "content_type": "text/plain"
+    },
+    "ingest_options": {
+      "vector_store": {
+        "custom_llm_provider": "bedrock"
+      }
+    }
+  }'
 ```
 
 ### Vertex AI RAG Engine
 
 ```bash showLineNumbers title="Ingest to Vertex AI RAG Corpus"
 curl -X POST "http://localhost:4000/v1/rag/ingest" \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"file\": {
-            \"filename\": \"document.txt\",
-            \"content\": \"$(base64 -i document.txt)\",
-            \"content_type\": \"text/plain\"
-        },
-        \"ingest_options\": {
-            \"vector_store\": {
-                \"custom_llm_provider\": \"vertex_ai\",
-                \"vector_store_id\": \"your-corpus-id\",
-                \"gcs_bucket\": \"your-gcs-bucket\"
-            }
-        }
-    }"
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": {
+      "filename": "document.txt",
+      "content": "<base64-encoded-content>",
+      "content_type": "text/plain"
+    },
+    "ingest_options": {
+      "vector_store": {
+        "custom_llm_provider": "vertex_ai",
+        "vector_store_id": "your-corpus-id",
+        "gcs_bucket": "your-gcs-bucket"
+      }
+    }
+  }'
 ```
 
 ### AWS S3 Vectors
@@ -141,12 +151,12 @@ Alternatively, search the vector store directly with `/vector_stores/{vector_sto
 
 ```bash showLineNumbers title="Search the vector store"
 curl -X POST "http://localhost:4000/v1/vector_stores/vs_xyz789/search" \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "query": "What is the main topic?",
-        "max_num_results": 5
-    }'
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What is the main topic?",
+    "max_num_results": 5
+  }'
 ```
 
 ## End-to-End Example
@@ -157,21 +167,21 @@ curl -X POST "http://localhost:4000/v1/vector_stores/vs_xyz789/search" \
 
 ```bash showLineNumbers title="Step 1: Ingest"
 curl -X POST "http://localhost:4000/v1/rag/ingest" \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"file\": {
-            \"filename\": \"test_document.txt\",
-            \"content\": \"$(base64 -i test_document.txt)\",
-            \"content_type\": \"text/plain\"
-        },
-        \"ingest_options\": {
-            \"name\": \"test-basic-ingest\",
-            \"vector_store\": {
-                \"custom_llm_provider\": \"openai\"
-            }
-        }
-    }"
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": {
+      "filename": "test_document.txt",
+      "content": "<base64-encoded-content>",
+      "content_type": "text/plain"
+    },
+    "ingest_options": {
+      "name": "test-basic-ingest",
+      "vector_store": {
+        "custom_llm_provider": "openai"
+      }
+    }
+  }'
 ```
 
 Response:
@@ -188,12 +198,12 @@ Response:
 
 ```bash showLineNumbers title="Step 2: Query"
 curl -X POST "http://localhost:4000/v1/vector_stores/vs_692658d337c4819183f2ad8488d12fc9/search" \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "query": "What is LiteLLM?",
-        "custom_llm_provider": "openai"
-    }'
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What is LiteLLM?",
+    "custom_llm_provider": "openai"
+  }'
 ```
 
 Response:
@@ -362,12 +372,16 @@ When `index_name` is omitted, LiteLLM automatically creates:
 
 ```bash showLineNumbers title="Ingest from URL"
 curl -X POST "http://localhost:4000/v1/rag/ingest" \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "file_url": "https://example.com/document.pdf",
-        "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}
-    }'
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file_url": "https://example.com/document.pdf",
+    "ingest_options": {
+      "vector_store": {
+        "custom_llm_provider": "openai"
+      }
+    }
+  }'
 ```
 
 ## Chunking Strategy
@@ -385,25 +399,25 @@ Vertex AI RAG Engine supports custom chunking via the `chunking_strategy` parame
 
 ```bash showLineNumbers title="Vertex AI with custom chunking"
 curl -X POST "http://localhost:4000/v1/rag/ingest" \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"file\": {
-            \"filename\": \"document.txt\",
-            \"content\": \"$(base64 -i document.txt)\",
-            \"content_type\": \"text/plain\"
-        },
-        \"ingest_options\": {
-            \"chunking_strategy\": {
-                \"chunk_size\": 500,
-                \"chunk_overlap\": 100
-            },
-            \"vector_store\": {
-                \"custom_llm_provider\": \"vertex_ai\",
-                \"vector_store_id\": \"your-corpus-id\",
-                \"gcs_bucket\": \"your-gcs-bucket\"
-            }
-        }
-    }"
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": {
+      "filename": "document.txt",
+      "content": "<base64-encoded-content>",
+      "content_type": "text/plain"
+    },
+    "ingest_options": {
+      "chunking_strategy": {
+        "chunk_size": 500,
+        "chunk_overlap": 100
+      },
+      "vector_store": {
+        "custom_llm_provider": "vertex_ai",
+        "vector_store_id": "your-corpus-id",
+        "gcs_bucket": "your-gcs-bucket"
+      }
+    }
+  }'
 ```
 
