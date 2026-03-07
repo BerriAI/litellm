@@ -666,6 +666,7 @@ if MCP_AVAILABLE:
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             build_input_schema,
             load_openapi_spec_async,
+            resolve_operation_params,
         )
 
         try:
@@ -679,22 +680,7 @@ if MCP_AVAILABLE:
                     if operation is None:
                         continue
 
-                    # Resolve $ref params and merge path-level params (same logic as
-                    # _register_openapi_tools) so large specs like GitHub's work correctly.
-                    def _resolve_ref(p: dict) -> dict:
-                        ref = p.get("$ref", "")
-                        if ref.startswith("#/components/parameters/"):
-                            param_name = ref.split("/")[-1]
-                            return components.get("parameters", {}).get(param_name, p)
-                        return p
-
-                    path_level = [_resolve_ref(p) for p in path_item.get("parameters", [])]
-                    op_level = [_resolve_ref(p) for p in operation.get("parameters", [])]
-                    op_keys = {(p.get("name"), p.get("in")) for p in op_level}
-                    merged = [p for p in path_level if (p.get("name"), p.get("in")) not in op_keys] + op_level
-
-                    resolved_op = dict(operation)
-                    resolved_op["parameters"] = merged
+                    resolved_op = resolve_operation_params(operation, path_item, components)
 
                     op_id = operation.get("operationId", f"{method}_{path}")
                     summary = operation.get("summary", "")

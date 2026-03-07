@@ -385,6 +385,7 @@ class MCPServerManager:
         )
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             load_openapi_spec_async,
+            resolve_operation_params,
         )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
@@ -450,32 +451,10 @@ class MCPServerManager:
 
                     operation = path_item[method]
 
-                    # Merge path-level parameters into the operation (operation-level wins)
-                    # and resolve any $ref parameters against components/parameters.
-                    # Real-world specs (e.g. GitHub's) define shared params at the path level
-                    # and use $ref instead of inline objects.
-                    path_level_params = path_item.get("parameters", [])
-                    op_level_params = operation.get("parameters", [])
-
-                    def _resolve_ref(p: dict) -> dict:
-                        ref = p.get("$ref", "")
-                        if not ref.startswith("#/components/parameters/"):
-                            return p
-                        param_name = ref.split("/")[-1]
-                        return components.get("parameters", {}).get(param_name, p)
-
-                    # Build merged list: path-level first, then op-level overrides by name+in
-                    resolved_path = [_resolve_ref(p) for p in path_level_params]
-                    resolved_op = [_resolve_ref(p) for p in op_level_params]
-                    op_keys = {(p.get("name"), p.get("in")) for p in resolved_op}
-                    merged_params = [
-                        p for p in resolved_path
-                        if (p.get("name"), p.get("in")) not in op_keys
-                    ] + resolved_op
-
-                    # Build a resolved copy of the operation for schema/function generation
-                    resolved_operation = dict(operation)
-                    resolved_operation["parameters"] = merged_params
+                    # Resolve $ref params and merge path-level params into the operation.
+                    resolved_operation = resolve_operation_params(
+                        operation, path_item, components
+                    )
 
                     # Generate tool name (without prefix initially)
                     operation_id = operation.get(
