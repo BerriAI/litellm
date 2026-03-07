@@ -79,8 +79,6 @@ sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9
     # no longer visible to image scanners.  The globally installed npm@latest
     # at /usr/local/lib/node_modules/npm/ remains fully functional.
     { apk del --no-cache npm 2>/dev/null || true; }
-    { apk del --no-cache npm 2>/dev/null || true; }
-    { apk del --no-cache npm 2>/dev/null || true; }
 WORKDIR /app
 COPY . .
 RUN ls -la /app
