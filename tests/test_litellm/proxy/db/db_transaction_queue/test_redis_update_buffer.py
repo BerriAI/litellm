@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -200,16 +200,11 @@ def test_validate_redis_transaction_buffer_raises_without_redis():
     When use_redis_transaction_buffer=true but no Redis cache is configured,
     the proxy should refuse to start with a clear error message.
     """
-    general_settings = {"use_redis_transaction_buffer": True}
-
-    with patch(
-        "litellm.proxy.proxy_server.general_settings", general_settings
-    ):
-        with pytest.raises(ValueError, match="use_redis_transaction_buffer"):
-            ProxyStartupEvent._validate_redis_transaction_buffer_config(
-                general_settings=general_settings,
-                redis_usage_cache=None,
-            )
+    with pytest.raises(ValueError, match="use_redis_transaction_buffer"):
+        ProxyStartupEvent._validate_redis_transaction_buffer_config(
+            general_settings={"use_redis_transaction_buffer": True},
+            redis_usage_cache=None,
+        )
 
 
 def test_validate_redis_transaction_buffer_passes_with_redis():
@@ -217,17 +212,11 @@ def test_validate_redis_transaction_buffer_passes_with_redis():
     When use_redis_transaction_buffer=true and Redis cache is configured,
     validation should pass without error.
     """
-    general_settings = {"use_redis_transaction_buffer": True}
-    mock_redis_cache = MagicMock()
-
-    with patch(
-        "litellm.proxy.proxy_server.general_settings", general_settings
-    ):
-        # Should not raise
-        ProxyStartupEvent._validate_redis_transaction_buffer_config(
-            general_settings=general_settings,
-            redis_usage_cache=mock_redis_cache,
-        )
+    # Should not raise
+    ProxyStartupEvent._validate_redis_transaction_buffer_config(
+        general_settings={"use_redis_transaction_buffer": True},
+        redis_usage_cache=MagicMock(),
+    )
 
 
 def test_validate_redis_transaction_buffer_passes_when_disabled():
@@ -235,11 +224,8 @@ def test_validate_redis_transaction_buffer_passes_when_disabled():
     When use_redis_transaction_buffer is not set or false,
     validation should pass regardless of Redis configuration.
     """
-    with patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ):
-        # Should not raise even without Redis
-        ProxyStartupEvent._validate_redis_transaction_buffer_config(
-            general_settings={},
-            redis_usage_cache=None,
-        )
+    # Should not raise even without Redis
+    ProxyStartupEvent._validate_redis_transaction_buffer_config(
+        general_settings={},
+        redis_usage_cache=None,
+    )
