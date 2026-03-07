@@ -20,6 +20,33 @@ from litellm.types.utils import all_litellm_params
 router = APIRouter()
 
 
+def _build_agent_request_headers(
+    agent: Any,
+    request: Request,
+) -> Optional[Dict[str, str]]:
+    """Build merged extra headers for forwarding to the backend agent."""
+    static_headers: Dict[str, str] = dict(agent.static_headers or {})
+    raw_headers = dict(request.headers)
+    normalized = {k.lower(): v for k, v in raw_headers.items()}
+    dynamic_headers: Dict[str, str] = {}
+    if agent.extra_headers:
+        for header_name in agent.extra_headers:
+            val = normalized.get(header_name.lower())
+            if val is not None:
+                dynamic_headers[header_name] = val
+    for alias in (agent.agent_id.lower(), agent.agent_name.lower()):
+        prefix = f"x-a2a-{alias}-"
+        for key, val in normalized.items():
+            if key.startswith(prefix):
+                header_name = key[len(prefix):]
+                if header_name:
+                    dynamic_headers[header_name] = val
+    return merge_agent_headers(
+        dynamic_headers=dynamic_headers or None,
+        static_headers=static_headers or None,
+    )
+
+
 def _jsonrpc_error(
     request_id: Optional[str],
     code: int,
@@ -389,34 +416,7 @@ async def invoke_agent_a2a(
         )
 
         # Build merged headers for the backend agent
-        static_headers: Dict[str, str] = dict(agent.static_headers or {})
-
-        raw_headers = dict(request.headers)
-        normalized = {k.lower(): v for k, v in raw_headers.items()}
-
-        dynamic_headers: Dict[str, str] = {}
-
-        # 1. Admin-configured extra_headers: forward named headers from client request
-        if agent.extra_headers:
-            for header_name in agent.extra_headers:
-                val = normalized.get(header_name.lower())
-                if val is not None:
-                    dynamic_headers[header_name] = val
-
-        # 2. Convention-based forwarding: x-a2a-{agent_id_or_name}-{header_name}
-        #    Matches both agent_id (UUID) and agent_name (alias), case-insensitive.
-        for alias in (agent.agent_id.lower(), agent.agent_name.lower()):
-            prefix = f"x-a2a-{alias}-"
-            for key, val in normalized.items():
-                if key.startswith(prefix):
-                    header_name = key[len(prefix) :]
-                    if header_name:
-                        dynamic_headers[header_name] = val
-
-        agent_extra_headers = merge_agent_headers(
-            dynamic_headers=dynamic_headers or None,
-            static_headers=static_headers or None,
-        )
+        agent_extra_headers = _build_agent_request_headers(agent=agent, request=request)
 
         # Route through SDK functions
         if method == "message/send":

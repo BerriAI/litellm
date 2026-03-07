@@ -75,6 +75,7 @@ class JWTHandler:
     ) -> None:
         self.http_handler = HTTPHandler()
         self.leeway = 0
+        self.litellm_jwtauth = LiteLLM_JWTAuth()
 
     def update_environment(
         self,
