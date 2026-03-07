@@ -169,6 +169,10 @@ async def update_budget(
         },  # type: ignore
     )
 
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    user_api_key_cache.delete_cache(key=f"budget_id:{budget_obj.budget_id}")
+
     return response
 
 

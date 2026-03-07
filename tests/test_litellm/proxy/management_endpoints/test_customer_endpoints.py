@@ -82,6 +82,41 @@ def test_update_customer_success(mock_prisma_client, mock_user_api_key_auth):
     assert response.json()["alias"] == "Updated Test User"
 
 
+@patch("litellm.proxy.proxy_server.user_api_key_cache")
+def test_update_end_user_cache_invalidation(
+    mock_user_api_key_cache, mock_prisma_client, mock_user_api_key_auth
+):
+    """
+    Test that updating an end user invalidates their cache entry.
+    """
+    # Mock the database responses
+    mock_end_user = LiteLLM_EndUserTable(
+        user_id="test-user-cache", alias="Test User", blocked=False
+    )
+    updated_mock_end_user = LiteLLM_EndUserTable(
+        user_id="test-user-cache", alias="Updated Test User", blocked=False
+    )
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_end_user
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=updated_mock_end_user
+    )
+
+    test_data = {"user_id": "test-user-cache", "alias": "Updated Test User"}
+
+    response = client.post(
+        "/customer/update", json=test_data, headers={"Authorization": "Bearer test-key"}
+    )
+
+    assert response.status_code == 200
+    # Verify cache invalidation was called with the correct key
+    mock_user_api_key_cache.delete_cache.assert_called_once_with(
+        key="end_user_id:test-user-cache"
+    )
+
+
 def test_update_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     """
     Test that update_end_user raises a 404 ProxyException when user_id does not exist.
@@ -103,7 +138,10 @@ def test_update_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     assert response.status_code == 404
     response_json = response.json()
     assert "error" in response_json
-    assert response_json["error"]["message"] == "End User Id=non-existent-user does not exist in db"
+    assert (
+        response_json["error"]["message"]
+        == "End User Id=non-existent-user does not exist in db"
+    )
     assert response_json["error"]["type"] == "not_found"
     assert response_json["error"]["param"] == "user_id"
     assert response_json["error"]["code"] == "404"
@@ -126,7 +164,10 @@ def test_info_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     assert response.status_code == 404
     response_json = response.json()
     assert "error" in response_json
-    assert response_json["error"]["message"] == "End User Id=non-existent-user does not exist in db"
+    assert (
+        response_json["error"]["message"]
+        == "End User Id=non-existent-user does not exist in db"
+    )
     assert response_json["error"]["type"] == "not_found"
     assert response_json["error"]["param"] == "end_user_id"
     assert response_json["error"]["code"] == "404"
@@ -165,7 +206,7 @@ def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
     Test that all customer endpoints return the same error schema format.
     All ProxyException errors should have: message, type, param, and code fields.
     """
-    
+
     def validate_error_schema(response_json):
         assert "error" in response_json, "Response should have 'error' key"
         error = response_json["error"]
@@ -212,7 +253,7 @@ def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
 
     # Test /customer/new - duplicate user error
     from unittest.mock import MagicMock
-    
+
     mock_end_user = LiteLLM_EndUserTable(
         user_id="existing-user", alias="Existing User", blocked=False
     )
@@ -229,33 +270,34 @@ def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
     assert error["code"] == "400"
 
 
-def test_customer_endpoints_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
+def test_customer_endpoints_error_schema_consistency(
+    mock_prisma_client, mock_user_api_key_auth
+):
     """
     Test the exact scenarios from the curl examples provided.
-    
+
     Scenario 1: GET /end_user/info with non-existent user
     OLD (incorrect): {"detail":{"error":"End User Id=... does not exist in db"}}
     NEW (correct):   {"error":{"message":"...","type":"not_found","param":"end_user_id","code":"404"}}
-    
+
     Scenario 2: POST /end_user/new with existing user
     Expected:        {"error":{"message":"...","type":"bad_request","param":"user_id","code":"400"}}
-    
+
     Both should use the same error format structure.
     """
-    
+
     # Scenario 1: GET /end_user/info with non-existent user
     # Should return 404 with proper error schema
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=None)
-    
+
     response1 = client.get(
         "/end_user/info?end_user_id=fake-test-end-user-michaels-local-testng",
         headers={"Authorization": "Bearer test-key"},
     )
-    
+
     assert response1.status_code == 404, "Should return 404 for non-existent user"
     response1_json = response1.json()
 
-    
     # Should have the correct format with {"error": {...}}
     assert "error" in response1_json, "Should have top-level 'error' key"
     error1 = response1_json["error"]
@@ -266,22 +308,25 @@ def test_customer_endpoints_error_schema_consistency(mock_prisma_client, mock_us
     assert error1["type"] == "not_found"
     assert error1["code"] == "404"
     assert "does not exist in db" in error1["message"]
-    
+
     # Scenario 2: POST /end_user/new with existing user
     # Should return 400 with proper error schema
     mock_prisma_client.db.litellm_endusertable.create = AsyncMock(
         side_effect=Exception("Unique constraint failed on the fields: (`user_id`)")
     )
-    
+
     response2 = client.post(
         "/end_user/new",
-        json={"user_id": "fake-test-end-user-michaels-local-testing", "budget_id": "Tier0"},
+        json={
+            "user_id": "fake-test-end-user-michaels-local-testing",
+            "budget_id": "Tier0",
+        },
         headers={"Authorization": "Bearer test-key"},
     )
-    
+
     assert response2.status_code == 400, "Should return 400 for duplicate user"
     response2_json = response2.json()
-    
+
     # Should have the same error structure as Scenario 1
     assert "error" in response2_json, "Should have top-level 'error' key"
     error2 = response2_json["error"]
@@ -292,11 +337,12 @@ def test_customer_endpoints_error_schema_consistency(mock_prisma_client, mock_us
     assert error2["type"] == "bad_request"
     assert error2["code"] == "400"
     assert "Customer already exists" in error2["message"]
-    
+
     # Verify both errors have the same schema structure
-    assert set(error1.keys()) == set(error2.keys()), \
-        "Both errors should have the same top-level keys"
-    
+    assert set(error1.keys()) == set(
+        error2.keys()
+    ), "Both errors should have the same top-level keys"
+
     # Both should have string values for all fields
     for key in ["message", "type", "code"]:
         assert isinstance(error1[key], str), f"error1[{key}] should be a string"
@@ -312,9 +358,7 @@ async def test_get_customer_daily_activity_admin_param_passing(monkeypatch):
     )
 
     mock_prisma_client = AsyncMock()
-    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
@@ -367,7 +411,7 @@ async def test_get_customer_daily_activity_with_end_user_aliases(monkeypatch):
     mock_end_user2 = MagicMock()
     mock_end_user2.user_id = "end-user-2"
     mock_end_user2.alias = "Customer Two"
-    
+
     mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
         return_value=[mock_end_user1, mock_end_user2]
     )

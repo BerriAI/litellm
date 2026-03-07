@@ -82,6 +82,43 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     max_budget=_current_model_budget_info.max_budget,
                 )
 
+        from datetime import datetime
+        from fastapi import HTTPException
+
+        current_minute = datetime.now().strftime("%Y-%m-%d-%H-%M")
+
+        if (
+            _current_model_budget_info.tpm_limit is not None
+            and _current_model_budget_info.tpm_limit > 0
+        ):
+            key_model_tpm_cache_key = (
+                f"key_model_tpm:{user_api_key_dict.token}:{model}:{current_minute}"
+            )
+            _current_tpm_spend = (
+                await self.dual_cache.async_get_cache(key=key_model_tpm_cache_key) or 0
+            )
+            if _current_tpm_spend >= _current_model_budget_info.tpm_limit:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"LiteLLM Rate Limit: Key={user_api_key_dict.token} exceeded tpm limit for model={model}. Current TPM: {_current_tpm_spend}, Limit: {_current_model_budget_info.tpm_limit}",
+                )
+
+        if (
+            _current_model_budget_info.rpm_limit is not None
+            and _current_model_budget_info.rpm_limit > 0
+        ):
+            key_model_rpm_cache_key = (
+                f"key_model_rpm:{user_api_key_dict.token}:{model}:{current_minute}"
+            )
+            _current_rpm_spend = (
+                await self.dual_cache.async_get_cache(key=key_model_rpm_cache_key) or 0
+            )
+            if _current_rpm_spend >= _current_model_budget_info.rpm_limit:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"LiteLLM Rate Limit: Key={user_api_key_dict.token} exceeded rpm limit for model={model}. Current RPM: {_current_rpm_spend}, Limit: {_current_model_budget_info.rpm_limit}",
+                )
+
         return True
 
     async def is_end_user_within_model_budget(
@@ -135,6 +172,45 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
                     current_cost=_current_spend,
                     max_budget=_current_model_budget_info.max_budget,
+                )
+
+        from datetime import datetime
+        from fastapi import HTTPException
+
+        current_minute = datetime.now().strftime("%Y-%m-%d-%H-%M")
+
+        if (
+            _current_model_budget_info.tpm_limit is not None
+            and _current_model_budget_info.tpm_limit > 0
+        ):
+            end_user_model_tpm_cache_key = (
+                f"end_user_model_tpm:{end_user_id}:{model}:{current_minute}"
+            )
+            _current_tpm_spend = (
+                await self.dual_cache.async_get_cache(key=end_user_model_tpm_cache_key)
+                or 0
+            )
+            if _current_tpm_spend >= _current_model_budget_info.tpm_limit:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"LiteLLM Rate Limit: End User={end_user_id} exceeded tpm limit for model={model}. Current TPM: {_current_tpm_spend}, Limit: {_current_model_budget_info.tpm_limit}",
+                )
+
+        if (
+            _current_model_budget_info.rpm_limit is not None
+            and _current_model_budget_info.rpm_limit > 0
+        ):
+            end_user_model_rpm_cache_key = (
+                f"end_user_model_rpm:{end_user_id}:{model}:{current_minute}"
+            )
+            _current_rpm_spend = (
+                await self.dual_cache.async_get_cache(key=end_user_model_rpm_cache_key)
+                or 0
+            )
+            if _current_rpm_spend >= _current_model_budget_info.rpm_limit:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"LiteLLM Rate Limit: End User={end_user_id} exceeded rpm limit for model={model}. Current RPM: {_current_rpm_spend}, Limit: {_current_model_budget_info.rpm_limit}",
                 )
 
         return True
@@ -268,6 +344,18 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if model is None:
             return
 
+        total_tokens = 0
+        if (
+            isinstance(response_obj, litellm.ModelResponse)
+            and hasattr(response_obj, "usage")
+            and response_obj.usage
+        ):
+            total_tokens = getattr(response_obj.usage, "total_tokens", 0)
+
+        from datetime import datetime
+
+        current_minute = datetime.now().strftime("%Y-%m-%d-%H-%M")
+
         if (
             virtual_key is not None
             and user_api_key_model_max_budget is not None
@@ -289,6 +377,22 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     response_cost=response_cost,
                 )
 
+            if key_budget_config is not None:
+                if (
+                    key_budget_config.tpm_limit is not None
+                    and key_budget_config.tpm_limit > 0
+                ):
+                    tpm_key = f"key_model_tpm:{virtual_key}:{model}:{current_minute}"
+                    await self.dual_cache.async_increment_cache(
+                        key=tpm_key, value=total_tokens
+                    )
+                if (
+                    key_budget_config.rpm_limit is not None
+                    and key_budget_config.rpm_limit > 0
+                ):
+                    rpm_key = f"key_model_rpm:{virtual_key}:{model}:{current_minute}"
+                    await self.dual_cache.async_increment_cache(key=rpm_key, value=1)
+
         if (
             end_user_id is not None
             and user_api_key_end_user_model_max_budget is not None
@@ -309,6 +413,28 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     start_time_key=end_user_start_time_key,
                     response_cost=response_cost,
                 )
+
+            if key_budget_config is not None:
+                if (
+                    key_budget_config.tpm_limit is not None
+                    and key_budget_config.tpm_limit > 0
+                ):
+                    end_user_tpm_key = (
+                        f"end_user_model_tpm:{end_user_id}:{model}:{current_minute}"
+                    )
+                    await self.dual_cache.async_increment_cache(
+                        key=end_user_tpm_key, value=total_tokens
+                    )
+                if (
+                    key_budget_config.rpm_limit is not None
+                    and key_budget_config.rpm_limit > 0
+                ):
+                    end_user_rpm_key = (
+                        f"end_user_model_rpm:{end_user_id}:{model}:{current_minute}"
+                    )
+                    await self.dual_cache.async_increment_cache(
+                        key=end_user_rpm_key, value=1
+                    )
 
         verbose_proxy_logger.debug(
             "current state of in memory cache %s",

@@ -415,6 +415,12 @@ async def common_checks(  # noqa: PLR0915
                     message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
                 )
 
+            await _end_user_soft_budget_check(
+                end_user_object=end_user_object,
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
         general_settings.get("enforce_user_param", None) is not None
@@ -2144,13 +2150,11 @@ async def get_key_object(
         )
 
     # else, check db
-    _valid_token: Optional[BaseModel] = (
-        await _fetch_key_object_from_db_with_reconnect(
-            hashed_token=hashed_token,
-            prisma_client=prisma_client,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+    _valid_token: Optional[BaseModel] = await _fetch_key_object_from_db_with_reconnect(
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     if _valid_token is None:
@@ -2970,6 +2974,50 @@ async def _team_max_budget_check(
             max_budget=team_object.max_budget,
             message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
         )
+
+
+async def _end_user_soft_budget_check(
+    end_user_object: Optional[LiteLLM_EndUserTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Triggers a budget alert if the end user is over its soft budget.
+    """
+    if (
+        end_user_object is not None
+        and end_user_object.litellm_budget_table is not None
+        and end_user_object.litellm_budget_table.soft_budget is not None
+        and end_user_object.spend >= end_user_object.litellm_budget_table.soft_budget
+    ):
+        verbose_proxy_logger.debug(
+            "Crossed Soft Budget for end_user %s, spend %s, soft_budget %s",
+            end_user_object.user_id,
+            end_user_object.spend,
+            end_user_object.litellm_budget_table.soft_budget,
+        )
+        if valid_token:
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=end_user_object.spend,
+                max_budget=end_user_object.litellm_budget_table.max_budget,
+                soft_budget=end_user_object.litellm_budget_table.soft_budget,
+                user_id=valid_token.user_id,
+                customer_id=end_user_object.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                user_email=None,
+                key_alias=valid_token.key_alias,
+                event_group=Litellm_EntityType.END_USER,
+            )
+
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="soft_budget",
+                    user_info=call_info,
+                )
+            )
 
 
 async def _team_soft_budget_check(
