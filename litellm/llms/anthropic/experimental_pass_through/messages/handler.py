@@ -7,6 +7,7 @@
 
 import asyncio
 import contextvars
+from copy import deepcopy
 from functools import partial
 from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union
 
@@ -202,6 +203,38 @@ def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional
     return anthropic_metadata_obj.model_dump(exclude_none=True)
 
 
+def _sanitize_anthropic_empty_text_blocks(messages: List[Dict]) -> List[Dict]:
+    """Remove empty text content blocks from Anthropic-format messages.
+
+    Claude's API can return assistant messages with empty text blocks alongside
+    tool_use blocks (e.g., {"type": "text", "text": ""}). These are valid in
+    responses but rejected when sent back in subsequent requests. This function
+    strips empty text blocks from content arrays, preserving all other blocks.
+
+    See: https://github.com/BerriAI/litellm/issues/22930
+    """
+    sanitized = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            filtered = [
+                block for block in content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and not block.get("text", "").strip()
+                )
+            ]
+            if len(filtered) != len(content):
+                msg = deepcopy(msg)
+                # If all blocks were empty text, keep one with placeholder
+                msg["content"] = filtered if filtered else [{"type": "text", "text": "."}]
+            sanitized.append(msg)
+        else:
+            sanitized.append(msg)
+    return sanitized
+
+
 def anthropic_messages_handler(
     max_tokens: int,
     messages: List[Dict],
@@ -236,6 +269,12 @@ def anthropic_messages_handler(
     from litellm.types.utils import LlmProviders
 
     metadata = validate_anthropic_api_metadata(metadata)
+
+    # Sanitize empty text content blocks in messages to prevent 400 errors.
+    # Claude's API can return assistant messages with empty text blocks alongside
+    # tool_use blocks, but rejects them when sent back in subsequent requests.
+    # See: https://github.com/BerriAI/litellm/issues/22930
+    messages = _sanitize_anthropic_empty_text_blocks(messages)
 
     local_vars = locals()
     is_async = kwargs.pop("is_async", False)
