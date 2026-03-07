@@ -240,3 +240,52 @@ def test_fallback_without_anthropic_content():
     # then adds text
     assert "thinking" in type_sequence
     assert "text" in type_sequence
+
+
+def test_text_only_response_no_anthropic_content():
+    """Text-only responses should not store anthropic_content (memory optimisation)."""
+    import litellm
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    config = AnthropicConfig()
+
+    completion_response = {
+        "id": "msg_text_only",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello, how can I help?"}],
+        "model": "claude-sonnet-4-6",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+
+    class FakeResponse:
+        def json(self):
+            return completion_response
+        headers = {}
+        status_code = 200
+        text = "{}"
+
+    class FakeLogger:
+        model_call_details = {}
+        def post_call(self, **kwargs):
+            pass
+
+    result = config.transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=FakeResponse(),
+        model_response=litellm.ModelResponse(),
+        logging_obj=FakeLogger(),
+        request_data={},
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key="test-key",
+        json_mode=False,
+    )
+
+    provider = result.choices[0].message.provider_specific_fields or {}
+    assert "anthropic_content" not in provider, (
+        "text-only responses should not carry anthropic_content"
+    )

@@ -1725,7 +1725,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             # interleaved thinking blocks.
             # Fixes: https://github.com/BerriAI/litellm/issues/23047
             raw_content = completion_response.get("content")
-            if raw_content is not None:
+            if raw_content is not None and any(
+                c.get("type")
+                in ("thinking", "redacted_thinking", "server_tool_use")
+                for c in raw_content
+            ):
                 provider_specific_fields["anthropic_content"] = raw_content
 
             _message = litellm.Message(
