@@ -305,8 +305,8 @@ describe("MCPServers", () => {
     expect(screen.getByText("Team B Server")).toBeInTheDocument();
     expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
 
-    // Find the team select dropdown by looking for the "Current Team:" label
-    const teamLabel = screen.getByText("Current Team:");
+    // Find the team select dropdown by looking for the "Team" label
+    const teamLabel = screen.getByText("Team");
     const teamSelectContainer = teamLabel.closest("div")?.querySelector(".ant-select");
     expect(teamSelectContainer).toBeTruthy();
 
