@@ -1,4 +1,5 @@
 import json
+import orjson
 import ssl
 from typing import (
     TYPE_CHECKING,
@@ -180,7 +181,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else json.dumps(data)
+                        else orjson.dumps(data)
                     ),
                     timeout=timeout,
                     stream=stream,
@@ -240,7 +241,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else json.dumps(data)
+                        else orjson.dumps(data)
                     ),
                     timeout=timeout,
                     stream=stream,

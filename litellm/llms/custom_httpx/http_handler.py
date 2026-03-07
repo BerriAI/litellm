@@ -737,18 +737,17 @@ class AsyncHTTPHandler:
     ) -> Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]:
         """
         - Creates a transport for httpx.AsyncClient
+            - if USE_SIDECAR is set, use the Rust sidecar transport
             - if litellm.force_ipv4 is True, it will return AsyncHTTPTransport with local_address="0.0.0.0"
             - [Default] It will return AiohttpTransport
             - Users can opt out of using AiohttpTransport by setting litellm.use_aiohttp_transport to False
-
-
-        Notes on this handler:
-        - Why AiohttpTransport?
-            - By default, we use AiohttpTransport since it offers much higher throughput and lower latency than httpx.
-
-        - Why force ipv4?
-            - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
+        #########################################################
+        # SIDECAR TRANSPORT — Rust-based HTTP forwarding
+        #########################################################
+        if AsyncHTTPHandler._should_use_sidecar_transport():
+            return AsyncHTTPHandler._create_sidecar_transport()
+
         #########################################################
         # AIOHTTP TRANSPORT is off by default
         #########################################################
@@ -763,6 +762,23 @@ class AsyncHTTPHandler:
         # HTTPX TRANSPORT is used when aiohttp is not installed
         #########################################################
         return AsyncHTTPHandler._create_httpx_transport()
+
+    @staticmethod
+    def _should_use_sidecar_transport() -> bool:
+        """Check if the Rust sidecar transport is enabled via env var."""
+        return os.getenv("USE_SIDECAR", "").lower() == "true"
+
+    @staticmethod
+    def _create_sidecar_transport():
+        """Create a sidecar transport that forwards requests through the Rust binary."""
+        from litellm.llms.custom_httpx.sidecar_transport import (
+            LiteLLMSidecarTransport,
+        )
+
+        port = int(os.getenv("SIDECAR_PORT", "8787"))
+        sidecar_url = f"http://127.0.0.1:{port}"
+        verbose_logger.info("Using Sidecar transport → %s", sidecar_url)
+        return LiteLLMSidecarTransport(sidecar_url=sidecar_url)
 
     @staticmethod
     def _should_use_aiohttp_transport() -> bool:
