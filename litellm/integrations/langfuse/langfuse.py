@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
     filter_exceptions_from_params,
 )
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
@@ -123,7 +124,7 @@ class LangFuseLogger:
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(
             flush_interval
         )
-        
+
         if should_use_langfuse_mock():
             self.langfuse_client = create_mock_langfuse_client()
             self.is_mock_mode = True
@@ -291,8 +292,6 @@ class LangFuseLogger:
 
             functions = optional_params.pop("functions", None)
             tools = optional_params.pop("tools", None)
-            # Remove secret_fields to prevent leaking sensitive data (e.g., authorization headers)
-            optional_params.pop("secret_fields", None)
             if functions is not None:
                 prompt["functions"] = functions
             if tools is not None:
@@ -505,13 +504,18 @@ class LangFuseLogger:
             kwargs.get("model", ""), custom_llm_provider, metadata
         )
 
+        # Use whitelisted model parameters to prevent leaking secrets
+        sanitized_model_params = ModelParamHelper.get_standard_logging_model_parameters(
+            optional_params
+        )
+
         trace.generation(
             CreateGeneration(
                 name=metadata.get("generation_name", "litellm-completion"),
                 startTime=start_time,
                 endTime=end_time,
                 model=model_name,
-                modelParameters=optional_params,
+                modelParameters=sanitized_model_params,
                 prompt=input,
                 completion=output,
                 usage={
@@ -607,9 +611,7 @@ class LangFuseLogger:
             # Use standard_logging_object.trace_id if available (when trace_id from metadata is None)
             # This allows standard trace_id to be used when provided in standard_logging_object
             if trace_id is None and standard_logging_object is not None:
-                trace_id = cast(
-                    Optional[str], standard_logging_object.get("trace_id")
-                )
+                trace_id = cast(Optional[str], standard_logging_object.get("trace_id"))
             # Fallback to litellm_call_id if no trace_id found
             if trace_id is None:
                 trace_id = litellm_call_id
@@ -833,13 +835,26 @@ class LangFuseLogger:
                 kwargs.get("model", ""), custom_llm_provider, metadata
             )
 
+            # Use whitelisted model_parameters from StandardLoggingPayload
+            # to prevent leaking secrets (api_key, auth headers, etc.)
+            if standard_logging_object is not None:
+                sanitized_model_params = standard_logging_object.get(
+                    "model_parameters", optional_params
+                )
+            else:
+                sanitized_model_params = (
+                    ModelParamHelper.get_standard_logging_model_parameters(
+                        optional_params
+                    )
+                )
+
             generation_params = {
                 "name": generation_name,
                 "id": clean_metadata.pop("generation_id", generation_id),
                 "start_time": start_time,
                 "end_time": end_time,
                 "model": model_name,
-                "model_parameters": optional_params,
+                "model_parameters": sanitized_model_params,
                 "input": input if not mask_input else "redacted-by-litellm",
                 "output": output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
