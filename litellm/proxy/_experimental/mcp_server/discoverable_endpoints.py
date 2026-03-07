@@ -2,6 +2,8 @@ import json
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import httpx
+
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -135,12 +137,18 @@ def _resolve_oauth2_server_for_root_endpoints(
     When the MCP SDK hits root-level endpoints like /register, /authorize, /token
     without a server name prefix, we try to find the right server automatically.
     Returns the server if exactly one OAuth2 server is configured, else None.
+
+    Note: IP filtering is intentionally not applied here. These OAuth relay endpoints
+    must be reachable by the user's browser during an interactive OAuth flow; the
+    actual MCP data access is protected separately once a token is obtained.
     """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
-    registry = global_mcp_server_manager.get_filtered_registry(client_ip=client_ip)
+    # Use client_ip=None so IP access-control is not applied to OAuth relay endpoints.
+    # OAuth relay (authorize/token/register/callback) must be browser-accessible.
+    registry = global_mcp_server_manager.get_filtered_registry(client_ip=None)
     oauth2_servers = [
         s for s in registry.values() if s.auth_type == MCPAuth.oauth2
     ]
@@ -234,13 +242,24 @@ async def exchange_token_with_server(
         token_data["code_verifier"] = code_verifier
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    response = await async_client.post(
-        mcp_server.token_url,
-        headers={"Accept": "application/json"},
-        data=token_data,
-    )
+    try:
+        response = await async_client.post(
+            mcp_server.token_url,
+            headers={"Accept": "application/json"},
+            data=token_data,
+        )
+    except httpx.HTTPStatusError as exc:
+        # Proxy the upstream OAuth error back to the client so MCP clients can
+        # display a meaningful error rather than a generic 500.
+        try:
+            error_body = exc.response.json()
+        except Exception:
+            error_body = {
+                "error": "upstream_error",
+                "error_description": exc.response.text,
+            }
+        return JSONResponse(status_code=exc.response.status_code, content=error_body)
 
-    response.raise_for_status()
     token_response = response.json()
     access_token = token_response["access_token"]
 
@@ -331,9 +350,10 @@ async def authorize(
     )
 
     lookup_name = mcp_server_name or client_id
-    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    # Do not apply IP filtering for OAuth relay endpoints: the user's browser
+    # navigates here during an interactive OAuth flow and must not be blocked.
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
-        lookup_name, client_ip=client_ip
+        lookup_name, client_ip=None
     )
     if mcp_server is None and mcp_server_name is None:
         mcp_server = _resolve_oauth2_server_for_root_endpoints()
@@ -378,9 +398,9 @@ async def token_endpoint(
     )
 
     lookup_name = mcp_server_name or client_id
-    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    # Do not apply IP filtering for OAuth relay endpoints.
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
-        lookup_name, client_ip=client_ip
+        lookup_name, client_ip=None
     )
     if mcp_server is None and mcp_server_name is None:
         mcp_server = _resolve_oauth2_server_for_root_endpoints()
@@ -702,9 +722,9 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
             )
         return dummy_return
 
-    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    # Do not apply IP filtering for OAuth relay endpoints.
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
-        mcp_server_name, client_ip=client_ip
+        mcp_server_name, client_ip=None
     )
     if mcp_server is None:
         return dummy_return

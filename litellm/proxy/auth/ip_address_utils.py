@@ -104,6 +104,11 @@ class IPAddressUtils:
         except ValueError:
             return False
 
+        # IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1) are not directly
+        # matched by IPv4 networks, so unwrap them to their IPv4 equivalent.
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
+
         return any(addr in network for network in networks)
 
     @staticmethod
