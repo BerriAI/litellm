@@ -54,11 +54,11 @@ async def test_ui_view_users_with_null_email(mocker, caplog):
 
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
-    # Flag OFF by default — no settings row
-    async def mock_find_unique_settings(*args, **kwargs):
-        return None
-
-    mock_prisma_client.db.litellm_uisettings.find_unique = mock_find_unique_settings
+    # Flag OFF by default
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={},
+    )
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -92,10 +92,10 @@ async def test_ui_view_users_proxy_admin_no_org_filter(mocker):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Flag OFF by default
-    async def mock_find_unique_settings(*args, **kwargs):
-        return None
-
-    mock_prisma_client.db.litellm_uisettings.find_unique = mock_find_unique_settings
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={},
+    )
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     await ui_view_users(
@@ -132,13 +132,10 @@ async def test_ui_view_users_org_admin_filtered_by_org(mocker):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Flag ON
-    mock_settings_row = mocker.MagicMock()
-    mock_settings_row.settings = {"scope_user_search_to_org": True}
-
-    async def mock_find_unique_settings(*args, **kwargs):
-        return mock_settings_row
-
-    mock_prisma_client.db.litellm_uisettings.find_unique = mock_find_unique_settings
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
@@ -185,13 +182,10 @@ async def test_ui_view_users_non_org_admin_returns_403(mocker):
     mock_prisma_client = mocker.MagicMock()
 
     # Flag ON
-    mock_settings_row = mocker.MagicMock()
-    mock_settings_row.settings = {"scope_user_search_to_org": True}
-
-    async def mock_find_unique_settings(*args, **kwargs):
-        return mock_settings_row
-
-    mock_prisma_client.db.litellm_uisettings.find_unique = mock_find_unique_settings
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
@@ -237,11 +231,11 @@ async def test_ui_view_users_flag_off_internal_user_can_search(mocker):
 
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
-    # Flag OFF — no settings row
-    async def mock_find_unique_settings(*args, **kwargs):
-        return None
-
-    mock_prisma_client.db.litellm_uisettings.find_unique = mock_find_unique_settings
+    # Flag OFF
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={},
+    )
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     response = await ui_view_users(
@@ -261,7 +255,7 @@ async def test_ui_view_users_flag_on_team_admin_org_team(mocker):
     """
     Flag ON, team admin for org-bound team: org filter is applied using team's org.
     """
-    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     mock_prisma_client = mocker.MagicMock()
     org_id = "org-456"
@@ -278,30 +272,26 @@ async def test_ui_view_users_flag_on_team_admin_org_team(mocker):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Flag ON
-    mock_settings_row = mocker.MagicMock()
-    mock_settings_row.settings = {"scope_user_search_to_org": True}
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
 
-    async def mock_find_unique_settings(*args, **kwargs):
-        return mock_settings_row
+    # Mock get_team_object
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id=tid,
+        team_alias="test-team",
+        organization_id=org_id,
+        members_with_roles=[{"user_id": "team-admin-user", "role": "admin"}],
+    )
 
-    mock_prisma_client.db.litellm_uisettings.find_unique = mock_find_unique_settings
+    async def mock_get_team_object(*args, **kwargs):
+        return team_obj
 
-    # Team lookup
-    mock_team_row = mocker.MagicMock()
-    mock_team_row.model_dump.return_value = {
-        "team_id": tid,
-        "team_alias": "test-team",
-        "organization_id": org_id,
-        "members_with_roles": [{"user_id": "team-admin-user", "role": "admin"}],
-        "admins": [],
-        "members": [],
-        "blocked": False,
-    }
-
-    async def mock_find_unique_team(*args, **kwargs):
-        return mock_team_row
-
-    mock_prisma_client.db.litellm_teamtable.find_unique = mock_find_unique_team
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        side_effect=mock_get_team_object,
+    )
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
@@ -337,35 +327,32 @@ async def test_ui_view_users_flag_on_team_admin_non_org_team_403(mocker):
     Flag ON, team admin for non-org team: returns 403.
     """
     from fastapi import HTTPException
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     mock_prisma_client = mocker.MagicMock()
     tid = "team-no-org"
 
     # Flag ON
-    mock_settings_row = mocker.MagicMock()
-    mock_settings_row.settings = {"scope_user_search_to_org": True}
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
 
-    async def mock_find_unique_settings(*args, **kwargs):
-        return mock_settings_row
+    # Mock get_team_object — team has no organization_id
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id=tid,
+        team_alias="no-org-team",
+        organization_id=None,
+        members_with_roles=[{"user_id": "team-admin-user", "role": "admin"}],
+    )
 
-    mock_prisma_client.db.litellm_uisettings.find_unique = mock_find_unique_settings
+    async def mock_get_team_object(*args, **kwargs):
+        return team_obj
 
-    # Team lookup — no organization_id
-    mock_team_row = mocker.MagicMock()
-    mock_team_row.model_dump.return_value = {
-        "team_id": tid,
-        "team_alias": "no-org-team",
-        "organization_id": None,
-        "members_with_roles": [{"user_id": "team-admin-user", "role": "admin"}],
-        "admins": [],
-        "members": [],
-        "blocked": False,
-    }
-
-    async def mock_find_unique_team(*args, **kwargs):
-        return mock_team_row
-
-    mock_prisma_client.db.litellm_teamtable.find_unique = mock_find_unique_team
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        side_effect=mock_get_team_object,
+    )
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
@@ -409,13 +396,10 @@ async def test_ui_view_users_flag_on_non_admin_no_team_id_403(mocker):
     mock_prisma_client = mocker.MagicMock()
 
     # Flag ON
-    mock_settings_row = mocker.MagicMock()
-    mock_settings_row.settings = {"scope_user_search_to_org": True}
-
-    async def mock_find_unique_settings(*args, **kwargs):
-        return mock_settings_row
-
-    mock_prisma_client.db.litellm_uisettings.find_unique = mock_find_unique_settings
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
