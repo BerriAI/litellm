@@ -139,7 +139,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
             label={
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 Extra Headers
-                <Tooltip title="Forward custom headers from incoming requests to this MCP server (e.g., Authorization, X-Custom-Header, User-Agent)">
+                <Tooltip title="Header names to forward from client requests to this MCP server. Clients must include these headers in their requests (e.g., Authorization, X-Custom-Header). Only headers listed here will be forwarded.">
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
                 {mcpServer?.extra_headers && mcpServer.extra_headers.length > 0 && (
@@ -169,7 +169,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
             label={
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 Static Headers
-                <Tooltip title="Send these key-value headers with every request to this MCP server.">
+                <Tooltip title="Fixed key-value headers sent with every request to this MCP server. These are set server-side and do not require the client to pass them.">
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>

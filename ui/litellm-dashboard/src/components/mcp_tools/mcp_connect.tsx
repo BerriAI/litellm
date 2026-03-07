@@ -35,6 +35,7 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
   accessGroups = ["dev-group"],
 }) => {
   const [useServerHeader, setUseServerHeader] = useState(false);
+  const [useServerAuth, setUseServerAuth] = useState(false);
 
   const getHeadersConfig = () => {
     const headers: Record<string, any> = {
@@ -42,9 +43,12 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
     };
     if (useServerHeader && serverName) {
       const formattedServerName = serverName.replace(/\s+/g, "_");
-      // Include both server name and access groups in the same header (comma-separated string)
       const serverAndGroups = [formattedServerName, ...accessGroups].join(",");
       headers["x-mcp-servers"] = serverAndGroups;
+    }
+    if (useServerAuth && serverName) {
+      const alias = serverName.replace(/\s+/g, "_").toLowerCase();
+      headers[`x-mcp-${alias}-authorization`] = "Bearer YOUR_SERVER_AUTH_TOKEN";
     }
     return headers;
   };
@@ -61,35 +65,70 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
         </div>
       </div>
       {serverName && (title === "Implementation Example" || title === "Configuration") && (
-        <Form.Item className="mb-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Switch size="small" checked={useServerHeader} onChange={setUseServerHeader} />
-            <Text className="text-sm">
-              Limit tools to specific MCP servers or MCP groups by passing the <code>x-mcp-servers</code> header
-            </Text>
-          </div>
-          {useServerHeader && (
-            <Alert
-              className="mt-2"
-              type="info"
-              showIcon
-              message="Two Options"
-              description={
-                <div>
-                  <p>
-                    <strong>Option 1:</strong> Get a specific server: <code>"{serverName.replace(/\s+/g, "_")}"</code>
-                  </p>
-                  <p>
-                    <strong>Option 2:</strong> Get a group of MCPs: <code>"dev-group"</code>
-                  </p>
-                  <p className="mt-2 text-sm text-gray-600">
-                    You can also mix both: <code>"Server1,dev-group"</code>
-                  </p>
-                </div>
-              }
-            />
-          )}
-        </Form.Item>
+        <>
+          <Form.Item className="mb-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Switch size="small" checked={useServerHeader} onChange={setUseServerHeader} />
+              <Text className="text-sm">
+                Limit tools to specific MCP servers or MCP groups by passing the <code>x-mcp-servers</code> header
+              </Text>
+            </div>
+            {useServerHeader && (
+              <Alert
+                className="mt-2"
+                type="info"
+                showIcon
+                message="Two Options"
+                description={
+                  <div>
+                    <p>
+                      <strong>Option 1:</strong> Get a specific server: <code>"{serverName.replace(/\s+/g, "_")}"</code>
+                    </p>
+                    <p>
+                      <strong>Option 2:</strong> Get a group of MCPs: <code>"dev-group"</code>
+                    </p>
+                    <p className="mt-2 text-sm text-gray-600">
+                      You can also mix both: <code>"Server1,dev-group"</code>
+                    </p>
+                  </div>
+                }
+              />
+            )}
+          </Form.Item>
+          <Form.Item className="mb-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Switch size="small" checked={useServerAuth} onChange={setUseServerAuth} />
+              <Text className="text-sm">
+                Pass per-server authentication using <code>x-mcp-&#123;alias&#125;-&#123;header&#125;</code> headers
+              </Text>
+            </div>
+            {useServerAuth && (
+              <Alert
+                className="mt-2"
+                type="info"
+                showIcon
+                message="Server-Specific Auth Headers"
+                description={
+                  <div>
+                    <p>
+                      Format: <code>x-mcp-&#123;server_alias&#125;-&#123;header_name&#125;: value</code>
+                    </p>
+                    <p className="mt-1">
+                      <strong>Examples:</strong>
+                    </p>
+                    <ul className="mt-1 ml-4 list-disc">
+                      <li><code>x-mcp-github-authorization: Bearer ghp_xxx</code></li>
+                      <li><code>x-mcp-zapier-x-api-key: sk-xxx</code></li>
+                    </ul>
+                    <p className="mt-2 text-sm text-gray-600">
+                      Each MCP server can use different auth. The alias is the server&apos;s alias in lowercase.
+                    </p>
+                  </div>
+                }
+              />
+            )}
+          </Form.Item>
+        </>
       )}
       {React.Children.map(children, (child) => {
         if (
