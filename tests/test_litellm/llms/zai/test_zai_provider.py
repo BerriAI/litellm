@@ -179,3 +179,95 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
 
     assert response.choices[0].message.content == "Hello! How can I help you today?"
     assert response.usage.total_tokens == 25
+
+
+class TestZaiThinkingParamMapping:
+    """Test that Anthropic-style thinking params are mapped to Z.ai format."""
+
+    def _get_config(self):
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        return ZAIChatConfig()
+
+    def test_thinking_enabled(self):
+        config = self._get_config()
+        result = config.map_openai_params(
+            non_default_params={"thinking": {"type": "enabled"}},
+            optional_params={},
+            model="glm-4.7",
+            drop_params=False,
+        )
+        assert result["thinking"] == {"type": "enabled"}
+
+    def test_thinking_disabled(self):
+        config = self._get_config()
+        result = config.map_openai_params(
+            non_default_params={"thinking": {"type": "disabled"}},
+            optional_params={},
+            model="glm-4.7",
+            drop_params=False,
+        )
+        assert result["thinking"] == {"type": "disabled"}
+
+    def test_thinking_budget_tokens_stripped(self):
+        """Z.ai does not support budget_tokens — it should be ignored."""
+        config = self._get_config()
+        result = config.map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+            optional_params={},
+            model="glm-4.7",
+            drop_params=False,
+        )
+        assert result["thinking"] == {"type": "enabled"}
+        assert "budget_tokens" not in result["thinking"]
+
+    def test_thinking_clear_thinking_passthrough(self):
+        """clear_thinking controls Preserved Thinking and should be passed through."""
+        config = self._get_config()
+        result = config.map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "clear_thinking": False}},
+            optional_params={},
+            model="glm-4.7",
+            drop_params=False,
+        )
+        assert result["thinking"] == {"type": "enabled", "clear_thinking": False}
+
+    def test_reasoning_effort_maps_to_thinking(self):
+        config = self._get_config()
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="glm-4.7",
+            drop_params=False,
+        )
+        assert result["thinking"] == {"type": "enabled"}
+
+    def test_reasoning_effort_none_disables(self):
+        config = self._get_config()
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="glm-4.7",
+            drop_params=False,
+        )
+        assert result["thinking"] == {"type": "disabled"}
+
+    def test_thinking_bool_true(self):
+        config = self._get_config()
+        result = config.map_openai_params(
+            non_default_params={"thinking": True},
+            optional_params={},
+            model="glm-4.7",
+            drop_params=False,
+        )
+        assert result["thinking"] == {"type": "enabled"}
+
+    def test_thinking_bool_false(self):
+        config = self._get_config()
+        result = config.map_openai_params(
+            non_default_params={"thinking": False},
+            optional_params={},
+            model="glm-4.7",
+            drop_params=False,
+        )
+        assert result["thinking"] == {"type": "disabled"}
