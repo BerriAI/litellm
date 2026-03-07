@@ -3421,6 +3421,7 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
 
     assert "additionalModelRequestFields" in request_data
     assert "tool_choice" in request_data["additionalModelRequestFields"]
+    assert request_data["additionalModelRequestFields"]["tool_choice"]["type"] == "auto"
     assert request_data["additionalModelRequestFields"]["tool_choice"]["disable_parallel_tool_use"] is True
     assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
 
@@ -3449,6 +3450,38 @@ def test_parallel_tool_calls_older_model_drops_disable_flag():
     additional = request_data.get("additionalModelRequestFields", {})
     assert "tool_choice" not in additional
     assert "parallel_tool_calls" not in additional
+
+
+def test_parallel_tool_calls_true_includes_type_field():
+    """parallel_tool_calls=True must include 'type' in tool_choice to avoid Bedrock rejection.
+
+    Regression test: without 'type': 'auto', the Anthropic model on Bedrock rejects the
+    request with: tool_choice.type: Field required
+    """
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages = [{"role": "user", "content": "hi"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": True, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "additionalModelRequestFields" in request_data
+    tc = request_data["additionalModelRequestFields"]["tool_choice"]
+    assert tc["type"] == "auto"
+    assert tc["disable_parallel_tool_use"] is False
+    assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
 
 
 class TestBedrockMinThinkingBudgetTokens:
