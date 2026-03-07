@@ -163,15 +163,16 @@ async def authenticate_user(  # noqa: PLR0915
         # Admin is Authe'd in - generate key for the UI to access Proxy
 
         # ensure this user is set as the proxy admin, in this route there is no sso, we can assume this user is only the admin
-        await user_update(
-            data=UpdateUserRequest(
-                user_id=key_user_id,
-                user_role=user_role,
-            ),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-            ),
-        )
+        if prisma_client is not None:
+            await user_update(
+                data=UpdateUserRequest(
+                    user_id=key_user_id,
+                    user_role=user_role,
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                ),
+            )
 
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
