@@ -3706,9 +3706,9 @@ class Router:
             ### get custom
             response = original_generic_function(
                 **{
-                    **data,
-                    "caching": self.cache_responses,
                     **kwargs,
+                    "caching": self.cache_responses,
+                    **data,
                 }
             )
 
