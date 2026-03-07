@@ -658,6 +658,46 @@ class TestAnthropicStreaming:
                 f"Expected sequential indices [0, 1, 2] but got {block_start_indices}"
             )
 
+    async def test_anthropic_streaming_skips_tool_block_with_missing_id(self, handler):
+        """Test that a tool block without an 'id' field is skipped (not accumulated) and passed through."""
+
+        async def mock_stream():
+            events = [
+                {"type": "message_start", "message": {"id": "msg_123", "content": [], "stop_reason": None}},
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+                {"type": "content_block_stop", "index": 0},
+                # Tool block with missing id
+                {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "name": "bad_tool", "input": {}}},
+                {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+                {"type": "content_block_stop", "index": 1},
+                {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 10}},
+                {"type": "message_stop"},
+            ]
+            for m in events:
+                yield f"data: {json.dumps(m)}\n\n".encode()
+
+        async def mock_post(*_args: Any, **kwargs: Any) -> Mock:
+            # Allow-all: echo back the request as-is
+            mock_response = Mock()
+            mock_response.json.return_value = kwargs.get("json", {})
+            mock_response.raise_for_status = Mock()
+            return mock_response
+
+        with patch.object(handler.tool_blocking_client, "post", new=mock_post):
+            chunks = []
+            async for chunk in handler.async_post_call_streaming_iterator_hook(
+                user_api_key_dict={},
+                response=mock_stream(),
+                request_data=create_anthropic_request_data(),
+            ):
+                chunks.append(await self._decode_sse(chunk))
+
+        # The malformed tool block should still be emitted (fail-open), not cause a KeyError
+        assert len(chunks) > 0
+        text_deltas = self._find_text_deltas(chunks)
+        assert len(text_deltas) > 0
+
     async def test_anthropic_streaming_fail_open_on_missing_message_delta(self, handler):
         """Test that buffered tool chunks are emitted if stream ends without message_delta (fail-open)."""
 

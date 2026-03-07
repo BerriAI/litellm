@@ -27,7 +27,7 @@ os.environ["RUBRIK_WEBHOOK_URL"] = "http://localhost:8080"
 
 # Patch asyncio.create_task to avoid event loop issues during import
 with patch("asyncio.create_task", Mock()):
-    from litellm.integrations.rubrik import RubrikLogger  # noqa: E402
+    from litellm.integrations.rubrik import LLMResponseFormat, RubrikLogger  # noqa: E402
 
 
 @pytest.fixture
@@ -295,6 +295,17 @@ class TestInitialization:
             with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host", "RUBRIK_BATCH_SIZE": "-5"}):
                 h = RubrikLogger()
                 assert h.batch_size > 0
+
+    def test_detect_format_with_query_params(self):
+        """Test that URL format detection works even when the URL has query parameters."""
+        openai_data = {"proxy_server_request": {"url": "http://host/chat/completions?stream=true"}}
+        assert RubrikLogger._detect_llm_response_format(openai_data) == LLMResponseFormat.OPENAI
+
+        anthropic_data = {"proxy_server_request": {"url": "http://host/v1/messages?foo=bar"}}
+        assert RubrikLogger._detect_llm_response_format(anthropic_data) == LLMResponseFormat.ANTHROPIC
+
+        unknown_data = {"proxy_server_request": {"url": "http://host/other?q=1"}}
+        assert RubrikLogger._detect_llm_response_format(unknown_data) == LLMResponseFormat.UNKNOWN
 
 
 @pytest.mark.asyncio

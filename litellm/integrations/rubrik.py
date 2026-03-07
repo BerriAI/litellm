@@ -31,6 +31,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, Union, cast
+from urllib.parse import urlparse
 
 import httpx
 
@@ -338,10 +339,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         """Detect the LLM response format (OpenAI/Anthropic) from the proxied endpoint URL."""
         proxy_request = request_data.get("proxy_server_request", {})
         url = proxy_request.get("url", "")
+        path = urlparse(url).path
 
-        if url.endswith(_ENDPOINT_OPENAI_CHAT_COMPLETIONS):
+        if path.endswith(_ENDPOINT_OPENAI_CHAT_COMPLETIONS):
             return LLMResponseFormat.OPENAI
-        if url.endswith(_ENDPOINT_ANTHROPIC_MESSAGES):
+        if path.endswith(_ENDPOINT_ANTHROPIC_MESSAGES):
             return LLMResponseFormat.ANTHROPIC
         return LLMResponseFormat.UNKNOWN
 
@@ -568,6 +570,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return
 
         tool_id = content_block.get("id")
+        if tool_id is None:
+            verbose_logger.warning("Anthropic tool block missing 'id' field — skipping accumulation")
+            return
         tool_calls[tool_id] = AnthropicToolCallData(
             index=chunk.get("index", 0),
             id=tool_id,
