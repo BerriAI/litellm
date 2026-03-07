@@ -1,4 +1,4 @@
-import { deleteHashicorpVaultConfig } from "@/components/networking";
+import { deleteHashicorpVaultConfig } from "./hashicorpVaultApi";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { hashicorpVaultKeys } from "./useHashicorpVaultConfig";
 

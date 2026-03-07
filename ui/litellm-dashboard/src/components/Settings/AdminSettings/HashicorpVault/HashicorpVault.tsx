@@ -7,8 +7,8 @@ import { useUpdateHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOve
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { testHashicorpVaultConnection } from "@/components/networking";
-import { Alert, Button, Card, Descriptions, Skeleton, Space, Typography } from "antd";
+import { testHashicorpVaultConnection } from "@/app/(dashboard)/hooks/configOverrides/hashicorpVaultApi";
+import { Alert, Button, Card, Descriptions, Flex, Skeleton, Space, Typography } from "antd";
 import { Edit, KeyRound, PlugZap, Trash2 } from "lucide-react";
 import { SENSITIVE_FIELDS, FIELD_LABELS } from "./constants";
 import EditHashicorpVaultModal from "./EditHashicorpVaultModal";
@@ -85,7 +85,7 @@ export default function HashicorpVault() {
     }
     if (SENSITIVE_FIELDS.has(key)) {
       return (
-        <div className="flex items-center justify-between">
+        <Flex justify="space-between" align="center">
           <Text className="font-mono text-gray-600">{value}</Text>
           <Button
             type="text"
@@ -94,7 +94,7 @@ export default function HashicorpVault() {
             icon={<Trash2 className="w-3.5 h-3.5" />}
             onClick={() => setClearingField(key)}
           />
-        </div>
+        </Flex>
       );
     }
     return <Text className="font-mono text-gray-600">{value}</Text>;
@@ -140,16 +140,16 @@ export default function HashicorpVault() {
         <Card>
           <Space direction="vertical" size="large" className="w-full">
             {/* Header */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
+            <Flex justify="space-between" align="center">
+              <Flex align="center" gap={12}>
                 <KeyRound className="w-6 h-6 text-gray-400" />
                 <div>
                   <Title level={3} style={{ marginBottom: 0 }}>Hashicorp Vault</Title>
                   <Text type="secondary">Manage secret manager configuration</Text>
                 </div>
-              </div>
+              </Flex>
 
-              <div className="flex items-center gap-3">
+              <Space>
                 {isConfigured && (
                   <>
                     <Button
@@ -174,8 +174,8 @@ export default function HashicorpVault() {
                     </Button>
                   </>
                 )}
-              </div>
-            </div>
+              </Space>
+            </Flex>
 
             {isConfigured && (
               <Alert
