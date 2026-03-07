@@ -287,13 +287,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           setDiscoveryVisible(true);
         }}
       />
-      <Title>MCP Servers</Title>
-      <Text className="text-tremor-content mt-2">Configure and manage your MCP servers</Text>
-      {isAdminRole(userRole) && (
-        <Button className="mt-4 mb-4" onClick={() => setDiscoveryVisible(true)}>
-          + Add New MCP Server
-        </Button>
-      )}
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <Title>MCP Servers</Title>
+            {filteredServers.length > 0 && (
+              <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                {filteredServers.length}
+              </span>
+            )}
+          </div>
+          <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
+        </div>
+        {isAdminRole(userRole) && (
+          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+            + Add New MCP Server
+          </Button>
+        )}
+      </div>
       <MCPDiscovery
         isVisible={isDiscoveryVisible}
         onClose={() => setDiscoveryVisible(false)}

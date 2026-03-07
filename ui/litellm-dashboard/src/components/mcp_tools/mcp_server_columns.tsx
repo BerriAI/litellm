@@ -242,15 +242,15 @@ export const mcpServerColumns = (
       if (server.has_user_credential) {
         return (
           <div className="flex items-center gap-2">
-            <span className="text-green-600 text-xs font-medium flex items-center gap-1">
-              <CheckOutlined /> Connected
+            <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+              <CheckOutlined style={{ fontSize: 10 }} /> Connected
             </span>
             {onByokConnect && (
               <button
-                className="text-xs text-gray-400 hover:text-blue-500 underline"
+                className="text-xs text-gray-400 hover:text-blue-600 transition-colors"
                 onClick={() => onByokConnect(server)}
               >
-                Reconnect
+                Update
               </button>
             )}
           </div>
@@ -258,7 +258,7 @@ export const mcpServerColumns = (
       }
       return onByokConnect ? (
         <button
-          className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg font-medium"
+          className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md font-medium transition-colors shadow-sm"
           onClick={() => onByokConnect(server)}
         >
           Connect
@@ -270,22 +270,22 @@ export const mcpServerColumns = (
     id: "actions",
     header: "Actions",
     cell: ({ row }) => (
-      <div className="flex items-center gap-2">
-        <Tooltip title="Edit MCP Server">
-          <Icon
-            icon={PencilAltIcon}
-            size="sm"
+      <div className="flex items-center gap-1">
+        <Tooltip title="Edit">
+          <button
             onClick={() => onEdit(row.original.server_id)}
-            className="cursor-pointer hover:text-blue-600"
-          />
+            className="p-1.5 rounded-md text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+          >
+            <Icon icon={PencilAltIcon} size="sm" />
+          </button>
         </Tooltip>
-        <Tooltip title="Delete MCP Server">
-          <Icon
-            icon={TrashIcon}
-            size="sm"
+        <Tooltip title="Delete">
+          <button
             onClick={() => onDelete(row.original.server_id)}
-            className="cursor-pointer hover:text-red-600"
-          />
+            className="p-1.5 rounded-md text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+          >
+            <Icon icon={TrashIcon} size="sm" />
+          </button>
         </Tooltip>
       </div>
     ),
