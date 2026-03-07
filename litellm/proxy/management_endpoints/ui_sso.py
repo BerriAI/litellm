@@ -2678,6 +2678,10 @@ class SSOAuthenticationHandler:
                             code=status.HTTP_401_UNAUTHORIZED,
                         )
                 else:
+                    # Best-effort cleanup: if a stale/corrupt entry is present, delete it
+                    # now so it does not linger until TTL expiry (resource hygiene).
+                    if cached_data is not None:
+                        await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
                     verbose_proxy_logger.warning(
                         "PKCE is enabled but verifier not found in cache for state '%s' "
                         "(cache type: %s, raw data present: %s). "
