@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, Any, Dict, Optional, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 from typing_extensions import override
 
@@ -15,11 +15,14 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 from litellm.integrations._types.open_inference import (
         MessageAttributes,
+        MessageContentAttributes,
         ImageAttributes,
         SpanAttributes,
         AudioAttributes,
         EmbeddingAttributes,
-        OpenInferenceSpanKindValues
+        ToolCallAttributes,
+        OpenInferenceSpanKindValues,
+        OpenInferenceMimeTypeValues,
 )
 
 
@@ -29,64 +32,101 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
     def set_messages(span: "Span", kwargs: Dict[str, Any]):
         messages = kwargs.get("messages")
 
-        # for /chat/completions
-        # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
-        if messages:
-            last_message = messages[-1]
+        if not messages:
+            return
+
+        # Set input.value from the last user message for display
+        last_user_content = _extract_last_user_input(messages)
+        if last_user_content:
+            safe_set_attribute(span, SpanAttributes.INPUT_VALUE, last_user_content)
             safe_set_attribute(
-                span,
-                SpanAttributes.INPUT_VALUE,
-                last_message.get("content", ""),
+                span, SpanAttributes.INPUT_MIME_TYPE, OpenInferenceMimeTypeValues.TEXT.value
             )
 
-            # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page.
-            for idx, msg in enumerate(messages):
-                prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
-                # Set the role per message.
+        # Set per-message attributes (input_messages tab in Phoenix)
+        for idx, msg in enumerate(messages):
+            prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
+            role = msg.get("role", "")
+            safe_set_attribute(span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", role)
+
+            # Handle content — could be string, list of content blocks, or None
+            content = msg.get("content")
+            content_str = _content_to_string(content)
+            if content_str:
                 safe_set_attribute(
-                    span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role")
+                    span, f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}", content_str
                 )
-                # Set the content per message.
-                safe_set_attribute(
-                    span,
-                    f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                    msg.get("content", ""),
-                )
+
+            # Handle multipart content blocks (text, image, tool_result, etc.)
+            if isinstance(content, list):
+                _set_message_contents(span, prefix, content)
+
+            # Tool role messages: set tool_call_id and function name
+            if role == "tool":
+                tool_call_id = msg.get("tool_call_id")
+                if tool_call_id:
+                    safe_set_attribute(
+                        span,
+                        f"{prefix}.{MessageAttributes.MESSAGE_TOOL_CALL_ID}",
+                        tool_call_id,
+                    )
+                func_name = msg.get("name")
+                if func_name:
+                    safe_set_attribute(
+                        span,
+                        f"{prefix}.{MessageAttributes.MESSAGE_NAME}",
+                        func_name,
+                    )
+
+            # Assistant messages with tool_calls
+            tool_calls = msg.get("tool_calls")
+            if tool_calls and isinstance(tool_calls, list):
+                _set_tool_calls_on_message(span, prefix, tool_calls)
 
     @staticmethod
     @override
     def set_response_output_messages(span: "Span", response_obj):
         """
         Sets output message attributes on the span from the LLM response.
-        Args:
-            span: The OpenTelemetry span to set attributes on
-            response_obj: The response object containing choices with messages
+        Handles text content, tool_calls, and structured output.
         """
-        from litellm.integrations._types.open_inference import (
-            MessageAttributes,
-            SpanAttributes,
-        )
+        if not hasattr(response_obj, "get"):
+            return
 
         for idx, choice in enumerate(response_obj.get("choices", [])):
             response_message = choice.get("message", {})
-            safe_set_attribute(
-                span,
-                SpanAttributes.OUTPUT_VALUE,
-                response_message.get("content", ""),
-            )
+            content = response_message.get("content", "")
 
-            # This shows up under `output_messages` tab on the span page.
+            # Build output.value — prefer text content, fall back to tool_calls summary
+            tool_calls = response_message.get("tool_calls")
+            if content:
+                safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, content)
+            elif tool_calls:
+                # Summarize tool calls as the output value for display
+                tool_summary = _summarize_tool_calls(tool_calls)
+                safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, tool_summary)
+                safe_set_attribute(
+                    span,
+                    SpanAttributes.OUTPUT_MIME_TYPE,
+                    OpenInferenceMimeTypeValues.JSON.value,
+                )
+
             prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}"
             safe_set_attribute(
                 span,
                 f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
                 response_message.get("role"),
             )
-            safe_set_attribute(
-                span,
-                f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                response_message.get("content", ""),
-            )
+            if content:
+                safe_set_attribute(
+                    span,
+                    f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                    content,
+                )
+
+            # Set tool_calls on output messages
+            if tool_calls and isinstance(tool_calls, list):
+                _set_tool_calls_on_message(span, prefix, tool_calls)
 
 
 def _set_response_attributes(span: "Span", response_obj):
@@ -106,22 +146,31 @@ def _set_response_attributes(span: "Span", response_obj):
 def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
     for idx, choice in enumerate(response_obj.get("choices", [])):
         response_message = choice.get("message", {})
-        safe_set_attribute(
-            span,
-            span_attrs.OUTPUT_VALUE,
-            response_message.get("content", ""),
-        )
+        content = response_message.get("content", "")
+        tool_calls = response_message.get("tool_calls")
+
+        if content:
+            safe_set_attribute(span, span_attrs.OUTPUT_VALUE, content)
+        elif tool_calls:
+            tool_summary = _summarize_tool_calls(tool_calls)
+            safe_set_attribute(span, span_attrs.OUTPUT_VALUE, tool_summary)
+
         prefix = f"{span_attrs.LLM_OUTPUT_MESSAGES}.{idx}"
         safe_set_attribute(
             span,
             f"{prefix}.{msg_attrs.MESSAGE_ROLE}",
             response_message.get("role"),
         )
-        safe_set_attribute(
-            span,
-            f"{prefix}.{msg_attrs.MESSAGE_CONTENT}",
-            response_message.get("content", ""),
-        )
+        if content:
+            safe_set_attribute(
+                span,
+                f"{prefix}.{msg_attrs.MESSAGE_CONTENT}",
+                content,
+            )
+
+        # Set tool_calls on output messages
+        if tool_calls and isinstance(tool_calls, list):
+            _set_tool_calls_on_message(span, prefix, tool_calls)
 
 
 def _set_image_outputs(span: "Span", response_obj, image_attrs, span_attrs):
@@ -231,6 +280,174 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
     reasoning_tokens = usage.get("output_tokens_details", {}).get("reasoning_tokens")
     if reasoning_tokens:
         safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, reasoning_tokens)
+
+
+def _extract_last_user_input(messages: List[Dict[str, Any]]) -> Optional[str]:
+    """Extract the last user message content as the input value for display."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = msg.get("content")
+            return _content_to_string(content)
+    # Fallback: last message content regardless of role
+    if messages:
+        return _content_to_string(messages[-1].get("content"))
+    return None
+
+
+def _content_to_string(content: Any) -> str:
+    """Convert message content (string, list of blocks, or None) to a string."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                block_type = block.get("type", "")
+                if block_type == "text":
+                    parts.append(block.get("text", ""))
+                elif block_type == "tool_use":
+                    name = block.get("name", "unknown_tool")
+                    parts.append(f"[tool_use: {name}]")
+                elif block_type == "tool_result":
+                    tool_id = block.get("tool_use_id", "")
+                    result_content = block.get("content", "")
+                    if isinstance(result_content, list):
+                        result_content = " ".join(
+                            b.get("text", "") for b in result_content if isinstance(b, dict)
+                        )
+                    parts.append(f"[tool_result: {tool_id}] {result_content}")
+                elif block_type == "image_url":
+                    parts.append("[image]")
+                else:
+                    parts.append(f"[{block_type}]")
+        return "\n".join(parts) if parts else ""
+    return str(content)
+
+
+def _set_message_contents(span: "Span", prefix: str, content_blocks: list):
+    """Set message_contents attributes for multipart content blocks."""
+    for cidx, block in enumerate(content_blocks):
+        if not isinstance(block, dict):
+            continue
+        cprefix = f"{prefix}.{MessageAttributes.MESSAGE_CONTENTS}.{cidx}"
+        block_type = block.get("type", "text")
+        safe_set_attribute(
+            span, f"{cprefix}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", block_type
+        )
+        if block_type == "text":
+            safe_set_attribute(
+                span, f"{cprefix}.{MessageContentAttributes.MESSAGE_CONTENT_TEXT}", block.get("text", "")
+            )
+        elif block_type == "image_url":
+            url = block.get("image_url", {}).get("url", "")
+            safe_set_attribute(
+                span, f"{cprefix}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", url
+            )
+
+
+def _set_tool_calls_on_message(span: "Span", prefix: str, tool_calls: list):
+    """Set tool_call attributes on a message (input or output)."""
+    for tc_idx, tc in enumerate(tool_calls):
+        if not isinstance(tc, dict):
+            # Handle pydantic model objects
+            tc = tc.__dict__ if hasattr(tc, "__dict__") else {}
+        tc_prefix = f"{prefix}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tc_idx}"
+
+        tc_id = tc.get("id")
+        if tc_id:
+            safe_set_attribute(span, f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_ID}", tc_id)
+
+        function = tc.get("function")
+        if isinstance(function, dict):
+            fn_name = function.get("name")
+            fn_args = function.get("arguments")
+        elif hasattr(function, "name"):
+            fn_name = getattr(function, "name", None)
+            fn_args = getattr(function, "arguments", None)
+        else:
+            fn_name = None
+            fn_args = None
+
+        if fn_name:
+            safe_set_attribute(
+                span, f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}", fn_name
+            )
+        if fn_args:
+            args_str = fn_args if isinstance(fn_args, str) else json.dumps(fn_args)
+            safe_set_attribute(
+                span,
+                f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
+                args_str,
+            )
+
+
+def _summarize_tool_calls(tool_calls: list) -> str:
+    """Create a JSON summary of tool_calls for output.value display."""
+    summaries = []
+    for tc in tool_calls:
+        if isinstance(tc, dict):
+            function = tc.get("function", {})
+            if isinstance(function, dict):
+                name = function.get("name", "unknown")
+                args = function.get("arguments", "{}")
+            else:
+                name = getattr(function, "name", "unknown")
+                args = getattr(function, "arguments", "{}")
+        elif hasattr(tc, "function"):
+            name = getattr(tc.function, "name", "unknown")
+            args = getattr(tc.function, "arguments", "{}")
+        else:
+            continue
+        summaries.append({"name": name, "arguments": args})
+    return json.dumps(summaries)
+
+
+def _detect_tool_use_span_kind(
+    messages: Optional[list], response_obj: Any
+) -> Optional[str]:
+    """
+    Detect if the request/response involves tool use patterns that should
+    override the default LLM span kind.
+
+    Returns a more specific span kind if tool use is detected, or None.
+    """
+    if not response_obj or not hasattr(response_obj, "get"):
+        return None
+
+    # Check response tool_calls
+    tool_names = []
+    for choice in response_obj.get("choices", []):
+        msg = choice.get("message", {})
+        for tc in msg.get("tool_calls") or []:
+            if isinstance(tc, dict):
+                fn = tc.get("function", {})
+                name = fn.get("name", "") if isinstance(fn, dict) else getattr(fn, "name", "")
+            elif hasattr(tc, "function"):
+                name = getattr(tc.function, "name", "")
+            else:
+                name = ""
+            if name:
+                tool_names.append(name.lower())
+
+    if not tool_names:
+        return None
+
+    # Detect retriever patterns (file read, search, etc.)
+    retriever_patterns = {"read", "glob", "grep", "file_search", "retrieval", "search"}
+    web_search_patterns = {"web_search", "websearch", "brave_search", "web_fetch"}
+
+    for name in tool_names:
+        if any(pat in name for pat in web_search_patterns):
+            return OpenInferenceSpanKindValues.RETRIEVER.value
+        if any(pat in name for pat in retriever_patterns):
+            return OpenInferenceSpanKindValues.RETRIEVER.value
+
+    # If any tool calls are present, it's a TOOL span kind
+    return None  # Let the default LLM kind apply; tools are visible via attributes
 
 
 def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
@@ -364,6 +581,12 @@ def set_attributes(
         _set_tool_attributes(span, optional_tools, metadata_tools)
         if (optional_tools or metadata_tools) and span_kind != OpenInferenceSpanKindValues.TOOL.value:
             span_kind = OpenInferenceSpanKindValues.TOOL.value
+
+        # Detect retriever/web_search patterns from response tool_calls
+        messages = kwargs.get("messages")
+        tool_use_kind = _detect_tool_use_span_kind(messages, response_obj)
+        if tool_use_kind is not None:
+            span_kind = tool_use_kind
 
         safe_set_attribute(span, SpanAttributes.OPENINFERENCE_SPAN_KIND, span_kind)
         attributes.set_messages(span, kwargs)

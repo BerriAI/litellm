@@ -84,7 +84,7 @@ def test_arize_set_attributes():
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
 
     # Validate that the expected number of attributes were set
-    assert span.set_attribute.call_count == 26
+    assert span.set_attribute.call_count == 27
 
     # Metadata attached to the span
     span.set_attribute.assert_any_call(
