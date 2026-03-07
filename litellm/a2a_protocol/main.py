@@ -653,15 +653,22 @@ async def create_a2a_client(
 
     verbose_logger.info(f"Creating A2A client for {base_url}")
 
-    # Always create a fresh httpx client per A2A call so that per-agent auth
-    # headers (extra_headers) are never shared across agents or requests.
-    # Mutating a cached shared client would cause headers from one agent to
-    # bleed into requests made to a different agent.
-    httpx_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout),
-        headers=extra_headers or {},
-    )
+    # Use get_async_httpx_client with per-agent params so that different agents
+    # (with different extra_headers) get separate cached clients.  The params
+    # dict is hashed into the cache key, keeping agent auth isolated while
+    # still reusing connections within the same agent.
+    _client_params: dict = {"timeout": timeout}
     if extra_headers:
+        # Include sorted header keys in params so each unique header set
+        # produces a distinct cache key.
+        _client_params["extra_headers"] = str(sorted(extra_headers.items()))
+    _async_handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.A2AProvider,
+        params=_client_params,
+    )
+    httpx_client = _async_handler.client
+    if extra_headers:
+        httpx_client.headers.update(extra_headers)
         verbose_proxy_logger.debug(
             f"A2A client created with extra_headers={list(extra_headers.keys())}"
         )

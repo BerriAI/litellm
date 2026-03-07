@@ -962,6 +962,8 @@ def test_managed_files_with_loadbalancing(mocker: MockerFixture, monkeypatch, ll
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
+    # Disable auth so the test doesn't depend on master_key state from other tests
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     
     # Create batch file content
     test_file_content = b'{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}}'
