@@ -13,6 +13,10 @@ from typing import (
     cast,
 )
 
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_default_reasoning_summary_disabled,
+)
+
 # OpenAI has a 64-character limit for function/tool names
 # Anthropic does not have this limit, so we need to truncate long names
 OPENAI_MAX_TOOL_NAME_LENGTH = 64
@@ -693,6 +697,12 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking
             )
             if reasoning_effort:
+                summary = thinking.get("summary") if isinstance(thinking, dict) else None
+                summary_disabled = is_default_reasoning_summary_disabled()
+                if summary:
+                    return {"reasoning_effort": {"effort": reasoning_effort, "summary": summary}}
+                elif not summary_disabled:
+                    return {"reasoning_effort": {"effort": reasoning_effort, "summary": "detailed"}}
                 return {"reasoning_effort": reasoning_effort}
             return {}
 
@@ -924,7 +934,11 @@ class LiteLLMAnthropicMessagesAdapter:
                         cast(Dict[str, Any], thinking)
                     )
                     if reasoning_effort:
-                        new_kwargs["reasoning_effort"] = reasoning_effort
+                        summary = thinking.get("summary") if isinstance(thinking, dict) else None
+                        if summary:
+                            new_kwargs["reasoning_effort"] = {"effort": reasoning_effort, "summary": summary}
+                        else:
+                            new_kwargs["reasoning_effort"] = reasoning_effort
 
         ## CONVERT OUTPUT_FORMAT to RESPONSE_FORMAT
         if "output_format" in anthropic_message_request:

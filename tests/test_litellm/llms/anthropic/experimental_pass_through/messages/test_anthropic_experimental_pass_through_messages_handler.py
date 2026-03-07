@@ -180,6 +180,7 @@ def test_openai_model_with_thinking_converts_to_reasoning():
         assert "reasoning" in call_kwargs, "reasoning should be passed to litellm.responses"
 
         # budget_tokens=1024 -> effort="minimal" (< 2000 threshold)
+        # summary="detailed" added by default unless disable_default_reasoning_summary is set
         expected_reasoning = {"effort": "minimal", "summary": "detailed"}
         assert call_kwargs["reasoning"] == expected_reasoning, (
             f"reasoning should be {expected_reasoning} for budget_tokens=1024, "
@@ -213,12 +214,257 @@ class TestThinkingParameterTransformation:
         from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
             LiteLLMAnthropicMessagesAdapter,
         )
-        
+
         thinking = {"type": "enabled", "budget_tokens": 1024}
         result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
             thinking=thinking,
             model="openai/gpt-5.2",
         )
-        
-        assert result == {"reasoning_effort": "minimal"}
+
+        assert result == {"reasoning_effort": {"effort": "minimal", "summary": "detailed"}}
         assert "thinking" not in result
+
+    def test_translate_thinking_for_model_no_summary_when_disabled(self):
+        """When disable_default_reasoning_summary is True, no summary is injected."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = True
+            thinking = {"type": "enabled", "budget_tokens": 5000}
+            result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+                thinking=thinking,
+                model="openai/gpt-5.2",
+            )
+            assert result == {"reasoning_effort": "medium"}
+        finally:
+            litellm.disable_default_reasoning_summary = original
+
+    def test_translate_thinking_for_model_preserves_user_summary(self):
+        """User-provided summary is always preserved regardless of flag."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 10000, "summary": "concise"}
+        result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+            thinking=thinking,
+            model="openai/gpt-5.2",
+        )
+        assert result == {"reasoning_effort": {"effort": "high", "summary": "concise"}}
+
+
+class TestThinkingSummaryPreservation:
+    """Tests for thinking.summary preservation and disable_default_reasoning_summary flag."""
+
+    def test_thinking_summary_concise_preserved_for_openai(self):
+        """User-provided summary='concise' should not be replaced with 'detailed'."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
+        completion_kwargs = {"model": "openai/gpt-5.1", "reasoning_effort": "medium"}
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking=thinking
+        )
+        assert completion_kwargs["reasoning_effort"] == {"effort": "medium", "summary": "concise"}
+
+    def test_thinking_summary_auto_preserved_for_openai(self):
+        """User-provided summary='auto' should be preserved."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 10000, "summary": "auto"}
+        completion_kwargs = {"model": "openai/gpt-5.1", "reasoning_effort": "high"}
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking=thinking
+        )
+        assert completion_kwargs["reasoning_effort"] == {"effort": "high", "summary": "auto"}
+
+    def test_summary_added_by_default_when_no_user_summary(self):
+        """When no user summary and flag is off, summary='detailed' is added by default."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = False
+            completion_kwargs = {
+                "model": "responses/gpt-5.2",
+                "custom_llm_provider": "openai",
+                "reasoning_effort": "medium",
+            }
+            LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+                completion_kwargs, thinking={"type": "enabled", "budget_tokens": 5000}
+            )
+            assert completion_kwargs["reasoning_effort"] == {"effort": "medium", "summary": "detailed"}
+        finally:
+            litellm.disable_default_reasoning_summary = original
+
+    def test_summary_excluded_when_disable_flag_set_string_reasoning(self):
+        """When disable_default_reasoning_summary is True, summary is not added for string reasoning_effort."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = True
+            completion_kwargs = {
+                "model": "responses/gpt-5.2",
+                "custom_llm_provider": "openai",
+                "reasoning_effort": "high",
+            }
+            LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+                completion_kwargs, thinking={"type": "enabled", "budget_tokens": 10000}
+            )
+            assert completion_kwargs["reasoning_effort"] == {"effort": "high"}
+            assert "summary" not in completion_kwargs["reasoning_effort"]
+        finally:
+            litellm.disable_default_reasoning_summary = original
+
+    def test_summary_excluded_when_disable_flag_set_dict_reasoning(self):
+        """When disable_default_reasoning_summary is True, summary is not injected into dict reasoning_effort."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = True
+            completion_kwargs = {
+                "model": "responses/gpt-5.2",
+                "custom_llm_provider": "openai",
+                "reasoning_effort": {"effort": "medium"},
+            }
+            LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+                completion_kwargs, thinking={"type": "enabled", "budget_tokens": 5000}
+            )
+            assert completion_kwargs["reasoning_effort"] == {"effort": "medium"}
+            assert "summary" not in completion_kwargs["reasoning_effort"]
+        finally:
+            litellm.disable_default_reasoning_summary = original
+
+    def test_summary_excluded_when_env_var_set(self):
+        """When LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY env var is true, summary is not added."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = False
+            os.environ["LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY"] = "true"
+            completion_kwargs = {
+                "model": "responses/gpt-5.2",
+                "custom_llm_provider": "openai",
+                "reasoning_effort": "high",
+            }
+            LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+                completion_kwargs, thinking={"type": "enabled", "budget_tokens": 10000}
+            )
+            assert completion_kwargs["reasoning_effort"] == {"effort": "high"}
+            assert "summary" not in completion_kwargs["reasoning_effort"]
+        finally:
+            litellm.disable_default_reasoning_summary = original
+            os.environ.pop("LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY", None)
+
+    def test_user_provided_summary_preserved_even_when_flag_off(self):
+        """When user already set summary in dict reasoning_effort, it's preserved regardless of flag."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = False
+            completion_kwargs = {
+                "model": "responses/gpt-5.2",
+                "custom_llm_provider": "openai",
+                "reasoning_effort": {"effort": "high", "summary": "concise"},
+            }
+            LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+                completion_kwargs, thinking={"type": "enabled", "budget_tokens": 10000}
+            )
+            assert completion_kwargs["reasoning_effort"]["summary"] == "concise"
+        finally:
+            litellm.disable_default_reasoning_summary = original
+
+    def test_openai_model_with_thinking_summary_end_to_end(self):
+        """End-to-end: anthropic_messages_handler should preserve thinking.summary for OpenAI models."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            anthropic_messages_handler,
+        )
+
+        with patch("litellm.responses", return_value="test-response") as mock_responses:
+            try:
+                anthropic_messages_handler(
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": "What is 2+2?"}],
+                    model="openai/gpt-5.2",
+                    api_key="test-api-key",
+                    thinking={
+                        "type": "enabled",
+                        "budget_tokens": 5000,
+                        "summary": "concise",
+                    },
+                )
+            except Exception:
+                pass
+
+            mock_responses.assert_called_once()
+            call_kwargs = mock_responses.call_args.kwargs
+            reasoning = call_kwargs["reasoning"]
+            assert reasoning["summary"] == "concise", \
+                f"Expected summary='concise', got summary='{reasoning.get('summary')}'"
+
+    def test_responses_adapter_preserves_summary(self):
+        """translate_thinking_to_reasoning should include summary when user provides it."""
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
+            LiteLLMAnthropicToResponsesAPIAdapter,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
+        result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
+        assert result == {"effort": "medium", "summary": "concise"}
+
+    def test_responses_adapter_no_summary_when_disabled(self):
+        """translate_thinking_to_reasoning should not include summary when flag is set and no user summary."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
+            LiteLLMAnthropicToResponsesAPIAdapter,
+        )
+
+        original = litellm.disable_default_reasoning_summary
+        try:
+            litellm.disable_default_reasoning_summary = True
+            thinking = {"type": "enabled", "budget_tokens": 5000}
+            result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
+            assert result == {"effort": "medium"}
+            assert "summary" not in result
+        finally:
+            litellm.disable_default_reasoning_summary = original
+
+    def test_translate_thinking_for_model_preserves_summary(self):
+        """translate_thinking_for_model should include summary in reasoning_effort dict when user provides it."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
+        result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+            thinking=thinking,
+            model="openai/gpt-5.2",
+        )
+        assert result == {"reasoning_effort": {"effort": "medium", "summary": "concise"}}

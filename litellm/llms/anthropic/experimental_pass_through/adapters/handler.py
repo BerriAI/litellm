@@ -12,6 +12,9 @@ from typing import (
 )
 
 import litellm
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_default_reasoning_summary_disabled,
+)
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -44,8 +47,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         For OpenAI models, Chat Completions typically does not return reasoning text
         (only token accounting). To return a thinking-like content block in the
-        Anthropic response format, we route the request through OpenAI's Responses API
-        and request a reasoning summary.
+        Anthropic response format, we route the request through OpenAI's Responses API.
+        If the user provides a `summary` field in the thinking dict, it is passed
+        through to the OpenAI reasoning params (opt-in per OpenAI spec).
         """
         custom_llm_provider = completion_kwargs.get("custom_llm_provider")
         if custom_llm_provider is None:
@@ -76,20 +80,27 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             # Prefix model with "responses/" to route to OpenAI Responses API
             completion_kwargs["model"] = f"responses/{model}"
             
+        summary_disabled = is_default_reasoning_summary_disabled()
+
         reasoning_effort = completion_kwargs.get("reasoning_effort")
+        summary = thinking.get("summary")
         if isinstance(reasoning_effort, str) and reasoning_effort:
-            completion_kwargs["reasoning_effort"] = {
-                "effort": reasoning_effort,
-                "summary": "detailed",
-            }
+            reasoning_dict: Dict[str, Any] = {"effort": reasoning_effort}
+            if summary:
+                reasoning_dict["summary"] = summary
+            elif not summary_disabled:
+                reasoning_dict["summary"] = "detailed"
+            completion_kwargs["reasoning_effort"] = reasoning_dict
         elif isinstance(reasoning_effort, dict):
             if (
                 "summary" not in reasoning_effort
                 and "generate_summary" not in reasoning_effort
             ):
-                updated_reasoning_effort = dict(reasoning_effort)
-                updated_reasoning_effort["summary"] = "detailed"
-                completion_kwargs["reasoning_effort"] = updated_reasoning_effort
+                effective_summary = summary if summary else ("detailed" if not summary_disabled else None)
+                if effective_summary:
+                    updated_reasoning_effort = dict(reasoning_effort)
+                    updated_reasoning_effort["summary"] = effective_summary
+                    completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
     def _prepare_completion_kwargs(

@@ -675,3 +675,69 @@ response = litellm.completion(
     reasoning_effort={"effort": "low", "summary": "detailed"},  # Explicit control
 )
 ```
+
+### Summary Preservation via `/v1/messages` Adapter
+
+When using the Anthropic `/v1/messages` adapter to route non-Claude models (e.g., `openai/gpt-5.1`), the `thinking.summary` value is preserved and forwarded to the downstream provider. For example:
+
+```python
+import litellm
+
+response = await litellm.anthropic.messages.acreate(
+    model="openai/gpt-5.1",
+    messages=[{"role": "user", "content": "Hello"}],
+    max_tokens=8096,
+    thinking={"type": "enabled", "budget_tokens": 5000, "summary": "concise"},
+)
+# The summary="concise" is preserved when routing to OpenAI's Responses API
+```
+
+### Default Summary Injection for `/v1/messages` Adapter
+
+When the Anthropic `/v1/messages` adapter translates `thinking` parameters to OpenAI `reasoning_effort` for non-Claude models, `summary="detailed"` is automatically injected by default. This ensures that reasoning text is returned in the response (matching the Anthropic thinking behavior).
+
+To **disable** this default injection, use the `disable_default_reasoning_summary` flag:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+# Disable default summary="detailed" injection
+litellm.disable_default_reasoning_summary = True
+
+response = await litellm.anthropic.messages.acreate(
+    model="openai/gpt-5.1",
+    messages=[{"role": "user", "content": "Hello"}],
+    max_tokens=8096,
+    thinking={"type": "enabled", "budget_tokens": 5000},
+)
+# No summary will be injected — only reasoning_effort is forwarded
+```
+
+</TabItem>
+
+<TabItem value="env" label="Environment Variable">
+
+```bash
+export LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY=true
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml
+litellm_settings:
+  disable_default_reasoning_summary: true
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+
+This flag only affects the automatic injection of `summary="detailed"` when no user-provided summary is present. If you explicitly pass `thinking.summary` (e.g., `"concise"` or `"auto"`), your value is always preserved regardless of this flag.
+
+:::
