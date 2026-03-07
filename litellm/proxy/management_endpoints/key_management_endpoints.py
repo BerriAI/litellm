@@ -4140,6 +4140,7 @@ async def list_keys(
 )
 @management_endpoint_wrapper
 async def key_aliases(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(50, ge=1, le=100, description="Page size"),
     search: Optional[str] = Query(
@@ -4148,6 +4149,9 @@ async def key_aliases(
 ) -> Dict[str, Any]:
     """
     Lists key aliases with pagination and optional search.
+
+    Non-admin users only see aliases for keys they own or keys belonging to
+    their teams.
 
     Returns:
         {
@@ -4178,6 +4182,41 @@ async def key_aliases(
             "key_alias != ''",
             "(team_id IS NULL OR team_id != $1)",
         ]
+
+        # Scope results for non-admin users: only show aliases for keys the
+        # user owns or keys belonging to teams they are a member of.
+        is_proxy_admin = user_api_key_dict.user_role in [
+            LitellmUserRoles.PROXY_ADMIN.value,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        ]
+        if not is_proxy_admin:
+            scope_conditions: List[str] = []
+            if user_api_key_dict.user_id:
+                query_params.append(user_api_key_dict.user_id)
+                scope_conditions.append(f"user_id = ${len(query_params)}")
+
+            # Look up the user's teams from the user table
+            user_teams: List[str] = []
+            if user_api_key_dict.user_id:
+                user_row = await prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_id": user_api_key_dict.user_id}
+                )
+                if user_row is not None:
+                    user_teams = getattr(user_row, "teams", []) or []
+
+            if user_teams:
+                team_placeholders = ", ".join(
+                    f"${len(query_params) + i + 1}" for i in range(len(user_teams))
+                )
+                query_params.extend(user_teams)
+                scope_conditions.append(f"team_id IN ({team_placeholders})")
+
+            if scope_conditions:
+                where_parts.append(f"({' OR '.join(scope_conditions)})")
+            else:
+                # No user_id and no teams — return nothing
+                where_parts.append("FALSE")
+
         if search:
             query_params.append(f"%{search}%")
             where_parts.append(f"key_alias ILIKE ${len(query_params)}")
