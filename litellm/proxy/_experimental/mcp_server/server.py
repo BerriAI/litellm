@@ -61,6 +61,11 @@ from litellm.utils import Rules, client, function_setup
 # Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).
 # Storing the credential value (not just a bool) means _get_byok_credential and
 # _check_byok_credential share a single DB round-trip per TTL window.
+#
+# Known trade-off: OAuth2 provider tokens may expire before the TTL elapses, causing
+# a brief 401 window (up to _BYOK_CRED_CACHE_TTL seconds) after a token expires at the
+# provider before the cache entry is evicted and a fresh DB lookup is made.  Mitigating
+# this (e.g. by storing and checking `expires_in`) is a future improvement.
 _byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
 _BYOK_CRED_CACHE_TTL = 60  # seconds
 _BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
@@ -1859,7 +1864,7 @@ if MCP_AVAILABLE:
         elif mcp_server:
             response = await _handle_managed_mcp_tool(
                 server_name=server_name,
-                name=original_tool_name,  # Pass the full name (potentially prefixed)
+                name=original_tool_name,  # Pass the unprefixed tool name to the managed server
                 arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,

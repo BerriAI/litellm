@@ -10,12 +10,9 @@ Endpoints:
   GET  /v1/mcp/server/{server_id}/oauth2/status    — check if user is connected
 """
 
-import base64
-import hashlib
-import hmac
 import html as _html_module
 import json
-import os
+import secrets
 import time
 from typing import Dict, Optional
 from urllib.parse import parse_qs, urlencode
@@ -70,16 +67,16 @@ def _purge_expired_states() -> None:
 
 
 def _make_state_token(server_id: str, user_id: str, timestamp: float, master_key: str) -> str:
-    """HMAC-SHA256 of '{server_id}:{user_id}:{timestamp}:{nonce}' base64url-encoded.
+    """Return a cryptographically random opaque state token.
 
-    A 16-byte random nonce is appended so that concurrent flows for the same
-    (server_id, user_id) pair — e.g. from multiple open browser tabs — each
-    produce a unique state token instead of colliding in _pending_oauth2_states.
+    The token is looked up in `_pending_oauth2_states` by the callback — it is
+    never used to carry or verify signed data.  A 32-byte (256-bit) random value
+    is therefore sufficient and makes the intent explicit.
+
+    Parameters are accepted for API compatibility with existing tests; they are
+    not used in the generated token.
     """
-    nonce = base64.urlsafe_b64encode(os.urandom(16)).rstrip(b"=").decode()
-    message = f"{server_id}:{user_id}:{timestamp}:{nonce}".encode()
-    digest = hmac.new(master_key.encode(), message, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return secrets.token_urlsafe(32)
 
 
 def _build_success_html(server_name: str) -> str:

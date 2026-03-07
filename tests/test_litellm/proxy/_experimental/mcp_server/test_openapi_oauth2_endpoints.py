@@ -28,19 +28,19 @@ def test_make_state_token_returns_string():
     assert len(token) > 0
 
 
-def test_make_state_token_is_unique_for_same_inputs():
-    """Two calls with identical inputs must produce different tokens (random nonce)."""
+def test_make_state_token_is_unique():
+    """Every call produces a unique token (cryptographically random)."""
     ts = time.time()
     t1 = _make_state_token("server1", "user1", ts, "master-key")
     t2 = _make_state_token("server1", "user1", ts, "master-key")
-    assert t1 != t2, "Tokens should differ due to random nonce"
+    assert t1 != t2, "Tokens should differ on each call"
 
 
-def test_make_state_token_differs_by_server():
-    ts = time.time()
-    t1 = _make_state_token("server1", "user1", ts, "master-key")
-    t2 = _make_state_token("server2", "user1", ts, "master-key")
-    assert t1 != t2
+def test_make_state_token_has_sufficient_entropy():
+    """Token must be at least 32 url-safe characters (≥192 bits of entropy)."""
+    token = _make_state_token("server1", "user1", time.time(), "master-key")
+    # secrets.token_urlsafe(32) produces at least 43 url-safe characters
+    assert len(token) >= 32
 
 
 # ---------------------------------------------------------------------------
