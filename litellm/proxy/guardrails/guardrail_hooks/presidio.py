@@ -1202,6 +1202,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     "output_parse_pii enabled but no pii_tokens in request_data; "
                     "returning texts unmodified"
                 )
+                return inputs
             texts = inputs.get("texts", [])
             inputs["texts"] = [self._unmask_pii_text(t, pii_tokens) for t in texts]
             return inputs

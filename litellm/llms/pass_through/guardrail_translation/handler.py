@@ -173,17 +173,17 @@ class PassThroughEndpointHandler(BaseTranslation):
             return response
 
         # Merge caller's request_data (contains pii_tokens from input masking)
-        # with response info and user API key metadata.
-        # Note: response is always a dict here (non-dict returns early above).
-        request_data: dict = {
+        # with response info. Nesting response under "response" key matches the
+        # pattern used by all other handlers and avoids key collisions.
+        effective_request_data: dict = {
             **(request_data or {}),
-            **response,
+            "response": response,
         }
 
         # Add user API key metadata with prefixed keys
         user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
         if user_metadata:
-            request_data["litellm_metadata"] = user_metadata
+            effective_request_data["litellm_metadata"] = user_metadata
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
         inputs = GenericGuardrailAPIInputs(texts=[text_to_check])
@@ -193,7 +193,7 @@ class PassThroughEndpointHandler(BaseTranslation):
             inputs["model"] = response_model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data=request_data,
+            request_data=effective_request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
