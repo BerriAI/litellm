@@ -3,6 +3,7 @@ Helper functions to handle images passed in messages
 """
 
 import base64
+from typing import Optional
 
 from httpx import Response
 
@@ -49,7 +50,7 @@ def _infer_media_type_from_url(url: str) -> str:
     return media_type
 
 
-def _get_valid_media_type(content_type: str | None, url: str) -> str:
+def _get_valid_media_type(content_type: Optional[str], url: str) -> str:
     """
     Get a valid media type from Content-Type header, falling back to URL extension.
 

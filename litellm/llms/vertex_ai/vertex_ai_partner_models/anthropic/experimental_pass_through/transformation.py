@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -208,9 +209,47 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         {"type": "image", "source": {"type": "url", "url": "https://..."}}
         to:
         {"type": "image", "source": {"type": "base64", "media_type": "...", "data": "..."}}
+
+        Uses asyncio.gather to download multiple images concurrently.
         """
+        # First pass: collect all image URLs and their positions
+        # Position is (message_idx, block_idx, url, original_block)
+        image_tasks: List[Tuple[int, int, str, Dict]] = []
+
+        for msg_idx, message in enumerate(messages):
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block_idx, block in enumerate(content):
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "image":
+                    source = block.get("source", {})
+                    if isinstance(source, dict) and source.get("type") == "url":
+                        url = source.get("url")
+                        if url:
+                            image_tasks.append((msg_idx, block_idx, url, block))
+
+        # Download all images concurrently
+        if image_tasks:
+            download_coros = [
+                async_convert_url_to_base64(task[2]) for task in image_tasks
+            ]
+            data_uris = await asyncio.gather(*download_coros)
+
+            # Build a lookup: (msg_idx, block_idx) -> (data_uri, original_block)
+            image_results: Dict[Tuple[int, int], Tuple[str, Dict]] = {}
+            for i, task in enumerate(image_tasks):
+                msg_idx, block_idx, _, original_block = task
+                image_results[(msg_idx, block_idx)] = (data_uris[i], original_block)
+        else:
+            image_results = {}
+
+        # Second pass: build the result
         converted_messages = []
-        for message in messages:
+        for msg_idx, message in enumerate(messages):
             if not isinstance(message, dict):
                 converted_messages.append(message)
                 continue
@@ -221,38 +260,28 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
                 continue
 
             new_content = []
-            for block in content:
-                if not isinstance(block, dict):
+            for block_idx, block in enumerate(content):
+                key = (msg_idx, block_idx)
+                if key in image_results:
+                    data_uri, original_block = image_results[key]
+                    # Parse the data URI to extract media_type and data
+                    # Format: "data:image/jpeg;base64,/9j/..."
+                    media_type_part, base64_data = data_uri.split("data:")[1].split(
+                        ";base64,"
+                    )
+                    # Preserve all original block fields (e.g., cache_control)
+                    # while replacing the source
+                    new_block = {
+                        **original_block,
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type_part,
+                            "data": base64_data,
+                        },
+                    }
+                    new_content.append(new_block)
+                else:
                     new_content.append(block)
-                    continue
-
-                # Check if this is an image block with URL source
-                if block.get("type") == "image":
-                    source = block.get("source", {})
-                    if isinstance(source, dict) and source.get("type") == "url":
-                        url = source.get("url")
-                        if url:
-                            # Convert URL to base64 using async utility
-                            data_uri = await async_convert_url_to_base64(url)
-                            # Parse the data URI to extract media_type and data
-                            # Format: "data:image/jpeg;base64,/9j/..."
-                            media_type_part, base64_data = data_uri.split(
-                                "data:"
-                            )[1].split(";base64,")
-                            # Preserve all original block fields (e.g., cache_control)
-                            # while replacing the source
-                            new_block = {
-                                **block,
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type_part,
-                                    "data": base64_data,
-                                },
-                            }
-                            new_content.append(new_block)
-                            continue
-
-                new_content.append(block)
 
             new_message = {**message, "content": new_content}
             converted_messages.append(new_message)
