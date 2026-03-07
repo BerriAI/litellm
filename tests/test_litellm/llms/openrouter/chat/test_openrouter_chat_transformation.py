@@ -373,7 +373,7 @@ def test_openrouter_cost_tracking_non_streaming():
     Test OpenRouter cost tracking for non-streaming completions.
 
     Verifies:
-    1. Request includes usage.include=true to get cost data
+    1. Request does NOT inject usage parameter (OpenRouter returns cost data by default)
     2. Response extracts cost from usage.cost and stores in _hidden_params
     """
     from unittest.mock import Mock, patch
@@ -381,7 +381,7 @@ def test_openrouter_cost_tracking_non_streaming():
 
     config = OpenrouterConfig()
 
-    # Test request adds usage parameter
+    # Verify request does NOT add usage parameter — OpenRouter returns cost by default
     transformed_request = config.transform_request(
         model="openrouter/anthropic/claude-sonnet-4.5",
         messages=[{"role": "user", "content": "Hello"}],
@@ -389,8 +389,7 @@ def test_openrouter_cost_tracking_non_streaming():
         litellm_params={},
         headers={},
     )
-    assert "usage" in transformed_request
-    assert transformed_request["usage"] == {"include": True}
+    assert "usage" not in transformed_request
 
     # Test response extracts cost
     mock_response = Mock(spec=httpx.Response)
@@ -434,13 +433,13 @@ def test_openrouter_cost_tracking_streaming():
     Test OpenRouter cost tracking for streaming completions.
 
     Verifies:
-    1. Request includes usage.include=true (same as non-streaming)
+    1. Request does NOT inject usage parameter (OpenRouter returns cost data by default)
     2. Streaming chunks preserve usage/cost data in the final chunk
     3. Cost field is accessible in the usage object
     """
     config = OpenrouterConfig()
 
-    # Test request adds usage parameter for streaming
+    # Verify request does NOT add usage parameter — OpenRouter returns cost by default
     transformed_request = config.transform_request(
         model="openrouter/anthropic/claude-sonnet-4.5",
         messages=[{"role": "user", "content": "Hello"}],
@@ -448,8 +447,7 @@ def test_openrouter_cost_tracking_streaming():
         litellm_params={},
         headers={},
     )
-    assert "usage" in transformed_request
-    assert transformed_request["usage"] == {"include": True}
+    assert "usage" not in transformed_request
 
     # Test streaming chunks preserve cost data
     handler = OpenRouterChatCompletionStreamingHandler(
