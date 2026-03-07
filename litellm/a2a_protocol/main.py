@@ -207,7 +207,7 @@ async def _execute_a2a_send_with_retry(
 
 
 @client
-async def asend_message(
+async def asend_message(  # noqa: PLR0915
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendMessageRequest"] = None,
     api_base: Optional[str] = None,
