@@ -21,10 +21,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    OpenAIImageGenerationOptionalParams,
-)
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
@@ -62,7 +59,10 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
 
     def get_supported_openai_params(
         self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    ) -> List[str]:
+        # Returns List[str] rather than List[OpenAIImageGenerationOptionalParams] because
+        # ModelsLab accepts provider-specific params (e.g. negative_prompt) that are not
+        # part of the OpenAI image generation Literal type.
         return [
             "n",
             "size",
