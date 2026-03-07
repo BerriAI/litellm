@@ -106,8 +106,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # so should_run_guardrail returns True for both pre_call and post_call.
         if (self.output_parse_pii or self.apply_to_output) and not logging_only:
             current_hook = self.event_hook
-            if isinstance(current_hook, str) and current_hook == "pre_call":
-                self.event_hook = ["pre_call", "post_call"]
+            if isinstance(current_hook, str) and current_hook != "post_call":
+                self.event_hook = [current_hook, "post_call"]
             elif isinstance(current_hook, list) and "post_call" not in current_hook:
                 self.event_hook = current_hook + ["post_call"]
         self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
