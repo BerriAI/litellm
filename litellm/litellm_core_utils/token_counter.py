@@ -1,8 +1,10 @@
 # What is this?
 ## Helper utilities for token counting
+import asyncio
 import base64
 import io
 import struct
+from concurrent.futures import ThreadPoolExecutor
 from typing import (
     Any,
     Callable,
@@ -19,6 +21,8 @@ import tiktoken
 
 import litellm
 from litellm import verbose_logger
+
+_tokenizer_threadpool: Optional[ThreadPoolExecutor] = None
 from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
@@ -313,6 +317,70 @@ Type for a function that counts tokens in a string.
 """
 
 
+def _get_tokenizer_threadpool() -> Optional[ThreadPoolExecutor]:
+    """
+    Get or create the global threadpool for async tokenization.
+    Returns None if async tokenization is disabled.
+    """
+    global _tokenizer_threadpool
+    
+    if litellm.async_tokenizer_threshold_bytes is None:
+        return None
+    
+    if _tokenizer_threadpool is None:
+        max_workers = litellm.tokenizer_threadpool_max_workers or 4
+        _tokenizer_threadpool = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="litellm_tokenizer"
+        )
+        verbose_logger.debug(
+            f"Created tokenizer threadpool with {max_workers} workers"
+        )
+    
+    return _tokenizer_threadpool
+
+
+def _calculate_input_size_bytes(
+    text: Optional[Union[str, List[str]]],
+    messages: Optional[List[Union[AllMessageValues, Message]]]
+) -> int:
+    """Calculate approximate size of input for threshold checking"""
+    size = 0
+    
+    if text is not None:
+        if isinstance(text, str):
+            size = len(text.encode('utf-8'))
+        elif isinstance(text, list):
+            size = sum(len(str(t).encode('utf-8')) for t in text)
+    
+    if messages is not None:
+        for msg in messages:
+            if isinstance(msg, dict):
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    size += len(content.encode('utf-8'))
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and "text" in item:
+                            size += len(str(item["text"]).encode('utf-8'))
+    
+    return size
+
+
+def _should_use_async_tokenization(input_size_bytes: int) -> bool:
+    """
+    Determine if we should use async tokenization based on input size.
+    
+    Returns True if:
+    - async_tokenizer_threshold_bytes is set AND
+    - input size exceeds the threshold
+    """
+    if litellm.async_tokenizer_threshold_bytes is None:
+        return False
+    
+    return input_size_bytes > litellm.async_tokenizer_threshold_bytes
+
+
 class _MessageCountParams:
     """
     A class to hold the parameters for counting tokens in messages.
@@ -423,6 +491,127 @@ def token_counter(
         raise ValueError("Either text or messages must be provided")
 
     return num_tokens
+
+
+async def async_token_counter(
+    model="",
+    custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
+    text: Optional[Union[str, List[str]]] = None,
+    messages: Optional[List[Union[AllMessageValues, Message]]] = None,
+    count_response_tokens: Optional[bool] = False,
+    tools: Optional[List[ChatCompletionToolParam]] = None,
+    tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
+    use_default_image_token_count: Optional[bool] = False,
+    default_token_count: Optional[int] = None,
+) -> int:
+    """
+    Async version of token_counter that runs tokenization in a threadpool for large inputs.
+    
+    This prevents CPU-intensive tokenization from blocking the async event loop.
+    For small inputs, falls back to sync tokenization for efficiency.
+    
+    Args:
+        Same as token_counter()
+    
+    Returns:
+        int: The number of tokens in the text.
+    """
+    from litellm.utils import convert_list_message_to_dict
+    
+    if litellm.disable_token_counter is True:
+        return 0
+    
+    input_size = _calculate_input_size_bytes(text, messages)
+    
+    if not _should_use_async_tokenization(input_size):
+        # Input is small, run synchronously (faster for small inputs)
+        return token_counter(
+            model=model,
+            custom_tokenizer=custom_tokenizer,
+            text=text,
+            messages=messages,
+            count_response_tokens=count_response_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            use_default_image_token_count=use_default_image_token_count,
+            default_token_count=default_token_count,
+        )
+    
+    # Large input - use threadpool to avoid blocking event loop
+    verbose_logger.debug(
+        f"Using async tokenization for large input ({input_size:,} bytes > {litellm.async_tokenizer_threshold_bytes:,} threshold)"
+    )
+    
+    threadpool = _get_tokenizer_threadpool()
+    
+    if threadpool is None:
+        verbose_logger.warning(
+            "Async tokenization requested but threadpool not available, falling back to sync"
+        )
+        return token_counter(
+            model=model,
+            custom_tokenizer=custom_tokenizer,
+            text=text,
+            messages=messages,
+            count_response_tokens=count_response_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            use_default_image_token_count=use_default_image_token_count,
+            default_token_count=default_token_count,
+        )
+    
+    # Run tokenization in threadpool
+    loop = asyncio.get_event_loop()
+    
+    try:
+        # Run in threadpool with optional timeout
+        if litellm.tokenizer_timeout_seconds is not None:
+            num_tokens = await asyncio.wait_for(
+                loop.run_in_executor(
+                    threadpool,
+                    token_counter,
+                    model,
+                    custom_tokenizer,
+                    text,
+                    messages,
+                    count_response_tokens,
+                    tools,
+                    tool_choice,
+                    use_default_image_token_count,
+                    default_token_count,
+                ),
+                timeout=litellm.tokenizer_timeout_seconds
+            )
+        else:
+            num_tokens = await loop.run_in_executor(
+                threadpool,
+                token_counter,
+                model,
+                custom_tokenizer,
+                text,
+                messages,
+                count_response_tokens,
+                tools,
+                tool_choice,
+                use_default_image_token_count,
+                default_token_count,
+            )
+        
+        verbose_logger.debug(
+            f"Async tokenization completed: {num_tokens} tokens"
+        )
+        return num_tokens
+        
+    except asyncio.TimeoutError:
+        verbose_logger.error(
+            f"Tokenization timed out after {litellm.tokenizer_timeout_seconds}s, returning 0 tokens"
+        )
+        return 0
+    except Exception as e:
+        verbose_logger.error(
+            f"Error in async tokenization: {e}, returning 0 tokens"
+        )
+        return 0
 
 
 def _count_messages(
