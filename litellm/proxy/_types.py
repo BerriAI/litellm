@@ -239,6 +239,7 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # list routes
     KEY_LIST = "/key/list"
+    KEY_ALIASES = "/key/aliases"
 
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
@@ -515,6 +516,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
+        KeyManagementRoutes.KEY_ALIASES.value,
     ]
 
     management_routes = [
