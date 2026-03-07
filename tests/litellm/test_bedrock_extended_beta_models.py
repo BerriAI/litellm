@@ -204,5 +204,5 @@ class TestModelSpecificFeatures:
             model = f"bedrock/{region}/mistral.devstral-2-123b"
             assert model_data[model]["supports_system_messages"] is True
 
-        assert '"mistral.devstral-2-123b"' not in constants_text
+        assert "mistral.devstral-2-123b" not in constants_text
         assert "mistral.devstral-2-123b" in litellm.bedrock_converse_models
