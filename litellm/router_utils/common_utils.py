@@ -75,6 +75,103 @@ def filter_team_based_models(
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
 
+
+def filter_deployments_by_access_groups(
+    model: str,
+    healthy_deployments: Union[List[Dict], Dict],
+    request_kwargs: Optional[Dict] = None,
+) -> Union[List[Dict], Dict]:
+    """
+    Filter deployments by access groups when a key accesses a model
+    through an access group rather than by direct model name.
+
+    When a virtual key has access to model "gpt-4o" via access group "dev_models",
+    only route to deployments that belong to "dev_models" — not all deployments
+    of "gpt-4o" across all access groups.
+
+    This prevents cross-group load balancing (Issue #21935).
+
+    Preserves backward compatibility:
+    - Keys with direct model access (model name in key's models list) → no filtering
+    - Keys with wildcard access ("*" or "all-proxy-models") → no filtering
+    - Deployments without access_groups → always kept (unrestricted)
+    - If filtering removes all deployments → returns empty list (routing fails with "no healthy deployments")
+    """
+    if request_kwargs is None:
+        return healthy_deployments
+    if isinstance(healthy_deployments, dict):
+        return healthy_deployments
+    if not healthy_deployments:
+        return healthy_deployments
+
+    # Extract the UserAPIKeyAuth object from request metadata
+    metadata = request_kwargs.get("metadata") or {}
+    litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+
+    user_api_key_auth = metadata.get("user_api_key_auth") or litellm_metadata.get(
+        "user_api_key_auth"
+    )
+    if user_api_key_auth is None:
+        return healthy_deployments
+
+    key_models: list = getattr(user_api_key_auth, "models", []) or []
+    key_access_group_ids: list = (
+        getattr(user_api_key_auth, "access_group_ids", []) or []
+    )
+
+    # If key has all-model access or no restrictions at all, don't filter
+    if not key_models and not key_access_group_ids:
+        return healthy_deployments
+    if any(
+        m in key_models
+        for m in ("*", "all-proxy-models", "openai-proxy-all-models", "all-team-models")
+    ):
+        return healthy_deployments
+
+    # If key has direct access to this model name (not via access group), don't filter
+    if model in key_models:
+        return healthy_deployments
+
+    # Collect all access groups defined across all deployments
+    all_deployment_access_groups: set = set()
+    for deployment in healthy_deployments:
+        for group in (deployment.get("model_info") or {}).get("access_groups") or []:
+            all_deployment_access_groups.add(group)
+
+    if not all_deployment_access_groups:
+        # No deployments use access groups — nothing to filter
+        return healthy_deployments
+
+    # Build the set of access groups the key has access to:
+    # 1. Explicit access_group_ids on the key
+    # 2. Entries in key's models list that match an access group name
+    key_access_groups: set = set(key_access_group_ids)
+    key_access_groups |= set(key_models) & all_deployment_access_groups
+
+    if not key_access_groups:
+        # Key doesn't match any access group — likely using wildcards or aliases
+        # Don't filter to preserve backward compatibility
+        return healthy_deployments
+
+    # Filter: keep deployments that either:
+    # 1. Have no access_groups (unrestricted deployment)
+    # 2. Have access_groups that overlap with the key's access groups
+    filtered = []
+    for deployment in healthy_deployments:
+        deployment_groups = set(
+            (deployment.get("model_info") or {}).get("access_groups") or []
+        )
+        if not deployment_groups:
+            # Unrestricted deployment — always keep
+            filtered.append(deployment)
+        elif deployment_groups & key_access_groups:
+            # Deployment belongs to one of the key's access groups — keep
+            filtered.append(deployment)
+        # else: deployment is in a different access group — skip
+
+    return filtered
+
+
 def _deployment_supports_web_search(deployment: Dict) -> bool:
     """
     Check if a deployment supports web search.
@@ -112,7 +209,7 @@ def filter_web_search_deployments(
     is_web_search_request = False
     tools = request_kwargs.get("tools") or []
     for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure. 
+        # These are the two websearch tools for OpenAI / Azure.
         if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
             is_web_search_request = True
             break
@@ -121,7 +218,9 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     # Filter out deployments that don't support web search
-    final_deployments = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
+    final_deployments = [
+        d for d in healthy_deployments if _deployment_supports_web_search(d)
+    ]
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments

@@ -90,6 +90,7 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 from litellm.router_utils.common_utils import (
     filter_team_based_models,
+    filter_deployments_by_access_groups,
     filter_web_search_deployments,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
@@ -8736,6 +8737,14 @@ class Router:
             verbose_router_logger.debug(
                 f"healthy_deployments after team filter: {healthy_deployments}"
             )
+
+        # IF KEY ACCESSES MODEL VIA ACCESS GROUP, FILTER DEPLOYMENTS TO ONLY
+        # THOSE IN THE KEY'S ACCESS GROUPS (Issue #21935)
+        healthy_deployments = filter_deployments_by_access_groups(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
 
         healthy_deployments = filter_web_search_deployments(
             healthy_deployments=healthy_deployments,
