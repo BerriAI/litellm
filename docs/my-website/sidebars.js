@@ -811,6 +811,7 @@ const sidebars = {
         "providers/anyscale",
         "providers/apertis",
         "providers/baseten",
+        "providers/blockrun",
         "providers/bytez",
         "providers/cerebras",
         "providers/chutes",
