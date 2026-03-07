@@ -267,7 +267,7 @@ async def openapi_oauth2_connect(
 
 
 @router.get("/v1/mcp/oauth2/callback", include_in_schema=False, response_model=None)
-async def openapi_oauth2_callback(
+async def openapi_oauth2_callback(  # noqa: PLR0915
     request: Request,
     code: Optional[str] = Query(default=None),
     state: Optional[str] = Query(default=None),
