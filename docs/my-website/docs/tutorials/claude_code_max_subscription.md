@@ -349,8 +349,25 @@ curl "http://localhost:4000/v1/models" \
   -H "Authorization: Bearer sk-otsclFlEblQ-6D60ua2IZg"
 ```
 
+## SDK Direct Usage
+
+If you don't need the proxy and just want to use your Claude Pro/Max OAuth token directly with the LiteLLM SDK, you can pass it as the `api_key` parameter. LiteLLM automatically detects OAuth tokens and handles the correct authentication headers.
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-5-20250929",
+    api_key="sk-ant-oat01-...",  # Your OAuth token
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+See the [Anthropic provider docs](/docs/providers/anthropic#oauth-token-claude-promax-subscription) for more details.
+
 ## Related Documentation
 
+- [Anthropic Provider - OAuth Token Support](/docs/providers/anthropic#oauth-token-claude-promax-subscription) - Direct SDK usage with OAuth tokens
 - [Forward Client Headers](/docs/proxy/forward_client_headers) - Detailed header forwarding configuration
 - [Claude Code Quickstart](/docs/tutorials/claude_responses_api) - Basic Claude Code + LiteLLM setup
 - [Virtual Keys](/docs/proxy/virtual_keys) - Creating and managing API keys
