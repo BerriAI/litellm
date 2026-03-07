@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 from typing import Any, Dict, Set
 
@@ -7,7 +6,6 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 from fastapi import APIRouter, Depends, HTTPException
-from prisma.errors import RecordNotFoundError
 from pydantic import TypeAdapter
 
 import litellm
@@ -338,7 +336,9 @@ async def delete_hashicorp_vault_config(
         await prisma_client.db.litellm_configoverrides.delete(
             where={"config_type": "hashicorp_vault"}
         )
-    except RecordNotFoundError:
+    except Exception as e:
+        if e.__class__.__name__ != "RecordNotFoundError":
+            raise
         verbose_proxy_logger.debug(
             "No existing Hashicorp Vault config record to delete"
         )
