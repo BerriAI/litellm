@@ -1,12 +1,13 @@
 import json
 import os
 import sys
-from litellm._uuid import uuid
 from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from litellm._uuid import uuid
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -20,6 +21,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
+    _add_team_model_to_db,
     clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
@@ -399,7 +401,9 @@ class TestClearCache:
         """
         Test that clear_cache clears DB models and preserves config models.
         """
-        from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            clear_cache,
+        )
 
         # Create mock router with mixed DB and config models
         mock_router = MagicMock()
@@ -583,8 +587,9 @@ class TestModelInfoEndpoint:
     @pytest.mark.asyncio
     async def test_model_info_inaccessible_model_returns_404(self):
         """Test model_info returns 404 for inaccessible models"""
-        from litellm.proxy.proxy_server import model_info
         from fastapi import HTTPException
+
+        from litellm.proxy.proxy_server import model_info
 
         # Mock user with limited access
         user_api_key_dict = UserAPIKeyAuth(
@@ -620,7 +625,7 @@ class TestModelInfoEndpoint:
     async def test_model_info_team_model_access(self):
         """Test model_info works with team model access"""
         from litellm.proxy.proxy_server import model_info
-        
+
         # Mock user with team access
         user_api_key_dict = UserAPIKeyAuth(
             user_id="test_user",
@@ -653,3 +658,102 @@ class TestModelInfoEndpoint:
             assert result["id"] == "team-model-1"
             assert result["object"] == "model" 
             assert result["owned_by"] == "custom"
+
+
+class TestAddTeamModelToDb:
+    """Test _add_team_model_to_db preserves model_name for multi-region routing."""
+
+    @pytest.mark.asyncio
+    async def test_team_model_preserves_model_name(self):
+        """
+        Test that _add_team_model_to_db preserves the original model_name.
+        
+        This is critical for multi-region load balancing where multiple 
+        deployments (e.g., eastus2, northcentralus) need to share the same
+        model_name for the router to distribute requests across them.
+        """
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+        
+        original_model_name = "MyTeam-gpt-4o"
+        team_id = "test-team-123"
+        
+        # Create a Deployment with team_id
+        model_params = Deployment(
+            model_name=original_model_name,
+            litellm_params=LiteLLM_Params(
+                model="gpt-4o",
+                api_key="fake_key",
+            ),
+            model_info=ModelInfo(
+                id="model-uuid-123",
+                team_id=team_id,
+            ),
+        )
+        
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        
+        # Mock prisma_client and team_model_add
+        mock_prisma = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(
+            return_value=MagicMock(model_name=original_model_name)
+        )
+        
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+            new_callable=AsyncMock,
+        ) as mock_team_model_add, patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+            return_value="encrypted_fake_key",
+        ):
+            result = await _add_team_model_to_db(
+                model_params=model_params,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=mock_prisma,
+            )
+        
+        # Verify model_name was NOT replaced with UUID
+        assert model_params.model_name == original_model_name, \
+            f"model_name should be preserved as '{original_model_name}', got '{model_params.model_name}'"
+        
+        # Verify team_public_model_name was set
+        assert model_params.model_info.team_public_model_name == original_model_name
+        
+        # Verify team_model_add was called with the original model_name
+        mock_team_model_add.assert_called_once()
+        call_args = mock_team_model_add.call_args
+        assert original_model_name in call_args.kwargs["data"].models
+
+    @pytest.mark.asyncio
+    async def test_team_model_returns_none_without_team_id(self):
+        """Test that _add_team_model_to_db returns None when no team_id is provided."""
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+        
+        model_params = Deployment(
+            model_name="regular-model",
+            litellm_params=LiteLLM_Params(
+                model="gpt-4o",
+                api_key="fake_key",
+            ),
+            model_info=ModelInfo(
+                id="model-uuid-123",
+                team_id=None,  # No team_id
+            ),
+        )
+        
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        
+        mock_prisma = AsyncMock()
+        
+        result = await _add_team_model_to_db(
+            model_params=model_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=mock_prisma,
+        )
+        
+        assert result is None, "Should return None when team_id is not provided"
