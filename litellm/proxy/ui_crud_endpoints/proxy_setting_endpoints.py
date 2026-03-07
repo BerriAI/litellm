@@ -124,6 +124,11 @@ class UISettings(BaseModel):
         description="If true, team admins are exempt from the vector stores disable restriction (only takes effect when disable_vector_stores_for_internal_users is true).",
     )
 
+    scope_user_search_to_org: bool = Field(
+        default=False,
+        description="If enabled, the user search endpoint (/user/filter/ui) restricts results by organization. When off, any authenticated user can search all users.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -143,6 +148,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
+    "scope_user_search_to_org",
 }
 
 # Flags that must be synced from the persisted UISettings into
