@@ -413,9 +413,6 @@ from litellm.proxy.proxy_server import UserAPIKeyAuth
 from typing import Any, Dict, Optional
 
 class CustomHeaderLogger(CustomLogger):
-    def __init__(self):
-        super().__init__()
-
     async def async_post_call_response_headers_hook(
         self,
         data: dict,
@@ -425,8 +422,25 @@ class CustomHeaderLogger(CustomLogger):
     ) -> Optional[Dict[str, str]]:
         """
         Inject custom headers into all responses (success and failure).
+        Works for /chat/completions, /embeddings, and /responses.
+
+        Use request_headers to echo incoming headers (e.g., API gateway request IDs).
         """
-        return {"x-custom-header": "custom-value"}
+        headers = {"x-custom-header": "custom-value"}
+
+        # Echo an incoming gateway request ID into the response
+        if request_headers:
+            gateway_id = request_headers.get("x-gateway-request-id")
+            if gateway_id:
+                headers["x-gateway-request-id"] = gateway_id
+
+        return headers
 
 proxy_handler_instance = CustomHeaderLogger()
 ```
+
+:::tip
+This hook works for **all proxy endpoints**: `/chat/completions`, `/embeddings`, `/responses` (streaming and non-streaming), and failure responses.
+
+The `request_headers` parameter contains the original HTTP request headers, allowing you to echo incoming headers (e.g., API gateway request IDs) into the response.
+:::
