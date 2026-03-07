@@ -3276,6 +3276,9 @@ class ProxyException(Exception):
         elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
             self.code = "401"
 
+    def __str__(self) -> str:
+        return self.message
+
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
         error_dict: Dict[str, Optional[Union[str, Dict]]] = {
