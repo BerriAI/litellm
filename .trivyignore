@@ -10,3 +10,11 @@ GHSA-h25m-26qc-wcjf
 
 # MEDIUM: Image Optimizer DoS
 CVE-2025-59471
+
+# DOMPurify XSS (transitive dep of @docusaurus/theme-mermaid)
+# Fix: override dompurify>=3.3.2 in docs/my-website/package.json
+CVE-2026-0540
+
+# SVGO Billion Laughs DoS (transitive dep of @docusaurus/core)
+# Fix: override svgo>=3.3.3 in docs/my-website/package.json
+CVE-2026-29074

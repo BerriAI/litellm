@@ -229,6 +229,24 @@
         "interactions": true
       }
     },
+    "bedrock_mantle": {
+      "display_name": "AWS - Bedrock Mantle (`bedrock_mantle`)",
+      "url": "https://docs.litellm.ai/docs/providers/bedrock",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "bedrock": {
       "display_name": "AWS - Bedrock (`bedrock`)",
       "url": "https://docs.litellm.ai/docs/providers/bedrock",
@@ -1886,6 +1904,23 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "searchapi": {
+      "display_name": "SearchAPI.io (`searchapi`)",
+      "url": "https://docs.litellm.ai/docs/providers/searchapi",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
       }
     },
     "searxng": {

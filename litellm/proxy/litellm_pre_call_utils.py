@@ -1835,82 +1835,88 @@ async def add_guardrails_from_policy_engine(
     # Extract dynamic policies from request body (if present)
     request_body_policies_raw = data.pop("policies", None)
 
-    registry = get_policy_registry()
-    verbose_proxy_logger.debug(
-        f"Policy engine: registry initialized={registry.is_initialized()}, "
-        f"policy_count={len(registry.get_all_policies())}"
-    )
-    if not registry.is_initialized():
+    try:
+        registry = get_policy_registry()
         verbose_proxy_logger.debug(
-            "Policy engine not initialized, skipping policy matching"
+            f"Policy engine: registry initialized={registry.is_initialized()}, "
+            f"policy_count={len(registry.get_all_policies())}"
         )
-        return
+        if not registry.is_initialized():
+            verbose_proxy_logger.debug(
+                "Policy engine not initialized, skipping policy matching"
+            )
+            return
 
-    # Extract tags and build context
-    all_tags = get_tags_from_request_body(data) or None
-    context = PolicyMatchContext(
-        team_alias=user_api_key_dict.team_alias,
-        key_alias=user_api_key_dict.key_alias,
-        model=data.get("model"),
-        tags=all_tags,
-    )
+        # Extract tags and build context
+        all_tags = get_tags_from_request_body(data) or None
+        context = PolicyMatchContext(
+            team_alias=str(user_api_key_dict.team_alias) if user_api_key_dict.team_alias is not None else None,
+            key_alias=str(user_api_key_dict.key_alias) if user_api_key_dict.key_alias is not None else None,
+            model=data.get("model"),
+            tags=all_tags,
+        )
 
-    verbose_proxy_logger.debug(
-        f"Policy engine: matching policies for context team_alias={context.team_alias}, "
-        f"key_alias={context.key_alias}, model={context.model}, tags={context.tags}"
-    )
+        verbose_proxy_logger.debug(
+            f"Policy engine: matching policies for context team_alias={context.team_alias}, "
+            f"key_alias={context.key_alias}, model={context.model}, tags={context.tags}"
+        )
 
-    # Separate policy names from policy version IDs (policy_<uuid>)
-    request_body_names: List[str] = []
-    request_body_version_ids: List[str] = []
-    if request_body_policies_raw and isinstance(request_body_policies_raw, list):
-        for item in request_body_policies_raw:
-            if not isinstance(item, str):
-                continue
-            if _is_policy_version_id(item):
-                policy_id = _extract_policy_id(item)
-                if policy_id:
-                    request_body_version_ids.append(policy_id)
+        # Separate policy names from policy version IDs (policy_<uuid>)
+        request_body_names: List[str] = []
+        request_body_version_ids: List[str] = []
+        if request_body_policies_raw and isinstance(request_body_policies_raw, list):
+            for item in request_body_policies_raw:
+                if not isinstance(item, str):
+                    continue
+                if _is_policy_version_id(item):
+                    policy_id = _extract_policy_id(item)
+                    if policy_id:
+                        request_body_version_ids.append(policy_id)
+                else:
+                    request_body_names.append(item)
+
+        # Resolve policy versions by ID from in-memory cache (populated by sync job; no DB in hot path)
+        merged_policies: Dict[str, Any] = dict(registry.get_all_policies())
+        fetched_policy_names: List[str] = []
+        for policy_id in request_body_version_ids:
+            result = registry.get_policy_by_id_for_request(policy_id=policy_id)
+            if result is not None:
+                pname, policy = result
+                merged_policies[pname] = policy
+                fetched_policy_names.append(pname)
+                verbose_proxy_logger.debug(
+                    f"Policy engine: loaded version by ID policy_{policy_id} -> {pname}"
+                )
             else:
-                request_body_names.append(item)
+                verbose_proxy_logger.debug(
+                    f"Policy engine: policy version {policy_id} not found in cache, skipping"
+                )
 
-    # Resolve policy versions by ID from in-memory cache (populated by sync job; no DB in hot path)
-    merged_policies: Dict[str, Any] = dict(registry.get_all_policies())
-    fetched_policy_names: List[str] = []
-    for policy_id in request_body_version_ids:
-        result = registry.get_policy_by_id_for_request(policy_id=policy_id)
-        if result is not None:
-            pname, policy = result
-            merged_policies[pname] = policy
-            fetched_policy_names.append(pname)
-            verbose_proxy_logger.debug(
-                f"Policy engine: loaded version by ID policy_{policy_id} -> {pname}"
-            )
-        else:
-            verbose_proxy_logger.debug(
-                f"Policy engine: policy version {policy_id} not found in cache, skipping"
-            )
+        # Build request body list: names + policy names from fetched versions
+        request_body_policies = request_body_names + fetched_policy_names
 
-    # Build request body list: names + policy names from fetched versions
-    request_body_policies = request_body_names + fetched_policy_names
+        # Match and track policies (with merged_policies when we have version overrides)
+        applied_policy_names, _ = _match_and_track_policies(
+            data,
+            context,
+            request_body_policies,
+            policies_override=merged_policies if request_body_version_ids else None,
+        )
 
-    # Match and track policies (with merged_policies when we have version overrides)
-    applied_policy_names, _ = _match_and_track_policies(
-        data,
-        context,
-        request_body_policies,
-        policies_override=merged_policies if request_body_version_ids else None,
-    )
-
-    # Resolve and apply guardrails. Use applied_policy_names so request-body policies
-    # (names + version IDs) are included. Use merged_policies when we have version overrides.
-    _apply_resolved_guardrails_to_metadata(
-        data,
-        metadata_variable_name,
-        context,
-        policy_names=applied_policy_names if applied_policy_names else None,
-        policies=merged_policies if request_body_version_ids else None,
-    )
+        # Resolve and apply guardrails. Use applied_policy_names so request-body policies
+        # (names + version IDs) are included. Use merged_policies when we have version overrides.
+        _apply_resolved_guardrails_to_metadata(
+            data,
+            metadata_variable_name,
+            context,
+            policy_names=applied_policy_names if applied_policy_names else None,
+            policies=merged_policies if request_body_version_ids else None,
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Policy engine: error during policy matching/resolution, "
+            f"skipping policy guardrails: {e}"
+        )
 
 
 def add_provider_specific_headers_to_request(

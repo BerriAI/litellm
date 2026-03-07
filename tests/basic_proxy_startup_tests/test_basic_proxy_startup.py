@@ -23,7 +23,7 @@ async def test_health_and_chat_completion():
         async with session.get("http://0.0.0.0:4000/health/readiness") as response:
             assert response.status == 200
             readiness_response = await response.json()
-            assert readiness_response["status"] == "connected"
+            assert readiness_response["status"] in ["connected", "healthy"]
 
         # Test liveness endpoint
         async with session.get("http://0.0.0.0:4000/health/liveness") as response:

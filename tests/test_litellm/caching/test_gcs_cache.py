@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
+import litellm.caching.gcs_cache as gcs_cache_module
 from litellm.caching.gcs_cache import GCSCache
 
 
@@ -15,9 +16,9 @@ def mock_gcs_dependencies():
     mock_sync_client = MagicMock()
     mock_async_client = AsyncMock()
 
-    with patch("litellm.caching.gcs_cache._get_httpx_client", return_value=mock_sync_client), \
-         patch("litellm.caching.gcs_cache.get_async_httpx_client", return_value=mock_async_client), \
-         patch("litellm.caching.gcs_cache.GCSBucketBase.sync_construct_request_headers", return_value={}):
+    with patch.object(gcs_cache_module, "_get_httpx_client", return_value=mock_sync_client), \
+         patch.object(gcs_cache_module, "get_async_httpx_client", return_value=mock_async_client), \
+         patch.object(gcs_cache_module.GCSBucketBase, "sync_construct_request_headers", return_value={}):
         yield {
             "sync_client": mock_sync_client,
             "async_client": mock_async_client,

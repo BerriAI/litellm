@@ -666,7 +666,7 @@ def test_stream_chunk_builder_openai_audio_output_usage():
     usage_obj: Optional[litellm.Usage] = None
 
     for index, chunk in enumerate(chunks):
-        if hasattr(chunk, "usage"):
+        if hasattr(chunk, "usage") and chunk.usage is not None:
             usage_obj = chunk.usage
             print(f"chunk usage: {chunk.usage}")
             print(f"index: {index}")

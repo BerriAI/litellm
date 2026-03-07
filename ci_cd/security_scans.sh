@@ -161,6 +161,8 @@ run_grype_scans() {
         "GHSA-3ppc-4f35-3m26" # minimatch ReDoS via repeated wildcards - from nodejs_wheel bundled npm, not used in application runtime code
         "GHSA-83g3-92jg-28cx" # tar arbitrary file read/write via hardlink - from nodejs_wheel bundled npm, not used in application runtime code
         "CVE-2026-25639" # axios - full fix requires 1.x major version bump; pinned to >=0.30.2 to clear other axios CVEs, upgrade to 1.x in follow-up
+        "GHSA-qffp-2rhf-9h96" # tar hardlink path traversal via drive-relative linkpath - transitive dep, not directly exploitable in this context
+        "CVE-2026-2297" # Python 3.13 SourcelessFileLoader import hook issue - no fix available yet
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

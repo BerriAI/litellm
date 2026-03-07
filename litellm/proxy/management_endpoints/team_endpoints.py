@@ -705,6 +705,8 @@ async def new_team(  # noqa: PLR0915
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - enforced_batch_output_expires_after: Optional[dict] - Enforce expiration on batch output files for the team. Must contain 'anchor' and 'seconds' keys. Example - {"anchor": "created_at", "seconds": 86400}.
+    - enforced_file_expires_after: Optional[dict] - Enforce expiration on uploaded files for the team. Must contain 'anchor' and 'seconds' keys. Example - {"anchor": "created_at", "seconds": 86400}.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
@@ -1267,6 +1269,8 @@ async def update_team(   # noqa: PLR0915
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
     Example - update team TPM Limit
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - enforced_batch_output_expires_after: Optional[dict] - Enforce expiration on batch output files for the team. Must contain 'anchor' and 'seconds' keys. Example - {"anchor": "created_at", "seconds": 86400}.
+    - enforced_file_expires_after: Optional[dict] - Enforce expiration on uploaded files for the team. Must contain 'anchor' and 'seconds' keys. Example - {"anchor": "created_at", "seconds": 86400}.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
