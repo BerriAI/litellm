@@ -980,6 +980,48 @@ async def get_in_product_nudges():
     return InProductNudgeResponse(is_claude_code_enabled=False)
 
 
+UI_SETTINGS_CACHE_KEY = "ui_settings:settings_dict"
+
+
+async def get_ui_settings_cached() -> Dict[str, Any]:
+    """
+    Return the persisted UI settings dict, using DualCache for reads.
+
+    Cache hit  → return cached dict immediately.
+    Cache miss → read from DB, populate cache, return dict.
+    """
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    # 1. Try cache
+    cached = await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY)
+    if cached is not None and isinstance(cached, dict):
+        return cached
+
+    # 2. Fallback to DB
+    if prisma_client is None:
+        return {}
+
+    db_record = await prisma_client.db.litellm_uisettings.find_unique(
+        where={"id": "ui_settings"}
+    )
+    ui_settings: Dict[str, Any] = {}
+    if db_record and db_record.ui_settings:
+        raw = db_record.ui_settings
+        ui_settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
+
+    # Sanitize
+    ui_settings = {
+        k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
+    }
+
+    # 3. Populate cache
+    await user_api_key_cache.async_set_cache(
+        key=UI_SETTINGS_CACHE_KEY, value=ui_settings
+    )
+
+    return ui_settings
+
+
 @router.get(
     "/get/ui_settings",
     tags=["UI Settings"],
@@ -1107,6 +1149,16 @@ async def update_ui_settings(
         from litellm.proxy.proxy_server import general_settings
 
         general_settings.update(_flags_to_sync)
+
+    # Invalidate + set DualCache so subsequent reads see the new values immediately
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    sanitized = {
+        k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
+    }
+    await user_api_key_cache.async_set_cache(
+        key=UI_SETTINGS_CACHE_KEY, value=sanitized
+    )
 
     return {
         "message": "UI settings updated successfully",

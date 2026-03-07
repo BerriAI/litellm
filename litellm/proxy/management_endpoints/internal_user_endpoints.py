@@ -30,7 +30,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     get_daily_activity_aggregated,
 )
-from litellm.proxy.auth.auth_checks import get_user_object
+from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -1869,21 +1869,17 @@ async def ui_view_users(
         proxy_logging_obj,
         user_api_key_cache,
     )
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        get_ui_settings_cached,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     try:
-        # Read the scope_user_search_to_org flag from the DB
-        ui_settings_row = (
-            await prisma_client.db.litellm_uisettings.find_unique(
-                where={"id": "ui_settings"}
-            )
-        )
-        scope_flag = False
-        if ui_settings_row is not None:
-            settings_json = ui_settings_row.settings or {}  # type: ignore[union-attr]
-            scope_flag = bool(settings_json.get("scope_user_search_to_org", False))
+        # Read the scope_user_search_to_org flag (cached)
+        ui_settings = await get_ui_settings_cached()
+        scope_flag = bool(ui_settings.get("scope_user_search_to_org", False))
 
         org_filter_ids: Optional[List[str]] = None
 
@@ -1915,27 +1911,29 @@ async def ui_view_users(
                 if org_admin_org_ids:
                     org_filter_ids = org_admin_org_ids
                 elif team_id is not None:
-                    # Look up the team to check if it belongs to an org
-                    team_row = await prisma_client.db.litellm_teamtable.find_unique(
-                        where={"team_id": team_id}
-                    )
-                    if team_row is not None:
-                        team_obj = LiteLLM_TeamTable(**team_row.model_dump())
-                        if _is_user_team_admin(user_api_key_dict, team_obj):
-                            if team_obj.organization_id:
-                                org_filter_ids = [team_obj.organization_id]
-                            else:
-                                raise HTTPException(
-                                    status_code=403,
-                                    detail={
-                                        "error": "scope_user_search_to_org is enabled and this team is not part of an organization. Contact your proxy admin to adjust this setting."
-                                    },
-                                )
+                    # Look up the team via cached helper
+                    try:
+                        team_obj = await get_team_object(
+                            team_id=team_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    except HTTPException:
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
+                            },
+                        )
+                    if _is_user_team_admin(user_api_key_dict, team_obj):
+                        if team_obj.organization_id:
+                            org_filter_ids = [team_obj.organization_id]
                         else:
                             raise HTTPException(
                                 status_code=403,
                                 detail={
-                                    "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
+                                    "error": "scope_user_search_to_org is enabled and this team is not part of an organization. Contact your proxy admin to adjust this setting."
                                 },
                             )
                     else:
