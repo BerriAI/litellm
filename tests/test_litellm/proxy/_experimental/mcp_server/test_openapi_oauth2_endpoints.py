@@ -1,5 +1,6 @@
 """Unit tests for openapi_oauth2_endpoints.py"""
 
+import json
 import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -216,9 +217,197 @@ async def test_status_no_prisma_returns_not_connected():
         mock_mgr.get_mcp_server_by_id.return_value = mock_server
         result = await openapi_oauth2_status("server1", mock_user)
 
-    import json
-
     raw = result.body
     body = json.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw))
     assert body["connected"] is False
     assert body["server_id"] == "server1"
+
+
+# ---------------------------------------------------------------------------
+# Refresh token — stored as JSON blob when provider returns one
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_callback_stores_refresh_token_as_json():
+    """When the provider returns a refresh_token, it is stored as a JSON blob."""
+    from litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints import (
+        openapi_oauth2_callback,
+    )
+
+    state = "test-state-refresh"
+    now = time.time()
+    _pending_oauth2_states[state] = {
+        "server_id": "server1",
+        "user_id": "user1",
+        "timestamp": now,
+        "expires_at": now + 600,
+    }
+
+    mock_server = MagicMock()
+    mock_server.token_url = "https://provider.example/token"
+    mock_server.client_id = "cid"
+    mock_server.client_secret = "csecret"
+    mock_server.server_name = "TestProvider"
+    mock_server.name = "test"
+
+    mock_response = MagicMock()
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {
+        "access_token": "ghu_accesstoken123",
+        "refresh_token": "ghr_refreshtoken456",
+        "token_type": "bearer",
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    stored_credentials: list = []
+
+    async def fake_store(prisma_client, user_id, server_id, credential):
+        stored_credentials.append(credential)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.global_mcp_server_manager"
+    ) as mock_mgr, patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.get_request_base_url",
+        return_value="http://localhost:4000",
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.store_user_credential",
+        side_effect=fake_store,
+    ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+        create=True,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+        MagicMock(),
+    ), patch(
+        "httpx.AsyncClient"
+    ) as mock_client_cls:
+        mock_mgr.get_mcp_server_by_id.return_value = mock_server
+        mock_async_client = AsyncMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await openapi_oauth2_callback(
+            request=MagicMock(),
+            code="auth-code",
+            state=state,
+            error=None,
+            error_description=None,
+        )
+
+    assert len(stored_credentials) == 1
+    stored = stored_credentials[0]
+    parsed = json.loads(stored)
+    assert parsed["access_token"] == "ghu_accesstoken123"
+    assert parsed["refresh_token"] == "ghr_refreshtoken456"
+
+
+@pytest.mark.asyncio
+async def test_callback_stores_plain_token_when_no_refresh_token():
+    """When the provider does not return a refresh_token, the plain access_token is stored."""
+    from litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints import (
+        openapi_oauth2_callback,
+    )
+
+    state = "test-state-no-refresh"
+    now = time.time()
+    _pending_oauth2_states[state] = {
+        "server_id": "server1",
+        "user_id": "user1",
+        "timestamp": now,
+        "expires_at": now + 600,
+    }
+
+    mock_server = MagicMock()
+    mock_server.token_url = "https://provider.example/token"
+    mock_server.client_id = "cid"
+    mock_server.client_secret = "csecret"
+    mock_server.server_name = "TestProvider"
+    mock_server.name = "test"
+
+    mock_response = MagicMock()
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {
+        "access_token": "ghu_only_access",
+        "token_type": "bearer",
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    stored_credentials: list = []
+
+    async def fake_store(prisma_client, user_id, server_id, credential):
+        stored_credentials.append(credential)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.global_mcp_server_manager"
+    ) as mock_mgr, patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.get_request_base_url",
+        return_value="http://localhost:4000",
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.store_user_credential",
+        side_effect=fake_store,
+    ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+        create=True,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+        MagicMock(),
+    ), patch(
+        "httpx.AsyncClient"
+    ) as mock_client_cls:
+        mock_mgr.get_mcp_server_by_id.return_value = mock_server
+        mock_async_client = AsyncMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await openapi_oauth2_callback(
+            request=MagicMock(),
+            code="auth-code",
+            state=state,
+            error=None,
+            error_description=None,
+        )
+
+    assert len(stored_credentials) == 1
+    # Plain string — NOT a JSON blob
+    assert stored_credentials[0] == "ghu_only_access"
+
+
+# ---------------------------------------------------------------------------
+# _extract_access_token (server.py helper)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_access_token_plain_string():
+    """Plain token strings are returned unchanged."""
+    from litellm.proxy._experimental.mcp_server.server import _extract_access_token
+
+    assert _extract_access_token("ghp_plaintoken") == "ghp_plaintoken"
+
+
+def test_extract_access_token_json_blob():
+    """JSON blob with access_token + refresh_token → access_token returned."""
+    from litellm.proxy._experimental.mcp_server.server import _extract_access_token
+
+    blob = json.dumps({"access_token": "ghu_access", "refresh_token": "ghr_refresh"})
+    assert _extract_access_token(blob) == "ghu_access"
+
+
+def test_extract_access_token_none():
+    """None input returns None."""
+    from litellm.proxy._experimental.mcp_server.server import _extract_access_token
+
+    assert _extract_access_token(None) is None
+
+
+def test_extract_access_token_json_without_access_token_key():
+    """JSON object without 'access_token' key is returned as-is (treated as plain string)."""
+    from litellm.proxy._experimental.mcp_server.server import _extract_access_token
+
+    blob = json.dumps({"some_other_key": "value"})
+    # Falls back to raw string since there's no access_token
+    assert _extract_access_token(blob) == blob

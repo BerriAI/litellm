@@ -5,6 +5,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import json
 import time
 import traceback
 import uuid
@@ -62,6 +63,25 @@ from litellm.utils import Rules, client, function_setup
 _byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
 _BYOK_CRED_CACHE_TTL = 60  # seconds
 _BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
+
+
+def _extract_access_token(credential: Optional[str]) -> Optional[str]:
+    """Extract the access_token from a stored credential.
+
+    OAuth2 callbacks may store a JSON blob of the form
+    ``{"access_token": "...", "refresh_token": "..."}`` when the provider
+    returns a refresh token.  This helper transparently handles both the JSON
+    format and plain-string credentials (e.g. static API keys or older entries).
+    """
+    if credential is None:
+        return None
+    try:
+        data = json.loads(credential)
+        if isinstance(data, dict) and "access_token" in data:
+            return data["access_token"]
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return credential
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -1555,11 +1575,16 @@ if MCP_AVAILABLE:
 
         if prisma_client is None:
             return None
-        credential = await get_user_credential(
+        raw = await get_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
+        # Credentials stored by the OAuth2 callback may be a JSON blob of the
+        # form {"access_token": "...", "refresh_token": "..."} when the provider
+        # returned a refresh token.  Extract just the access_token so the rest of
+        # the auth-injection path continues to receive a plain string.
+        credential = _extract_access_token(raw)
         _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
         return credential
 

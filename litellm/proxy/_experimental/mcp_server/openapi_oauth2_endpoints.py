@@ -14,6 +14,7 @@ import base64
 import hashlib
 import hmac
 import html as _html_module
+import json
 import os
 import time
 from typing import Dict, Optional
@@ -200,6 +201,11 @@ async def openapi_oauth2_connect(
     base_url = get_request_base_url(request)
     callback_url = f"{base_url}/v1/mcp/oauth2/callback"
 
+    # NOTE: PKCE (RFC 7636 / OAuth 2.1) is not implemented here because this is
+    # a server-side *confidential* client that always presents a client_secret.
+    # Confidential clients are significantly less exposed to code-interception
+    # attacks than public clients.  PKCE support for public/SPAs is tracked as
+    # a follow-up improvement.
     params: dict = {
         "client_id": server.client_id,
         "redirect_uri": callback_url,
@@ -352,6 +358,7 @@ async def openapi_oauth2_callback(
     # Parse response: try JSON first, fall back to URL-encoded form (GitHub can return either)
     # Some providers return HTTP 200 with an error body, so check for error fields explicitly.
     access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
     provider_error: Optional[str] = None
     content_type = response.headers.get("content-type", "")
     if "application/json" in content_type:
@@ -363,6 +370,7 @@ async def openapi_oauth2_callback(
                 provider_error = f"{err}: {err_desc}" if err_desc else err
             else:
                 access_token = token_data.get("access_token")
+                refresh_token = token_data.get("refresh_token")
         except Exception:
             pass
     if access_token is None and provider_error is None:
@@ -378,6 +386,9 @@ async def openapi_oauth2_callback(
                 tokens = form_data.get("access_token", [])
                 if tokens:
                     access_token = tokens[0]
+                refresh_tokens = form_data.get("refresh_token", [])
+                if refresh_tokens:
+                    refresh_token = refresh_tokens[0]
         except Exception:
             pass
 
@@ -424,12 +435,21 @@ async def openapi_oauth2_callback(
             status_code=500,
         )
 
+    # Persist the access token (and refresh token if the provider returned one).
+    # Stored as a JSON blob so the token retrieval path can surface the refresh
+    # token for future renewal without a schema change.
+    credential_to_store = (
+        json.dumps({"access_token": access_token, "refresh_token": refresh_token})
+        if refresh_token
+        else access_token
+    )
+
     try:
         await store_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=server_id,
-            credential=access_token,
+            credential=credential_to_store,
         )
         from litellm.proxy._experimental.mcp_server.server import (
             _invalidate_byok_cred_cache,
