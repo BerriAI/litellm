@@ -69,6 +69,9 @@ from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
 from .auth_utils import get_model_from_request
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_team_model_overrides_enabled,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -318,6 +321,7 @@ async def common_checks(  # noqa: PLR0915
             team_object=team_object,
             llm_router=llm_router,
             team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+            valid_token=valid_token,
         ):
             raise ProxyException(
                 message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
@@ -2144,13 +2148,11 @@ async def get_key_object(
         )
 
     # else, check db
-    _valid_token: Optional[BaseModel] = (
-        await _fetch_key_object_from_db_with_reconnect(
-            hashed_token=hashed_token,
-            prisma_client=prisma_client,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+    _valid_token: Optional[BaseModel] = await _fetch_key_object_from_db_with_reconnect(
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     if _valid_token is None:
@@ -2635,11 +2637,20 @@ def can_org_access_model(
     )
 
 
+def compute_effective_team_models(
+    team_default_models: Optional[List[str]],
+    team_member_models: Optional[List[str]],
+) -> List[str]:
+    """Union of team defaults and per-user overrides, deduplicated."""
+    return list(set(team_default_models or []) | set(team_member_models or []))
+
+
 async def can_team_access_model(
     model: Union[str, List[str]],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
     team_model_aliases: Optional[Dict[str, str]] = None,
+    valid_token: Optional[UserAPIKeyAuth] = None,
 ) -> Literal[True]:
     """
     Returns True if the team can access a specific model.
@@ -2647,11 +2658,51 @@ async def can_team_access_model(
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
     """
+    models_to_check: List[str] = team_object.models if team_object else []
+    if _is_team_model_overrides_enabled() and valid_token:
+        # Only apply override logic when overrides are actually configured.
+        # Teams that haven't set default_models or member models continue
+        # to use the original team_object.models / access_group path unchanged.
+        if valid_token.team_default_models or valid_token.team_member_models:
+            effective_models = compute_effective_team_models(
+                team_default_models=valid_token.team_default_models,
+                team_member_models=valid_token.team_member_models,
+            )
+
+            if effective_models:
+                # Defense-in-depth: intersect with team.models so that
+                # misconfigured default_models can never grant access
+                # beyond the team's allowed model list.
+                if (
+                    team_object
+                    and team_object.models
+                    and SpecialModelNames.all_proxy_models.value
+                    not in team_object.models
+                ):
+                    models_to_check = list(
+                        set(effective_models) & set(team_object.models)
+                    )
+                else:
+                    models_to_check = effective_models
+            elif team_object and team_object.models:
+                # Fallback: effective models empty but team has models configured.
+                # Graceful degradation prevents misconfiguration cliff when feature
+                # is enabled without populating default_models.
+                models_to_check = team_object.models
+            else:
+                # Both effective models and team.models are empty — deny access
+                raise ProxyException(
+                    message=f"Team not allowed to access model. No models available for user in this team. Model={model}.",
+                    type=ProxyErrorTypes.team_model_access_denied,
+                    param="model",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
+
     try:
         return _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=team_object.models if team_object else [],
+            models=models_to_check,
             team_model_aliases=team_model_aliases,
             team_id=team_object.team_id if team_object else None,
             object_type="team",

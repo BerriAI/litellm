@@ -2,7 +2,7 @@
 ## Helper utils for the management endpoints (keys/users/teams)
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -64,19 +64,19 @@ async def handle_budget_for_entity(
 ) -> Optional[str]:
     """
     Common helper to handle budget creation/updates for entities (organizations, tags, etc).
-    
+
     This function:
     1. Creates a new budget if budget_id is None but budget fields are provided
     2. Updates an existing budget if budget fields are provided and budget_id exists
     3. Returns the budget_id to use (existing or newly created)
-    
+
     Args:
         data: The request object (e.g., TagNewRequest, NewOrganizationRequest, etc.) containing budget fields
         existing_budget_id: The existing budget_id if updating an entity, None if creating new
         user_api_key_dict: User authentication info
         prisma_client: Database client
         litellm_proxy_admin_name: Admin name for audit trail
-        
+
     Returns:
         Optional[str]: The budget_id to use, or None if no budget was created/updated
     """
@@ -88,7 +88,9 @@ async def handle_budget_for_entity(
     budget_params = LiteLLM_BudgetTable.model_fields.keys()
 
     # Extract budget fields from data
-    _json_data = data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
+    _json_data = (
+        data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
+    )
     _budget_data = {k: v for k, v in _json_data.items() if k in budget_params}
 
     # Check if budget_id is explicitly provided in the data
@@ -146,6 +148,7 @@ async def add_new_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     default_team_budget_id: Optional[str] = None,
+    models: Optional[List[str]] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -220,14 +223,23 @@ async def add_new_member(
     else:
         _budget_id = default_team_budget_id
 
-    if _budget_id and returned_user is not None and returned_user.user_id is not None:
+    if (
+        (_budget_id or models)
+        and returned_user is not None
+        and returned_user.user_id is not None
+    ):
+        create_data: Dict[str, Any] = {
+            "team_id": team_id,
+            "user_id": returned_user.user_id,
+        }
+        if _budget_id:
+            create_data["budget_id"] = _budget_id
+        if models is not None:
+            create_data["models"] = models
+
         _returned_team_membership = (
             await prisma_client.db.litellm_teammembership.create(
-                data={
-                    "team_id": team_id,
-                    "user_id": returned_user.user_id,
-                    "budget_id": _budget_id,
-                },
+                data=create_data,  # type: ignore
                 include={"litellm_budget_table": True},
             )
         )

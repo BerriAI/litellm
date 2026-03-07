@@ -126,7 +126,10 @@ def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
 
 
 def _set_key_rotation_fields(
-    data: dict, auto_rotate: bool, rotation_interval: Optional[str], existing_key_alias: Optional[str] = None
+    data: dict,
+    auto_rotate: bool,
+    rotation_interval: Optional[str],
+    existing_key_alias: Optional[str] = None,
 ) -> None:
     """
     Helper function to set rotation fields in key data if auto_rotate is enabled.
@@ -910,6 +913,84 @@ async def _check_team_key_limits(
     )
 
 
+async def _validate_key_models_against_effective_team_models(
+    team_id: str,
+    user_id: Optional[str],
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    team_table: LiteLLM_TeamTableCachedObj,
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    Validate that the requested models for a key are a subset of the effective team models.
+    Effective models = team.default_models ∪ membership.models
+    """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_team_model_overrides_enabled,
+    )
+
+    if not _is_team_model_overrides_enabled():
+        return
+
+    # 1. Fetch team membership if user_id is provided
+    member_models: List[str] = []
+    if user_id:
+        membership = await prisma_client.db.litellm_teammembership.find_unique(
+            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+        )
+        if membership:
+            member_models = membership.models or []
+
+    team_default_models = team_table.default_models or []
+
+    # Skip override validation when neither default_models nor member models
+    # are configured. Teams not using overrides continue with existing behavior.
+    if not team_default_models and not member_models:
+        return
+
+    # 2. Compute effective models
+    from litellm.proxy.auth.auth_checks import compute_effective_team_models
+
+    effective_models = compute_effective_team_models(
+        team_default_models=team_default_models,
+        team_member_models=member_models,
+    )
+
+    # 3. Cap effective models to team.models (same intersection the runtime
+    #    auth check applies) so the key is never stamped with models the
+    #    runtime would block.
+    if (
+        team_table.models
+        and SpecialModelNames.all_proxy_models.value not in team_table.models
+    ):
+        effective_models = list(set(effective_models) & set(team_table.models))
+
+    # 4. Fallback: if effective models empty but team has models, use team.models
+    if not effective_models:
+        if team_table.models:
+            effective_models = team_table.models
+        else:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"No models available for User={user_id} in Team={team_id}. Admins must set 'default_models' on the team or per-user 'models' overrides."
+                },
+            )
+
+    # 5. If data.models is empty, default to effective models
+    if not data.models:
+        data.models = effective_models
+    else:
+        # Verify requested models are a subset of effective models
+        for m in data.models:
+            if m not in effective_models:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"Model '{m}' is not available for this user in Team={team_id}. Available models = {effective_models}"
+                    },
+                )
+
+
 async def _check_project_key_limits(
     project_id: str,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
@@ -1221,6 +1302,13 @@ async def generate_key_fn(
                 data=data,
                 prisma_client=prisma_client,
             )
+            await _validate_key_models_against_effective_team_models(
+                team_id=data.team_id,
+                user_id=data.user_id,
+                data=data,
+                team_table=team_table,
+                prisma_client=prisma_client,
+            )
 
         # Validate key against project limits if project_id is set
         if data.project_id is not None:
@@ -1372,6 +1460,13 @@ async def generate_service_account_key_fn(
         await _check_team_key_limits(
             team_table=team_table,
             data=data,
+            prisma_client=prisma_client,
+        )
+        await _validate_key_models_against_effective_team_models(
+            team_id=data.team_id,
+            user_id=data.user_id,
+            data=data,
+            team_table=team_table,
             prisma_client=prisma_client,
         )
 
@@ -1904,6 +1999,25 @@ async def update_key_fn(
                 await _check_team_key_limits(
                     team_table=team_obj,
                     data=data,
+                    prisma_client=prisma_client,
+                )
+
+        # Step 6d: Key update validation against effective models
+        if data.models is not None and (data.team_id or existing_key_row.team_id):
+            team_id_to_check = data.team_id or existing_key_row.team_id
+            if team_obj is None or team_obj.team_id != team_id_to_check:
+                team_obj = await get_team_object(
+                    team_id=team_id_to_check,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+            if team_obj is not None:
+                await _validate_key_models_against_effective_team_models(
+                    team_id=team_id_to_check,
+                    user_id=data.user_id or existing_key_row.user_id,
+                    data=data,
+                    team_table=team_obj,
                     prisma_client=prisma_client,
                 )
 
@@ -3058,7 +3172,10 @@ async def delete_verification_tokens(
         hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
 
-    return {"deleted_keys": deleted_tokens, "failed_tokens": failed_tokens}, _keys_being_deleted
+    return {
+        "deleted_keys": deleted_tokens,
+        "failed_tokens": failed_tokens,
+    }, _keys_being_deleted
 
 
 def _transform_verification_tokens_to_deleted_records(
@@ -3161,7 +3278,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key( # noqa: PLR0915
+async def _rotate_master_key(  # noqa: PLR0915
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -3376,6 +3493,8 @@ async def _insert_deprecated_key(
             "Failed to insert deprecated key for grace period: %s",
             deprecated_err,
         )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -3939,8 +4058,7 @@ def _get_member_team_ids_from_objects(
         team.team_id
         for team in team_objects
         if any(
-            member.user_id is not None
-            and member.user_id == user_api_key_dict.user_id
+            member.user_id is not None and member.user_id == user_api_key_dict.user_id
             for member in team.members_with_roles
         )
     ]
@@ -4223,9 +4341,7 @@ async def key_aliases(
 
         where_sql = " AND ".join(where_parts)
 
-        count_sql = (
-            f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        )
+        count_sql = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
         count_rows = await prisma_client.db.query_raw(count_sql, *query_params)
         total_count = int(count_rows[0]["count"]) if count_rows else 0
 
@@ -4240,7 +4356,9 @@ async def key_aliases(
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
         alias_rows = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
-        aliases: List[str] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
+        aliases: List[str] = [
+            row["key_alias"] for row in alias_rows if row.get("key_alias")
+        ]
 
         total_pages = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(
