@@ -1494,6 +1494,8 @@ native_background_mode: List[
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
+# Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload
+_pkce_no_redis_warning_emitted: bool = False
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
@@ -3030,15 +3032,18 @@ class ProxyConfig:
             # all API-key lookups through Redis.
             use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
             if use_pkce and redis_usage_cache is None:
-                verbose_proxy_logger.warning(
-                    "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
-                    "PKCE verifiers will not be shared across instances — callbacks may land on a "
-                    "different pod than the login request and fail silently. "
-                    "Configure Redis via the 'cache' section in your proxy config, "
-                    "or enable sticky sessions for single-instance deployments. "
-                    "Set PKCE_STRICT_CACHE_MISS=true to fail fast with a 401 on cache misses "
-                    "instead of continuing without a code_verifier."
-                )
+                global _pkce_no_redis_warning_emitted
+                if not _pkce_no_redis_warning_emitted:
+                    _pkce_no_redis_warning_emitted = True
+                    verbose_proxy_logger.warning(
+                        "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
+                        "PKCE verifiers will not be shared across instances — callbacks may land on a "
+                        "different pod than the login request and fail silently. "
+                        "Configure Redis via the 'cache' section in your proxy config, "
+                        "or enable sticky sessions for single-instance deployments. "
+                        "Set PKCE_STRICT_CACHE_MISS=true to fail fast with a 401 on cache misses "
+                        "instead of continuing without a code_verifier."
+                    )
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
