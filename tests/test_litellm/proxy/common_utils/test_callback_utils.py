@@ -73,6 +73,32 @@ def test_process_callback_with_no_required_env_vars(mock_get_env_vars):
     assert result["variables"] == {}
 
 
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=[],
+)
+def test_process_callback_returns_correct_type_for_each_callback_mode(mock_get_env_vars):
+    """
+    Verify that process_callback returns the correct 'type' field for success,
+    failure, and success_and_failure callback modes. The UI relies on this field
+    to display the correct mode badge.
+
+    Regression test: the UI was reading 'mode' instead of 'type', causing all
+    callbacks to display as 'Success'. The frontend was fixed to read 'type'.
+    This test ensures the backend contract is maintained.
+    """
+    for callback_type in ["success", "failure", "success_and_failure"]:
+        result = process_callback(
+            _callback="s3_v2",
+            callback_type=callback_type,
+            environment_variables={},
+        )
+        assert result["type"] == callback_type, (
+            f"Expected type '{callback_type}', got '{result['type']}'"
+        )
+        assert result["name"] == "s3_v2"
+
+
 def test_normalize_callback_names_none_returns_empty_list():
     assert normalize_callback_names(None) == []
     assert normalize_callback_names([]) == []
