@@ -175,6 +175,13 @@ const menuGroups: MenuGroup[] = [
         icon: <SafetyOutlined />,
         roles: [...all_admin_roles, ...internalUserRoles],
       },
+      {
+        key: "mcp-monitor",
+        page: "mcp-monitor",
+        label: "MCP Monitor",
+        icon: <ToolOutlined />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+      },
     ],
   },
   {
