@@ -175,6 +175,16 @@ async def openapi_oauth2_connect(
     if master_key is None:
         raise HTTPException(status_code=500, detail="Master key not configured")
 
+    # Fail early if the DB is unavailable: without it the callback cannot store
+    # the token, so sending the user through the provider consent flow is wasted effort.
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database is not configured. Cannot initiate OAuth2 flow.",
+        )
+
     user_id = user_api_key_dict.user_id or user_api_key_dict.api_key or ""
     if not user_id:
         raise HTTPException(status_code=400, detail="Cannot determine user identity from token")

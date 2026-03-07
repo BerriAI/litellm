@@ -105,8 +105,8 @@ def _write_byok_cred_cache(
 ) -> None:
     """Write a credential value to the cache, evicting the oldest entry if at capacity.
 
-    Evicts a single entry (LRU-style) rather than clearing all at once to avoid
-    a thundering-herd DB spike when the cache fills under load.
+    Evicts the oldest-inserted entry (FIFO) rather than clearing all at once to
+    avoid a thundering-herd DB spike when the cache fills under load.
     """
     if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
         oldest_key = next(iter(_byok_cred_cache))
