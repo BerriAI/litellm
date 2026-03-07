@@ -8935,6 +8935,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.CAMB_AI == provider:
+            from litellm.llms.camb_ai.text_to_speech.transformation import (
+                CambAITextToSpeechConfig,
+            )
+
+            return CambAITextToSpeechConfig()
         return None
 
     @staticmethod

@@ -684,3 +684,73 @@ async def test_aws_polly_tts_real_api():
     assert speech_file_path.stat().st_size > 0
 
     print(f"AWS Polly TTS audio saved to: {speech_file_path}")
+
+
+@pytest.mark.asyncio
+async def test_camb_ai_tts_request_body():
+    """
+    Test CAMB AI TTS request body is formatted correctly.
+    Verifies the full litellm.aspeech() -> HTTP handler flow.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+    import httpx
+
+    mock_response_content = b"fake_audio_data"
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.content = mock_response_content
+    mock_httpx_response.status_code = 200
+    mock_httpx_response.headers = httpx.Headers({"content-type": "audio/mpeg"})
+
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+        mock_post.return_value = mock_httpx_response
+
+        response = await litellm.aspeech(
+            model="camb_ai/mars-flash",
+            voice="123",
+            input="Hello world",
+            api_key="test-key",
+            language="en-us",
+        )
+
+        assert mock_post.called
+
+        call_args = mock_post.call_args
+        request_body = call_args.kwargs.get("json")
+
+        assert request_body["text"] == "Hello world"
+        assert request_body["speech_model"] == "mars-flash"
+        assert request_body["voice_id"] == 123
+        assert request_body["language"] == "en-us"
+
+
+@pytest.mark.asyncio
+async def test_camb_ai_tts_request_url_and_headers():
+    """
+    Test CAMB AI TTS sends to the correct URL with proper auth headers.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+    import httpx
+
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.content = b"fake_audio_data"
+    mock_httpx_response.status_code = 200
+    mock_httpx_response.headers = httpx.Headers({"content-type": "audio/mpeg"})
+
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+        mock_post.return_value = mock_httpx_response
+
+        await litellm.aspeech(
+            model="camb_ai/mars-flash",
+            voice="456",
+            input="Test URL and headers",
+            api_key="my-secret-key",
+        )
+
+        call_args = mock_post.call_args
+        url = call_args.kwargs.get("url", call_args.args[0] if call_args.args else None)
+        headers = call_args.kwargs.get("headers", {})
+
+        assert "client.camb.ai" in str(url)
+        assert headers.get("x-api-key") == "my-secret-key"
