@@ -28,6 +28,7 @@ from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1586,16 +1587,21 @@ if MCP_AVAILABLE:
 
         if prisma_client is None:
             # Without a database we cannot fetch the per-user credential.
-            # Return a 503 (infrastructure problem) so callers can distinguish
-            # "no credential" (401) from "credential store unavailable" (503).
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "byok_store_unavailable",
-                    "server_id": mcp_server.server_id,
-                    "message": "Credential store is not available; cannot fetch BYOK credential.",
-                },
-            )
+            # When require_byok_credential_store is True (default) we raise 503
+            # so callers can distinguish "no credential" (401) from
+            # "credential store unavailable" (503).
+            # Set litellm.require_byok_credential_store = False to restore the
+            # legacy silent-bypass behaviour for stateless deployments.
+            if litellm.require_byok_credential_store:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "byok_store_unavailable",
+                        "server_id": mcp_server.server_id,
+                        "message": "Credential store is not available; cannot fetch BYOK credential.",
+                    },
+                )
+            return None
         raw = await get_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
@@ -1666,17 +1672,20 @@ if MCP_AVAILABLE:
 
         if prisma_client is None:
             # Without a database we cannot verify whether the user has a stored
-            # credential, so we must deny access rather than silently bypass the
-            # BYOK check.  A 503 signals a configuration/infrastructure problem,
-            # not an auth failure, so clients can distinguish the two cases.
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "byok_store_unavailable",
-                    "server_id": mcp_server.server_id,
-                    "message": "Credential store is not available; cannot verify BYOK access.",
-                },
-            )
+            # credential.  When require_byok_credential_store is True (default)
+            # we raise 503 to distinguish infra failures from missing credentials.
+            # Set litellm.require_byok_credential_store = False to restore the
+            # legacy silent-bypass behaviour for stateless deployments.
+            if litellm.require_byok_credential_store:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "byok_store_unavailable",
+                        "server_id": mcp_server.server_id,
+                        "message": "Credential store is not available; cannot verify BYOK access.",
+                    },
+                )
+            return
 
         raw_credential = await get_user_credential(
             prisma_client=prisma_client,
