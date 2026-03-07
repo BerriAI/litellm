@@ -2,6 +2,7 @@ import json
 import os
 import sys
 
+import litellm
 import pytest
 import yaml
 from fastapi.testclient import TestClient
@@ -6672,8 +6673,21 @@ async def test_key_aliases_admin_sees_all():
 
 
 class TestValidateKeyAliasFormat:
+    def test_validation_skipped_when_flag_disabled(self):
+        """When enable_key_alias_format_validation is False (default), no validation occurs."""
+        from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
+
+        litellm.enable_key_alias_format_validation = False
+        # Even invalid aliases should pass silently when the flag is off
+        _validate_key_alias_format(None)
+        _validate_key_alias_format("")
+        _validate_key_alias_format("!invalid!")
+        _validate_key_alias_format("a" * 256)
+
     def test_validate_key_alias_format_valid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
+
+        litellm.enable_key_alias_format_validation = True
         # Valid cases
         _validate_key_alias_format(None)  # OK
         _validate_key_alias_format("valid-alias")
@@ -6684,11 +6698,13 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("my-key-123")
         _validate_key_alias_format("user/user@example.com")
         _validate_key_alias_format("team/user@example.com")
+        litellm.enable_key_alias_format_validation = False
 
     def test_validate_key_alias_format_invalid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
         from litellm.proxy._types import ProxyException
-        
+
+        litellm.enable_key_alias_format_validation = True
         invalid_aliases = [
             "",               # empty
             " ",              # whitespace
@@ -6701,9 +6717,10 @@ class TestValidateKeyAliasFormat:
             "  leading",
             "trailing  ",
         ]
-        
+
         for alias in invalid_aliases:
             with pytest.raises(ProxyException) as exc:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+        litellm.enable_key_alias_format_validation = False
