@@ -256,3 +256,16 @@ class TestCallbackManagementEndpoints:
         )
         assert has_detailed_params, "Expected at least one callback to have detailed parameter configuration"
 
+        # At least one known callback (e.g. langfuse, websearch_interception) is present
+        config_ids = [c["id"] for c in response_data]
+        assert any(
+            cid in ["langfuse", "websearch_interception", "prometheus"]
+            for cid in config_ids
+        ), "Expected at least one of langfuse, websearch_interception, or prometheus in callback configs"
+
+        # Every list item has required keys id, displayName, dynamic_params
+        required_keys = ["id", "displayName", "dynamic_params"]
+        for config in response_data:
+            for key in required_keys:
+                assert key in config, f"Callback config missing required key '{key}': {config.get('id', config)}"
+

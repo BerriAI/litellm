@@ -11,9 +11,6 @@ model_list:
       model: openai/gpt-3.5-turbo
       api_key: os.environ/OPENAI_API_KEY
 
-litellm_settings:
-  callbacks: ["custom_api_name"]
-
 callback_settings:
   custom_api_name:
     callback_type: generic_api
@@ -21,6 +18,8 @@ callback_settings:
     headers:
       Authorization: Bearer sk-1234
 ```
+
+Callbacks defined in `callback_settings` are auto-enabled (no need to list them in `litellm_settings.callbacks`).
 
 ## Configuration
 
@@ -54,9 +53,6 @@ callback_settings:
 Use built-in configurations from `generic_api_compatible_callbacks.json`:
 
 ```yaml
-litellm_settings:
-  callbacks: ["rubrik"]  # loads pre-configured settings
-
 callback_settings:
   rubrik:
     callback_type: generic_api

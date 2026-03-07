@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
 import litellm
 from litellm import get_secret
@@ -13,6 +13,51 @@ from litellm.types.utils import (
 
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
+
+# Event type constants for callback_settings routing
+CALLBACK_EVENT_SUCCESS = "llm_api_success"
+CALLBACK_EVENT_FAILURE = "llm_api_failure"
+
+
+def get_callbacks_from_callback_settings(
+    callback_settings: Dict[str, Any],
+) -> tuple[List[str], List[str], List[str]]:
+    """
+    Derive enabled callbacks from callback_settings keys (model_list pattern).
+    Callbacks defined in callback_settings are auto-enabled.
+
+    Returns:
+        (callbacks_both, success_only, failure_only)
+        - callbacks_both: run on success and failure
+        - success_only: run on success only
+        - failure_only: run on failure only
+    """
+    callbacks_both: List[str] = []
+    success_only: List[str] = []
+    failure_only: List[str] = []
+
+    for callback_name, config in callback_settings.items():
+        if not isinstance(config, dict):
+            continue
+        event_types = config.get("event_types")
+        if isinstance(event_types, list) and len(event_types) > 0:
+            has_success = CALLBACK_EVENT_SUCCESS in event_types
+            has_failure = CALLBACK_EVENT_FAILURE in event_types
+            if has_success and has_failure:
+                callbacks_both.append(callback_name)
+            elif has_success:
+                success_only.append(callback_name)
+            elif has_failure:
+                failure_only.append(callback_name)
+            else:
+                # Empty or unrecognised event_types — default to both
+                callbacks_both.append(callback_name)
+        else:
+            # Default: both success and failure (current behavior)
+            callbacks_both.append(callback_name)
+
+    return (callbacks_both, success_only, failure_only)
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -36,7 +81,15 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     )
     if isinstance(value, list):
         imported_list: List[Any] = []
-        for callback in value:  # ["presidio", <my-custom-callback>]
+        for callback in value:  # ["presidio", {"websearch_interception": {"enabled_providers": ["bedrock"]}}, ...]
+            # Normalize dict-style callback (e.g. {"websearch_interception": {"enabled_providers": ["bedrock"]}})
+            iteration_callback_specific_params: Dict[str, Any] = dict(
+                callback_specific_params or {}
+            )
+            if isinstance(callback, dict) and len(callback) == 1:
+                (callback_name, params), = callback.items()
+                callback = callback_name
+                iteration_callback_specific_params[callback_name] = params
             # check if callback is a custom logger compatible callback
             if isinstance(callback, str):
                 callback = LoggingCallbackManager._add_custom_callback_generic_api_str(
@@ -61,10 +114,10 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     )  # validate boolean given
 
                 _presidio_params = {}
-                if "presidio" in callback_specific_params and isinstance(
-                    callback_specific_params["presidio"], dict
+                if "presidio" in iteration_callback_specific_params and isinstance(
+                    iteration_callback_specific_params["presidio"], dict
                 ):
-                    _presidio_params = callback_specific_params["presidio"]
+                    _presidio_params = iteration_callback_specific_params["presidio"]
 
                 params: Dict[str, Any] = {
                     "logging_only": presidio_logging_only,
@@ -277,7 +330,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 websearch_interception_obj = (
                     WebSearchInterceptionLogger.initialize_from_proxy_config(
                         litellm_settings=litellm_settings,
-                        callback_specific_params=callback_specific_params,
+                        callback_specific_params=iteration_callback_specific_params,
                     )
                 )
                 imported_list.append(websearch_interception_obj)
@@ -504,9 +557,14 @@ def get_metadata_variable_name_from_kwargs(
 
 
 def process_callback(
-    _callback: str, callback_type: str, environment_variables: dict
+    _callback: str,
+    callback_type: str,
+    environment_variables: dict,
+    callback_params: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Process a single callback and return its data with environment variables"""
+    """Process a single callback and return its data with environment variables.
+    When callback_params is provided (e.g. for websearch_interception enabled_providers),
+    it is included so the UI can display and edit the callback configuration."""
     env_vars = CustomLogger.get_callback_env_vars(_callback)
 
     env_vars_dict: dict[str, str | None] = {}
@@ -517,10 +575,34 @@ def process_callback(
         else:
             env_vars_dict[_var] = env_variable
 
-    return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
+    result: Dict[str, Any] = {
+        "name": _callback,
+        "variables": env_vars_dict,
+        "type": callback_type,
+    }
+    if callback_params is not None:
+        result["params"] = callback_params
+    return result
 
 
-def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
+def _dedupe_callbacks_preserve_dict_entries(
+    callbacks: Sequence[Any],
+) -> List[Union[str, Dict[str, Any]]]:
+    """Deduplicate callbacks by name. Safe for unhashable dicts."""
+    seen: set = set()
+    result: List[Union[str, Dict[str, Any]]] = []
+    for c in callbacks:
+        name = c if isinstance(c, str) else next(iter(c.keys()))
+        if name not in seen:
+            seen.add(name)
+            result.append(c)
+    return result
+
+
+def normalize_callback_names(
+    callbacks: Iterable[Union[str, object]] | None,
+) -> List[Union[str, object]]:
+    """Lowercase string callback names; pass through non-strings (e.g. from config) unchanged."""
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]

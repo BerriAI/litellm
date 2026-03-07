@@ -113,3 +113,38 @@ def mock_encrypt_value_helper(value, key=None, new_encryption_key=None):
 def mock_decrypt_value_helper(value, key=None, return_original_value=False):
     """Mock decryption - just return the value as-is for testing"""
     return value
+
+
+def test_get_config_callbacks_returns_200_with_mock_config(mock_auth):
+    """
+    Call GET /get/config/callbacks with mocked auth and config to exercise
+    the callback/config flow in this file.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    config_data = {
+        "litellm_settings": {
+            "success_callback": ["langfuse"],
+            "failure_callback": [],
+            "callbacks": [],
+        },
+        "general_settings": {},
+        "environment_variables": {"LANGFUSE_PUBLIC_KEY": "test-key"},
+    }
+
+    with patch.object(proxy_config, "get_config", new_callable=AsyncMock) as mock_get_config:
+        mock_get_config.return_value = config_data
+        original_overrides = app.dependency_overrides.copy()
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        try:
+            response = client.get("/get/config/callbacks")
+        finally:
+            app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "callbacks" in data
+    assert "available_callbacks" in data
+    callbacks = data["callbacks"]
+    assert any(cb.get("name") == "langfuse" and cb.get("type") == "success" for cb in callbacks)
+    mock_get_config.assert_called_once()

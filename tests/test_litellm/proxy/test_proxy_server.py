@@ -3173,10 +3173,12 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     # Remove any existing "/" route that might interfere
     routes_to_remove = []
     for route in app.routes:
-        if hasattr(route, "path") and route.path == "/":
-            if hasattr(route, "methods") and "GET" in route.methods:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if path == "/":
+            if methods is not None and "GET" in methods:
                 routes_to_remove.append(route)
-            elif not hasattr(route, "methods"):  # Catch-all routes
+            elif methods is None:  # Catch-all routes
                 routes_to_remove.append(route)
     
     for route in routes_to_remove:
@@ -3198,6 +3200,8 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
 async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     """
     Test that get_image uses /var/lib/litellm/assets when LITELLM_NON_ROOT is true.
+    get_image only calls makedirs when the assets dir does not exist, so we must
+    have exists() return False for that path to trigger the create-dir branch.
     """
     from unittest.mock import patch
 
@@ -3239,6 +3243,8 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     """
     Test that get_image falls back to default_site_logo when logo doesn't exist
     in /var/lib/litellm/assets for non-root case.
+    get_image only calls makedirs when the assets dir does not exist, so we must
+    have exists() return False for that path to trigger the create-dir branch.
     """
     from unittest.mock import patch
 
@@ -3536,6 +3542,131 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
     assert len(failure_callbacks) == 0
     assert "prometheus" in success_and_failure_callbacks
     assert "datadog" in success_and_failure_callbacks
+
+
+def test_get_config_returns_params_for_dict_style_callbacks(monkeypatch):
+    """
+    Test that /get/config/callbacks returns callback params when litellm_settings.callbacks
+    contains dict-style entries (e.g. websearch_interception with enabled_providers).
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    config_data = {
+        "litellm_settings": {
+            "success_callback": [],
+            "failure_callback": [],
+            "callbacks": [
+                "prometheus",
+                {"websearch_interception": {"enabled_providers": ["bedrock", "azure"]}},
+            ],
+        },
+        "general_settings": {},
+        "environment_variables": {},
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(
+        proxy_config, "get_config", AsyncMock(return_value=config_data)
+    )
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+
+    success_and_failure = [
+        cb for cb in callbacks if cb.get("type") == "success_and_failure"
+    ]
+    names = [cb["name"] for cb in success_and_failure]
+    assert "prometheus" in names
+    assert "websearch_interception" in names
+
+    websearch_cb = next(
+        cb for cb in success_and_failure if cb["name"] == "websearch_interception"
+    )
+    assert "params" in websearch_cb
+    assert websearch_cb["params"] == {
+        "enabled_providers": ["bedrock", "azure"],
+    }
+
+
+def test_delete_callback_removes_from_callbacks_list(monkeypatch):
+    """
+    Test that delete_callback removes a callback from litellm_settings.callbacks
+    when the callback is stored as a dict-style entry (e.g. websearch_interception).
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    config_data = {
+        "litellm_settings": {
+            "success_callback": [],
+            "callbacks": [
+                {"websearch_interception": {"enabled_providers": ["bedrock"]}},
+            ],
+        },
+        "general_settings": {},
+        "environment_variables": {},
+    }
+
+    saved_config = []
+
+    async def mock_get_config():
+        return config_data
+
+    async def mock_save_config(new_config):
+        saved_config.append(new_config)
+
+    async def mock_add_deployment(prisma_client=None, proxy_logging_obj=None):
+        pass
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr(proxy_config, "save_config", mock_save_config)
+    monkeypatch.setattr(proxy_config, "add_deployment", mock_add_deployment)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.store_model_in_db",
+        True,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_config",
+        proxy_config,
+    )
+
+    def auth_proxy_admin():
+        return UserAPIKeyAuth(
+            user_id="test",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-test",
+        )
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = auth_proxy_admin
+
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/config/callback/delete",
+            json={"callback_name": "websearch_interception"},
+        )
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    assert len(saved_config) == 1
+    assert saved_config[0]["litellm_settings"]["callbacks"] == []
 
 
 def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):

@@ -1,6 +1,8 @@
 export interface AlertingObject {
   name: string;
   variables: AlertingVariables;
+  type?: string;
+  params?: Record<string, unknown>;
 }
 
 export interface AlertingVariables {

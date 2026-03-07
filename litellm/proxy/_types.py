@@ -2389,14 +2389,12 @@ class UserAPIKeyAuth(
         # If values is already an instance (not a dict), return it as-is
         if not isinstance(values, dict):
             return values
-        if values.get("api_key") is not None:
-            values.update(
-                {"token": cls._safe_hash_litellm_api_key(values.get("api_key"))}
-            )
-            if isinstance(values.get("api_key"), str):
-                values.update(
-                    {"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))}
-                )
+        # api_key can be None (for team_id auth), or non-str from cache/JSON.
+        # Only hash when it's a str to avoid AttributeError in _safe_hash_litellm_api_key.
+        api_key = values.get("api_key")
+        if isinstance(api_key, str):
+            hashed = cls._safe_hash_litellm_api_key(api_key)
+            values.update({"token": hashed, "api_key": hashed})
         return values
 
     @classmethod
@@ -3092,6 +3090,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "TRACELOOP_API_KEY",
         ],
         ui_callback_name="Traceloop",
+    )
+
+    websearch_interception: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="websearch_interception",
+        ui_callback_name="WebSearch Interception",
+        litellm_callback_params=["enabled_providers", "search_tool_name"],
     )
 
 
