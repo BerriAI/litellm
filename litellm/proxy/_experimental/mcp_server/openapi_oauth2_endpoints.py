@@ -14,6 +14,7 @@ import base64
 import hashlib
 import hmac
 import html as _html_module
+import os
 import time
 from typing import Dict, Optional
 from urllib.parse import parse_qs, urlencode
@@ -39,6 +40,13 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 # ---------------------------------------------------------------------------
 # In-memory state store for pending OAuth2 flows.
 # Each entry: {state: {server_id, user_id, timestamp, expires_at}}
+#
+# NOTE: This is an in-process dict. In horizontally-scaled deployments
+# (multiple uvicorn workers, Kubernetes pods, etc.) the /connect request may
+# be handled by one instance while the provider's redirect hits /callback on
+# a different instance — that second instance won't find the state and the
+# flow will fail.  A follow-up should persist state in a shared store
+# (e.g. LiteLLM_MCPUserCredentials with a sentinel user_id, or Redis cache).
 # ---------------------------------------------------------------------------
 _pending_oauth2_states: Dict[str, dict] = {}
 
@@ -61,8 +69,14 @@ def _purge_expired_states() -> None:
 
 
 def _make_state_token(server_id: str, user_id: str, timestamp: float, master_key: str) -> str:
-    """HMAC-SHA256 of '{server_id}:{user_id}:{timestamp}' base64url-encoded."""
-    message = f"{server_id}:{user_id}:{timestamp}".encode()
+    """HMAC-SHA256 of '{server_id}:{user_id}:{timestamp}:{nonce}' base64url-encoded.
+
+    A 16-byte random nonce is appended so that concurrent flows for the same
+    (server_id, user_id) pair — e.g. from multiple open browser tabs — each
+    produce a unique state token instead of colliding in _pending_oauth2_states.
+    """
+    nonce = base64.urlsafe_b64encode(os.urandom(16)).rstrip(b"=").decode()
+    message = f"{server_id}:{user_id}:{timestamp}:{nonce}".encode()
     digest = hmac.new(master_key.encode(), message, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
 
@@ -157,6 +171,11 @@ async def openapi_oauth2_connect(
         raise HTTPException(
             status_code=400,
             detail=f"Server '{server_id}' has no client_id configured",
+        )
+    if not server.client_secret:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Server '{server_id}' has no client_secret configured",
         )
     if master_key is None:
         raise HTTPException(status_code=500, detail="Master key not configured")
@@ -331,23 +350,51 @@ async def openapi_oauth2_callback(
         )
 
     # Parse response: try JSON first, fall back to URL-encoded form (GitHub can return either)
+    # Some providers return HTTP 200 with an error body, so check for error fields explicitly.
     access_token: Optional[str] = None
+    provider_error: Optional[str] = None
     content_type = response.headers.get("content-type", "")
     if "application/json" in content_type:
         try:
             token_data = response.json()
-            access_token = token_data.get("access_token")
+            if token_data.get("error"):
+                err = token_data["error"]
+                err_desc = token_data.get("error_description", "")
+                provider_error = f"{err}: {err_desc}" if err_desc else err
+            else:
+                access_token = token_data.get("access_token")
         except Exception:
             pass
-    if access_token is None:
+    if access_token is None and provider_error is None:
         # URL-encoded form fallback (GitHub without Accept: application/json header)
         try:
             form_data = parse_qs(response.text)
-            tokens = form_data.get("access_token", [])
-            if tokens:
-                access_token = tokens[0]
+            if form_data.get("error"):
+                err = form_data["error"][0]
+                err_desc_list = form_data.get("error_description", [])
+                err_desc = err_desc_list[0] if err_desc_list else ""
+                provider_error = f"{err}: {err_desc}" if err_desc else err
+            else:
+                tokens = form_data.get("access_token", [])
+                if tokens:
+                    access_token = tokens[0]
         except Exception:
             pass
+
+    if provider_error:
+        verbose_proxy_logger.error(
+            "openapi_oauth2_callback: provider error user=%s server=%s error=%s",
+            user_id,
+            server_id,
+            provider_error,
+        )
+        return HTMLResponse(
+            content=_build_error_html(
+                "Token exchange failed",
+                f"The provider returned an error: {provider_error}",
+            ),
+            status_code=502,
+        )
 
     if not access_token:
         verbose_proxy_logger.error(

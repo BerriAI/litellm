@@ -6408,7 +6408,6 @@ export const getMcpOAuth2ConnectUrl = async (
       method: HTTP_REQUEST.GET,
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
       },
     });
 
@@ -6439,7 +6438,6 @@ export const getMcpOAuth2Status = async (
       method: HTTP_REQUEST.GET,
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
       },
     });
 

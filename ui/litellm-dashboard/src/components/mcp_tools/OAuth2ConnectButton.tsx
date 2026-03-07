@@ -12,6 +12,7 @@ interface OAuth2ConnectButtonProps {
 }
 
 const POLL_INTERVAL_MS = 2000;
+const MAX_POLL_MS = 10 * 60 * 1000; // 10 minutes
 
 export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
   server,
@@ -22,12 +23,14 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
   const [error, setError] = useState<string | null>(null);
   const popupRef = useRef<Window | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollStartRef = useRef<number | null>(null);
 
   const stopPolling = () => {
     if (pollTimerRef.current !== null) {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     }
+    pollStartRef.current = null;
   };
 
   const handleConnected = () => {
@@ -42,7 +45,20 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
   };
 
   const startPolling = () => {
+    // Always clear any existing interval before starting a new one to avoid
+    // double-polling if the button is clicked while a previous flow is still active.
+    stopPolling();
+    pollStartRef.current = Date.now();
     pollTimerRef.current = setInterval(async () => {
+      // Enforce a maximum polling duration to avoid indefinite requests when
+      // the popup is left open but the OAuth flow never completes.
+      if (pollStartRef.current !== null && Date.now() - pollStartRef.current > MAX_POLL_MS) {
+        stopPolling();
+        setLoading(false);
+        setError("OAuth2 connection timed out. Please try again.");
+        return;
+      }
+
       // Stop if popup was closed by user
       if (popupRef.current && popupRef.current.closed) {
         stopPolling();
@@ -56,7 +72,7 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
           handleConnected();
         }
       } catch {
-        // Ignore polling errors; keep trying until popup is closed
+        // Ignore polling errors; keep trying until popup is closed or timeout
       }
     }, POLL_INTERVAL_MS);
   };
