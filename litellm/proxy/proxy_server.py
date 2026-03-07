@@ -775,9 +775,10 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
                 _module_path, _func_name = _hook_spec.rsplit(":", 1)
                 _module = importlib.import_module(_module_path)
                 _hook_fn = getattr(_module, _func_name)
-                _result = _hook_fn()
-                if asyncio.iscoroutine(_result):
-                    await _result
+                if inspect.iscoroutinefunction(_hook_fn):
+                    await _hook_fn()
+                else:
+                    _hook_fn()
                 verbose_proxy_logger.info(
                     "Worker startup hook '%s' executed successfully", _hook_spec
                 )
