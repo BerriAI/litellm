@@ -451,7 +451,7 @@ describe("useLogFilterLogic", () => {
     );
   });
 
-  it("should fall back to logs when backend filters are active but API returns empty", async () => {
+  it("should show empty results when backend filters are active and API returns empty", async () => {
     vi.mocked(uiSpendLogsCall).mockResolvedValue({
       data: [],
       total: 0,
@@ -474,8 +474,10 @@ describe("useLogFilterLogic", () => {
       { timeout: 500 },
     );
 
-    expect(result.current.filteredLogs.data).toHaveLength(1);
-    expect(result.current.filteredLogs.data[0].request_id).toBe("client-req");
+    // Should NOT fall back to unfiltered logs; should reflect the empty backend result
+    expect(result.current.filteredLogs.data).toHaveLength(0);
+    expect(result.current.filteredLogs.total).toBe(0);
+    expect(result.current.filteredLogs.total_pages).toBe(0);
   });
 
   it("should refetch when sortBy changes and backend filters are active", async () => {
@@ -565,6 +567,97 @@ describe("useLogFilterLogic", () => {
     });
     expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
       expect.objectContaining({ page: 2 }),
+    );
+  });
+
+  it("should preserve key_alias param during pagination instead of converting to hash", async () => {
+    vi.mocked(uiSpendLogsCall).mockResolvedValue(
+      createPaginatedResponse([createLogEntry()]),
+    );
+    const logs = createPaginatedResponse([createLogEntry()]);
+    const { result, rerender } = renderHook(
+      (props) => useLogFilterLogic({ ...defaultProps, logs, ...props }),
+      { wrapper, initialProps: { currentPage: 1 } },
+    );
+
+    act(() => {
+      result.current.handleFilterChange({ "Key Alias": "user01" });
+    });
+
+    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), {
+      timeout: 500,
+    });
+
+    // Verify initial call uses key_alias (not api_key / hash)
+    expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        page: 1,
+        params: expect.objectContaining({ key_alias: "user01" }),
+      }),
+    );
+    // api_key should be undefined when filtering by alias
+    expect(vi.mocked(uiSpendLogsCall).mock.calls[0][0].params.api_key).toBeUndefined();
+
+    // Navigate to page 2
+    rerender({ currentPage: 2 });
+
+    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), {
+      timeout: 500,
+    });
+
+    // Page 2 should still use key_alias (not api_key / hash)
+    expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        page: 2,
+        params: expect.objectContaining({ key_alias: "user01" }),
+      }),
+    );
+    // api_key must remain undefined on page 2 as well
+    const lastCall = vi.mocked(uiSpendLogsCall).mock.calls[1][0];
+    expect(lastCall.params.api_key).toBeUndefined();
+  });
+
+  it("should use backend pagination metadata when filtering by key_alias across pages", async () => {
+    // Simulate a backend response where fuzzy match yields 3 total results across 1 page
+    const page1Response = {
+      data: [
+        createLogEntry({ request_id: "req-1" }),
+        createLogEntry({ request_id: "req-2" }),
+        createLogEntry({ request_id: "req-3" }),
+      ],
+      total: 3,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    };
+    vi.mocked(uiSpendLogsCall).mockResolvedValue(page1Response);
+
+    // The main query has more data (unfiltered)
+    const unfilteredLogs = {
+      data: Array.from({ length: 50 }, (_, i) => createLogEntry({ request_id: `unfiltered-${i}` })),
+      total: 100,
+      page: 1,
+      page_size: 50,
+      total_pages: 2,
+    };
+
+    const { result } = renderHook(
+      () => useLogFilterLogic({ ...defaultProps, logs: unfilteredLogs }),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.handleFilterChange({ "Key Alias": "user01" });
+    });
+
+    await waitFor(
+      () => {
+        // filteredLogs should reflect the backend's total/total_pages, not the main query's
+        expect(result.current.filteredLogs.total).toBe(3);
+        expect(result.current.filteredLogs.total_pages).toBe(1);
+        expect(result.current.filteredLogs.data).toHaveLength(3);
+      },
+      { timeout: 500 },
     );
   });
 
