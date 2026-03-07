@@ -95,7 +95,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     }));
   }, [keys?.keys, organization?.organization_id]);
 
-  const totalCount = keys?.total_count ?? 0;
   const pageCount = keys?.total_pages ?? 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
@@ -596,15 +595,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
             />
           </div>
 
-          <div className="flex items-center justify-between w-full mb-4">
-            {isLoading || isFetching ? (
-              <Skeleton.Node active style={{ width: 200, height: 20 }} />
-            ) : (
-              <span className="inline-flex text-sm text-gray-700">
-                {totalCount} Member{totalCount !== 1 ? "s" : ""}
-              </span>
-            )}
-
+          <div className="flex items-center justify-end w-full mb-4">
             <div className="inline-flex items-center gap-2">
               {isLoading || isFetching ? (
                 <Skeleton.Node active style={{ width: 74, height: 20 }} />
