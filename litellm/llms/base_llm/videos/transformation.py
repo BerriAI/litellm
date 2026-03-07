@@ -111,6 +111,28 @@ class BaseVideoConfig(ABC):
     ) -> VideoObject:
         pass
 
+    async def async_transform_video_create_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
+    ) -> VideoObject:
+        """
+        Async transform video creation response to VideoObject.
+
+        Optional override for providers that do async polling (e.g. ModelsLab).
+        Default falls back to the synchronous transform_video_create_response.
+        """
+        return self.transform_video_create_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            request_data=request_data,
+        )
+
     @abstractmethod
     def transform_video_content_request(
         self,

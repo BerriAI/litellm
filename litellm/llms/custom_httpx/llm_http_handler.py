@@ -5523,7 +5523,7 @@ class BaseLLMHTTPHandler:
                 provider_config=video_generation_provider_config,
             )
 
-        return video_generation_provider_config.transform_video_create_response(
+        return await video_generation_provider_config.async_transform_video_create_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
