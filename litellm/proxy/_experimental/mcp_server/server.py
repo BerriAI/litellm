@@ -1580,7 +1580,12 @@ if MCP_AVAILABLE:
         if cached is not None:
             credential, ts = cached
             if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                return credential
+                # Treat "" as a cache miss: the status endpoint may write an
+                # empty-string sentinel to record "connected=True" without a
+                # real token value.  Fall through to the DB to fetch the actual
+                # credential rather than returning an empty Bearer header.
+                if credential is None or credential:
+                    return credential
 
         from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
