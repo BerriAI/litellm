@@ -6414,7 +6414,8 @@ export const getMcpOAuth2ConnectUrl = async (
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
+      // Don't call handleError here: the caller (OAuth2ConnectButton) already
+      // renders an inline error via setError(), avoiding duplicate notifications.
       throw new Error(errorMessage);
     }
 

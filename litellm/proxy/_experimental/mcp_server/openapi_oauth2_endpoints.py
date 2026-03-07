@@ -167,8 +167,6 @@ async def openapi_oauth2_connect(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> JSONResponse:
-    from litellm.proxy.proxy_server import master_key
-
     server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
     if server is None:
         raise HTTPException(status_code=404, detail=f"MCP server '{server_id}' not found")
@@ -193,8 +191,6 @@ async def openapi_oauth2_connect(
             status_code=400,
             detail=f"Server '{server_id}' has no client_secret configured",
         )
-    if master_key is None:
-        raise HTTPException(status_code=500, detail="Master key not configured")
 
     # Fail early if the DB is unavailable: without it the callback cannot store
     # the token, so sending the user through the provider consent flow is wasted effort.

@@ -1654,6 +1654,11 @@ if MCP_AVAILABLE:
             )
 
         # Check shared credential cache before hitting the DB.
+        # Note: the status endpoint writes "" as a sentinel for "connected per latest
+        # status poll". We treat "" identically to _get_byok_credential (cache miss)
+        # so that both functions always verify from DB when only the sentinel is present.
+        # This prevents a race where a deleted credential passes the auth check but
+        # returns None from _get_byok_credential, causing a silent 401 to the backend.
         cache_key = (user_id, mcp_server.server_id)
         cached = _byok_cred_cache.get(cache_key)
         if cached is not None:
@@ -1675,7 +1680,10 @@ if MCP_AVAILABLE:
                             "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
                         },
                     )
-                return
+                # Only return early for real cached credentials; treat "" as a miss
+                # so we always verify against the DB when only the status sentinel exists.
+                if cached_cred:
+                    return
 
         from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
