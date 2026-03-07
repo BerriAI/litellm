@@ -1,7 +1,8 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AgentsPanel from "./agents";
+import * as networking from "./networking";
 
 vi.mock("./networking", () => ({
   getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
@@ -66,6 +67,39 @@ describe("AgentsPanel", () => {
     await waitFor(() => {
       const grid = screen.getByTestId("agent-card-grid");
       expect(grid).toHaveAttribute("data-is-admin", "false");
+    });
+  });
+
+  it("should render the Health Check toggle", async () => {
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    expect(screen.getByText("Health Check")).toBeInTheDocument();
+  });
+
+  it("should render the Health Check toggle for non-admin users too", async () => {
+    render(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
+    expect(screen.getByText("Health Check")).toBeInTheDocument();
+  });
+
+  it("should call getAgentsList with health_check=false on initial load", async () => {
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    await waitFor(() => {
+      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false);
+    });
+  });
+
+  it("should call getAgentsList with health_check=true when toggle is enabled", async () => {
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    await waitFor(() => {
+      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false);
+    });
+
+    const toggle = screen.getByRole("switch");
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    await waitFor(() => {
+      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", true);
     });
   });
 });

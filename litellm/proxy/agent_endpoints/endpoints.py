@@ -8,9 +8,11 @@ Follows the A2A Spec.
 3. Get specific agent via GET `/v1/agents/{agent_id}`
 """
 
-from typing import Any, List, Optional
+import asyncio
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -49,6 +51,42 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         )
 
 
+AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = 5.0
+
+
+async def _check_agent_url_health(
+    agent: AgentResponse,
+) -> Dict[str, Any]:
+    """
+    Perform a GET request against the agent's URL and return the health result.
+
+    Returns a dict with ``agent_id``, ``healthy`` (bool), and an optional
+    ``error`` message.
+    """
+    url = (agent.agent_card_params or {}).get("url")
+    if not url:
+        return {"agent_id": agent.agent_id, "healthy": False, "error": "No URL configured"}
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=AGENT_HEALTH_CHECK_TIMEOUT_SECONDS
+        ) as client:
+            response = await client.get(url)
+            if response.status_code < 500:
+                return {"agent_id": agent.agent_id, "healthy": True}
+            return {
+                "agent_id": agent.agent_id,
+                "healthy": False,
+                "error": f"HTTP {response.status_code}",
+            }
+    except Exception as exc:
+        return {
+            "agent_id": agent.agent_id,
+            "healthy": False,
+            "error": str(exc),
+        }
+
+
 @router.get(
     "/v1/agents",
     tags=["[beta] A2A Agents"],
@@ -57,12 +95,23 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
 )
 async def get_agents(
     request: Request,
+    health_check: bool = Query(
+        False,
+        description="When true, performs a GET request to each agent's URL and only returns agents with reachable URLs.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
     """
     Example usage:
     ```
     curl -X GET "http://localhost:4000/v1/agents" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-key" \
+    ```
+
+    Pass `?health_check=true` to filter out agents whose URL is unreachable:
+    ```
+    curl -X GET "http://localhost:4000/v1/agents?health_check=true" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer your-key" \
     ```
@@ -111,6 +160,21 @@ async def get_agents(
                 litellm.public_agent_groups is not None
                 and (agent.agent_id in litellm.public_agent_groups)
             )
+
+        if health_check:
+            health_results = await asyncio.gather(
+                *[_check_agent_url_health(agent) for agent in returned_agents]
+            )
+            healthy_ids = {
+                result["agent_id"]
+                for result in health_results
+                if result["healthy"]
+            }
+            returned_agents = [
+                agent
+                for agent in returned_agents
+                if agent.agent_id in healthy_ids
+            ]
 
         return returned_agents
     except HTTPException:
