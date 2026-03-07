@@ -84,6 +84,12 @@ class ExceptionCheckers:
             "input tokens exceed the configured limit",
             "`inputs` tokens + `max_new_tokens` must be",
             "exceeds the maximum number of tokens allowed",  # Gemini
+            "too large for model",  # Mistral
+            "length of all messages is too long",  # Perplexity
+            "too many tokens",  # Bedrock
+            "too many input tokens",  # Bedrock
+            "input is too long",  # Replicate, Bedrock
+            "prompt is too long",  # Anthropic, Bedrock
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
