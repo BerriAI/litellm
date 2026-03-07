@@ -42,6 +42,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    MCP_TOOL_PREFIX_SEPARATOR,
     add_server_prefix_to_name,
     get_server_prefix,
 )
@@ -1579,7 +1580,17 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            return None
+            # Without a database we cannot fetch the per-user credential.
+            # Return a 503 (infrastructure problem) so callers can distinguish
+            # "no credential" (401) from "credential store unavailable" (503).
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "byok_store_unavailable",
+                    "server_id": mcp_server.server_id,
+                    "message": "Credential store is not available; cannot fetch BYOK credential.",
+                },
+            )
         raw = await get_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
@@ -1812,10 +1823,14 @@ if MCP_AVAILABLE:
         # caller used the bare (unprefixed) name and we already resolved the
         # server, construct the prefixed name and try again.
         if local_tool is None and mcp_server is not None and mcp_server.spec_path:
-            prefixed_name = add_server_prefix_to_name(name, get_server_prefix(mcp_server))
-            local_tool = global_mcp_tool_registry.get_tool(prefixed_name)
-            if local_tool:
-                name = prefixed_name
+            server_prefix = get_server_prefix(mcp_server)
+            # Only add the prefix when the tool name doesn't already carry it,
+            # otherwise we'd produce double-prefixed names like "github-github-get_user".
+            if not name.startswith(server_prefix + MCP_TOOL_PREFIX_SEPARATOR):
+                prefixed_name = add_server_prefix_to_name(name, server_prefix)
+                local_tool = global_mcp_tool_registry.get_tool(prefixed_name)
+                if local_tool:
+                    name = prefixed_name
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
             # For BYOK servers the credential must be injected via a ContextVar

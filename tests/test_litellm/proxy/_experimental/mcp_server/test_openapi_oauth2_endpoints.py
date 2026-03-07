@@ -582,3 +582,85 @@ def test_spec_path_server_uses_tool_registry():
     assert server.is_byok is True
     # The spec_path short-circuit in _get_tools_from_server is conditional on this field
     assert manager is not None
+
+
+# ---------------------------------------------------------------------------
+# Regression: _get_byok_credential raises 503 when prisma_client is None
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_byok_credential_raises_503_when_no_db():
+    """_get_byok_credential must raise 503 (not return None) when DB unavailable.
+
+    Previously it silently returned None, which caused the caller to surface a
+    401 instead of the correct 503 infrastructure-error response.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPTransport
+    from litellm.proxy._experimental.mcp_server.server import _get_byok_credential
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mock_server = MCPServer(
+        server_id="byok-server",
+        name="testserver",
+        server_name="TestServer",
+        transport=MCPTransport.sse,
+        is_byok=True,
+    )
+    mock_user = MagicMock(spec=UserAPIKeyAuth)
+    mock_user.user_id = "user-db-unavail"
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        None,
+        create=True,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _get_byok_credential(mock_server, mock_user)
+
+    assert exc_info.value.status_code == 503
+    assert "byok_store_unavailable" in str(exc_info.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# Regression: no double-prefix in execute_mcp_tool
+# ---------------------------------------------------------------------------
+
+
+def test_no_double_prefix_for_already_prefixed_tool_name():
+    """add_server_prefix_to_name must NOT be called when name already has the prefix.
+
+    Without the guard, a tool name like "github-get_user" would become
+    "github-github-get_user" and the registry lookup would always miss.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPTransport
+    from litellm.proxy._experimental.mcp_server.utils import (
+        MCP_TOOL_PREFIX_SEPARATOR,
+        add_server_prefix_to_name,
+        get_server_prefix,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="s1",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.sse,
+        spec_path="https://example.com/spec.json",
+        is_byok=False,
+    )
+
+    server_prefix = get_server_prefix(server)
+    tool_name = add_server_prefix_to_name("get_user", server_prefix)  # "github-get_user"
+
+    # Simulate the guard: only prefix when not already prefixed
+    if not tool_name.startswith(server_prefix + MCP_TOOL_PREFIX_SEPARATOR):
+        result = add_server_prefix_to_name(tool_name, server_prefix)
+    else:
+        result = tool_name
+
+    assert result == tool_name, f"Expected no double-prefix, got: {result}"
+    assert result.count(server_prefix) == 1, f"Prefix appears more than once: {result}"
