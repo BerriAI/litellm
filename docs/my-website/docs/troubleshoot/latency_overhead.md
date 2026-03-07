@@ -2,9 +2,41 @@
 
 Use this guide when you see unexpected latency overhead between LiteLLM proxy and the LLM provider.
 
+## The Invisible Latency Gap
+
+LiteLLM measures latency from when its handler starts. If a request waits in uvicorn's event loop **before** the handler runs, that wait is invisible to LiteLLM's own logs.
+
+```
+T=0   Request arrives at load balancer
+      [queue wait — LiteLLM never logs this]
+T=10  LiteLLM handler starts → timer begins
+T=20  Response sent
+
+LiteLLM logs: 10s    User experiences: 20s
+```
+
+To measure the pre-handler wait, poll `/health/backlog` on each pod:
+
+```bash
+curl http://localhost:4000/health/backlog \
+  -H "Authorization: Bearer sk-..."
+# {"in_flight_requests": 47}
+```
+
+Or scrape the `litellm_in_flight_requests` Prometheus gauge at `/metrics`.
+
+| `in_flight_requests` | ALB `TargetResponseTime` | Diagnosis |
+|---|---|---|
+| High | High | Pod overloaded → scale out |
+| Low | High | Delay is pre-ASGI — check for sync blocking code or event loop saturation |
+| High | Normal | Pod is busy but healthy, no queue buildup |
+
+If you're on **AWS ALB**, correlate `litellm_in_flight_requests` spikes with ALB's `TargetResponseTime` CloudWatch metric. The gap between what ALB reports and what LiteLLM logs is the invisible wait.
+
 ## Quick Checklist
 
-1. **Collect the `x-litellm-overhead-duration-ms` response header** — this tells you LiteLLM's total overhead on every request. Start here.
+1. **Check `in_flight_requests` on each pod** via `/health/backlog` or the `litellm_in_flight_requests` Prometheus gauge — this tells you if requests are queuing before LiteLLM starts processing. Start here for unexplained latency.
+2. **Collect the `x-litellm-overhead-duration-ms` response header** — this tells you LiteLLM's total overhead on every request.
 2. **Is DEBUG logging enabled?** This is the #1 cause of latency with large payloads.
 3. **Are you sending large base64 payloads?** (images, PDFs) — see [Large Payload Overhead](#large-payload-overhead).
 4. **Enable detailed timing headers** to pinpoint where time is spent.

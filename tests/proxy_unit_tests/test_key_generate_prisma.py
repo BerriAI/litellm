@@ -3668,9 +3668,10 @@ async def test_list_keys(prisma_client):
 async def test_key_aliases(prisma_client):
     """
     Test the key_aliases function:
-    - Returns a list
+    - Returns a paginated response
     - Includes alias from a newly created key
-    - Aliases are unique and sorted
+    - Aliases are sorted
+    - Pagination and search params work correctly
     """
     import asyncio
     import uuid
@@ -3682,10 +3683,16 @@ async def test_key_aliases(prisma_client):
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
-    # Basic call
-    response = await key_aliases()
+    # Basic call - check pagination response shape
+    response = await key_aliases(page=1, size=50)
     assert "aliases" in response
     assert isinstance(response["aliases"], list)
+    assert "total_count" in response
+    assert "current_page" in response
+    assert "total_pages" in response
+    assert "size" in response
+    assert response["current_page"] == 1
+    assert response["size"] == 50
 
     # Create a new user (and key) with a unique alias
     unique_id = str(uuid.uuid4())
@@ -3704,16 +3711,21 @@ async def test_key_aliases(prisma_client):
     # Allow async DB writes to settle
     await asyncio.sleep(2)
 
-    # Call again and validate
-    response_after = await key_aliases()
+    # Call again and validate alias is present
+    response_after = await key_aliases(page=1, size=50)
     aliases = response_after["aliases"]
-
-    # Contains the new alias
     assert test_alias in aliases
-
-    # Unique & sorted (endpoint dedupes and orders ascending)
-    assert len(aliases) == len(set(aliases))
     assert aliases == sorted(aliases)
+
+    # Search by partial alias
+    partial = test_alias[:10]
+    search_response = await key_aliases(page=1, size=50, search=partial)
+    assert test_alias in search_response["aliases"]
+
+    # Search with no match
+    no_match_response = await key_aliases(page=1, size=50, search="__no_match_xyz__")
+    assert len(no_match_response["aliases"]) == 0
+    assert no_match_response["total_count"] == 0
 
 
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")

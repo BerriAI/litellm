@@ -1,0 +1,15 @@
+name: "LiteLLM CodeQL config"
+
+# Exclude queries that produce result sets > 2 GiB on this codebase,
+# causing 49+ minute runs that fail and block CI resources.
+query-filters:
+  - exclude:
+      id: py/clear-text-logging-sensitive-data  # CWE-312/CleartextLogging.ql — result set > 2 GiB
+  - exclude:
+      id: py/polynomial-redos                   # CWE-730/PolynomialReDoS.ql — result set > 2 GiB
+
+paths-ignore:
+  - tests
+  - docs
+  - "**/*.md"
+  - litellm/proxy/_experimental/out

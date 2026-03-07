@@ -46,3 +46,7 @@ class LiteLLMProxyResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/responses"
+
+    def supports_native_websocket(self) -> bool:
+        """LiteLLM Proxy does not support native WebSocket for Responses API"""
+        return False
