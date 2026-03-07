@@ -1520,6 +1520,7 @@ def completion(  # type: ignore # noqa: PLR0915
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            auth_url=kwargs.get("auth_url"),
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,
@@ -2313,6 +2314,10 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "gigachat":
             # GigaChat - Sber AI's LLM (Russia)
+            auth_url = (
+                litellm_params.get("auth_url")
+                or get_secret_str("GIGACHAT_AUTH_URL")
+            )
             api_key = (
                 api_key
                 or litellm.api_key
@@ -5644,6 +5649,12 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
             )
         elif custom_llm_provider == "gigachat":
+            
+            auth_url = (
+                optional_params.get("auth_url")
+                or get_secret_str("GIGACHAT_AUTH_URL")
+            )
+            
             api_key = (
                 api_key
                 or litellm.api_key
@@ -5651,6 +5662,7 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("GIGACHAT_CREDENTIALS")
                 or get_secret_str("GIGACHAT_API_KEY")
             )
+            
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -5663,7 +5675,10 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
-                litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
+                litellm_params={
+                    "ssl_verify": kwargs.get("ssl_verify", None),
+                    "auth_url": auth_url,
+                },
             )
         elif custom_llm_provider == "perplexity":
             response = base_llm_http_handler.embedding(
