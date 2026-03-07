@@ -28,6 +28,8 @@ import Navbar from "@/components/navbar";
 import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import OldTeams from "@/components/OldTeams";
+import { fetchUserModels, CreateKeyPrefillData } from "@/components/organisms/create_key_button";
+import Organizations, { fetchOrganizations } from "@/components/organizations";
 import PassThroughSettings from "@/components/pass_through_settings";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
 import PoliciesPanel from "@/components/policies";
@@ -50,8 +52,13 @@ import VectorStoreManagement from "@/components/vector_store_management";
 import ViewUserDashboard from "@/components/view_users";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import { isJwtExpired } from "@/utils/jwtUtils";
+import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
+import { formatUserRole, isAdminRole } from "@/utils/roles";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
 import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ConfigProvider, theme } from "antd";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values

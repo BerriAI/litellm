@@ -565,7 +565,24 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     if (!pendingPrefillModels) {
       form.setFieldValue("models", []);
     }
-  }, [selectedCreateKeyTeam, accessToken, userID, userRole, form]);
+  }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole, form]);
+
+  // Apply deferred model prefill once the available model list arrives.
+  // This handles timing where prefill data arrives before or after models are fetched.
+  useEffect(() => {
+    if (!pendingPrefillModels || pendingPrefillModels.length === 0) {
+      return;
+    }
+    if (!modelsToPick || modelsToPick.length === 0) {
+      return;
+    }
+
+    const validModels = pendingPrefillModels.filter((model) => modelsToPick.includes(model));
+    if (validModels.length > 0) {
+      form.setFieldsValue({ models: validModels });
+    }
+    setPendingPrefillModels(null);
+  }, [pendingPrefillModels, modelsToPick, form]);
 
   // Apply deferred model prefill once the available model list arrives.
   // This handles timing where prefill data arrives before or after models are fetched.
