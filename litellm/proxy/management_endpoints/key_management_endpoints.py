@@ -4991,7 +4991,7 @@ async def test_key_logging(
         )
 
 
-_KEY_ALIAS_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.]{0,253}[a-zA-Z0-9]$")
+_KEY_ALIAS_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.@]{0,253}[a-zA-Z0-9]$")
 
 
 def _validate_key_alias_format(key_alias: Optional[str]) -> None:
@@ -5009,7 +5009,7 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
 
     if not _KEY_ALIAS_PATTERN.match(key_alias):
         raise ProxyException(
-            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.",
+            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.@.",
             type=ProxyErrorTypes.bad_request_error,
             param="key_alias",
             code=400,
