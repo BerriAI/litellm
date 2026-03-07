@@ -28,14 +28,13 @@ const descriptionsConfig = {
 
 export default function HashicorpVault() {
   const { accessToken } = useAuthorized();
-  const { data, isLoading, isError, error, refetch } = useHashicorpVaultConfig();
+  const { data, isLoading, isError, error } = useHashicorpVaultConfig();
   const { mutate: deleteConfig, isPending: isDeleting } = useDeleteHashicorpVaultConfig(accessToken);
-  const { mutateAsync: updateConfig } = useUpdateHashicorpVaultConfig(accessToken);
+  const { mutate: updateConfig, isPending: isClearingField } = useUpdateHashicorpVaultConfig(accessToken);
 
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [clearingField, setClearingField] = useState<string | null>(null);
-  const [isClearingField, setIsClearingField] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
 
   const rawValues = data?.values ?? {};
@@ -66,19 +65,17 @@ export default function HashicorpVault() {
     });
   };
 
-  const handleClearField = async () => {
+  const handleClearField = () => {
     if (!clearingField) return;
-    setIsClearingField(true);
-    try {
-      await updateConfig({ [clearingField]: "" });
-      NotificationManager.success(`${FIELD_LABELS[clearingField] ?? clearingField} cleared`);
-      setClearingField(null);
-      refetch();
-    } catch (err) {
-      NotificationManager.fromBackend(err);
-    } finally {
-      setIsClearingField(false);
-    }
+    updateConfig({ [clearingField]: "" }, {
+      onSuccess: () => {
+        NotificationManager.success(`${FIELD_LABELS[clearingField] ?? clearingField} cleared`);
+        setClearingField(null);
+      },
+      onError: (err) => {
+        NotificationManager.fromBackend(err);
+      },
+    });
   };
 
   const renderValue = (key: string) => {
@@ -140,84 +137,79 @@ export default function HashicorpVault() {
           />
         </Card>
       ) : (
-        <Space direction="vertical" size="large" className="w-full">
-          <Card>
-            <Space direction="vertical" size="large" className="w-full">
-              {/* Header */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <KeyRound className="w-6 h-6 text-gray-400" />
-                  <div>
-                    <Title level={3} style={{ marginBottom: 0 }}>Hashicorp Vault</Title>
-                    <Text type="secondary">Manage secret manager configuration</Text>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  {isConfigured && (
-                    <>
-                      <Button
-                        icon={<PlugZap className="w-4 h-4" />}
-                        loading={isTesting}
-                        onClick={handleTestConnection}
-                      >
-                        Test Connection
-                      </Button>
-                      <Button
-                        icon={<Edit className="w-4 h-4" />}
-                        onClick={() => setIsEditModalVisible(true)}
-                      >
-                        Edit Configuration
-                      </Button>
-                      <Button
-                        danger
-                        icon={<Trash2 className="w-4 h-4" />}
-                        onClick={() => setIsDeleteModalOpen(true)}
-                      >
-                        Delete Configuration
-                      </Button>
-                    </>
-                  )}
+        <Card>
+          <Space direction="vertical" size="large" className="w-full">
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <KeyRound className="w-6 h-6 text-gray-400" />
+                <div>
+                  <Title level={3} style={{ marginBottom: 0 }}>Hashicorp Vault</Title>
+                  <Text type="secondary">Manage secret manager configuration</Text>
                 </div>
               </div>
 
-              {isConfigured && (
-                <Alert
-                  type="info"
-                  showIcon
-                  message="Secrets must be stored with the field name &quot;key&quot;"
-                  description={
-                    <>
-                      <Text code>vault kv put secret/SECRET_NAME key=secret_value</Text>
-                      <br />
-                      <Typography.Link
-                        href="https://docs.litellm.ai/docs/secret_managers/hashicorp_vault"
-                        target="_blank"
-                      >
-                        View documentation
-                      </Typography.Link>
-                    </>
-                  }
-                />
-              )}
+              <div className="flex items-center gap-3">
+                {isConfigured && (
+                  <>
+                    <Button
+                      icon={<PlugZap className="w-4 h-4" />}
+                      loading={isTesting}
+                      onClick={handleTestConnection}
+                    >
+                      Test Connection
+                    </Button>
+                    <Button
+                      icon={<Edit className="w-4 h-4" />}
+                      onClick={() => setIsEditModalVisible(true)}
+                    >
+                      Edit Configuration
+                    </Button>
+                    <Button
+                      danger
+                      icon={<Trash2 className="w-4 h-4" />}
+                      onClick={() => setIsDeleteModalOpen(true)}
+                    >
+                      Delete Configuration
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
 
-              {isConfigured ? (
-                renderSettings()
-              ) : (
-                <HashicorpVaultEmptyPlaceholder onAdd={() => setIsEditModalVisible(true)} />
-              )}
-            </Space>
-          </Card>
-        </Space>
+            {isConfigured && (
+              <Alert
+                type="info"
+                showIcon
+                message={'Secrets must be stored with the field name "key"'}
+                description={
+                  <>
+                    <Text code>vault kv put secret/SECRET_NAME key=secret_value</Text>
+                    <br />
+                    <Typography.Link
+                      href="https://docs.litellm.ai/docs/secret_managers/hashicorp_vault"
+                      target="_blank"
+                    >
+                      View documentation
+                    </Typography.Link>
+                  </>
+                }
+              />
+            )}
+
+            {isConfigured ? (
+              renderSettings()
+            ) : (
+              <HashicorpVaultEmptyPlaceholder onAdd={() => setIsEditModalVisible(true)} />
+            )}
+          </Space>
+        </Card>
       )}
 
       <EditHashicorpVaultModal
         isVisible={isEditModalVisible}
         onCancel={() => setIsEditModalVisible(false)}
-        onSuccess={() => {
-          setIsEditModalVisible(false);
-          refetch();
-        }}
+        onSuccess={() => setIsEditModalVisible(false)}
       />
 
       <DeleteResourceModal
