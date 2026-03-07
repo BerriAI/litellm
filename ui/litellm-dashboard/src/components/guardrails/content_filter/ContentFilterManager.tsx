@@ -1,5 +1,6 @@
-import { Alert, Divider, Typography } from "antd";
+import { Alert, Divider, Typography, message } from "antd";
 import React, { useEffect, useState } from "react";
+import yaml from "js-yaml";
 import ContentFilterConfiguration from "./ContentFilterConfiguration";
 import ContentFilterDisplay from "./ContentFilterDisplay";
 import type { CompetitorIntentConfig } from "./CompetitorIntentConfiguration";
@@ -265,7 +266,25 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
               setBlockedWords(blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w)))
             }
             onFileUpload={(content: string) => {
-              console.log("File uploaded:", content);
+              try {
+                const parsed = yaml.load(content) as Record<string, any>;
+                if (parsed && Array.isArray(parsed.blocked_words)) {
+                  const VALID_ACTIONS = new Set(["BLOCK", "MASK"]);
+                  const newWords: BlockedWord[] = parsed.blocked_words.map(
+                    (w: any, index: number) => ({
+                      id: `uploaded-${typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2)}-${index}`,
+                      keyword: w.keyword || "",
+                      action: VALID_ACTIONS.has(w.action) ? w.action : "BLOCK",
+                      description: w.description || undefined,
+                    })
+                  );
+                  const validWords = newWords.filter((w) => w.keyword?.trim());
+                  setBlockedWords((prev) => [...prev, ...validWords]);
+                }
+              } catch (e) {
+                console.error("Failed to parse YAML:", e);
+                message.error("Failed to parse uploaded YAML. Please check the file format.");
+              }
             }}
             accessToken={accessToken}
             contentCategories={guardrailSettings.content_filter_settings.content_categories || []}

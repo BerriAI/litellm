@@ -22,12 +22,16 @@ const GUARDRAIL_SETTINGS = {
   },
 };
 
+// Store callbacks to allow tests to trigger them
+let capturedOnFileUpload: ((content: string) => void) | undefined;
+
 vi.mock("./ContentFilterConfiguration", () => ({
   default: ({
     onPatternAdd,
     onPatternRemove,
     onBlockedWordAdd,
     onBlockedWordRemove,
+    onFileUpload,
     selectedPatterns,
     blockedWords,
   }: {
@@ -35,53 +39,73 @@ vi.mock("./ContentFilterConfiguration", () => ({
     onPatternRemove: (id: string) => void;
     onBlockedWordAdd: (w: object) => void;
     onBlockedWordRemove: (id: string) => void;
+    onFileUpload?: (content: string) => void;
     selectedPatterns: { id: string }[];
     blockedWords: { id: string }[];
-  }) => (
-    <div data-testid="content-filter-config">
-      <button
-        type="button"
-        onClick={() =>
-          onPatternAdd({
-            id: "pattern-new",
-            type: "prebuilt",
-            name: "ssn",
-            action: "BLOCK",
-          })
-        }
-      >
-        Add pattern
-      </button>
-      <button
-        type="button"
-        onClick={() =>
-          onBlockedWordAdd({
-            id: "word-new",
-            keyword: "secret",
-            action: "MASK",
-          })
-        }
-      >
-        Add keyword
-      </button>
-      {selectedPatterns[0] && (
+  }) => {
+    // Capture the callback for testing
+    capturedOnFileUpload = onFileUpload;
+    
+    return (
+      <div data-testid="content-filter-config">
+        <span data-testid="blocked-word-count">{blockedWords.length}</span>
+        <span data-testid="blocked-word-keywords">{blockedWords.map((w: any) => w.keyword).join(",")}</span>
         <button
           type="button"
-          onClick={() => onPatternRemove(selectedPatterns[0].id)}
+          onClick={() =>
+            onPatternAdd({
+              id: "pattern-new",
+              type: "prebuilt",
+              name: "ssn",
+              action: "BLOCK",
+            })
+          }
         >
-          Remove pattern
+          Add pattern
         </button>
-      )}
-      {blockedWords[0] && (
         <button
           type="button"
-          onClick={() => onBlockedWordRemove(blockedWords[0].id)}
+          onClick={() =>
+            onBlockedWordAdd({
+              id: "word-new",
+              keyword: "secret",
+              action: "MASK",
+            })
+          }
         >
-          Remove keyword
+          Add keyword
         </button>
-      )}
-    </div>
-  ),
+        {onFileUpload && (
+          <button
+            type="button"
+            onClick={() =>
+              onFileUpload(
+                "blocked_words:\n  - keyword: \"uploaded\"\n    action: \"BLOCK\"\n  - keyword: \"bad\"\n    action: \"MASK\"\n    description: \"bad word\""
+              )
+            }
+          >
+            Upload file
+          </button>
+        )}
+        {selectedPatterns[0] && (
+          <button
+            type="button"
+            onClick={() => onPatternRemove(selectedPatterns[0].id)}
+          >
+            Remove pattern
+          </button>
+        )}
+        {blockedWords[0] && (
+          <button
+            type="button"
+            onClick={() => onBlockedWordRemove(blockedWords[0].id)}
+          >
+            Remove keyword
+          </button>
+        )}
+      </div>
+    );
+  },
 }));
 
 vi.mock("./ContentFilterDisplay", () => ({
@@ -99,10 +123,13 @@ vi.mock("./ContentFilterDisplay", () => ({
   ),
 }));
 
+const mockMessageError = vi.fn();
+
 vi.mock("antd", async (importOriginal) => {
   const actual = await importOriginal<typeof import("antd")>();
   return {
     ...actual,
+    message: { error: mockMessageError, success: vi.fn(), warning: vi.fn(), info: vi.fn() },
     Divider: ({ children }: { children: React.ReactNode }) => (
       <div data-testid="divider">{children}</div>
     ),
@@ -504,5 +531,113 @@ describe("formatContentFilterDataForAPI", () => {
         severity_threshold: "medium",
       },
     ]);
+  });
+});
+
+describe("ContentFilterManager YAML file upload", () => {
+  beforeEach(() => {
+    mockMessageError.mockReset();
+  });
+
+  afterEach(() => {
+    capturedOnFileUpload = undefined;
+  });
+
+  it("should parse uploaded YAML and merge blocked words into state", async () => {
+    const user = userEvent.setup();
+    render(
+      <ContentFilterManager
+        guardrailData={CONTENT_FILTER_GUARDRAIL_DATA}
+        guardrailSettings={GUARDRAIL_SETTINGS}
+        accessToken="test-token"
+        isEditing={true}
+      />
+    );
+
+    // Verify initial state: 1 blocked word ("test") from guardrailData
+    expect(screen.getByTestId("blocked-word-count").textContent).toBe("1");
+
+    // Click "Upload file" button from mock which triggers onFileUpload with YAML
+    const uploadBtn = await screen.findByText("Upload file");
+    await user.click(uploadBtn);
+
+    // After upload, should have 3 blocked words (1 original + 2 uploaded)
+    await waitFor(() => {
+      expect(screen.getByTestId("blocked-word-count").textContent).toBe("3");
+      const keywords = screen.getByTestId("blocked-word-keywords").textContent;
+      expect(keywords).toContain("uploaded");
+      expect(keywords).toContain("bad");
+    });
+  });
+
+  it("should handle invalid YAML gracefully with error message in catch block", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    
+    render(
+      <ContentFilterManager
+        guardrailData={CONTENT_FILTER_GUARDRAIL_DATA}
+        guardrailSettings={GUARDRAIL_SETTINGS}
+        accessToken="test-token"
+        isEditing={true}
+      />
+    );
+
+    // Verify initial state
+    await waitFor(() => {
+      expect(screen.getByTestId("blocked-word-count").textContent).toBe("1");
+    });
+
+    // Call the captured callback with invalid YAML (triggers catch block)
+    expect(capturedOnFileUpload).toBeDefined();
+    if (capturedOnFileUpload) {
+      // This should trigger the catch block in onFileUpload (ContentFilterManager.tsx:284-287)
+      capturedOnFileUpload("{ invalid yaml: [unclosed");
+    }
+
+    // Verify error was logged
+    await waitFor(() => {
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "Failed to parse YAML:",
+        expect.any(Error)
+      );
+    });
+
+    // Verify user-facing error notification was shown
+    expect(mockMessageError).toHaveBeenCalledWith(
+      "Failed to parse uploaded YAML. Please check the file format."
+    );
+
+    // State should remain unchanged (1 blocked word)
+    expect(screen.getByTestId("blocked-word-count").textContent).toBe("1");
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("should silently ignore valid YAML without blocked_words key", async () => {
+    render(
+      <ContentFilterManager
+        guardrailData={CONTENT_FILTER_GUARDRAIL_DATA}
+        guardrailSettings={GUARDRAIL_SETTINGS}
+        accessToken="test-token"
+        isEditing={true}
+      />
+    );
+
+    // Verify initial state: 1 blocked word from guardrailData
+    await waitFor(() => {
+      expect(screen.getByTestId("blocked-word-count").textContent).toBe("1");
+    });
+
+    // Call the captured callback with YAML that has no blocked_words key
+    // This tests the missing key case (ContentFilterManager.tsx:271)
+    expect(capturedOnFileUpload).toBeDefined();
+    if (capturedOnFileUpload) {
+      // Valid YAML but no blocked_words key - should be silently ignored
+      capturedOnFileUpload("patterns:\n  - name: email\n  - name: ssn");
+    }
+
+    // State should remain unchanged (still 1 blocked word)
+    expect(screen.getByTestId("blocked-word-count").textContent).toBe("1");
+    expect(screen.getByTestId("blocked-word-keywords").textContent).toBe("test");
   });
 });
