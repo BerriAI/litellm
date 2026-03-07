@@ -205,6 +205,15 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
               <Descriptions.Item label="RPM Limit">{agent.rpm_limit ?? "Unlimited"}</Descriptions.Item>
               <Descriptions.Item label="Session TPM Limit">{agent.session_tpm_limit ?? "Unlimited"}</Descriptions.Item>
               <Descriptions.Item label="Session RPM Limit">{agent.session_rpm_limit ?? "Unlimited"}</Descriptions.Item>
+              {agent.spend !== undefined && agent.spend !== null && (
+                <Descriptions.Item label="Total Spend">${agent.spend.toFixed(6)}</Descriptions.Item>
+              )}
+              {agent.litellm_params?.max_iterations !== undefined && (
+                <Descriptions.Item label="Max Iterations">{agent.litellm_params.max_iterations}</Descriptions.Item>
+              )}
+              {agent.litellm_params?.max_budget_per_session !== undefined && (
+                <Descriptions.Item label="Max Budget Per Session">${agent.litellm_params.max_budget_per_session}</Descriptions.Item>
+              )}
               <Descriptions.Item label="Created At">{formatDate(agent.created_at)}</Descriptions.Item>
               <Descriptions.Item label="Updated At">{formatDate(agent.updated_at)}</Descriptions.Item>
             </Descriptions>

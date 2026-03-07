@@ -129,7 +129,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         """
         try:
             litellm_params = kwargs.get("litellm_params") or {}
-            metadata = litellm_params.get("metadata") or {}
+            metadata = (
+                litellm_params.get("metadata")
+                or litellm_params.get("litellm_metadata")
+                or {}
+            )
             session_id = metadata.get("session_id")
             if session_id is None:
                 return
@@ -208,9 +212,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
     async def _get_current_spend(self, cache_key: str) -> float:
         """Read current accumulated spend for a session."""
-        if (
-            self.internal_usage_cache.dual_cache.redis_cache is not None
-        ):
+        if self.internal_usage_cache.dual_cache.redis_cache is not None:
             try:
                 result = await self.internal_usage_cache.dual_cache.redis_cache.async_get_cache(
                     key=cache_key
@@ -252,9 +254,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
         return await self._in_memory_increment_spend(cache_key, amount)
 
-    async def _in_memory_increment_spend(
-        self, cache_key: str, amount: float
-    ) -> float:
+    async def _in_memory_increment_spend(self, cache_key: str, amount: float) -> float:
         current = await self.internal_usage_cache.async_get_cache(
             key=cache_key,
             litellm_parent_otel_span=None,
