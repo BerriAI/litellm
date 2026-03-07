@@ -501,7 +501,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             request_data = {}
                         # Store pii_tokens in metadata to avoid leaking to LLM providers.
                         # Providers like Anthropic reject unknown top-level fields.
-                        if "metadata" not in request_data:
+                        if not request_data.get("metadata"):
                             request_data["metadata"] = {}
                         if "pii_tokens" not in request_data["metadata"]:
                             request_data["metadata"]["pii_tokens"] = {}

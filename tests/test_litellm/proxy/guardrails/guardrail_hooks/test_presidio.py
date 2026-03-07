@@ -1742,3 +1742,47 @@ def test_event_hook_no_expansion_when_already_post_call():
     )
     # Should remain a string "post_call", not expanded to a list
     assert guardrail.event_hook == "post_call"
+
+
+@pytest.mark.asyncio
+async def test_metadata_none_does_not_crash():
+    """
+    Regression test: if metadata is explicitly None in request_data,
+    the guardrail must not crash with TypeError on the write or read path.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    token_key = "<PERSON>_abc123def456"
+    # metadata explicitly None — must not crash
+    request_data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": None,
+    }
+
+    response = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content=f"Hello {token_key}, how can I help you?",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ]
+    )
+
+    # Should not raise TypeError
+    await guardrail._process_response_for_pii(
+        response=response,
+        request_data=request_data,
+        mode="unmask",
+    )
+
+    # No pii_tokens to unmask, so content stays as-is
+    assert (
+        response.choices[0].message.content == f"Hello {token_key}, how can I help you?"
+    )
