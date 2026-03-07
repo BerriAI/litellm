@@ -3255,6 +3255,7 @@ class ProxyException(Exception):
         provider_specific_fields: Optional[dict] = None,
     ):
         self.message = str(message)
+        super().__init__(self.message)
         self.type = type
         self.param = param
         self.openai_code = openai_code or code
@@ -3278,6 +3279,9 @@ class ProxyException(Exception):
             self.code = "429"
         elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
             self.code = "401"
+
+    def __str__(self) -> str:
+        return self.message
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
