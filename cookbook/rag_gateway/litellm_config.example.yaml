@@ -1,0 +1,94 @@
+# LiteLLM Multi-Provider Configuration
+# This config demonstrates production-ready patterns for RAG systems
+
+model_list:
+  # Primary: OpenAI GPT-4 (high quality, higher cost)
+  - model_name: gpt-4-turbo
+    litellm_params:
+      model: gpt-4-turbo-preview
+      api_key: os.environ/OPENAI_API_KEY
+      timeout: 30  # 30 second timeout
+      max_retries: 3  # Retry up to 3 times
+      
+  # Fallback 1: OpenAI GPT-3.5 (faster, cheaper)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+      timeout: 20
+      max_retries: 2
+      
+  # Fallback 2: Anthropic Claude (alternative provider)
+  - model_name: claude-3-haiku
+    litellm_params:
+      model: claude-3-haiku-20240307
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 30
+      max_retries: 2
+      
+  # Local option: Ollama (free, private, no API key needed)
+  - model_name: ollama-llama3
+    litellm_params:
+      model: ollama/llama3
+      api_base: http://localhost:11434
+      timeout: 60  # Local models may be slower
+      
+  # Cost-effective option: Groq (very fast inference)
+  - model_name: groq-llama3
+    litellm_params:
+      model: groq/llama3-70b-8192
+      api_key: os.environ/GROQ_API_KEY
+      timeout: 15  # Groq is very fast
+      max_retries: 2
+
+# Router configuration for load balancing and fallbacks
+router_settings:
+  # Routing strategy: 'simple-shuffle', 'least-busy', 'usage-based-routing'
+  routing_strategy: simple-shuffle
+  
+  # Retry configuration
+  num_retries: 3
+  retry_after: 2  # Wait 2 seconds before retry
+  
+  # Timeout for entire request (including retries)
+  timeout: 45
+  
+  # Fallback models (in order of preference)
+  fallbacks:
+    - gpt-4-turbo
+    - gpt-3.5-turbo
+    - claude-3-haiku
+    - groq-llama3
+    - ollama-llama3
+
+# Logging configuration
+litellm_settings:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  set_verbose: true
+  
+  # Drop parameters not supported by provider
+  drop_params: true
+  
+  # Success callback for logging
+  success_callback: ["langfuse"]  # Optional: integrate with Langfuse for observability
+  
+  # Cost tracking
+  track_cost_per_request: true
+  
+  # Cache responses (optional, requires Redis)
+  # cache: true
+  # cache_params:
+  #   type: redis
+  #   host: localhost
+  #   port: 6379
+
+# General settings
+general_settings:
+  # Master key for proxy authentication (if using proxy server)
+  # master_key: os.environ/LITELLM_MASTER_KEY
+  
+  # Database for storing request logs (optional)
+  # database_url: os.environ/DATABASE_URL
+  
+  # Enable request/response logging
+  store_model_in_db: true
