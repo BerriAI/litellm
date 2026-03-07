@@ -119,6 +119,9 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         model = model.replace(
             "o_series/", ""
         )  # handle o_series/my-random-deployment-name
+        # Azure OpenAI doesn't support output_config parameter (Anthropic-specific), remove it if present
+        # See: https://github.com/BerriAI/litellm/issues/22797
+        optional_params.pop("output_config", None)
         return super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )

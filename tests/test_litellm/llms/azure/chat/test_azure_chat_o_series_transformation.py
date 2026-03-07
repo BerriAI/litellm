@@ -28,3 +28,28 @@ async def test_azure_chat_o_series_transformation():
     )
     print(response)
     assert response["model"] == "web-interface-o1-mini"
+
+
+def test_azure_o_series_strips_output_config():
+    """Test that Azure O-series strips output_config parameter (Anthropic-specific).
+
+    Azure OpenAI doesn't support output_config, which is an Anthropic API parameter
+    for extended thinking/effort configuration. When requests are proxied through
+    LiteLLM from Anthropic-format clients (like Claude Code CLI), this parameter
+    should be stripped to avoid Azure API errors.
+
+    See: https://github.com/BerriAI/litellm/issues/22797
+    """
+    config = AzureOpenAIO1Config()
+    request = config.transform_request(
+        model="o3",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "output_config": {"effort": "high"},
+            "max_completion_tokens": 100,
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "output_config" not in request
+    assert request["max_completion_tokens"] == 100
