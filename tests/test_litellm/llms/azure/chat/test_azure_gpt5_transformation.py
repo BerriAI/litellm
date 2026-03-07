@@ -114,12 +114,7 @@ def test_azure_gpt5_codex_series_transform_request(config: AzureOpenAIGPT5Config
 
 
 def test_azure_gpt5_strips_output_config(config: AzureOpenAIGPT5Config):
-    """Test that Azure GPT-5 strips output_config parameter (Anthropic-specific).
-
-    Azure OpenAI doesn't support output_config, which is an Anthropic API parameter
-    for extended thinking/effort configuration. When requests are proxied through
-    LiteLLM from Anthropic-format clients (like Claude Code CLI), this parameter
-    should be stripped to avoid Azure API errors.
+    """Test that Azure GPT-5 strips output_config with effort parameter.
 
     See: https://github.com/BerriAI/litellm/issues/22797
     """
@@ -128,6 +123,21 @@ def test_azure_gpt5_strips_output_config(config: AzureOpenAIGPT5Config):
         messages=[],
         optional_params={
             "output_config": {"effort": "high"},
+            "max_completion_tokens": 100,
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "output_config" not in request
+    assert request["max_completion_tokens"] == 100
+
+
+def test_azure_gpt5_works_without_output_config(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5 requests work normally when output_config is not present."""
+    request = config.transform_request(
+        model="gpt-5.2",
+        messages=[],
+        optional_params={
             "max_completion_tokens": 100,
         },
         litellm_params={},
