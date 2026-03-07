@@ -82,6 +82,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self.turn_off_message_logging = turn_off_message_logging
         pass
 
+    def setup_proxy(self, app: Any) -> None:
+        """
+        Called once during proxy startup after all callbacks are initialized.
+
+        Override this method to interact with the FastAPI app during startup,
+        e.g., to add middleware, mount additional routes, or register shutdown hooks.
+
+        Args:
+            app: The FastAPI application instance.
+        """
+        pass
+
     @staticmethod
     def get_callback_env_vars(callback_name: Optional[str] = None) -> List[str]:
         """
