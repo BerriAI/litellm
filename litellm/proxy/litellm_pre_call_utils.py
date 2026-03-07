@@ -1848,9 +1848,11 @@ async def add_guardrails_from_policy_engine(
 
     # Extract tags and build context
     all_tags = get_tags_from_request_body(data) or None
+    _team_alias = user_api_key_dict.team_alias
+    _key_alias = user_api_key_dict.key_alias
     context = PolicyMatchContext(
-        team_alias=user_api_key_dict.team_alias,
-        key_alias=user_api_key_dict.key_alias,
+        team_alias=_team_alias if isinstance(_team_alias, str) else None,
+        key_alias=_key_alias if isinstance(_key_alias, str) else None,
         model=data.get("model"),
         tags=all_tags,
     )
