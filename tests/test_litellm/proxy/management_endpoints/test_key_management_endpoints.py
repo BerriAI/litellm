@@ -6782,7 +6782,6 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("my-key-123")
         _validate_key_alias_format("user/user@example.com")
         _validate_key_alias_format("team/user@example.com")
-        litellm.enable_key_alias_format_validation = False
 
     def test_validate_key_alias_format_invalid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
@@ -6807,6 +6806,7 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+<<<<<<< HEAD
 
     # Verify generate_key_helper_fn was called
     mock_generate_key.assert_awaited_once()
@@ -6888,3 +6888,5 @@ async def test_key_does_not_override_explicit_budget_duration():
     mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
 
         litellm.enable_key_alias_format_validation = False
+=======
+>>>>>>> 1452237ec6 (fix req changes)
