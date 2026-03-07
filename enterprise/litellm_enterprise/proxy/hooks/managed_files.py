@@ -589,7 +589,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_file_id_mapping = cast(
                 Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping")
             )
+            # model_info may be at top-level or nested under litellm_metadata
+            # (batch/file operations use litellm_metadata)
             model_id = cast(Optional[str], kwargs.get("model_info", {}).get("id", None))
+            if model_id is None:
+                model_id = cast(
+                    Optional[str],
+                    kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id", None),
+                )
             mapped_file_id: Optional[str] = None
             if input_file_id and model_file_id_mapping and model_id:
                 mapped_file_id = model_file_id_mapping.get(input_file_id, {}).get(
@@ -1086,11 +1093,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self, file_id: str
     ) -> List[Dict[str, Any]]:
         """
-        Find batches in non-terminal states that reference this file.
-        
-        Non-terminal states: validating, in_progress, finalizing
-        Terminal states: completed, complete, failed, expired, cancelled
-        
+        Find batches that reference this file and still need cost tracking.
+        Find batches that are in non-terminal state and have not yet been processed by CheckBatchCost.
         Args:
             file_id: The unified file ID to check
             
@@ -1121,7 +1125,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={
                 "file_purpose": "batch",
-                "status": {"in": ["validating", "in_progress", "finalizing"]},
+                "batch_processed": False,
+                "status": {"not_in": ["failed", "expired", "cancelled"]}
             },
             take=MAX_MATCHES_TO_RETURN,
             order={"created_at": "desc"},
@@ -1205,7 +1210,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             
             error_message += (
                 f"To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
-                f"Alternatively, wait for all batches to complete processing."
+                f"Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
             )
             
             raise HTTPException(

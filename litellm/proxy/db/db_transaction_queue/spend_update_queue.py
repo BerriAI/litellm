@@ -31,6 +31,11 @@ class SpendUpdateQueue(BaseUpdateQueue):
     ) -> DBSpendUpdateTransactions:
         """Flush all updates from the queue and return all updates aggregated by entity type."""
         updates = await self.flush_all_updates_from_in_memory_queue()
+        if len(updates) > 0:
+            verbose_proxy_logger.info(
+                "Spend tracking - flushed %d spend update items from in-memory queue",
+                len(updates),
+            )
         verbose_proxy_logger.debug("Aggregating updates by entity type: %s", updates)
         return self.get_aggregated_db_spend_update_transactions(updates)
 

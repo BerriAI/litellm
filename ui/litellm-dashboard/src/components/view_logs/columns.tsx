@@ -6,14 +6,15 @@ import React, { useState } from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { TableHeaderSortDropdown } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { TimeCell } from "./time_cell";
-import { MCP_CALL_TYPES } from "./constants";
-import { LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
+import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
+import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 /** API sort field mapping for /spend/logs/ui endpoint */
 export const LOGS_SORT_FIELD_MAP = {
   startTime: "startTime",
   spend: "spend",
   total_tokens: "total_tokens",
+  request_duration_ms: "request_duration_ms",
 } as const;
 
 export type LogsSortField = keyof typeof LOGS_SORT_FIELD_MAP;
@@ -61,13 +62,15 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   status?: string;
-  duration?: number;
+  completionStartTime?: string;
+  request_duration_ms?: number;
   session_total_count?: number;
   session_total_spend?: number;
   mcp_tool_call_count?: number;
   mcp_tool_call_spend?: number;
   session_llm_count?: number;
   session_mcp_count?: number;
+  session_agent_count?: number;
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
@@ -123,17 +126,26 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const row = info.row.original;
       const sessionCount = row.session_total_count || 1;
       const isMcp = MCP_CALL_TYPES.includes(row.call_type);
-      const sessionLlmCount = row.session_llm_count ?? (isMcp ? 0 : sessionCount);
+      const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
+      const sessionLlmCount = row.session_llm_count ?? (isMcp || isAgent ? 0 : sessionCount);
+      const sessionAgentCount = row.session_agent_count ?? (isAgent ? sessionCount : 0);
       const sessionMcpCount = row.session_mcp_count ?? (isMcp ? sessionCount : 0);
 
       if (isMcp) return <McpBadge />;
+      if (isAgent && sessionCount <= 1) return <AgentBadge />;
       if (sessionCount <= 1) return <LlmBadge />;
 
-      // Multi-call session — show total count, plus MCP indicator when mixed.
+      // Multi-call session — show total count, plus Agent/MCP indicators when mixed.
       const sessionTypeBadge = (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-[11px] font-medium whitespace-nowrap">
           <SparkleIcon />
           <span>{sessionCount}</span>
+          {sessionAgentCount > 0 && (
+            <>
+              <span className="text-blue-300">·</span>
+              <AgentIcon size={10} />
+            </>
+          )}
           {sessionMcpCount > 0 && (
             <>
               <span className="text-blue-300">·</span>
@@ -143,8 +155,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         </span>
       );
 
+      const tooltipParts = [
+        sessionLlmCount > 0 && `${sessionLlmCount} LLM`,
+        sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
+        sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
+      ].filter(Boolean);
       return (
-        <Tooltip title={`${sessionLlmCount} LLM • ${sessionMcpCount} MCP`}>
+        <Tooltip title={tooltipParts.join(" • ")}>
           {sessionTypeBadge}
         </Tooltip>
       );
@@ -231,13 +248,47 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: "Duration (s)",
-    accessorKey: "duration",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
-        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
-    ),
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Duration (s)"
+            field="request_duration_ms"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Duration (s)",
+    accessorKey: "request_duration_ms",
+    cell: (info: any) => {
+      const ms = info.getValue();
+      if (ms == null) return <span>-</span>;
+      const seconds = (ms / 1000).toFixed(2);
+      return (
+        <Tooltip title={`${ms}ms`}>
+          <span className="max-w-[15ch] truncate block">{seconds}</span>
+        </Tooltip>
+      );
+    },
+  },
+  {
+    header: "TTFT (s)",
+    accessorKey: "completionStartTime",
+    cell: (info: any) => {
+      const row = info.row.original;
+      const completionStartTime = info.getValue();
+      if (!completionStartTime) return <span>-</span>;
+      // For non-streaming, completionStartTime == endTime so TTFT is not meaningful
+      if (completionStartTime === row.endTime) return <span>-</span>;
+      const ttftMs = new Date(completionStartTime).getTime() - new Date(row.startTime).getTime();
+      if (ttftMs <= 0) return <span>-</span>;
+      const ttftSeconds = (ttftMs / 1000).toFixed(2);
+      return (
+        <Tooltip title={`${ttftMs}ms`}>
+          <span className="max-w-[15ch] truncate block">{ttftSeconds}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Team Name",

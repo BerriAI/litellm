@@ -80,7 +80,7 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     XDG_CACHE_HOME=/app/.cache \
     PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
 
-RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.12.0 \
+RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 \
     && mkdir -p /app/.cache/npm
 
 RUN NPM_CONFIG_CACHE=/app/.cache/npm \
@@ -105,7 +105,8 @@ RUN for i in 1 2 3; do \
   && for i in 1 2 3; do \
     apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
     done \
-  && npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 \
+  && apk upgrade --no-cache nodejs \
+  && npm install -g npm@latest tar@7.5.8 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.1 diff@8.0.3 \
   && GLOBAL="$(npm root -g)" \
   && find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
@@ -115,6 +116,12 @@ RUN for i in 1 2 3; do \
      done \
   && find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+     done \
+  && find "$GLOBAL/npm" -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+     done \
+  && find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
      done \
   && npm cache clean --force
 
@@ -162,14 +169,20 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
 # npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
 # Patch every copy of tar, glob, and brace-expansion inside that tree.
 RUN GLOBAL="$(npm root -g)" && \
-    find /usr/lib -path "*/nodejs_wheel/*/node_modules/tar" -type d | while read d; do \
+    find /usr/lib -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
     done && \
-    find /usr/lib -path "*/nodejs_wheel/*/node_modules/glob" -type d | while read d; do \
+    find /usr/lib -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
     done && \
-    find /usr/lib -path "*/nodejs_wheel/*/node_modules/@isaacs/brace-expansion" -type d | while read d; do \
+    find /usr/lib -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    find /usr/lib -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+    done && \
+    find /usr/lib -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
     done
 
 # Permissions, cleanup, and Prisma prep
