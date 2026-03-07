@@ -1451,11 +1451,15 @@ def test_add_object_type_preserves_any_type_schema():
     assert schema["type"] == "object"
 
 
-def test_convert_anyof_preserves_any_type_members():
-    """Test convert_anyof_null_to_nullable does NOT coerce empty anyOf members to object."""
+def test_convert_anyof_pure_any_type_collapses_to_nullable_parent():
+    """
+    anyOf: [{}, null] means "any nullable value".
+    The empty schema {} (any-type) inside anyOf cannot receive nullable=True and be
+    sent to Gemini — Gemini rejects {"nullable": True} with no type field as an anyOf
+    entry. Instead we collapse the anyOf and set nullable=True on the parent.
+    """
     from litellm.llms.vertex_ai.common_utils import convert_anyof_null_to_nullable
 
-    # anyOf with empty schema and null — empty should be preserved
     schema = {
         "anyOf": [
             {},
@@ -1463,10 +1467,42 @@ def test_convert_anyof_preserves_any_type_members():
         ]
     }
     convert_anyof_null_to_nullable(schema)
-    # null should be removed, empty schema should be preserved (not coerced to object)
-    assert len(schema["anyOf"]) == 1
-    assert "type" not in schema["anyOf"][0] or schema["anyOf"][0].get("type") != "object"
-    assert schema["anyOf"][0].get("nullable") is True
+    # anyOf should be removed; parent gets nullable=True to represent "any nullable value"
+    assert "anyOf" not in schema
+    assert schema.get("nullable") is True
+
+
+def test_convert_anyof_drops_empty_schema_when_concrete_type_present():
+    """
+    Regression test for tool schemas with anyOf: [array, {}, null].
+    The bare {} (any-type) inside anyOf must be dropped — Gemini rejects
+    {"nullable": True} with no type field. The concrete array type should
+    remain with nullable=True.
+
+    Broken by da941e4261c5 (preserve type schema semantics for JsonValue fields).
+    """
+    from litellm.llms.vertex_ai.common_utils import convert_anyof_null_to_nullable
+
+    schema = {
+        "properties": {
+            "callbacks": {
+                "anyOf": [
+                    {"items": {}, "type": "array"},
+                    {},
+                    {"type": "null"},
+                ]
+            }
+        }
+    }
+    convert_anyof_null_to_nullable(schema)
+
+    callbacks_anyof = schema["properties"]["callbacks"]["anyOf"]
+    # {} and {"type": "null"} should both be gone; only the array entry remains
+    assert len(callbacks_anyof) == 1
+    assert callbacks_anyof[0].get("type") == "array"
+    assert callbacks_anyof[0].get("nullable") is True
+    # empty items should have been stripped too
+    assert "items" not in callbacks_anyof[0]
 
 
 def test_build_vertex_schema_jsonvalue():
