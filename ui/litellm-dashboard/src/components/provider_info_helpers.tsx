@@ -371,11 +371,19 @@ export const getPlaceholder = (selectedProvider: string): string => {
   }
 };
 
+// Typed as enum keys so renames cause compile-time errors (values can't be used since e.g. OpenAI_Compatible resolves to a display string, not the provider_map key)
+const _providersRequiringPrefix: (keyof typeof Providers)[] = ["Azure", "OpenAI_Compatible", "OpenAI_Text_Compatible"];
+const providersRequiringPrefix = new Set<string>(_providersRequiringPrefix);
+
+export const prefixWithProvider = (provider: string, modelName: string): string => {
+  if (!providersRequiringPrefix.has(provider)) return modelName;
+  const prefix = provider_map[provider];
+  return prefix ? `${prefix}/${modelName}` : modelName;
+};
+
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
   let providerKey = provider;
-  console.log(`Provider key: ${providerKey}`);
   let custom_llm_provider = provider_map[providerKey];
-  console.log(`Provider mapped to: ${custom_llm_provider}`);
 
   let providerModels: Array<string> = [];
 
