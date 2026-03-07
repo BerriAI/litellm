@@ -479,16 +479,18 @@ def _build_aggregated_sql_query(
     timezone_offset_minutes: Optional[int] = None,
     include_entity_id: bool = False,
 ) -> Tuple[str, List[Any]]:
-    """Build a parameterized SQL GROUP BY query for aggregated daily activity.
+    """Build a parameterized SQL query for aggregated daily activity.
 
-    Groups by (date, api_key, model, model_group, custom_llm_provider,
-    mcp_namespaced_tool_name, endpoint) with SUMs on all metric columns.
+    Uses a plain SELECT (no GROUP BY) because the table's unique constraint
+    already ensures near-uniqueness across (entity_id, date, api_key, model,
+    custom_llm_provider, mcp_namespaced_tool_name, endpoint). Skipping the
+    GROUP BY avoids the expensive hash/sort aggregation step in PostgreSQL,
+    which is essentially a no-op on these tables.
 
-    When include_entity_id is False (default), the entity_id column is omitted
-    from GROUP BY to collapse rows across entities.
+    The Python _aggregate_spend_records function handles the final rollup.
 
-    When include_entity_id is True, the entity_id column is included in both
-    SELECT and GROUP BY, preserving per-entity breakdown in the results.
+    When include_entity_id is True, the entity_id column is included in SELECT
+    to preserve per-entity breakdown in the results.
 
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
@@ -556,7 +558,6 @@ def _build_aggregated_sql_query(
     where_clause = " AND ".join(sql_conditions)
 
     entity_select = f'"{entity_id_field}",' if include_entity_id else ""
-    entity_group_by = f'"{entity_id_field}",' if include_entity_id else ""
 
     sql_query = f"""
         SELECT
@@ -568,18 +569,16 @@ def _build_aggregated_sql_query(
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
-            SUM(spend)::float AS spend,
-            SUM(prompt_tokens)::bigint AS prompt_tokens,
-            SUM(completion_tokens)::bigint AS completion_tokens,
-            SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
-            SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
-            SUM(api_requests)::bigint AS api_requests,
-            SUM(successful_requests)::bigint AS successful_requests,
-            SUM(failed_requests)::bigint AS failed_requests
+            spend::float AS spend,
+            prompt_tokens::bigint AS prompt_tokens,
+            completion_tokens::bigint AS completion_tokens,
+            cache_read_input_tokens::bigint AS cache_read_input_tokens,
+            cache_creation_input_tokens::bigint AS cache_creation_input_tokens,
+            api_requests::bigint AS api_requests,
+            successful_requests::bigint AS successful_requests,
+            failed_requests::bigint AS failed_requests
         FROM "{pg_table}"
         WHERE {where_clause}
-        GROUP BY {entity_group_by} date, api_key, model, model_group, custom_llm_provider,
-                 mcp_namespaced_tool_name, endpoint
         ORDER BY date DESC
     """
 
