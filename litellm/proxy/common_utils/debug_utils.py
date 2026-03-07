@@ -43,7 +43,9 @@ configure_gc_thresholds()
 
 
 @router.get("/debug/asyncio-tasks")
-async def get_active_tasks_stats():
+async def get_active_tasks_stats(
+    _: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Returns:
       total_active_tasks: int
@@ -97,7 +99,9 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
     tracemalloc.start(10)
 
     @router.get("/memory-usage", include_in_schema=False)
-    async def memory_usage():
+    async def memory_usage(
+        _: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
         # Take a snapshot of the current memory usage
         snapshot = tracemalloc.take_snapshot()
         top_stats = snapshot.statistics("lineno")
@@ -670,7 +674,9 @@ async def configure_gc_thresholds_endpoint(
 
 
 @router.get("/otel-spans", include_in_schema=False)
-async def get_otel_spans():
+async def get_otel_spans(
+    _: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     from litellm.proxy.proxy_server import open_telemetry_logger
 
     if open_telemetry_logger is None:
