@@ -220,7 +220,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return input_items, instructions
 
-    def _map_optional_params_to_responses_api_request(
+    def _map_optional_params_to_responses_api_request(  # noqa: PLR0915
         self,
         optional_params: dict,
         responses_api_request: "ResponsesAPIOptionalRequestParams",

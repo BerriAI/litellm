@@ -723,6 +723,21 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                     atype.pop("items")
                 atype["nullable"] = True
 
+        # If only one variant remains after removing null, unwrap anyOf and merge sibling fields
+        # This preserves fields like 'default', 'examples', 'pattern' that would otherwise be
+        # stripped by _filter_anyof_fields. See https://github.com/BerriAI/litellm/issues/19255
+        if len(anyof) == 1:
+            single_variant = anyof[0]
+            # Collect sibling fields (everything except 'anyOf')
+            siblings = {k: v for k, v in schema.items() if k != "anyOf"}
+            # Clear the schema and replace with merged content
+            schema.clear()
+            # Start with sibling metadata, then let variant fields override
+            # so core schema-defining fields (type, enum, etc.) from the
+            # variant are never silently clobbered by siblings.
+            schema.update(siblings)
+            schema.update(single_variant)
+
     properties = schema.get("properties", None)
     if properties is not None:
         for name, value in properties.items():
