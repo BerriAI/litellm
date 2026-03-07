@@ -56,7 +56,13 @@ class TestModelsLabImageGenerationConfig:
         assert "n" in params
         assert "size" in params
 
-    def test_validate_environment_raises_without_api_key(self):
+    @patch(
+        "litellm.llms.modelslab.image_generation.transformation.get_secret_str",
+        return_value=None,
+    )
+    def test_validate_environment_raises_without_api_key(self, _mock_secret):
+        # Patch get_secret_str so the test is deterministic even if
+        # MODELSLAB_API_KEY happens to be set in the environment.
         with pytest.raises(ValueError) as exc_info:
             self.config.validate_environment(
                 headers={},

@@ -99,7 +99,13 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
             if k not in optional_params.keys():
                 if k in supported_params:
                     if k == "n":
-                        optional_params["samples"] = non_default_params[k]
+                        n_val = int(non_default_params[k])
+                        if not (1 <= n_val <= 4):
+                            raise ValueError(
+                                f"ModelsLab supports 1–4 samples (n), got {n_val}. "
+                                f"Please pass a value between 1 and 4."
+                            )
+                        optional_params["samples"] = n_val
                     elif k == "negative_prompt":
                         optional_params["negative_prompt"] = non_default_params[k]
                     elif k == "size":
@@ -410,7 +416,7 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
 
         if status == "processing":
             generation_id = response_data.get("id")
-            if not generation_id:
+            if generation_id is None:
                 raise self.get_error_class(
                     error_message="ModelsLab returned 'processing' without a generation ID",
                     status_code=raw_response.status_code,
@@ -491,7 +497,7 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
 
         if status == "processing":
             generation_id = response_data.get("id")
-            if not generation_id:
+            if generation_id is None:
                 raise self.get_error_class(
                     error_message="ModelsLab returned 'processing' without a generation ID",
                     status_code=raw_response.status_code,
