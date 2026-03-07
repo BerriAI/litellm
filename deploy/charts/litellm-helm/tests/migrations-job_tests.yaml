@@ -125,3 +125,80 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: DATABASE_URL
+
+  - it: should not render volumeMounts or volumes when readOnlyRootFilesystem is false and no volumeMounts are set
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      securityContext:
+        readOnlyRootFilesystem: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: should render tmp/cache/npm volumeMounts and volumes when readOnlyRootFilesystem is true
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      securityContext:
+        readOnlyRootFilesystem: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: cache
+            mountPath: /.cache
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: npm
+            mountPath: /.npm
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tmp
+            emptyDir:
+              sizeLimit: 500Mi
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: cache
+            emptyDir:
+              sizeLimit: 500Mi
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: npm
+            emptyDir:
+              sizeLimit: 500Mi
+
+  - it: should include both readOnlyRootFilesystem mounts and user-defined volumeMounts when both are set
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      securityContext:
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - name: custom-mount
+          mountPath: /custom
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-mount
+            mountPath: /custom
