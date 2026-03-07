@@ -46,7 +46,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
         # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
-        if self.is_model_gpt_5_1_model(model) and not self.is_model_gpt_5_2_model(model):
+        if self._supports_reasoning_effort_level(model, "none") and not self.is_model_gpt_5_2_model(model):
             params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
         elif self.is_model_gpt_5_2_model(model):
             azure_supported_params = ["logprobs", "top_logprobs"]
@@ -69,9 +69,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
         # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
-        is_gpt_5_1 = self.is_model_gpt_5_1_model(model)
+        supports_none = self._supports_reasoning_effort_level(model, "none")
 
-        if reasoning_effort_value == "none" and not is_gpt_5_1:
+        if reasoning_effort_value == "none" and not supports_none:
             if litellm.drop_params is True or (
                 drop_params is not None and drop_params is True
             ):
@@ -101,8 +101,8 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             drop_params=drop_params,
         )
 
-        # Only drop reasoning_effort='none' for non-gpt-5.1/5.2/5.4 models
-        if result.get("reasoning_effort") == "none" and not is_gpt_5_1:
+        # Only drop reasoning_effort='none' for models that don't support it
+        if result.get("reasoning_effort") == "none" and not supports_none:
             result.pop("reasoning_effort")
 
         return result

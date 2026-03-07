@@ -140,6 +140,14 @@ class AgentRegistry:
                     agent_copy, None, prisma_client
                 )
 
+            # Serialize static_headers
+            static_headers_obj = agent.get("static_headers")
+            static_headers_val: Optional[str] = (
+                safe_dumps(dict(static_headers_obj)) if static_headers_obj else None
+            )
+
+            extra_headers_val: Optional[List[str]] = agent.get("extra_headers")
+
             create_data: Dict[str, Any] = {
                 "agent_name": agent_name,
                 "litellm_params": litellm_params,
@@ -149,6 +157,10 @@ class AgentRegistry:
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
+            if static_headers_val is not None:
+                create_data["static_headers"] = static_headers_val
+            if extra_headers_val is not None:
+                create_data["extra_headers"] = extra_headers_val
             if object_permission_id is not None:
                 create_data["object_permission_id"] = object_permission_id
 
@@ -248,6 +260,16 @@ class AgentRegistry:
             ):
                 if rate_field in agent:
                     update_data[rate_field] = agent.get(rate_field)
+            if "static_headers" in agent:
+                headers_value = agent.get("static_headers")
+                update_data["static_headers"] = safe_dumps(
+                    dict(headers_value) if headers_value is not None else {}
+                )
+            if "extra_headers" in agent:
+                extra_headers_value = agent.get("extra_headers")
+                update_data["extra_headers"] = (
+                    extra_headers_value if extra_headers_value is not None else []
+                )
             if agent.get("object_permission") is not None:
                 agent_copy = dict(augment_agent)
                 existing_object_permission_id = existing_agent.get(
@@ -317,10 +339,21 @@ class AgentRegistry:
                 )
             agent_card_params: str = safe_dumps(agent_card_params_dict)
 
+            # Serialize static_headers for update
+            static_headers_obj_u = agent.get("static_headers")
+            static_headers_val_u: str = (
+                safe_dumps(dict(static_headers_obj_u))
+                if static_headers_obj_u is not None
+                else safe_dumps({})
+            )
+            extra_headers_val_u: List[str] = agent.get("extra_headers") or []
+
             update_data: Dict[str, Any] = {
                 "agent_name": agent_name,
                 "litellm_params": litellm_params,
                 "agent_card_params": agent_card_params,
+                "static_headers": static_headers_val_u,
+                "extra_headers": extra_headers_val_u,
                 "updated_by": updated_by,
                 "updated_at": datetime.now(timezone.utc),
             }

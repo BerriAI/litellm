@@ -1088,6 +1088,34 @@ async def test_prepare_key_update_data_duration_never_expires():
 
 
 @pytest.mark.asyncio
+async def test_prepare_key_update_data_duration_none_never_expires():
+    """Test that duration=None sets expires to None (never expires)."""
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=False,
+        rotation_interval=None,
+        metadata={},
+    )
+
+    update_request = UpdateKeyRequest(key="test-token", duration=None)
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    assert result["expires"] is None
+
+
+@pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_team_id():
     """
     Test that validate_team_id_used_in_service_account_request raises HTTPException
@@ -6432,6 +6460,8 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("valid/alias")
         _validate_key_alias_format("a" * 255)
         _validate_key_alias_format("my-key-123")
+        _validate_key_alias_format("user/user@example.com")
+        _validate_key_alias_format("team/user@example.com")
 
     def test_validate_key_alias_format_invalid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
@@ -6444,7 +6474,7 @@ class TestValidateKeyAliasFormat:
             "!",              # special char
             "-start",         # non-alphanumeric start
             "end-",           # non-alphanumeric end
-            "invalid@char",   # invalid char
+            "invalid#char",   # invalid char
             "a" * 256,        # too long
             "  leading",
             "trailing  ",
