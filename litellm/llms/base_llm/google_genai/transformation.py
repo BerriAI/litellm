@@ -12,14 +12,14 @@ if TYPE_CHECKING:
         GenerateContentResponse,
         ToolConfigDict,
     )
+    from litellm.types.router import GenericLiteLLMParams
 else:
     GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
+    GenericLiteLLMParams = Any
     LiteLLMLoggingObj = Any
     ToolConfigDict = Any
-    
-from litellm.types.router import GenericLiteLLMParams
 
 
 class BaseGoogleGenAIGenerateContentConfig(ABC):

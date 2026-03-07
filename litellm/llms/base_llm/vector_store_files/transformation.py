@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_store_files import (
     VectorStoreFileAuthCredentials,
     VectorStoreFileChunkingStrategy,
@@ -18,12 +17,14 @@ from litellm.types.vector_store_files import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.types.router import GenericLiteLLMParams
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseLLMException = _BaseLLMException
 else:
+    GenericLiteLLMParams = Any
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
 

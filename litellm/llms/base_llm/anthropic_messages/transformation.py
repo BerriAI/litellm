@@ -6,14 +6,14 @@ import httpx
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
-from litellm.types.router import GenericLiteLLMParams
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
+    from litellm.types.router import GenericLiteLLMParams
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
+    GenericLiteLLMParams = Any
     LiteLLMLoggingObj = Any
 
 
