@@ -1,6 +1,5 @@
 export const SENSITIVE_FIELDS = new Set([
   "vault_token",
-  "approle_role_id",
   "approle_secret_id",
   "client_key",
 ]);
