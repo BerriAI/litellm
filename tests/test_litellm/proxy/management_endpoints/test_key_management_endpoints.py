@@ -6727,3 +6727,118 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_non_admin_auto_assigns_user_id(monkeypatch):
+    """
+    Test that when a non-admin caller generates a key without specifying user_id,
+    the caller's own user_id is auto-assigned. This prevents budget bypass by ensuring
+    keys are always attributed to their creator.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123",
+            litellm_budget_table=None,
+            object_permission=None,
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123",
+            litellm_budget_table=None,
+            object_permission=None,
+        )
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+
+    data = GenerateKeyRequest()  # No user_id provided
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-caller-key",
+        user_id="caller-user-123",
+    )
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    response = await generate_key_fn(data=data, user_api_key_dict=caller)
+
+    # Verify the insert was called with the caller's user_id
+    insert_call_kwargs = mock_prisma_client.insert_data.call_args
+    inserted_data = insert_call_kwargs.kwargs.get("data", insert_call_kwargs[1].get("data", {})) if insert_call_kwargs.kwargs else insert_call_kwargs[1].get("data", {})
+    assert inserted_data.get("user_id") == "caller-user-123", (
+        f"Expected user_id to be auto-assigned to 'caller-user-123', got {inserted_data.get('user_id')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_key_admin_allows_null_user_id(monkeypatch):
+    """
+    Test that admin callers can still generate keys without user_id.
+    Admins are trusted and should not have user_id auto-assigned.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123",
+            litellm_budget_table=None,
+            object_permission=None,
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123",
+            litellm_budget_table=None,
+            object_permission=None,
+        )
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+
+    data = GenerateKeyRequest()  # No user_id provided
+    admin_caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin-key",
+        user_id="admin-user-456",
+    )
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    response = await generate_key_fn(data=data, user_api_key_dict=admin_caller)
+
+    # Verify the insert was called without user_id being auto-assigned
+    insert_call_kwargs = mock_prisma_client.insert_data.call_args
+    inserted_data = insert_call_kwargs.kwargs.get("data", insert_call_kwargs[1].get("data", {})) if insert_call_kwargs.kwargs else insert_call_kwargs[1].get("data", {})
+    assert inserted_data.get("user_id") is None, (
+        f"Expected user_id to remain None for admin, got {inserted_data.get('user_id')}"
+    )
