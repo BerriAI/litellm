@@ -632,9 +632,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 
         if general_settings.get("enable_oauth2_auth", False) is True:
-            # Only apply OAuth2 M2M authentication to LLM API routes, not UI/management routes
+            # Only apply OAuth2 M2M authentication to LLM API routes and info routes, not UI/management routes
             # This allows UI SSO to work separately from API M2M authentication
-            if RouteChecks.is_llm_api_route(route=route):
+            # Note: Info routes are already scoped to the user
+            if RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route):
                 # return UserAPIKeyAuth object
                 # helper to check if the api_key is a valid oauth2 token
                 from litellm.proxy.proxy_server import premium_user
