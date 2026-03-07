@@ -2,6 +2,7 @@ import json
 from typing import Any, List, Literal, Optional, Tuple
 
 import litellm
+from litellm.llms.vertex_ai.batches.utils import get_vertex_ai_batch_output_with_custom_id
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, ModelInfo, Usage
@@ -203,7 +204,10 @@ async def _get_batch_output_file_content_as_dictionary(
     )
 
     if custom_llm_provider == "vertex_ai":
-        raise ValueError("Vertex AI does not support file content retrieval")
+        return await get_vertex_ai_batch_output_with_custom_id(
+            batch=batch,
+            litellm_params=litellm_params,
+        )
 
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
