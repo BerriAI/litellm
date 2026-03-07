@@ -7,7 +7,7 @@ import contextvars
 import json
 import os
 from pathlib import PurePosixPath
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
@@ -113,6 +113,62 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
             return base_url
     
     return ""
+
+
+def _resolve_ref(
+    param: Dict[str, Any], component_params: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Resolve a single parameter, following a $ref if present.
+
+    Returns the resolved param dict, or None if the $ref target is absent from
+    components (so callers can skip/filter it rather than propagating a stub
+    with name=None that would corrupt deduplication).
+    """
+    ref = param.get("$ref", "")
+    if not ref.startswith("#/components/parameters/"):
+        return param
+    return component_params.get(ref.split("/")[-1])
+
+
+def _resolve_param_list(
+    raw: List[Dict[str, Any]], component_params: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Resolve $refs in a parameter list, dropping any unresolvable entries."""
+    result = []
+    for p in raw:
+        resolved = _resolve_ref(p, component_params)
+        if resolved is not None and resolved.get("name"):
+            result.append(resolved)
+    return result
+
+
+def resolve_operation_params(
+    operation: Dict[str, Any],
+    path_item: Dict[str, Any],
+    components: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return a copy of *operation* with fully-resolved, merged parameters.
+
+    Handles two common patterns in real-world OpenAPI specs:
+
+    1. **$ref parameters** — ``{"$ref": "#/components/parameters/per-page"}``
+       instead of inline objects.  Each ref is resolved against
+       ``components["parameters"]``; unresolvable refs are silently dropped so
+       they cannot corrupt the deduplication set with ``(None, None)`` keys.
+
+    2. **Path-level parameters** — params defined on the path item that apply
+       to every HTTP method on that path (e.g. ``owner``, ``repo``).  They are
+       merged with the operation-level params; operation-level wins when the
+       same ``name`` + ``in`` combination appears in both.
+    """
+    component_params = components.get("parameters", {})
+    path_level = _resolve_param_list(path_item.get("parameters", []), component_params)
+    op_level = _resolve_param_list(operation.get("parameters", []), component_params)
+    op_keys = {(p["name"], p.get("in")) for p in op_level}
+    merged = [p for p in path_level if (p["name"], p.get("in")) not in op_keys] + op_level
+    result = dict(operation)
+    result["parameters"] = merged
+    return result
 
 
 def extract_parameters(operation: Dict[str, Any]) -> tuple:
