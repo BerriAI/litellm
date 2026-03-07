@@ -86,17 +86,18 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
   });
-  const totalCount = keys?.total_count || 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   // Use the filter logic hook
 
-  const { filters, filteredKeys, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
+  const { filters, filteredKeys, filteredTotalCount, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
     useFilterLogic({
       keys: keys?.keys || [],
       teams,
       organizations,
     });
+
+  const totalCount = filteredTotalCount ?? keys?.total_count ?? 0;
 
   // Add a useEffect to call refresh when a key is created
   useEffect(() => {
@@ -209,7 +210,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     },
     {
       id: "organization_id",
-      accessorKey: "organization_id",
+      accessorKey: "org_id",
       header: "Organization ID",
       size: 140,
       enableSorting: false,

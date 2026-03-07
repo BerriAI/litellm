@@ -686,6 +686,48 @@ class TestTransformListInputItemsRequest:
         # Assert
         assert "include" not in params  # Empty list should not be included
 
+    def test_openai_transform_compact_response_api_request_query_params_preserved(self):
+        """Test compact URL construction preserves query params and appends path."""
+        # Setup
+        azure_style_api_base = (
+            "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+        )
+
+        # Execute
+        url, data = self.openai_config.transform_compact_response_api_request(
+            model="gpt-5.2-codex",
+            input="hello",
+            response_api_optional_request_params={},
+            api_base=azure_style_api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
+        # Assert
+        assert (
+            url
+            == "https://test.openai.azure.com/openai/responses/compact?api-version=2024-05-01-preview"
+        )
+        assert data["model"] == "gpt-5.2-codex"
+        assert data["input"] == "hello"
+
+    def test_openai_transform_compact_response_api_request_path_without_query(self):
+        """Test compact URL construction for base URL without query params."""
+        # Execute
+        url, data = self.openai_config.transform_compact_response_api_request(
+            model="gpt-4o",
+            input="hello",
+            response_api_optional_request_params={},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
+        # Assert
+        assert url == "https://api.openai.com/v1/responses/compact"
+        assert data["model"] == "gpt-4o"
+        assert data["input"] == "hello"
+
     def test_azure_transform_list_input_items_request_minimal(self):
         """Test Azure implementation with minimal parameters"""
         # Setup

@@ -190,7 +190,7 @@ vi.mock("../networking", () => ({
     soft_budget: null,
   }),
   fetchMCPAccessGroups: vi.fn().mockResolvedValue([]),
-  getAgentsList: vi.fn().mockResolvedValue([]),
+  getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
@@ -221,6 +221,20 @@ vi.mock("../shared/numerical_input", () => ({ default: () => null }));
 vi.mock("../vector_store_management/VectorStoreSelector", () => ({ default: () => null }));
 vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: (model: string) => model,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
+  useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+}));
+
+vi.mock("../common_components/ProjectDropdown", () => ({
+  default: ({ value, onChange }: { value?: string; onChange?: (v: string) => void }) => (
+    <input
+      data-testid="project-dropdown"
+      value={value || ""}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
+  ),
 }));
 
 vi.mock("../common_components/AccessGroupSelector", () => ({

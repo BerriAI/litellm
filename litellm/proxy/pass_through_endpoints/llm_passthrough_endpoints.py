@@ -2086,6 +2086,93 @@ class BaseOpenAIPassThroughHandler:
         return joined_path_str
 
 
+@router.api_route(
+    "/cursor/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Cursor Pass-through", "pass-through"],
+)
+async def cursor_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Pass-through endpoint for the Cursor Cloud Agents API.
+
+    Supports all Cursor Cloud Agents endpoints:
+    - GET    /v0/agents         — List agents
+    - POST   /v0/agents         — Launch an agent
+    - GET    /v0/agents/{id}    — Agent status
+    - GET    /v0/agents/{id}/conversation — Agent conversation
+    - POST   /v0/agents/{id}/followup    — Add follow-up
+    - POST   /v0/agents/{id}/stop        — Stop an agent
+    - DELETE /v0/agents/{id}    — Delete an agent
+    - GET    /v0/me             — API key info
+    - GET    /v0/models         — List models
+    - GET    /v0/repositories   — List GitHub repositories
+
+    Uses Basic Authentication (base64-encoded `API_KEY:`).
+
+    Credential lookup order:
+    1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)
+    2. litellm.credential_list (credentials added via UI)
+    3. CURSOR_API_KEY environment variable
+    """
+    import base64
+
+    base_target_url = os.getenv("CURSOR_API_BASE") or "https://api.cursor.com"
+
+    cursor_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="cursor",
+        region_name=None,
+    )
+
+    if cursor_api_key is None:
+        for credential in litellm.credential_list:
+            if (
+                credential.credential_info
+                and credential.credential_info.get("custom_llm_provider") == "cursor"
+            ):
+                cursor_api_key = credential.credential_values.get("api_key")
+                credential_api_base = credential.credential_values.get("api_base")
+                if credential_api_base:
+                    base_target_url = credential_api_base
+                break
+
+    if cursor_api_key is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Cursor API key not found. Add Cursor credentials via the UI (Models + Endpoints → LLM Credentials) or set CURSOR_API_KEY environment variable.",
+        )
+
+    encoded_endpoint = httpx.URL(endpoint).path
+
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+
+    auth_value = base64.b64encode(
+        f"{cursor_api_key}:".encode("utf-8")
+    ).decode("ascii")
+
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={"Authorization": f"Basic {auth_value}"},
+        custom_llm_provider="cursor",
+    )
+    received_value = await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+    )
+
+    return received_value
+
+
 async def vertex_ai_live_websocket_passthrough(
     websocket: WebSocket,
     model: Optional[str] = None,
