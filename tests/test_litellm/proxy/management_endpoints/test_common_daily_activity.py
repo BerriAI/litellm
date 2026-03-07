@@ -473,43 +473,10 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
 
 
 class TestBuildAggregatedSqlQuery:
-    """Tests for _build_aggregated_sql_query to verify the plain SELECT (no GROUP BY) approach."""
+    """Tests for _build_aggregated_sql_query conditional GROUP BY behavior."""
 
-    def test_basic_query_no_group_by(self):
-        """Verify the query uses plain SELECT without GROUP BY."""
-        sql, params = _build_aggregated_sql_query(
-            table_name="litellm_dailyteamspend",
-            entity_id_field="team_id",
-            entity_id=None,
-            start_date="2024-01-01",
-            end_date="2024-01-31",
-            model=None,
-            api_key=None,
-        )
-        assert "GROUP BY" not in sql
-        assert "SUM(" not in sql
-        assert "ORDER BY date DESC" in sql
-        assert '"LiteLLM_DailyTeamSpend"' in sql
-        assert params == ["2024-01-01", "2024-01-31"]
-
-    def test_query_selects_columns_directly(self):
-        """Verify metric columns are selected with casts, not aggregated."""
-        sql, _ = _build_aggregated_sql_query(
-            table_name="litellm_dailyteamspend",
-            entity_id_field="team_id",
-            entity_id=None,
-            start_date="2024-01-01",
-            end_date="2024-01-31",
-            model=None,
-            api_key=None,
-        )
-        assert "spend::float AS spend" in sql
-        assert "prompt_tokens::bigint AS prompt_tokens" in sql
-        assert "completion_tokens::bigint AS completion_tokens" in sql
-        assert "api_requests::bigint AS api_requests" in sql
-
-    def test_include_entity_id_true(self):
-        """When include_entity_id=True, entity column should appear in SELECT."""
+    def test_include_entity_id_true_no_group_by(self):
+        """When include_entity_id=True, skip GROUP BY (it's a no-op on unique constraint)."""
         sql, params = _build_aggregated_sql_query(
             table_name="litellm_dailyteamspend",
             entity_id_field="team_id",
@@ -520,11 +487,34 @@ class TestBuildAggregatedSqlQuery:
             api_key=None,
             include_entity_id=True,
         )
-        assert '"team_id",' in sql
         assert "GROUP BY" not in sql
+        assert "SUM(" not in sql
+        assert '"team_id",' in sql
+        assert "spend::float AS spend" in sql
+        assert "ORDER BY date DESC" in sql
+        assert '"LiteLLM_DailyTeamSpend"' in sql
+        assert params == ["2024-01-01", "2024-01-31"]
 
-    def test_include_entity_id_false(self):
-        """When include_entity_id=False (default), entity column should not appear."""
+    def test_include_entity_id_false_uses_group_by(self):
+        """When include_entity_id=False (default), use GROUP BY to collapse across entities."""
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            include_entity_id=False,
+        )
+        assert "GROUP BY" in sql
+        assert "SUM(spend)" in sql
+        assert '"team_id",' not in sql
+        assert "ORDER BY date DESC" in sql
+        assert params == ["2024-01-01", "2024-01-31"]
+
+    def test_group_by_excludes_model_group(self):
+        """GROUP BY should not include model_group (uses MAX instead)."""
         sql, _ = _build_aggregated_sql_query(
             table_name="litellm_dailyteamspend",
             entity_id_field="team_id",
@@ -535,7 +525,27 @@ class TestBuildAggregatedSqlQuery:
             api_key=None,
             include_entity_id=False,
         )
-        assert '"team_id",' not in sql
+        assert "MAX(model_group)" in sql
+        # model_group should not appear in GROUP BY clause
+        group_by_clause = sql.split("GROUP BY")[1].split("ORDER BY")[0]
+        assert "model_group" not in group_by_clause
+
+    def test_include_entity_id_true_selects_columns_directly(self):
+        """With include_entity_id=True, metric columns are selected directly (no SUM)."""
+        sql, _ = _build_aggregated_sql_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            include_entity_id=True,
+        )
+        assert "spend::float AS spend" in sql
+        assert "prompt_tokens::bigint AS prompt_tokens" in sql
+        assert "completion_tokens::bigint AS completion_tokens" in sql
+        assert "api_requests::bigint AS api_requests" in sql
 
     def test_entity_id_single_value_filter(self):
         """Single entity_id value should produce an = condition."""
@@ -689,7 +699,7 @@ class TestBuildAggregatedSqlQuery:
             )
 
     def test_all_table_names_supported(self):
-        """All known table names should produce valid queries."""
+        """All known table names should produce valid queries in both modes."""
         tables = [
             ("litellm_dailyuserspend", "user_id", "LiteLLM_DailyUserSpend"),
             ("litellm_dailyteamspend", "team_id", "LiteLLM_DailyTeamSpend"),
@@ -703,7 +713,8 @@ class TestBuildAggregatedSqlQuery:
             ("litellm_dailytagspend", "tag", "LiteLLM_DailyTagSpend"),
         ]
         for table_name, entity_field, pg_table in tables:
-            sql, params = _build_aggregated_sql_query(
+            # include_entity_id=True: no GROUP BY
+            sql, _ = _build_aggregated_sql_query(
                 table_name=table_name,
                 entity_id_field=entity_field,
                 entity_id=None,
@@ -711,6 +722,21 @@ class TestBuildAggregatedSqlQuery:
                 end_date="2024-01-31",
                 model=None,
                 api_key=None,
+                include_entity_id=True,
             )
             assert f'FROM "{pg_table}"' in sql
             assert "GROUP BY" not in sql
+
+            # include_entity_id=False: uses GROUP BY
+            sql, _ = _build_aggregated_sql_query(
+                table_name=table_name,
+                entity_id_field=entity_field,
+                entity_id=None,
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                model=None,
+                api_key=None,
+                include_entity_id=False,
+            )
+            assert f'FROM "{pg_table}"' in sql
+            assert "GROUP BY" in sql
