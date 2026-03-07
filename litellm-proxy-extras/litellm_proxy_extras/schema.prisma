@@ -1147,7 +1147,6 @@ model LiteLLM_ToolTable {
   @@index([team_id])
 }
 
-// Per-(tool, team/key) policy overrides. When present, override replaces global tool policy for that scope.
 //Unified Access Groups table for storing unified access groups
 model LiteLLM_AccessGroupTable {
   access_group_id    String   @id @default(uuid())

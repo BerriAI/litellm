@@ -60,10 +60,15 @@ class TestOpenRouterResponsesAPIConfig:
         )
         assert headers["Authorization"] == "Bearer sk-or-test-key"
 
-    def test_validate_environment_raises_without_key(self):
+    def test_validate_environment_raises_without_key(self, monkeypatch):
         """validate_environment should raise when no API key is available."""
         config = OpenRouterResponsesAPIConfig()
         from litellm.types.router import GenericLiteLLMParams
+
+        # Clear any API keys that might be set in the environment
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OR_API_KEY", raising=False)
 
         try:
             config.validate_environment(

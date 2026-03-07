@@ -3069,13 +3069,13 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     loop_amount, chunk_value, expected_chunk_fail
 ):
     """
-    Test if InternalServerError raised if model enters infinite loop
+    Test if MidStreamFallbackError raised if model enters infinite loop
 
     Test if request passes if model loop is below accepted limit
     """
     litellm.set_verbose = False
     chunks = [
-        litellm.ModelResponse(
+        litellm.ModelResponseStream(
             **{
                 "id": "chatcmpl-123",
                 "object": "chat.completion.chunk",
@@ -3090,7 +3090,6 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
                     }
                 ],
             },
-            stream=True,
         )
     ] * loop_amount
     completion_stream = ModelResponseListIterator(model_responses=chunks)
@@ -3113,7 +3112,10 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
-        with pytest.raises(litellm.InternalServerError):
+        from litellm.exceptions import MidStreamFallbackError
+
+        # MidStreamFallbackError wraps InternalServerError when repeated chunks detected
+        with pytest.raises(MidStreamFallbackError):
             for chunk in response:
                 continue
     else:

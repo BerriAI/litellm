@@ -1644,6 +1644,37 @@ if MCP_AVAILABLE:
                 },
             )
 
+    async def _resolve_byok_auth(
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+    ) -> Optional[str]:
+        """Resolve BYOK credential for a server, returning the auth header to use."""
+        if not mcp_server.is_byok:
+            return mcp_auth_header
+        if not mcp_auth_header:
+            byok_cred = await _get_byok_credential(mcp_server, user_api_key_auth)
+            if byok_cred is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "byok_auth_required",
+                        "server_id": mcp_server.server_id,
+                        "server_name": mcp_server.server_name or mcp_server.name,
+                        "message": (
+                            "No stored credential found for this BYOK server. "
+                            "Complete the OAuth authorization flow to provide your API key."
+                        ),
+                    },
+                    headers={
+                        "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                    },
+                )
+            return byok_cred
+        # External auth header supplied; still enforce user-identity check.
+        await _check_byok_credential(mcp_server, user_api_key_auth)
+        return mcp_auth_header
+
     async def execute_mcp_tool(
         name: str,
         arguments: Dict[str, Any],
@@ -1733,30 +1764,10 @@ if MCP_AVAILABLE:
                     "mcp_tool_call_metadata"
                 ] = standard_logging_mcp_tool_call
 
-            # BYOK: retrieve the stored per-user credential.  A single DB call
-            # both checks existence and fetches the value, avoiding a double query.
-            if mcp_server.is_byok and not mcp_auth_header:
-                byok_cred = await _get_byok_credential(mcp_server, user_api_key_auth)
-                if byok_cred is None:
-                    raise HTTPException(
-                        status_code=401,
-                        detail={
-                            "error": "byok_auth_required",
-                            "server_id": mcp_server.server_id,
-                            "server_name": mcp_server.server_name or mcp_server.name,
-                            "message": (
-                                "No stored credential found for this BYOK server. "
-                                "Complete the OAuth authorization flow to provide your API key."
-                            ),
-                        },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
-                    )
-                mcp_auth_header = byok_cred
-            elif mcp_server.is_byok:
-                # External auth header supplied; still enforce user-identity check.
-                await _check_byok_credential(mcp_server, user_api_key_auth)
+            # BYOK: retrieve or validate the per-user credential
+            mcp_auth_header = await _resolve_byok_auth(
+                mcp_server, user_api_key_auth, mcp_auth_header
+            )
 
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
