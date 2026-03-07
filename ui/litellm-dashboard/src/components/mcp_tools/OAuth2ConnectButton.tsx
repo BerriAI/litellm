@@ -107,10 +107,15 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
     }
   };
 
-  // Clean up on unmount
+  // Clean up on unmount: stop polling and close any open popup so it doesn't
+  // stay open after the user navigates away from the page.
   useEffect(() => {
     return () => {
       stopPolling();
+      if (popupRef.current && !popupRef.current.closed) {
+        popupRef.current.close();
+      }
+      popupRef.current = null;
     };
   }, []);
 

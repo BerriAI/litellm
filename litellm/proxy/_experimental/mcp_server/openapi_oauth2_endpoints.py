@@ -59,6 +59,22 @@ router = APIRouter(tags=["mcp"])
 # ---------------------------------------------------------------------------
 
 
+def _get_callback_base_url(request: "Request") -> str:
+    """Return the base URL to use for the OAuth2 redirect_uri.
+
+    Prefers a statically-configured base URL (via the LITELLM_PROXY_BASE_URL
+    environment variable) over the request-derived URL to avoid trusting
+    potentially-spoofable X-Forwarded-Host headers in the OAuth2 security
+    context.  Falls back to the request-derived URL when the env var is unset.
+    """
+    import os
+
+    static_base = os.environ.get("LITELLM_PROXY_BASE_URL", "").rstrip("/")
+    if static_base:
+        return static_base
+    return get_request_base_url(request)
+
+
 def _purge_expired_states() -> None:
     now = time.time()
     expired = [k for k, v in _pending_oauth2_states.items() if v["expires_at"] < now]
@@ -206,7 +222,7 @@ async def openapi_oauth2_connect(
         "expires_at": timestamp + _STATE_TTL_SECONDS,
     }
 
-    base_url = get_request_base_url(request)
+    base_url = _get_callback_base_url(request)
     callback_url = f"{base_url}/v1/mcp/oauth2/callback"
 
     # NOTE: PKCE (RFC 7636 / OAuth 2.1) is not implemented here because this is
@@ -316,7 +332,7 @@ async def openapi_oauth2_callback(
             status_code=500,
         )
 
-    base_url = get_request_base_url(request)
+    base_url = _get_callback_base_url(request)
     callback_url = f"{base_url}/v1/mcp/oauth2/callback"
 
     token_request_data = {
