@@ -42,9 +42,9 @@ def _make_sse_bytes(text: str, index: int = 0) -> bytes:
     }
     delta_event = (
         b"event: content_block_delta\n"
-        b"data: " + json.dumps(delta_payload).encode() + b"\n"
+        b"data: " + json.dumps(delta_payload).encode()
     )
-    stop_event = b"event: message_stop\ndata: " + json.dumps({"type": "message_stop"}).encode() + b"\n"
+    stop_event = b"event: message_stop\ndata: " + json.dumps({"type": "message_stop"}).encode()
     return delta_event + b"\n\n" + stop_event + b"\n\n"
 
 

@@ -1077,6 +1077,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         yield chunk  # type: ignore[misc]
                     return
 
+                if all_bytes_chunks and all_chunks:
+                    verbose_proxy_logger.warning(
+                        "PII masking: mixed bytes (%d) and model (%d) chunks; "
+                        "bytes chunks passed through unmodified",
+                        len(all_bytes_chunks),
+                        len(all_chunks),
+                    )
+                    for chunk in all_bytes_chunks:
+                        yield chunk  # type: ignore[misc]
+
                 if not all_chunks:
                     return
 
