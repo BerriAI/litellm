@@ -310,3 +310,130 @@ def test_completion_cost_includes_web_search_without_standard_built_in_tools_par
 
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+class TestGetBuiltInToolsFromKwargs:
+    """Tests for get_built_in_tools_from_kwargs to ensure backwards compatibility."""
+
+    def test_empty_kwargs_returns_none(self):
+        """Empty dict should return (None, None)."""
+        result = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs({})
+        assert result == (None, None)
+
+    def test_kwargs_without_tools_or_web_search_returns_none(self):
+        """kwargs with unrelated keys should return (None, None)."""
+        kwargs = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+        result = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+        assert result == (None, None)
+
+    def test_direct_web_search_options_extracted(self):
+        """Direct web_search_options dict in kwargs should be extracted."""
+        kwargs = {"web_search_options": {"search_context_size": "medium"}}
+        web_search, file_search = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+
+        assert web_search is not None
+        assert isinstance(web_search, dict)
+        assert web_search.get("search_context_size") == "medium"
+        assert file_search is None
+
+    def test_web_search_tool_in_tools_list(self):
+        """web_search tool in tools list should be extracted."""
+        kwargs = {
+            "tools": [
+                {"type": "function", "function": {"name": "get_weather"}},
+                {"type": "web_search", "search_context_size": "low"},
+            ]
+        }
+        web_search, file_search = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+
+        assert web_search is not None
+        assert web_search.get("type") == "web_search"
+        assert file_search is None
+
+    def test_file_search_tool_in_tools_list(self):
+        """file_search tool in tools list should be extracted."""
+        kwargs = {
+            "tools": [
+                {"type": "function", "function": {"name": "get_weather"}},
+                {"type": "file_search", "max_results": 10},
+            ]
+        }
+        web_search, file_search = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+
+        assert web_search is None
+        assert file_search is not None
+        assert file_search.get("type") == "file_search"
+
+    def test_both_web_search_and_file_search_extracted(self):
+        """Both tool types should be extracted when present."""
+        kwargs = {
+            "tools": [
+                {"type": "web_search"},
+                {"type": "file_search"},
+                {"type": "function", "function": {"name": "calculate"}},
+            ]
+        }
+        web_search, file_search = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+
+        assert web_search is not None
+        assert file_search is not None
+
+    def test_only_function_tools_returns_none(self):
+        """Tools list with only function tools should return (None, None)."""
+        kwargs = {
+            "tools": [
+                {"type": "function", "function": {"name": "get_weather"}},
+                {"type": "function", "function": {"name": "send_email"}},
+            ]
+        }
+        result = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+        assert result == (None, None)
+
+    def test_non_dict_tools_skipped(self):
+        """Non-dict items in tools list should be skipped without error."""
+        kwargs = {
+            "tools": [
+                "not a dict",
+                None,
+                123,
+                {"type": "web_search"},
+            ]
+        }
+        web_search, file_search = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+
+        assert web_search is not None
+        assert web_search.get("type") == "web_search"
+
+    def test_web_search_preview_type_extracted(self):
+        """web_search_preview type should also be extracted as web_search."""
+        kwargs = {
+            "tools": [
+                {"type": "web_search_preview"},
+            ]
+        }
+        web_search, file_search = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+
+        assert web_search is not None
+        assert web_search.get("type") == "web_search_preview"
+
+    def test_direct_web_search_options_takes_precedence(self):
+        """Direct web_search_options should be used even if tools list has web_search."""
+        kwargs = {
+            "web_search_options": {"search_context_size": "high"},
+            "tools": [
+                {"type": "web_search", "search_context_size": "low"},
+            ]
+        }
+        web_search, file_search = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+
+        # Direct web_search_options should take precedence
+        assert web_search is not None
+        assert web_search.get("search_context_size") == "high"
+
+    def test_empty_web_search_options_dict_returns_web_search_options(self):
+        """An empty web_search_options dict should still produce WebSearchOptions (use defaults)."""
+        kwargs = {"web_search_options": {}}
+        web_search, file_search = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+
+        assert web_search is not None
+        assert file_search is None
