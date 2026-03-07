@@ -637,9 +637,9 @@ class TestAsyncPostCallSuccessHook:
         assert result == mock_response_with_tools
 
     async def test_no_blocking_when_service_returns_empty(self, handler, mock_response_with_tools):
-        """Test that response is unchanged when service returns no blocked tools."""
+        """Test that response is unchanged when service allows all tools."""
         mock_http_response = Mock()
-        mock_http_response.json.return_value = {"blockedTools": []}
+        mock_http_response.json.return_value = mock_response_with_tools.model_dump()
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_http_response)
@@ -891,6 +891,7 @@ class TestAsyncPostCallStreamingIteratorHook:
         assert result_chunk.choices[0].delta.tool_calls is not None
         assert len(result_chunk.choices[0].delta.tool_calls) == 1
         assert result_chunk.choices[0].delta.tool_calls[0].id == "call_B"
+        assert result_chunk.choices[0].delta.tool_calls[0].index == 0  # Re-indexed from original 1
         assert result_chunk.choices[0].delta.tool_calls[0].function.name == "allowed_tool"
 
         # Should have explanation content

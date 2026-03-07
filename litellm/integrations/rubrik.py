@@ -637,6 +637,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         allowed_tools, explanation = await self._get_allowed_tool_calls(tool_calls_by_index)
         choice: StreamingChoices = cast(StreamingChoices, chunk_template.choices[0])
 
+        # Re-index tools sequentially so clients see contiguous indices
+        for new_index, tool in enumerate(allowed_tools):
+            tool.index = new_index
+
         choice.delta = Delta(
             content=explanation,
             tool_calls=allowed_tools if allowed_tools else None,
