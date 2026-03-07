@@ -1711,3 +1711,34 @@ async def test_pii_tokens_in_metadata_used_for_unmasking():
     )
 
     assert response.choices[0].message.content == "Hello John, how can I help you?"
+
+
+@pytest.mark.parametrize(
+    "initial_hook",
+    ["pre_call", "during_call", "pre_mcp_call"],
+)
+def test_event_hook_auto_expansion_for_all_string_hooks(initial_hook):
+    """
+    Regression test: when output_parse_pii is True, the guardrail must add
+    'post_call' to event_hook regardless of the initial string hook value,
+    not just when it's 'pre_call'.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        event_hook=initial_hook,
+    )
+    assert isinstance(guardrail.event_hook, list)
+    assert initial_hook in guardrail.event_hook
+    assert "post_call" in guardrail.event_hook
+
+
+def test_event_hook_no_expansion_when_already_post_call():
+    """post_call alone should stay as-is — no expansion needed."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        event_hook="post_call",
+    )
+    # Should remain a string "post_call", not expanded to a list
+    assert guardrail.event_hook == "post_call"
