@@ -1319,6 +1319,47 @@ async def test_assistant_message_cache_control():
 
 
 @pytest.mark.asyncio
+async def test_assistant_message_cache_control_with_ttl_claude_45():
+    """Test cache_control TTL is preserved for Claude 4.5 Bedrock models."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": "Hi there!",
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        },
+    ]
+
+    model = "bedrock/anthropic.claude-sonnet-4.5-20250514-v1:0"
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model=model,
+        llm_provider="bedrock_converse",
+    )
+
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
+        )
+    )
+
+    assert result == async_result
+
+    assistant_content = result[1]["content"]
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
+    assert assistant_content[1]["cachePoint"]["ttl"] == "1h"
+
+
+@pytest.mark.asyncio
 async def test_assistant_message_list_content_cache_control():
     """Test assistant messages with list content and cache_control."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
