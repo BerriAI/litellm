@@ -768,16 +768,27 @@ async def get_ui_theme_settings():
     Note: This endpoint is public (no authentication required) so all users can see custom branding.
     Only the /update/ui_theme_settings endpoint requires authentication for admins to change settings.
     """
+    import os
+
     from litellm.proxy.proxy_server import proxy_config
 
     # Load existing config
     config = await proxy_config.get_config()
 
-    return await _get_settings_with_schema(
+    result = await _get_settings_with_schema(
         settings_key="ui_theme_config",
         settings_class=UIThemeConfig,
         config=config,
     )
+
+    # If logo_url is a local filesystem path (not an HTTP/HTTPS URL), the browser
+    # cannot load it directly as an image src. Null it out so the UI falls back to
+    # calling the /get_image endpoint, which reads UI_LOGO_PATH and serves the file.
+    logo_url = result["values"].get("logo_url")
+    if logo_url and not logo_url.startswith(("http://", "https://")):
+        result["values"]["logo_url"] = None
+
+    return result
 
 
 @router.patch(

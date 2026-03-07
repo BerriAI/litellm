@@ -4,6 +4,7 @@ import enum
 import importlib
 import inspect
 import io
+import mimetypes
 import os
 import random
 import secrets
@@ -11234,14 +11235,32 @@ async def get_image():
 
     cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
     cache_path = os.path.join(cache_dir, "cached_logo.jpg")
+    cache_type_path = os.path.join(cache_dir, "cached_logo_type.txt")
 
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
+    def _get_image_media_type(path: str) -> str:
+        media_type, _ = mimetypes.guess_type(path)
+        if media_type and media_type.startswith("image/"):
+            return media_type
+        return "image/jpeg"
+
+    def _read_cached_media_type() -> str:
+        if os.path.exists(cache_type_path):
+            try:
+                with open(cache_type_path) as f:
+                    cached_type = f.read().strip()
+                if cached_type.startswith("image/"):
+                    return cached_type
+            except OSError:
+                pass
+        return "image/jpeg"
+
     # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
     if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
         if os.path.exists(logo_path):
-            return FileResponse(logo_path, media_type="image/jpeg")
+            return FileResponse(logo_path, media_type=_get_image_media_type(logo_path))
         # Custom path doesn't exist — fall back to default
         verbose_proxy_logger.warning(
             f"UI_LOGO_PATH '{logo_path}' does not exist, falling back to default logo"
@@ -11250,7 +11269,7 @@ async def get_image():
 
     # [OPTIMIZATION] For HTTP URLs and default logo, check if the cached image exists
     if os.path.exists(cache_path):
-        return FileResponse(cache_path, media_type="image/jpeg")
+        return FileResponse(cache_path, media_type=_read_cached_media_type())
 
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
@@ -11269,8 +11288,22 @@ async def get_image():
                 with open(cache_path, "wb") as f:
                     f.write(response.content)
 
+                # Persist the upstream Content-Type so it survives restarts
+                content_type = (
+                    response.headers.get("content-type", "image/jpeg")
+                    .split(";")[0]
+                    .strip()
+                )
+                if not content_type.startswith("image/"):
+                    content_type = "image/jpeg"
+                try:
+                    with open(cache_type_path, "w") as f:
+                        f.write(content_type)
+                except OSError:
+                    pass
+
                 # Return the cached image as a FileResponse
-                return FileResponse(cache_path, media_type="image/jpeg")
+                return FileResponse(cache_path, media_type=content_type)
             else:
                 # Handle the case when the image cannot be downloaded
                 return FileResponse(default_logo, media_type="image/jpeg")
@@ -11280,7 +11313,7 @@ async def get_image():
             return FileResponse(default_logo, media_type="image/jpeg")
     else:
         # Return the local image file if the logo path is not an HTTP/HTTPS URL
-        return FileResponse(logo_path, media_type="image/jpeg")
+        return FileResponse(logo_path, media_type=_get_image_media_type(logo_path))
 
 
 @app.get("/get_favicon", include_in_schema=False)
