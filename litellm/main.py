@@ -252,6 +252,7 @@ from .types.utils import (
     FileTypes,
     HiddenParams,
     LlmProviders,
+    LlmProvidersSet,
     PromptTokensDetails,
     ProviderSpecificHeader,
     all_litellm_params,
@@ -1139,9 +1140,8 @@ def completion(  # type: ignore # noqa: PLR0915
     # normalize camelCase thinking keys (e.g. budgetTokens -> budget_tokens)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
 
-    ######### unpacking kwargs #####################
     args = locals()
-
+    ######### unpacking kwargs #####################
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
@@ -1427,9 +1427,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         provider_config: Optional[BaseConfig] = None
-        if custom_llm_provider is not None and custom_llm_provider in [
-            provider.value for provider in LlmProviders
-        ]:
+        if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -4369,9 +4367,11 @@ def completion(  # type: ignore # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
-            completion_kwargs=args,
+            completion_kwargs={"messages": messages},
             extra_kwargs=kwargs,
         )
+
+
 
 
 def completion_with_retries(*args, **kwargs):
