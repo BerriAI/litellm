@@ -515,6 +515,8 @@ async def aresponses(
 
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -781,6 +783,8 @@ def responses(
 
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -846,6 +850,8 @@ async def adelete_responses(
             response = init_response
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
@@ -941,6 +947,8 @@ def delete_responses(
 
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
@@ -1020,6 +1028,8 @@ async def aget_responses(
             )
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
@@ -1129,6 +1139,8 @@ def get_responses(
 
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
@@ -1191,6 +1203,8 @@ async def alist_input_items(
             response = init_response
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
@@ -1276,6 +1290,8 @@ def list_input_items(
 
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
@@ -1341,6 +1357,8 @@ async def acancel_responses(
             response = init_response
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
@@ -1436,6 +1454,8 @@ def cancel_responses(
 
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=None,
             custom_llm_provider=custom_llm_provider,
@@ -1514,6 +1534,8 @@ async def acompact_responses(
 
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -1655,6 +1677,8 @@ def compact_responses(
 
         return response
     except Exception as e:
+        if any(isinstance(e, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+            raise e
         raise litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
