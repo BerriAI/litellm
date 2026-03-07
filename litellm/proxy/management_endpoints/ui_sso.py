@@ -2794,14 +2794,10 @@ class SSOAuthenticationHandler:
             if client_secret:
                 token_data["client_secret"] = client_secret
 
-        # Initialize response to None — guards against an UnboundLocalError in the
-        # unlikely case where httpx.AsyncClient() construction itself raises before
-        # the POST is attempted.  The try/except is INSIDE the async with so that
-        # TLS teardown exceptions from __aexit__ propagate as-is and are NOT
-        # mis-labelled as "Token endpoint request failed".  httpx buffers the full
-        # response body before __aexit__, so status_code / text / json() remain
-        # valid after the context exits.
-        response = None
+        # The try/except is INSIDE the async with so that TLS teardown exceptions
+        # from __aexit__ propagate as-is and are NOT mis-labelled as "Token endpoint
+        # request failed".  httpx buffers the full response body before __aexit__,
+        # so status_code / text / json() remain valid after the context exits.
         async with httpx.AsyncClient() as http_client:
             try:
                 response = await http_client.post(token_endpoint, **post_kwargs)
@@ -2816,15 +2812,6 @@ class SSOAuthenticationHandler:
                     param="token_exchange",
                     code=status.HTTP_401_UNAUTHORIZED,
                 ) from exc
-
-        if response is None:
-            # Should never happen in practice — construction failure is unexpected.
-            raise ProxyException(
-                message="Token endpoint request did not return a response",
-                type=ProxyErrorTypes.auth_error,
-                param="token_exchange",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
 
         # Response processing outside the async with — httpx buffers the full
         # response body so status_code / text / json() remain valid after __aexit__.
