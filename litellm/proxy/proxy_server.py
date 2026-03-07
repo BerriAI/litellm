@@ -1539,6 +1539,9 @@ native_background_mode: List[
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
+# Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
+# Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
+_pkce_no_redis_warning_emitted: bool = False
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
@@ -2518,6 +2521,8 @@ class ProxyConfig:
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+            # Note: PKCE verifier storage uses redis_usage_cache directly (not
+            # user_api_key_cache) to avoid routing all API-key lookups through Redis.
 
     def switch_on_llm_response_caching(self):
         """
@@ -3064,8 +3069,28 @@ class ProxyConfig:
             if user_api_key_cache_ttl is not None:
                 user_api_key_cache.update_cache_ttl(
                     default_in_memory_ttl=float(user_api_key_cache_ttl),
-                    default_redis_ttl=None,  # user_api_key_cache is an in-memory cache
+                    default_redis_ttl=None,  # user_api_key_cache uses in-memory TTL only; Redis not configured for key lookups
                 )
+
+            ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
+            # PKCE verifiers are stored in redis_usage_cache when available so they can
+            # be read back by any instance (not just the one that started the auth flow).
+            # user_api_key_cache is intentionally left in-memory-only to avoid routing
+            # all API-key lookups through Redis.
+            use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+            if use_pkce and redis_usage_cache is None:
+                global _pkce_no_redis_warning_emitted
+                if not _pkce_no_redis_warning_emitted:
+                    _pkce_no_redis_warning_emitted = True
+                    verbose_proxy_logger.warning(
+                        "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
+                        "PKCE verifiers will not be shared across instances — callbacks may land on a "
+                        "different pod than the login request and fail silently. "
+                        "Configure Redis via the 'cache' section in your proxy config, "
+                        "or enable sticky sessions for single-instance deployments. "
+                        "Set PKCE_STRICT_CACHE_MISS=true to fail fast with a 401 on cache misses "
+                        "instead of continuing without a code_verifier."
+                    )
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
