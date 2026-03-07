@@ -58,6 +58,25 @@ class BraintrustLogger(CustomLogger):
         )
         self.global_braintrust_sync_http_handler = HTTPHandler()
 
+    def _build_prompt_metadata(
+        self, dynamic_metadata: dict, project_id: Optional[str]
+    ) -> Optional[dict]:
+        """
+        Build the prompt metadata dict from dynamic_metadata.
+        Returns None if neither prompt_id nor prompt_slug are present.
+        Only includes fields that are not None.
+        """
+        prompt_id = dynamic_metadata.get("prompt_id")
+        prompt_slug = dynamic_metadata.get("prompt_slug")
+        if prompt_id is None and prompt_slug is None:
+            return None
+        prompt_data: dict = {"project_id": project_id}
+        if prompt_id is not None:
+            prompt_data["id"] = prompt_id
+        if prompt_slug is not None:
+            prompt_data["slug"] = prompt_slug
+        return prompt_data
+
     def validate_environment(self, api_key: Optional[str]):
         """
         Expects
@@ -194,6 +213,10 @@ class BraintrustLogger(CustomLogger):
                         isinstance(value, str) and key not in standard_logging_object
                     ):  # support logging dynamic metadata to braintrust
                         standard_logging_object[key] = value
+
+            prompt_metadata = self._build_prompt_metadata(dynamic_metadata, project_id)
+            if prompt_metadata is not None:
+                standard_logging_object["prompt"] = prompt_metadata
 
             cost = kwargs.get("response_cost", None)
 
@@ -333,6 +356,10 @@ class BraintrustLogger(CustomLogger):
                         isinstance(value, str) and key not in standard_logging_object
                     ):  # support logging dynamic metadata to braintrust
                         standard_logging_object[key] = value
+
+            prompt_metadata = self._build_prompt_metadata(dynamic_metadata, project_id)
+            if prompt_metadata is not None:
+                standard_logging_object["prompt"] = prompt_metadata
 
             cost = kwargs.get("response_cost", None)
 
