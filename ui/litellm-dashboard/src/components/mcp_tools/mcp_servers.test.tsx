@@ -10,6 +10,7 @@ vi.mock("../networking", () => ({
   fetchMCPServers: vi.fn(),
   fetchMCPServerHealth: vi.fn(),
   deleteMCPServer: vi.fn(),
+  createMCPServer: vi.fn(),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
   fetchMCPClientIp: vi.fn().mockResolvedValue(null),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
@@ -347,5 +348,75 @@ describe("MCPServers", () => {
 
     // Team B server should not be visible
     expect(screen.queryByText("Team B Server")).not.toBeInTheDocument();
+  });
+
+  it("should refetch servers after creating a new MCP server", async () => {
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "Existing Server",
+        alias: "existing-server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+      },
+    ];
+
+    const newServer = {
+      server_id: "server-new",
+      server_name: "New Server",
+      alias: "new-server",
+      url: "https://new-example.com/mcp",
+      transport: "http",
+      auth_type: "none",
+      created_at: "2024-01-02T00:00:00Z",
+      created_by: "user-1",
+      updated_at: "2024-01-02T00:00:00Z",
+      updated_by: "user-1",
+      teams: [],
+      mcp_access_groups: [],
+    };
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Existing Server")).toBeInTheDocument();
+    });
+
+    const initialCallCount = vi.mocked(networking.fetchMCPServers).mock.calls.length;
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([...mockServers, newServer]);
+
+    const mcpServersComponent = screen.getByText("MCP Servers").closest("div")?.parentElement;
+    expect(mcpServersComponent).toBeTruthy();
+
+    await act(async () => {
+      queryClient.invalidateQueries({ queryKey: ["mcpServers"] });
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(networking.fetchMCPServers).mock.calls.length).toBeGreaterThan(initialCallCount);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("New Server")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Existing Server")).toBeInTheDocument();
+    expect(screen.getByText("New Server")).toBeInTheDocument();
   });
 });

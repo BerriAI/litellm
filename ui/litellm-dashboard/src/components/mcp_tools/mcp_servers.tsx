@@ -213,6 +213,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const handleCreateSuccess = (newMcpServer: MCPServer) => {
     setFilteredServers((prev) => [...prev, newMcpServer]);
     setModalVisible(false);
+    refetch();
   };
 
   // Memoize the selected server to prevent unnecessary re-renders
