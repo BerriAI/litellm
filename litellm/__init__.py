@@ -12,6 +12,13 @@ warnings.filterwarnings(
 ### INIT VARIABLES #########################
 import threading
 import os
+
+# Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
+import dotenv as _dotenv
+
+if os.getenv("LITELLM_MODE", "DEV") == "DEV":
+    _dotenv.load_dotenv()
+
 from typing import (
     Callable,
     List,
@@ -74,12 +81,9 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
-import dotenv
 # register_async_client_cleanup is lazy-loaded and called on first access
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
-    dotenv.load_dotenv()
 
 
 ####################################################
@@ -301,6 +305,9 @@ return_response_headers: bool = (
     False  # get response headers from LLM Api providers - example x-remaining-requests,
 )
 enable_json_schema_validation: bool = False
+enable_key_alias_format_validation: bool = (
+    False  # opt-in validation of key_alias format on /key/generate and /key/update
+)
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
@@ -589,6 +596,7 @@ minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+bedrock_mantle_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -851,6 +859,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "bedrock_mantle":
+            bedrock_mantle_models.add(key)
 
 
 add_known_models()
@@ -958,6 +968,7 @@ model_list = list(
     | ovhcloud_models
     | lemonade_models
     | docker_model_runner_models
+    | bedrock_mantle_models
     | set(clarifai_models)
 )
 
@@ -1061,6 +1072,7 @@ models_by_provider: dict = {
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
+    "bedrock_mantle": bedrock_mantle_models
 }
 
 # mapping for those models which have larger equivalents
@@ -1242,6 +1254,7 @@ from .ocr.main import *
 from .rag.main import *
 from .search.main import *
 from .realtime_api.main import _arealtime
+from .responses.main import _aresponses_websocket
 from .fine_tuning.main import *
 from .files.main import *
 from .vector_store_files.main import (
@@ -1422,10 +1435,12 @@ if TYPE_CHECKING:
     from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as TopazImageVariationConfig
     from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig as OpenAITextCompletionConfig
     from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
+    from .llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig as BedrockMantleChatConfig
     from .llms.a2a.chat.transformation import A2AConfig as A2AConfig
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
     from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
+    from .llms.perplexity.embedding.transformation import PerplexityEmbeddingConfig as PerplexityEmbeddingConfig
     from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as AzureAIStudioConfig
     from .llms.mistral.chat.transformation import MistralConfig as MistralConfig
     from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig as OpenAIResponsesAPIConfig
@@ -1437,6 +1452,7 @@ if TYPE_CHECKING:
     from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
     from .llms.perplexity.responses.transformation import PerplexityResponsesConfig as PerplexityResponsesConfig
     from .llms.databricks.responses.transformation import DatabricksResponsesAPIConfig as DatabricksResponsesAPIConfig
+    from .llms.openrouter.responses.transformation import OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
@@ -1518,6 +1534,7 @@ if TYPE_CHECKING:
     from .llms.azure.completion.transformation import AzureOpenAITextConfig as AzureOpenAITextConfig
     from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig as HostedVLLMChatConfig
     from .llms.hosted_vllm.embedding.transformation import HostedVLLMEmbeddingConfig as HostedVLLMEmbeddingConfig
+    from .llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig as HostedVLLMResponsesAPIConfig
     from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
     from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
     from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig

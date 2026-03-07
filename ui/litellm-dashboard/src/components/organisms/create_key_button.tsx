@@ -1,6 +1,7 @@
 "use client";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -48,11 +49,24 @@ import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
 
+/**
+ * Interface for pre-filling the create key form from URL parameters
+ */
+export interface CreateKeyPrefillData {
+  owned_by?: "you" | "service_account" | "another_user";
+  team_id?: string;
+  key_alias?: string;
+  models?: string[];
+  key_type?: "default" | "llm_api" | "management";
+}
+
 interface CreateKeyProps {
   team: Team | null;
   data: any[] | null;
   teams: Team[] | null;
   addKey: (data: any) => void;
+  autoOpenCreate?: boolean;
+  prefillData?: CreateKeyPrefillData;
 }
 
 interface User {
@@ -143,9 +157,12 @@ export const fetchUserModels = async (
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */
-const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
+const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -155,6 +172,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
+  const [hasPrefilled, setHasPrefilled] = useState(false);
+  const [pendingPrefillModels, setPendingPrefillModels] = useState<string[] | null>(null);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
@@ -279,6 +298,55 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
 
     fetchPossibleRoles();
   }, [accessToken]);
+
+  // Auto-open modal and prefill form from URL params (deep link).
+  // Guarded by write access so we don't open for read-only users.
+  useEffect(() => {
+    if (autoOpenCreate && !hasPrefilled && teams && userRole && rolesWithWriteAccess.includes(userRole)) {
+      // Open the modal
+      setIsModalVisible(true);
+      setHasPrefilled(true);
+
+      // Apply prefill data if provided
+      if (prefillData) {
+        // Set key owner (owned_by) - validate that "another_user" is only allowed for Admin
+        if (prefillData.owned_by) {
+          if (prefillData.owned_by === "another_user" && userRole !== "Admin") {
+            // Ignore invalid owned_by for non-admin users, fall back to default
+            setKeyOwner("you");
+          } else {
+            setKeyOwner(prefillData.owned_by);
+          }
+        }
+
+        // Set team - find the team by ID and set it (only if team exists in user's teams)
+        if (prefillData.team_id) {
+          const selectedTeam = teams?.find((t) => t.team_id === prefillData.team_id) || null;
+          if (selectedTeam) {
+            setSelectedCreateKeyTeam(selectedTeam);
+            form.setFieldsValue({ team_id: prefillData.team_id });
+          }
+          // Silently ignore invalid team_id - don't prefill with a team user doesn't have access to
+        }
+
+        // Set key alias
+        if (prefillData.key_alias) {
+          form.setFieldsValue({ key_alias: prefillData.key_alias });
+        }
+
+        // Defer model selection until we load the allowed model list.
+        if (prefillData.models && prefillData.models.length > 0) {
+          setPendingPrefillModels(prefillData.models);
+        }
+
+        // Set key type
+        if (prefillData.key_type) {
+          setKeyType(prefillData.key_type);
+          form.setFieldsValue({ key_type: prefillData.key_type });
+        }
+      }
+    }
+  }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole]);
 
   // Check if team selection is required
   const isTeamSelectionRequired = modelsToPick.includes("no-default-models");
@@ -473,6 +541,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     NotificationsManager.success("Virtual Key copied to clipboard");
   };
 
+  // Fetch available models when team or auth changes.
+  // Note: Model prefill from URL params is handled by the useEffect below, which
+  // watches for pendingPrefillModels + modelsToPick to both be populated.
   useEffect(() => {
     if (selectedProjectId) {
       // When a project is selected, use the project's models
@@ -488,9 +559,28 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         setModelsToPick(allModels);
       });
     }
-    form.setFieldValue("models", []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole]);
+    // Only clear models if we don't have pending prefill models
+    if (!pendingPrefillModels) {
+      form.setFieldValue("models", []);
+    }
+  }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole, form]);
+
+  // Apply deferred model prefill once the available model list arrives.
+  // This handles timing where prefill data arrives before or after models are fetched.
+  useEffect(() => {
+    if (!pendingPrefillModels || pendingPrefillModels.length === 0) {
+      return;
+    }
+    if (!modelsToPick || modelsToPick.length === 0) {
+      return;
+    }
+
+    const validModels = pendingPrefillModels.filter((model) => modelsToPick.includes(model));
+    if (validModels.length > 0) {
+      form.setFieldsValue({ models: validModels });
+    }
+    setPendingPrefillModels(null);
+  }, [pendingPrefillModels, modelsToPick, form]);
 
   // Sync team when project is selected but teams loaded later (race condition)
   useEffect(() => {
@@ -692,33 +782,35 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 }}
               />
             </Form.Item>
-            <Form.Item
-              label={
-                <span>
-                  Project{" "}
-                  <Tooltip title="Assign this key to a project. Selecting a project will lock the team to the project's team.">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="project_id"
-              className="mt-4"
-            >
-              <ProjectDropdown
-                projects={projects}
-                teamId={selectedCreateKeyTeam?.team_id}
-                loading={isProjectsLoading || !teams}
-                onChange={(projectId) => {
-                  if (!projectId) {
-                    setSelectedProjectId(null);
-                    setSelectedCreateKeyTeam(null);
-                    form.setFieldValue("team_id", undefined);
-                    return;
-                  }
-                  setSelectedProjectId(projectId);
-                }}
-              />
-            </Form.Item>
+            {enableProjectsUI && (
+              <Form.Item
+                label={
+                  <span>
+                    Project{" "}
+                    <Tooltip title="Assign this key to a project. Selecting a project will lock the team to the project's team.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="project_id"
+                className="mt-4"
+              >
+                <ProjectDropdown
+                  projects={projects}
+                  teamId={selectedCreateKeyTeam?.team_id}
+                  loading={isProjectsLoading || !teams}
+                  onChange={(projectId) => {
+                    if (!projectId) {
+                      setSelectedProjectId(null);
+                      setSelectedCreateKeyTeam(null);
+                      form.setFieldValue("team_id", undefined);
+                      return;
+                    }
+                    setSelectedProjectId(projectId);
+                  }}
+                />
+              </Form.Item>
+            )}
           </div>
 
           {/* Show message when team selection is required */}
@@ -766,21 +858,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 label={
                   <span>
                     Models{" "}
-                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team. Leave empty to allow access to all models.">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
                 }
                 name="models"
-                rules={
-                  keyType === "management" || keyType === "read_only"
-                    ? []
-                    : [{ required: true, message: "Please select a model" }]
-                }
+                rules={[]}
                 help={
                   keyType === "management" || keyType === "read_only"
                     ? "Models field is disabled for this key type"
-                    : "required"
+                    : "optional - leave empty to allow access to all models"
                 }
                 className="mt-4"
               >
@@ -995,7 +1083,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     name="guardrails"
                     className="mt-4"
                     help={
-                      premiumUser
+                      canEditGuardrails
                         ? "Select existing guardrails or enter new ones"
                         : "Premium feature - Upgrade to set guardrails by key"
                     }
@@ -1003,9 +1091,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <Select
                       mode="tags"
                       style={{ width: "100%" }}
-                      disabled={!premiumUser}
+                      disabled={!canEditGuardrails}
                       placeholder={
-                        !premiumUser
+                        !canEditGuardrails
                           ? "Premium feature - Upgrade to set guardrails by key"
                           : "Select or enter guardrails"
                       }
@@ -1032,12 +1120,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     valuePropName="checked"
                     help={
-                      premiumUser
+                      canEditGuardrails
                         ? "Bypass global guardrails for this key"
                         : "Premium feature - Upgrade to disable global guardrails by key"
                     }
                   >
-                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+                    <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
                   <Form.Item
                     label={

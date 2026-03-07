@@ -25,6 +25,7 @@ from typing import (
     AsyncGenerator,
     Callable,
     Dict,
+    Generator,
     List,
     Literal,
     Optional,
@@ -727,8 +728,18 @@ class Router:
         """
         Initializes either a RedisCache or RedisClusterCache based on the cache_config.
         """
-        if cache_config.get("startup_nodes"):
-            return RedisClusterCache(**cache_config)
+        startup_nodes = cache_config.get("startup_nodes")
+        if not startup_nodes:
+            _env_cluster_nodes = get_secret("REDIS_CLUSTER_NODES")
+            if _env_cluster_nodes is not None and isinstance(
+                _env_cluster_nodes, str
+            ):
+                startup_nodes = json.loads(_env_cluster_nodes)
+
+        if startup_nodes:
+            return RedisClusterCache(
+                **{**cache_config, "startup_nodes": startup_nodes}
+            )
         else:
             return RedisCache(**cache_config)
 
@@ -880,6 +891,9 @@ class Router:
         )
         self._arealtime = self.factory_function(
             litellm._arealtime, call_type="_arealtime"
+        )
+        self._aresponses_websocket = self.factory_function(
+            litellm._aresponses_websocket, call_type="_aresponses_websocket"
         )
         self.acreate_fine_tuning_job = self.factory_function(
             litellm.acreate_fine_tuning_job, call_type="acreate_fine_tuning_job"
@@ -1248,6 +1262,26 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
         # ---------------------------------------------------------------------
+        # Encrypted content affinity
+        # ---------------------------------------------------------------------
+        if "encrypted_content_affinity" in optional_pre_call_checks:
+            from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+                EncryptedContentAffinityCheck,
+            )
+
+            if self.optional_callbacks is None:
+                self.optional_callbacks = []
+
+            already_registered = any(
+                isinstance(cb, EncryptedContentAffinityCheck)
+                for cb in self.optional_callbacks
+            )
+            if not already_registered:
+                ec_callback = EncryptedContentAffinityCheck()
+                self.optional_callbacks.append(ec_callback)
+                litellm.logging_callback_manager.add_litellm_callback(ec_callback)
+
+        # ---------------------------------------------------------------------
         # Remaining optional pre-call checks
         # ---------------------------------------------------------------------
         for pre_call_check in optional_pre_call_checks:
@@ -1256,6 +1290,7 @@ class Router:
                 "deployment_affinity",
                 "responses_api_deployment_check",
                 "session_affinity",
+                "encrypted_content_affinity",
             ):
                 continue
             if pre_call_check == "prompt_caching":
@@ -1327,6 +1362,11 @@ class Router:
         model_name = None
         deployment = None
         try:
+            # Capture kwargs before deployment selection so the streaming
+            # fallback iterator can re-dispatch with the original model group.
+            input_kwargs_for_streaming_fallback = kwargs.copy()
+            input_kwargs_for_streaming_fallback["model"] = model
+
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
                 model=model,
@@ -1397,6 +1437,15 @@ class Router:
                         model=model,
                         llm_provider="",
                     )
+
+            # Wrap streaming responses so MidStreamFallbackError (raised
+            # during iteration) triggers the Router's fallback chain.
+            if isinstance(response, CustomStreamWrapper):
+                return self._completion_streaming_iterator(
+                    model_response=response,
+                    messages=messages,
+                    initial_kwargs=input_kwargs_for_streaming_fallback,
+                )
 
             return response
         except Exception as e:
@@ -1536,7 +1585,28 @@ class Router:
             )
             raise e
 
-    async def _acompletion_streaming_iterator(  # noqa: PLR0915
+    @staticmethod
+    def _combine_fallback_usage(
+        fallback_item: ModelResponseStream,
+        complete_response_object_usage: Optional[Usage],
+    ) -> None:
+        """Merge partial-stream usage with fallback-stream usage on the chunk."""
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+
+        usage = cast(Optional[Usage], getattr(fallback_item, "usage", None))
+        usage_objects = [usage] if usage is not None else []
+        if (
+            complete_response_object_usage is not None
+            and hasattr(complete_response_object_usage, "usage")
+            and complete_response_object_usage.usage is not None  # type: ignore
+        ):
+            usage_objects.append(complete_response_object_usage)
+        combined_usage = BaseTokenUsageProcessor.combine_usage_objects(
+            usage_objects=usage_objects
+        )
+        setattr(fallback_item, "usage", combined_usage)
+
+    async def _acompletion_streaming_iterator(
         self,
         model_response: CustomStreamWrapper,
         messages: List[Dict[str, str]],
@@ -1597,17 +1667,24 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    initial_kwargs["messages"] = messages + [
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
-                        },
-                        {
-                            "role": "assistant",
-                            "content": e.generated_content,
-                            "prefix": True,
-                        },
-                    ]
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        # No content was generated before the error (e.g. a
+                        # rate-limit 429 on the very first chunk).  Retry with
+                        # the original messages — adding a continuation prompt
+                        # would waste tokens and confuse the model.
+                        initial_kwargs["messages"] = messages
+                    else:
+                        initial_kwargs["messages"] = messages + [
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": e.generated_content,
+                                "prefix": True,
+                            },
+                        ]
                     self._update_kwargs_before_fallbacks(
                         model=model_group, kwargs=initial_kwargs
                     )
@@ -1632,32 +1709,7 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                from litellm.cost_calculator import (
-                                    BaseTokenUsageProcessor,
-                                )
-
-                                usage = cast(
-                                    Optional[Usage],
-                                    getattr(fallback_item, "usage", None),
-                                )
-                                if usage is not None:
-                                    usage_objects = [usage]
-                                else:
-                                    usage_objects = []
-
-                                if (
-                                    complete_response_object_usage is not None
-                                    and hasattr(complete_response_object_usage, "usage")
-                                    and complete_response_object_usage.usage is not None  # type: ignore
-                                ):
-                                    usage_objects.append(complete_response_object_usage)
-
-                                combined_usage = (
-                                    BaseTokenUsageProcessor.combine_usage_objects(
-                                        usage_objects=usage_objects
-                                    )
-                                )
-                                setattr(fallback_item, "usage", combined_usage)
+                                self._combine_fallback_usage(fallback_item, complete_response_object_usage)
                             yield fallback_item
                     else:
                         # If fallback returns a non-streaming response, yield None
@@ -1695,6 +1747,135 @@ class Router:
                             )
 
         return FallbackStreamWrapper(stream_with_fallbacks())
+
+    def _completion_streaming_iterator(  # noqa: PLR0915
+        self,
+        model_response: CustomStreamWrapper,
+        messages: List[Dict[str, str]],
+        initial_kwargs: dict,
+    ) -> CustomStreamWrapper:
+        """
+        Sync equivalent of _acompletion_streaming_iterator.
+
+        Wraps a sync streaming response so that MidStreamFallbackError
+        (raised by CustomStreamWrapper.__next__) triggers the Router's
+        fallback chain instead of surfacing directly to the caller.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        class SyncFallbackStreamWrapper(CustomStreamWrapper):
+            def __init__(self, sync_generator: Generator):
+                super().__init__(
+                    completion_stream=sync_generator,
+                    model=model_response.model,
+                    custom_llm_provider=model_response.custom_llm_provider,
+                    logging_obj=model_response.logging_obj,
+                )
+                self._sync_generator = sync_generator
+                if hasattr(model_response, "_hidden_params"):
+                    self._hidden_params = model_response._hidden_params.copy()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._sync_generator)
+
+        router_self = self
+
+        def stream_with_fallbacks():
+            fallback_response = None
+            try:
+                for item in model_response:
+                    yield item
+            except MidStreamFallbackError as e:
+                from litellm.main import stream_chunk_builder
+
+                complete_response_object = stream_chunk_builder(
+                    chunks=model_response.chunks
+                )
+                complete_response_object_usage = cast(
+                    Optional[Usage],
+                    getattr(complete_response_object, "usage", None),
+                )
+                try:
+                    model_group = cast(str, initial_kwargs.get("model"))
+                    fallbacks: Optional[List] = initial_kwargs.get(
+                        "fallbacks", router_self.fallbacks
+                    )
+                    context_window_fallbacks: Optional[List] = initial_kwargs.get(
+                        "context_window_fallbacks",
+                        router_self.context_window_fallbacks,
+                    )
+                    content_policy_fallbacks: Optional[List] = initial_kwargs.get(
+                        "content_policy_fallbacks",
+                        router_self.content_policy_fallbacks,
+                    )
+                    initial_kwargs["original_function"] = router_self._completion
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        initial_kwargs["messages"] = messages
+                    else:
+                        initial_kwargs["messages"] = messages + [
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": e.generated_content,
+                                "prefix": True,
+                            },
+                        ]
+                    router_self._update_kwargs_before_fallbacks(
+                        model=model_group, kwargs=initial_kwargs
+                    )
+                    fallback_response = (
+                        router_self.function_with_fallbacks(
+                            **initial_kwargs,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                        )
+                    )
+
+                    if hasattr(fallback_response, "__iter__"):
+                        for fallback_item in fallback_response:
+                            if (
+                                fallback_item
+                                and isinstance(fallback_item, ModelResponseStream)
+                                and hasattr(fallback_item, "usage")
+                            ):
+                                router_self._combine_fallback_usage(fallback_item, complete_response_object_usage)
+                            yield fallback_item
+                    else:
+                        yield None
+
+                except Exception as fallback_error:
+                    verbose_router_logger.error(
+                        f"Fallback also failed: {fallback_error}"
+                    )
+                    raise fallback_error
+            finally:
+                if hasattr(model_response, "close"):
+                    try:
+                        model_response.close()  # type: ignore[reportAttributeAccessIssue]
+                    except BaseException as close_err:
+                        verbose_router_logger.debug(
+                            "stream_with_fallbacks: error closing model_response: %s",
+                            close_err,
+                        )
+                if fallback_response is not None and hasattr(
+                    fallback_response, "close"
+                ):
+                    try:
+                        fallback_response.close()
+                    except BaseException as close_err:
+                        verbose_router_logger.debug(
+                            "stream_with_fallbacks: error closing fallback_response: %s",
+                            close_err,
+                        )
+
+        return SyncFallbackStreamWrapper(stream_with_fallbacks())
 
     async def _silent_experiment_acompletion(
         self, silent_model: str, messages: List[Any], **kwargs
@@ -4512,6 +4693,7 @@ class Router:
             "afile_delete",
             "afile_content",
             "_arealtime",
+            "_aresponses_websocket",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
             "alist_fine_tuning_jobs",
@@ -4684,6 +4866,7 @@ class Router:
                 "anthropic_messages",
                 "aresponses",
                 "_arealtime",
+                "_aresponses_websocket",
                 "acreate_fine_tuning_job",
                 "acancel_fine_tuning_job",
                 "alist_fine_tuning_jobs",
@@ -6929,6 +7112,17 @@ class Router:
                 model_group_name=model_id
             )
 
+        # If still not found, check for wildcard pattern matches
+        if deployment is None:
+            potential_wildcard_models = self.pattern_router.route(model_id) or []
+            if potential_wildcard_models:
+                # Use the first matching wildcard deployment
+                deployment_dict = potential_wildcard_models[0]
+                if isinstance(deployment_dict, dict):
+                    deployment = Deployment(**deployment_dict)
+                elif isinstance(deployment_dict, Deployment):
+                    deployment = deployment_dict
+
         if deployment is None:
             return None
 
@@ -8660,6 +8854,13 @@ class Router:
             )
             if isinstance(healthy_deployments, dict):
                 return healthy_deployments
+
+            # When encrypted content affinity pins to a specific deployment,
+            if (
+                request_kwargs.get("_encrypted_content_affinity_pinned")
+                and len(healthy_deployments) == 1
+            ):
+                return healthy_deployments[0]
 
             start_time = time.time()
             if (

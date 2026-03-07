@@ -2,6 +2,32 @@
 
 Azure Model Router is a feature in Azure AI Foundry that automatically routes your requests to the best available model based on your requirements. This allows you to use a single endpoint that intelligently selects the optimal model for each request.
 
+## Quick Start
+
+**Model pattern**: `azure_ai/model_router/<deployment-name>`
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="azure_ai/model_router/model-router",  # Replace with your deployment name
+    messages=[{"role": "user", "content": "Hello!"}],
+    api_base="https://your-endpoint.cognitiveservices.azure.com/openai/v1/",
+    api_key="your-api-key",
+)
+```
+
+**Proxy config** (`config.yaml`):
+
+```yaml
+model_list:
+  - model_name: model-router
+    litellm_params:
+      model: azure_ai/model_router/model-router
+      api_base: https://your-endpoint.cognitiveservices.azure.com/openai/deployments/model-router/chat/completions?api-version=2025-01-01-preview
+      api_key: your-api-key
+```
+
 ## Key Features
 
 - **Automatic Model Selection**: Azure Model Router dynamically selects the best model for your request
@@ -229,19 +255,51 @@ Cost is tracked based on the actual model used (e.g., `gpt-4.1-nano`), plus a fl
 
 ## Cost Tracking
 
-LiteLLM automatically handles cost tracking for Azure Model Router by:
+LiteLLM automatically handles cost tracking for Azure Model Router. Understanding how this works helps you interpret spend and debug billing.
 
-1. **Detecting the actual model**: When Azure Model Router routes your request to a specific model (e.g., `gpt-4.1-nano-2025-04-14`), LiteLLM extracts this from the response
-2. **Calculating accurate costs**: Costs are calculated based on:
-   - The actual model used (e.g., `gpt-4.1-nano` token costs)
-   - Plus a flat infrastructure cost of **$0.14 per million input tokens** for using the Model Router
-3. **Streaming support**: Cost tracking works correctly for both streaming and non-streaming requests
+### How LiteLLM Calculates Cost
+
+When you use Azure Model Router, LiteLLM computes **two cost components**:
+
+| Component | Description | When Applied |
+|-----------|-------------|--------------|
+| **Model Cost** | Token-based cost for the actual model that handled the request (e.g., `gpt-5-nano`, `gpt-4.1-nano`) | Always, when Azure returns the model in the response |
+| **Router Flat Cost** | $0.14 per million input tokens (Azure AI Foundry infrastructure fee) | When the **request** was made via a model router endpoint |
+
+### Cost Calculation Flow
+
+1. **Request model detection**: LiteLLM records the model you requested (e.g., `azure_ai/model_router/model-router`). If it contains `model_router` or `model-router`, the request is treated as a router request.
+
+2. **Response model extraction**: Azure returns the actual model used in the response (e.g., `gpt-5-nano-2025-08-07`). LiteLLM uses this for the model cost lookup.
+
+3. **Model cost**: LiteLLM looks up the response model in its pricing table and computes cost from prompt tokens and completion tokens.
+
+4. **Router flat cost**: Because the original request was to a model router, LiteLLM adds the flat cost ($0.14 per M input tokens) on top of the model cost.
+
+5. **Total cost**: `Total = Model Cost + Router Flat Cost`
+
+### Configuration Requirements
+
+For cost tracking to work correctly:
+
+- **Use the full pattern**: `azure_ai/model_router/<deployment-name>` (e.g., `azure_ai/model_router/model-router`)
+- **Proxy config**: When using the LiteLLM proxy, set `model` in `litellm_params` to the full pattern so the request model is correctly identified as a router
+
+```yaml
+# proxy_server_config.yaml
+model_list:
+  - model_name: model-router
+    litellm_params:
+      model: azure_ai/model_router/model-router  # Required for router cost detection
+      api_base: https://your-endpoint.cognitiveservices.azure.com/openai/deployments/model-router/chat/completions?api-version=2025-01-01-preview
+      api_key: your-api-key
+```
 
 ### Cost Breakdown
 
 When you use Azure Model Router, the total cost includes:
 
-- **Model Cost**: Based on the actual model that handled your request (e.g., `gpt-4.1-nano`)
+- **Model Cost**: Based on the actual model that handled your request (e.g., `gpt-5-nano`, `gpt-4.1-nano`)
 - **Router Flat Cost**: $0.14 per million input tokens (Azure AI Foundry infrastructure fee)
 
 ### Example Response with Cost

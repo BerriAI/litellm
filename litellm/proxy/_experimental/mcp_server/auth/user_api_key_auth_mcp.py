@@ -649,8 +649,13 @@ class MCPRequestHandler:
                 )
             )
 
-            # Combine both lists
-            all_servers = direct_mcp_servers + access_group_servers
+            # servers referenced in tool permissions should also be accessible
+            tool_perm_servers = list(
+                (key_object_permission.mcp_tool_permissions or {}).keys()
+            )
+
+            # Combine all lists
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(
@@ -686,8 +691,13 @@ class MCPRequestHandler:
                 )
             )
 
-            # Combine both lists
-            all_servers = direct_mcp_servers + access_group_servers
+            # servers referenced in tool permissions should also be accessible
+            tool_perm_servers = list(
+                (object_permissions.mcp_tool_permissions or {}).keys()
+            )
+
+            # Combine all lists
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(
@@ -737,8 +747,6 @@ class MCPRequestHandler:
             # Get direct MCP servers
             direct_mcp_servers = end_user_obj.object_permission.mcp_servers or []
 
-
-
             # Get MCP servers from access groups
             access_group_servers = (
                 await MCPRequestHandler._get_mcp_servers_from_access_groups(
@@ -746,8 +754,13 @@ class MCPRequestHandler:
                 )
             )
 
-            # Combine both lists
-            all_servers = direct_mcp_servers + access_group_servers
+            # servers referenced in tool permissions should also be accessible
+            tool_perm_servers = list(
+                (end_user_obj.object_permission.mcp_tool_permissions or {}).keys()
+            )
+
+            # Combine all lists
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(

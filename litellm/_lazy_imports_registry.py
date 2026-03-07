@@ -214,11 +214,13 @@ LLM_CONFIG_NAMES = (
     "TopazImageVariationConfig",
     "OpenAITextCompletionConfig",
     "GroqChatConfig",
+    "BedrockMantleChatConfig",
     "A2AConfig",
     "GenAIHubOrchestrationConfig",
     "VoyageEmbeddingConfig",
     "VoyageContextualEmbeddingConfig",
     "InfinityEmbeddingConfig",
+    "PerplexityEmbeddingConfig",
     "AzureAIStudioConfig",
     "MistralConfig",
     "OpenAIResponsesAPIConfig",
@@ -226,9 +228,11 @@ LLM_CONFIG_NAMES = (
     "AzureOpenAIOSeriesResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
+    "HostedVLLMResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
+    "OpenRouterResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -859,6 +863,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "OpenAITextCompletionConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "BedrockMantleChatConfig": (".llms.bedrock_mantle.chat.transformation", "BedrockMantleChatConfig"),
     "A2AConfig": (".llms.a2a.chat.transformation", "A2AConfig"),
     "GenAIHubOrchestrationConfig": (
         ".llms.sap.chat.transformation",
@@ -875,6 +880,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "InfinityEmbeddingConfig": (
         ".llms.infinity.embedding.transformation",
         "InfinityEmbeddingConfig",
+    ),
+    "PerplexityEmbeddingConfig": (
+        ".llms.perplexity.embedding.transformation",
+        "PerplexityEmbeddingConfig",
     ),
     "AzureAIStudioConfig": (
         ".llms.azure_ai.chat.transformation",
@@ -901,6 +910,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.litellm_proxy.responses.transformation",
         "LiteLLMProxyResponsesAPIConfig",
     ),
+    "HostedVLLMResponsesAPIConfig": (
+        ".llms.hosted_vllm.responses.transformation",
+        "HostedVLLMResponsesAPIConfig",
+    ),
     "VolcEngineResponsesAPIConfig": (
         ".llms.volcengine.responses.transformation",
         "VolcEngineResponsesAPIConfig",
@@ -916,6 +929,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "DatabricksResponsesAPIConfig": (
         ".llms.databricks.responses.transformation",
         "DatabricksResponsesAPIConfig",
+    ),
+    "OpenRouterResponsesAPIConfig": (
+        ".llms.openrouter.responses.transformation",
+        "OpenRouterResponsesAPIConfig",
     ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",

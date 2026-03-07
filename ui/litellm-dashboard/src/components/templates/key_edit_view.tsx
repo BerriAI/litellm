@@ -1,10 +1,12 @@
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
+import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
@@ -83,6 +85,7 @@ export function KeyEditView({
   userRole,
   premiumUser = false,
 }: KeyEditViewProps) {
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const [form] = Form.useForm();
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
@@ -95,8 +98,11 @@ export function KeyEditView({
   );
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
+  const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
   const [isKeySaving, setIsKeySaving] = useState(false);
   const { data: projects } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
   const projectDisplay = (() => {
     if (!keyData.project_id) return null;
@@ -259,6 +265,10 @@ export function KeyEditView({
         }
       }
       // If it's already an array (shouldn't happen, but handle it), keep as is
+
+      if (neverExpire) {
+        values.duration = null;
+      }
 
       await onSubmit(values);
     } finally {
@@ -440,7 +450,7 @@ export function KeyEditView({
               form.setFieldValue("guardrails", v);
             }}
             accessToken={accessToken}
-            disabled={!premiumUser}
+            disabled={!canEditGuardrails}
           />
         )}
       </Form.Item>
@@ -457,7 +467,7 @@ export function KeyEditView({
         name="disable_global_guardrails"
         valuePropName="checked"
       >
-        <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+        <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
       </Form.Item>
 
       <Form.Item
@@ -603,12 +613,12 @@ export function KeyEditView({
       <Form.Item
         label="Team ID"
         name="team_id"
-        help={hasProject ? "Team is locked because this key belongs to a project" : undefined}
+        help={enableProjectsUI && hasProject ? "Team is locked because this key belongs to a project" : undefined}
       >
         <Select
           placeholder="Select team"
           showSearch
-          disabled={hasProject}
+          disabled={enableProjectsUI && hasProject}
           style={{ width: "100%" }}
           filterOption={(input, option) => {
             const team = teams?.find((t) => t.team_id === option?.value);
@@ -623,7 +633,7 @@ export function KeyEditView({
           ))}
         </Select>
       </Form.Item>
-      {hasProject && (
+      {enableProjectsUI && hasProject && (
         <Form.Item label="Project">
           <Input value={projectDisplay ?? ""} disabled />
         </Form.Item>
@@ -655,6 +665,8 @@ export function KeyEditView({
           onAutoRotationChange={setAutoRotationEnabled}
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
+          neverExpire={neverExpire}
+          onNeverExpireChange={setNeverExpire}
         />
         <Form.Item name="duration" hidden initialValue="">
           <Input />

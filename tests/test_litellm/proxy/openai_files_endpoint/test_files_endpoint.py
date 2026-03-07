@@ -107,7 +107,12 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     """
     import litellm
     from litellm import Router
+    from litellm.proxy._types import LitellmUserRoles
+    import litellm.proxy.proxy_server as ps
     from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
     # Mock create_file as an async function
     mock_create_file = mocker.patch("litellm.files.main.create_file", new=mocker.AsyncMock())
@@ -178,52 +183,59 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
 
-    # Create a simple test file content
-    test_file_content = b"test audio content"
-    test_file = ("test.wav", test_file_content, "audio/wav")
-
-    response = client.post(
-        "/v1/files",
-        files={"file": test_file},
-        data={
-            "purpose": "user_data",
-            "target_model_names": "azure-gpt-3-5-turbo, gpt-3.5-turbo",
-        },
-        headers={"Authorization": "Bearer test-key"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
     )
 
-    assert response.status_code == 200
+    try:
+        # Create a simple test file content
+        test_file_content = b"test audio content"
+        test_file = ("test.wav", test_file_content, "audio/wav")
 
-    # Get all calls made to create_file
-    calls = mock_create_file.call_args_list
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data={
+                "purpose": "user_data",
+                "target_model_names": "azure-gpt-3-5-turbo, gpt-3.5-turbo",
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
 
-    # Check for Azure call
-    azure_call_found = False
-    for call in calls:
-        kwargs = call.kwargs
-        if (
-            kwargs.get("custom_llm_provider") == "azure"
-            and kwargs.get("model") == "azure/chatgpt-v-2"
-            and kwargs.get("api_key") == "azure_api_key"
-        ):
-            azure_call_found = True
-            break
-    assert (
-        azure_call_found
-    ), f"Azure call not found with expected parameters. Calls: {calls}"
+        assert response.status_code == 200
 
-    # Check for OpenAI call
-    openai_call_found = False
-    for call in calls:
-        kwargs = call.kwargs
-        if (
-            kwargs.get("custom_llm_provider") == "openai"
-            and kwargs.get("model") == "openai/gpt-3.5-turbo"
-            and kwargs.get("api_key") == "openai_api_key"
-        ):
-            openai_call_found = True
-            break
-    assert openai_call_found, "OpenAI call not found with expected parameters"
+        # Get all calls made to create_file
+        calls = mock_create_file.call_args_list
+
+        # Check for Azure call
+        azure_call_found = False
+        for call in calls:
+            kwargs = call.kwargs
+            if (
+                kwargs.get("custom_llm_provider") == "azure"
+                and kwargs.get("model") == "azure/chatgpt-v-2"
+                and kwargs.get("api_key") == "azure_api_key"
+            ):
+                azure_call_found = True
+                break
+        assert (
+            azure_call_found
+        ), f"Azure call not found with expected parameters. Calls: {calls}"
+
+        # Check for OpenAI call
+        openai_call_found = False
+        for call in calls:
+            kwargs = call.kwargs
+            if (
+                kwargs.get("custom_llm_provider") == "openai"
+                and kwargs.get("model") == "openai/gpt-3.5-turbo"
+                and kwargs.get("api_key") == "openai_api_key"
+            ):
+                openai_call_found = True
+                break
+        assert openai_call_found, "OpenAI call not found with expected parameters"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.flaky(retries=3, delay=2)
@@ -1156,3 +1168,256 @@ def test_create_file_with_deep_nested_litellm_metadata(
     assert captured_litellm_metadata["config"]["database"]["port"] == "5432"
     assert "cache" in captured_litellm_metadata["config"]
     assert captured_litellm_metadata["config"]["cache"]["enabled"] == "true"
+
+
+# ---------------------------------------------------------------------------
+# Team-level enforced_file_expires_after tests
+# ---------------------------------------------------------------------------
+
+
+def _make_capturing_managed_files():
+    """Create a DummyManagedFiles that captures the expires_after from the request."""
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+
+    captured = {}
+
+    class CapturingManagedFiles(BaseFileEndpoints):
+        async def acreate_file(
+            self,
+            llm_router,
+            create_file_request,
+            target_model_names_list,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+        ):
+            if isinstance(create_file_request, dict):
+                captured["expires_after"] = create_file_request.get("expires_after")
+            else:
+                captured["expires_after"] = getattr(
+                    create_file_request, "expires_after", None
+                )
+            return OpenAIFileObject(
+                id="file-abc123",
+                object="file",
+                bytes=100,
+                created_at=1234567890,
+                filename="mydata.jsonl",
+                purpose="batch",
+                status="uploaded",
+            )
+
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
+            raise NotImplementedError
+
+        async def afile_list(self, purpose, litellm_parent_otel_span):
+            raise NotImplementedError
+
+        async def afile_delete(
+            self, file_id, litellm_parent_otel_span, llm_router, **data
+        ):
+            raise NotImplementedError
+
+        async def afile_content(
+            self, file_id, litellm_parent_otel_span, llm_router, **data
+        ):
+            raise NotImplementedError
+
+    return CapturingManagedFiles(), captured
+
+
+def _post_file_with_team_metadata(
+    monkeypatch,
+    llm_router: Router,
+    team_metadata: dict,
+    form_data: dict,
+):
+    """POST /v1/files with given team_metadata, return captured expires_after."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    dummy, captured = _make_capturing_managed_files()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = dummy
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    user_key = UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata)
+    app.dependency_overrides[user_api_key_auth] = lambda: user_key
+
+    test_file = ("mydata.jsonl", b'{"prompt": "Hello"}', "application/json")
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data=form_data,
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert response.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+    return captured["expires_after"]
+
+
+def test_file_team_override_overrides_caller(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Team enforced_file_expires_after wins over caller-provided value."""
+    expires_after = _post_file_with_team_metadata(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {
+                "anchor": "created_at",
+                "seconds": 3600,
+            }
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+            "expires_after[anchor]": "created_at",
+            "expires_after[seconds]": "86400",
+        },
+    )
+    assert expires_after["anchor"] == "created_at"
+    assert expires_after["seconds"] == 3600
+
+
+def test_file_no_team_setting_preserves_caller(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """No team setting = caller-provided expires_after passes through."""
+    expires_after = _post_file_with_team_metadata(
+        monkeypatch,
+        llm_router,
+        team_metadata={},
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+            "expires_after[anchor]": "created_at",
+            "expires_after[seconds]": "86400",
+        },
+    )
+    assert expires_after["anchor"] == "created_at"
+    assert expires_after["seconds"] == 86400
+
+
+def test_file_team_injects_when_caller_sends_nothing(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Team enforcement applies even when caller sends no expiry."""
+    expires_after = _post_file_with_team_metadata(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {
+                "anchor": "created_at",
+                "seconds": 3600,
+            }
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert expires_after["anchor"] == "created_at"
+    assert expires_after["seconds"] == 3600
+
+
+# ---------------------------------------------------------------------------
+# Team-level enforced_file_expires_after validation error tests
+# ---------------------------------------------------------------------------
+
+
+def _post_file_raw(monkeypatch, llm_router: Router, team_metadata: dict, form_data: dict):
+    """POST /v1/files and return the raw response (no status assertion)."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    dummy, _ = _make_capturing_managed_files()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = dummy
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    user_key = UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata)
+    app.dependency_overrides[user_api_key_auth] = lambda: user_key
+
+    test_file = ("mydata.jsonl", b'{"prompt": "Hello"}', "application/json")
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data=form_data,
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    return response
+
+
+def test_file_missing_anchor_key_returns_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Missing 'anchor' key in team metadata returns 500."""
+    response = _post_file_raw(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {"seconds": 3600},
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 500
+    assert "malformed" in response.json()["error"]["message"]
+
+
+def test_file_missing_seconds_key_returns_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Missing 'seconds' key in team metadata returns 500."""
+    response = _post_file_raw(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {"anchor": "created_at"},
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 500
+    assert "malformed" in response.json()["error"]["message"]
+
+
+def test_file_invalid_anchor_returns_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Invalid anchor value in team metadata returns 500."""
+    response = _post_file_raw(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {
+                "anchor": "updated_at",
+                "seconds": 3600,
+            },
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 500
+    assert "created_at" in response.json()["error"]["message"]
