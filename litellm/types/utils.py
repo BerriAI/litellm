@@ -2625,8 +2625,8 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
 
 
 class GuardrailMode(TypedDict, total=False):
-    tags: Optional[Dict[str, str]]
-    default: Optional[str]
+    tags: Optional[Dict[str, Union[str, List[str]]]]
+    default: Optional[Union[str, List[str]]]
 
 
 GuardrailStatus = Literal[
