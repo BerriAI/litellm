@@ -269,7 +269,7 @@ async def get_agent_card(
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def invoke_agent_a2a(
+async def invoke_agent_a2a(  # noqa: PLR0915
     agent_id: str,
     request: Request,
     fastapi_response: Response,
