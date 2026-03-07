@@ -666,21 +666,26 @@ if MCP_AVAILABLE:
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             build_input_schema,
             load_openapi_spec_async,
+            resolve_operation_params,
         )
 
         try:
             spec = await load_openapi_spec_async(spec_path)
             paths = spec.get("paths", {})
+            components = spec.get("components", {})
             tools: List[dict] = []
             for path, path_item in paths.items():
                 for method in ("get", "post", "put", "patch", "delete"):
                     operation = path_item.get(method)
                     if operation is None:
                         continue
+
+                    resolved_op = resolve_operation_params(operation, path_item, components)
+
                     op_id = operation.get("operationId", f"{method}_{path}")
                     summary = operation.get("summary", "")
                     description = operation.get("description", summary)
-                    input_schema = build_input_schema(operation)
+                    input_schema = build_input_schema(resolved_op)
                     tools.append(
                         {
                             "name": op_id,
