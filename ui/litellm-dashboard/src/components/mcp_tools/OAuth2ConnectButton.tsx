@@ -89,6 +89,7 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
   };
 
   const handleClick = async () => {
+    stopPolling();
     setError(null);
     setLoading(true);
     try {
