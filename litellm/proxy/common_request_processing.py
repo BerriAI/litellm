@@ -251,6 +251,7 @@ def _override_openai_response_model(
     response_obj: Any,
     requested_model: str,
     log_context: str,
+    upstream_model: Optional[str] = None,
 ) -> None:
     """
     Force the OpenAI-compatible `model` field in the response to match what the client requested.
@@ -291,12 +292,21 @@ def _override_openai_response_model(
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
         if downstream_model != requested_model:
-            verbose_proxy_logger.debug(
-                "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
-                log_context,
-                requested_model,
-                downstream_model,
-            )
+            if upstream_model and downstream_model == upstream_model:
+                verbose_proxy_logger.debug(
+                    "%s: response model is known alias - requested=%r upstream=%r downstream=%r. Overriding response['model'].",
+                    log_context,
+                    requested_model,
+                    upstream_model,
+                    downstream_model,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
+                    log_context,
+                    requested_model,
+                    downstream_model,
+                )
         response_obj["model"] = requested_model
         return
 
@@ -310,12 +320,21 @@ def _override_openai_response_model(
 
     downstream_model = getattr(response_obj, "model", None)
     if downstream_model != requested_model:
-        verbose_proxy_logger.debug(
-            "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
-            log_context,
-            requested_model,
-            downstream_model,
-        )
+        if upstream_model and downstream_model == upstream_model:
+            verbose_proxy_logger.debug(
+                "%s: response model is known alias - requested=%r upstream=%r downstream=%r. Overriding response.model.",
+                log_context,
+                requested_model,
+                upstream_model,
+                downstream_model,
+            )
+        else:
+            verbose_proxy_logger.warning(
+                "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
+                log_context,
+                requested_model,
+                downstream_model,
+            )
 
     try:
         setattr(response_obj, "model", requested_model)
@@ -994,10 +1013,12 @@ class ProxyBaseLLMRequestProcessing:
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
         if requested_model_from_client:
+            _upstream_model = getattr(logging_obj, "model", None)
             _override_openai_response_model(
                 response_obj=response,
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+                upstream_model=_upstream_model,
             )
 
         hidden_params = (
@@ -1214,11 +1235,12 @@ class ProxyBaseLLMRequestProcessing:
         elif isinstance(e, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
             # This matches the original behavior before the refactor in commit 511d435f6f
-            error_body = await e.response.aread()
+            http_status_error: httpx.HTTPStatusError = e
+            error_body = await http_status_error.response.aread()
             error_text = error_body.decode("utf-8")
 
             raise HTTPException(
-                status_code=e.response.status_code,
+                status_code=http_status_error.response.status_code,
                 detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
