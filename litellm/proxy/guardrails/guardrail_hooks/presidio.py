@@ -1058,10 +1058,24 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # --- Output masking path (apply_to_output=True) ---
         if self.apply_to_output:
             all_chunks: List[ModelResponseStream] = []
+            all_bytes_chunks: List[bytes] = []
             try:
                 async for chunk in response:
                     if isinstance(chunk, ModelResponseStream):
                         all_chunks.append(chunk)
+                    elif isinstance(chunk, bytes):
+                        all_bytes_chunks.append(chunk)
+
+                # Anthropic native SSE arrives as raw bytes — Presidio masking cannot
+                # be applied to unparsed SSE, so pass the stream through unmodified.
+                if all_bytes_chunks and not all_chunks:
+                    verbose_proxy_logger.warning(
+                        "PII masking: received bytes-only stream (Anthropic native SSE); "
+                        "output masking cannot be applied, passing through unmodified"
+                    )
+                    for chunk in all_bytes_chunks:
+                        yield chunk  # type: ignore[misc]
+                    return
 
                 if not all_chunks:
                     return
@@ -1096,6 +1110,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 # If we collected chunks before the error, replay those.
                 for chunk in all_chunks:
                     yield chunk
+                for chunk in all_bytes_chunks:  # type: ignore[misc]
+                    yield chunk  # type: ignore[misc]
                 return
 
         # --- PII unmasking path (output_parse_pii=True) ---

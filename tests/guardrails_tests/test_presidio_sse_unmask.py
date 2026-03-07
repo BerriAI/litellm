@@ -148,12 +148,14 @@ async def test_streaming_hook_unmasks_anthropic_sse_bytes():
     ):
         chunks.append(chunk)
 
-    assert len(chunks) == 1, f"Expected 1 rebuilt SSE chunk, got {len(chunks)}"
-    result = chunks[0]
-    assert isinstance(result, bytes), "Output should be bytes for Anthropic SSE path"
+    # The hook yields one chunk per SSE event: the merged text_delta event and
+    # the original message_stop event, so 2 chunks total.
+    assert len(chunks) == 2, f"Expected 2 rebuilt SSE chunks, got {len(chunks)}"
+    text_delta_chunk = chunks[0]
+    assert isinstance(text_delta_chunk, bytes), "Output should be bytes for Anthropic SSE path"
 
-    # The rebuilt SSE must contain the original name, not the PII token
-    result_text = result.decode()
+    # The rebuilt text_delta chunk must contain the original name, not the PII token
+    result_text = text_delta_chunk.decode()
     assert original_name in result_text, (
         f"Expected original name '{original_name}' in rebuilt SSE, got: {result_text}"
     )
