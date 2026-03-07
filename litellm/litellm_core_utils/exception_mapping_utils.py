@@ -2061,6 +2061,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="ollama",
                         model=model,
                     )
+                elif "session usage limit" in error_str.lower() or "rate limit" in error_str.lower():
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=f"OllamaException: {original_exception}",
+                        llm_provider="ollama",
+                        model=model,
+                        response=getattr(original_exception, "response", None),
+                    )
             elif custom_llm_provider == "vllm":
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 0:
