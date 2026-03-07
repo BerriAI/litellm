@@ -96,9 +96,14 @@ def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
 def _write_byok_cred_cache(
     user_id: str, server_id: str, credential: Optional[str]
 ) -> None:
-    """Write a credential value to the cache, evicting all entries if at capacity."""
+    """Write a credential value to the cache, evicting the oldest entry if at capacity.
+
+    Evicts a single entry (LRU-style) rather than clearing all at once to avoid
+    a thundering-herd DB spike when the cache fills under load.
+    """
     if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
-        _byok_cred_cache.clear()
+        oldest_key = next(iter(_byok_cred_cache))
+        del _byok_cred_cache[oldest_key]
     _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
 
 # Check if MCP is available

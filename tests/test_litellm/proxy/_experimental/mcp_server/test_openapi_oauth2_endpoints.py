@@ -416,3 +416,86 @@ def test_extract_access_token_json_without_access_token_key():
     blob = json.dumps({"some_other_key": "value"})
     # Falls back to raw string since there's no access_token
     assert _extract_access_token(blob) == blob
+
+
+# ---------------------------------------------------------------------------
+# _write_byok_cred_cache — LRU eviction (regression for thundering-herd bug)
+# ---------------------------------------------------------------------------
+
+
+def test_write_byok_cred_cache_evicts_single_oldest_entry():
+    """At capacity, _write_byok_cred_cache must evict one (oldest) entry, not clear all."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _BYOK_CRED_CACHE_MAX_SIZE,
+        _byok_cred_cache,
+        _write_byok_cred_cache,
+    )
+
+    _byok_cred_cache.clear()
+
+    # Fill to capacity
+    for i in range(_BYOK_CRED_CACHE_MAX_SIZE):
+        _byok_cred_cache[(f"user{i}", "server")] = ("token", 0.0)
+
+    assert len(_byok_cred_cache) == _BYOK_CRED_CACHE_MAX_SIZE
+
+    # Writing one more entry should evict the oldest, not clear everything
+    _write_byok_cred_cache("new_user", "server", "new_token")
+
+    # Cache should still be at max size — only ONE entry was evicted
+    assert len(_byok_cred_cache) == _BYOK_CRED_CACHE_MAX_SIZE
+
+    # The new entry must be present
+    assert ("new_user", "server") in _byok_cred_cache
+
+    # The oldest entry (user0) should have been evicted
+    assert ("user0", "server") not in _byok_cred_cache
+
+    _byok_cred_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the three bug fixes in c1fcbf6219
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_server_byok_fields_propagated():
+    """Bug fix 1 (related): MCPServer must accept and preserve is_byok,
+    byok_description, and byok_api_key_help_url (previously missing from
+    load_servers_from_config which caused BYOK OAuth2 servers to lose these
+    fields after config load).
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="github",
+        name="github",
+        server_name="GitHub",
+        transport=MCPTransport.sse,
+        is_byok=True,
+        byok_description=["Read your profile", "List your repos"],
+        byok_api_key_help_url="https://github.com/settings/tokens",
+    )
+
+    assert server.is_byok is True
+    assert server.byok_description == ["Read your profile", "List your repos"]
+    assert server.byok_api_key_help_url == "https://github.com/settings/tokens"
+
+
+def test_mcp_server_byok_fields_default_to_empty():
+    """Regression: byok fields default to False/[] (not None) so they don't
+    need null-guards in code that iterates byok_description.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="plain",
+        name="plain",
+        server_name="Plain Server",
+        transport=MCPTransport.http,
+    )
+
+    assert server.is_byok is False
+    assert isinstance(server.byok_description, list)
