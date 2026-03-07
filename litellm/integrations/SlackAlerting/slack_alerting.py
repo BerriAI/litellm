@@ -1482,6 +1482,13 @@ Model Info:
         if kwargs:
             for key, value in kwargs.items():
                 formatted_message += f"\n\n{key}: `{value}`\n\n"
+
+        if self.alerting_args.default_alerting_metadata:
+            alerting_metadata = {
+                **self.alerting_args.default_alerting_metadata,
+                **(alerting_metadata or {}),
+            }
+
         if alerting_metadata:
             for key, value in alerting_metadata.items():
                 formatted_message += f"\n\n*Alerting Metadata*: \n{key}: `{value}`\n\n"
