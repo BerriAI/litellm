@@ -94,7 +94,8 @@ RUN apt-get update && apt-get upgrade -y \
        done \
     && find / -path "*/node_modules/npm/package.json" -exec \
 sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null \
-    && npm cache clean --force
+    && npm cache clean --force \
+    && apt-get purge -y npm && apt-get autoremove -y
 
 WORKDIR /app
 
