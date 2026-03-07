@@ -139,6 +139,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to targeted fields.
@@ -171,12 +172,13 @@ class PassThroughEndpointHandler(BaseTranslation):
         if not text_to_check:
             return response
 
-        # Create a request_data dict with response info and user API key metadata
-        request_data: dict = (
-            {"response": response}
-            if not isinstance(response, dict)
-            else response.copy()
-        )
+        # Merge caller's request_data (contains pii_tokens from input masking)
+        # with response info. Nesting response under "response" key matches the
+        # pattern used by all other handlers and avoids key collisions.
+        request_data: dict = {
+            **(request_data or {}),
+            "response": response,
+        }
 
         # Add user API key metadata with prefixed keys
         user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)

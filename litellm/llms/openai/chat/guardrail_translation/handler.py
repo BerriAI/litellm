@@ -260,6 +260,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content.
@@ -309,7 +310,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_to_check:
             # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"response": response}
+            request_data: dict = {**(request_data or {}), "response": response}
 
             # Add user API key metadata with prefixed keys
             user_metadata = self.transform_user_api_key_dict_to_metadata(
@@ -364,6 +365,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> List["ModelResponseStream"]:
         """
         Process output streaming responses by applying guardrails to text content.
@@ -402,6 +404,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 guardrail_to_apply=guardrail_to_apply,
                 litellm_logging_obj=litellm_logging_obj,
                 user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
             )
 
             return responses_so_far
@@ -437,7 +440,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 3: Apply guardrail to all combined texts in batch
         if texts_to_check:
             # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"responses": responses_so_far}
+            request_data: dict = {**(request_data or {}), "responses": responses_so_far}
 
             # Add user API key metadata with prefixed keys
             user_metadata = self.transform_user_api_key_dict_to_metadata(
