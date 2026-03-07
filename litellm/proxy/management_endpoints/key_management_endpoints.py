@@ -64,6 +64,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    validate_mcp_object_permission_for_key,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -637,6 +638,12 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             data_json["metadata"]["tags"] = data_json["tags"]
 
         data_json.pop("tags")
+
+    await validate_mcp_object_permission_for_key(
+        user_api_key_dict=user_api_key_dict,
+        object_permission=data_json.get("object_permission"),
+        prisma_client=prisma_client,
+    )
 
     data_json = await _set_object_permission(
         data_json=data_json,
@@ -1946,6 +1953,13 @@ async def update_key_fn(
             )
 
             # Set Management Endpoint Metadata Fields
+
+        if "object_permission" in data_json:
+            await validate_mcp_object_permission_for_key(
+                user_api_key_dict=user_api_key_dict,
+                object_permission=data_json.get("object_permission"),
+                prisma_client=prisma_client,
+            )
 
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
