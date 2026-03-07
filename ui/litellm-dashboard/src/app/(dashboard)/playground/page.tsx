@@ -8,6 +8,7 @@ import ComplianceUI from "@/components/playground/complianceUI/ComplianceUI";
 import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
+import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { MessageOutlined, CloseOutlined } from "@ant-design/icons";
 
 interface ProxySettings {
@@ -19,6 +20,11 @@ export default function PlaygroundPage() {
   const { accessToken, userRole, userId, disabledPersonalKeyCreation, token } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
   const [chatBannerDismissed, setChatBannerDismissed] = useState(false);
+  const { data: uiConfig } = useUIConfig();
+  const uiRoot = uiConfig?.server_root_path && uiConfig.server_root_path !== "/"
+    ? uiConfig.server_root_path.replace(/\/+$/, "")
+    : "";
+  const chatHref = `${uiRoot}/ui/chat`;
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -67,7 +73,7 @@ export default function PlaygroundPage() {
             {" "}— a ChatGPT-like interface for your users to chat with AI models and MCP tools. Share it with your team.
           </span>
           <a
-            href="/chat"
+            href={chatHref}
             target="_blank"
             rel="noopener noreferrer"
             style={{
