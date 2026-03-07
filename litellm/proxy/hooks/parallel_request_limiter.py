@@ -132,7 +132,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             error_message = error_message + " " + additional_details
         raise HTTPException(
             status_code=429,
-            detail=f"Max parallel request limit reached {additional_details}",
+            detail=error_message,
             headers={"retry-after": str(self.time_to_next_minute())},
         )
 
