@@ -268,6 +268,58 @@ class TestGPTImage15OutputImageTokens:
             f"Expected {expected_cost}, got {cost}. "
             f"Image tokens may not be included in cost calculation."
         )
+    
+    def test_azure_gpt_image_15_output_tokens_cost(self):
+        """
+        Test that output tokens are correctly calculated in cost calculation for Azure.
+        """
+        # Set environment variable to use local model cost map
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        # Simulate gpt-image-1.5 response with output_tokens_details
+        usage = Usage(
+            prompt_tokens=200,
+            completion_tokens=4800,
+            total_tokens=5000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=200,
+                image_tokens=0,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                text_tokens=600,
+                image_tokens=4200,
+            ),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(b64_json="test")],
+        )
+        image_response.usage = usage
+        image_response._hidden_params = {"custom_llm_provider": "azure"}
+
+        cost = litellm.completion_cost(
+            completion_response=image_response,
+            model="gpt-image-1.5",
+            call_type="image_generation",
+            custom_llm_provider="azure",
+        )
+
+        # Azure gpt-image-1.5 pricing:
+        # - input_cost_per_token: 5e-06 ($5/1M for text input)
+        # - output_cost_per_token: 1e-05 ($10/1M for text output)
+        # - output_cost_per_image_token: 3.2e-05 ($32/1M for image output)
+        #
+        # Expected cost:
+        # Input text: 200 * $5/1M = $0.001
+        # Output text: 600 * $10/1M = $0.006
+        # Output image: 4200 * $32/1M = $0.1344
+        # Total: $0.1414
+        expected_cost = 200 * 5e-06 + 600 * 1e-05 + 4200 * 3.2e-05
+
+        assert abs(cost - expected_cost) < 1e-6, (
+            f"Expected {expected_cost}, got {cost}. "
+            f"Output tokens may be calculated in a wrong rate for Azure."
+        )
 
 
 class TestCompletionCostIntegration:
