@@ -77,10 +77,8 @@ sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9
     npm cache clean --force && \
     # Remove the apk-tracked npm so its stale SBOM metadata (tar 7.5.9) is
     # no longer visible to image scanners.  The globally installed npm@latest
-    npm cache clean --force && \
-    # Remove the apk-tracked npm so its stale SBOM metadata (tar 7.5.9) is
-    # no longer visible to image scanners.  The globally installed npm@latest
     # at /usr/local/lib/node_modules/npm/ remains fully functional.
+    { apk del --no-cache npm 2>/dev/null || true; }
     { apk del --no-cache npm 2>/dev/null || true; }
 COPY . .
 RUN ls -la /app
