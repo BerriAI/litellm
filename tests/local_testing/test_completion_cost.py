@@ -2945,3 +2945,77 @@ def test_batch_cost_calculator():
 
     cost = completion_cost(**args)
     assert cost > 0
+
+
+def test_cost_calculator_base_model_cross_provider():
+    """
+    When base_model has a different provider prefix than the deployment,
+    custom_llm_provider should be updated so cost_per_token builds the
+    correct model key.  Regression test for #22257.
+    """
+    resp = litellm.completion(
+        model="anthropic/my-custom-deployment",
+        messages=[{"role": "user", "content": "Hello"}],
+        base_model="gemini/gemini-2.0-flash",
+        mock_response="Hi there!",
+    )
+    assert resp._hidden_params["response_cost"] > 0
+
+
+def test_cost_calculator_base_model_cross_provider_direct():
+    """
+    Direct completion_cost unit test for cross-provider base_model override.
+    Verifies that completion_cost correctly routes to the base_model provider.
+    """
+    from litellm import ModelResponse, Usage
+
+    resp = ModelResponse(
+        id="chatcmpl-test",
+        model="gemini/gemini-2.0-flash",
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    cost = completion_cost(
+        model="anthropic/my-custom-deployment",
+        completion_response=resp,
+        base_model="gemini/gemini-2.0-flash",
+        custom_llm_provider="anthropic",
+    )
+    assert cost > 0
+
+
+def test_cost_calculator_base_model_cross_provider_hidden_params_guard():
+    """
+    Verify that hidden_params.custom_llm_provider does not undo the
+    base_model provider override when the response carries a stale provider.
+    """
+    from litellm import ModelResponse, Usage
+
+    resp = ModelResponse(
+        id="chatcmpl-guard",
+        model="gemini/gemini-2.0-flash",
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    # Simulate hidden_params carrying the original (wrong) provider
+    resp._hidden_params = {"custom_llm_provider": "anthropic"}
+
+    cost = completion_cost(
+        model="anthropic/my-custom-deployment",
+        completion_response=resp,
+        base_model="gemini/gemini-2.0-flash",
+        custom_llm_provider="anthropic",
+    )
+    assert cost > 0
+
+
+def test_cost_calculator_base_model_same_provider_no_regression():
+    """
+    When base_model has the same provider prefix as the deployment,
+    custom_llm_provider should remain unchanged (no-regression).
+    """
+    resp = litellm.completion(
+        model="openai/my-custom-deployment",
+        messages=[{"role": "user", "content": "Hello"}],
+        base_model="openai/gpt-4o",
+        mock_response="Hi there!",
+    )
+    assert resp._hidden_params["response_cost"] > 0

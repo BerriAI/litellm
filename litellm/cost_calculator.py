@@ -1093,6 +1093,19 @@ def completion_cost(  # noqa: PLR0915
             router_model_id=router_model_id,
         )
 
+        # When base_model overrides model and carries its own provider prefix
+        # (e.g. base_model="gemini/gemini-2.0-flash" on an anthropic deployment),
+        # align custom_llm_provider so cost_per_token builds the correct key.
+        # Skip when custom_pricing is True (base_model is ignored in that path).
+        _provider_overridden = False
+        if base_model is not None and selected_model is not None and not custom_pricing:
+            _parts = selected_model.split("/", 1)
+            if len(_parts) > 1 and _parts[0] in LlmProvidersSet:
+                extracted = _parts[0]
+                if extracted != custom_llm_provider:
+                    custom_llm_provider = extracted
+                    _provider_overridden = True
+
         potential_model_names = [
             selected_model,
             _get_response_model(completion_response),
@@ -1174,9 +1187,10 @@ def completion_cost(  # noqa: PLR0915
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
-                        custom_llm_provider = hidden_params.get(
-                            "custom_llm_provider", custom_llm_provider or None
-                        )
+                        if not _provider_overridden:
+                            custom_llm_provider = hidden_params.get(
+                                "custom_llm_provider", custom_llm_provider or None
+                            )
                         region_name = hidden_params.get("region_name", region_name)
 
                         # For Gemini/Vertex AI responses, trafficType is stored in
