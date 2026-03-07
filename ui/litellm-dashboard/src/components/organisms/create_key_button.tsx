@@ -584,22 +584,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setPendingPrefillModels(null);
   }, [pendingPrefillModels, modelsToPick, form]);
 
-  // Apply deferred model prefill once the available model list arrives.
-  // This handles timing where prefill data arrives before or after models are fetched.
+  // Sync team when project is selected but teams loaded later (race condition)
   useEffect(() => {
-    if (!pendingPrefillModels || pendingPrefillModels.length === 0) {
-      return;
+    if (!selectedProjectId || !teams) return;
+    const project = projects?.find((p) => p.project_id === selectedProjectId);
+    if (!project?.team_id) return;
+    // If team is already set correctly, skip
+    if (selectedCreateKeyTeam?.team_id === project.team_id) return;
+    const projectTeam = teams.find((t) => t.team_id === project.team_id) || null;
+    if (projectTeam) {
+      setSelectedCreateKeyTeam(projectTeam);
+      form.setFieldValue("team_id", projectTeam.team_id);
     }
-    if (!modelsToPick || modelsToPick.length === 0) {
-      return;
-    }
-
-    const validModels = pendingPrefillModels.filter((model) => modelsToPick.includes(model));
-    if (validModels.length > 0) {
-      form.setFieldsValue({ models: validModels });
-    }
-    setPendingPrefillModels(null);
-  }, [pendingPrefillModels, modelsToPick, form]);
+  }, [teams, selectedProjectId, projects]);
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
