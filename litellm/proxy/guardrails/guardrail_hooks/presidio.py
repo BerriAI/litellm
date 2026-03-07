@@ -1192,6 +1192,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
+        # --- PII unmask path for output responses ---
+        if input_type == "response" and self.output_parse_pii:
+            pii_tokens = request_data.get("pii_tokens", {}) if request_data else {}
+            if pii_tokens:
+                _texts = inputs.get("texts", [])
+                inputs["texts"] = [self._unmask_pii_text(t, pii_tokens) for t in _texts]
+            else:
+                verbose_proxy_logger.debug(
+                    "apply_guardrail: no pii_tokens in request_data for output unmask path"
+                )
+            return inputs
+
         texts = inputs.get("texts", [])
 
         new_texts = []
