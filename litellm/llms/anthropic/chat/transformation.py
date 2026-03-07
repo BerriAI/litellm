@@ -1716,6 +1716,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if compaction_blocks is not None:
                 provider_specific_fields["compaction_blocks"] = compaction_blocks
 
+            # Preserve the original Anthropic content block ordering so that
+            # round-trip reconstruction in anthropic_messages_pt() can replay
+            # interleaved thinking / server_tool_use / tool_result blocks in
+            # the exact order the API returned them.  Without this, all
+            # thinking blocks are grouped first, which breaks Anthropic's
+            # signature verification when multiple web searches produce
+            # interleaved thinking blocks.
+            # Fixes: https://github.com/BerriAI/litellm/issues/23047
+            raw_content = completion_response.get("content")
+            if raw_content is not None and any(
+                c.get("type")
+                in ("thinking", "redacted_thinking", "server_tool_use")
+                for c in raw_content
+            ):
+                provider_specific_fields["anthropic_content"] = raw_content
+
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,

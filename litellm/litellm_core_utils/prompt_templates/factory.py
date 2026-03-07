@@ -2444,6 +2444,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
                     assistant_content.extend(_compaction_blocks)  # type: ignore
 
+                # If the original Anthropic content block ordering was preserved,
+                # use it directly instead of reconstructing from separate fields.
+                # This preserves the interleaving of thinking blocks with
+                # server_tool_use / tool_result blocks, which is required by
+                # Anthropic's API when thinking blocks are present.
+                # Fixes: https://github.com/BerriAI/litellm/issues/23047
+                _anthropic_content = _provider_specific_fields_raw.get("anthropic_content")
+                if _anthropic_content and isinstance(_anthropic_content, list):
+                    assistant_content.extend(_anthropic_content)  # type: ignore
+                    msg_i += 1
+                    continue
+
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             if (
                 thinking_blocks is not None
