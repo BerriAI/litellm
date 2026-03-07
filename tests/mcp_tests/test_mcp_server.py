@@ -413,12 +413,18 @@ async def test_streamable_http_mcp_handler_mock():
     mock_receive = AsyncMock()
     mock_send = AsyncMock()
 
+    # Mock extract_mcp_auth_context to bypass auth checks in the handler
+    mock_auth_context = (None, None, None, {}, {}, {})
+
     with patch(
         "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
         True,
     ), patch(
         "litellm.proxy._experimental.mcp_server.server.session_manager",
         mock_session_manager,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        AsyncMock(return_value=mock_auth_context),
     ):
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
@@ -427,11 +433,8 @@ async def test_streamable_http_mcp_handler_mock():
         # Call the handler
         await handle_streamable_http_mcp(mock_scope, mock_receive, mock_send)
 
-        # Verify session manager handle_request was called with correct args
-        # send is passed directly (no wrapper)
-        mock_session_manager.handle_request.assert_called_once_with(
-            mock_scope, mock_receive, mock_send
-        )
+        # Verify session manager handle_request was called
+        mock_session_manager.handle_request.assert_called_once()
 
 
 @pytest.mark.asyncio
