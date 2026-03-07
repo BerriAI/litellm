@@ -28,7 +28,6 @@ from litellm.utils import ProviderConfigManager, client
 
 # Initialize HTTP handler
 base_llm_http_handler = BaseLLMHTTPHandler()
-DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com/v1"
 
 # Initialize LiteLLM skills handler (lazy - only used when custom_llm_provider="litellm")
 _litellm_skills_handler = None
@@ -197,9 +196,7 @@ def create_skill(
         )
 
         # Get API base and URL
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
         url = skills_api_provider_config.get_complete_url(
             api_base=api_base, endpoint="skills"
         )
@@ -244,6 +241,7 @@ def create_skill(
 async def alist_skills(
     limit: Optional[int] = None,
     page: Optional[str] = None,
+    before: Optional[str] = None,
     source: Optional[str] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
@@ -256,7 +254,10 @@ async def alist_skills(
     
     Args:
         limit: Number of results to return per page (max 100, default 20)
-        page: Pagination token for fetching a specific page of results
+        page: Pagination cursor for the next page.  For Anthropic this is
+              a page cursor; for OpenAI it maps to the ``after`` cursor.
+              Pass the ``next_page`` value from the previous response.
+        before: Cursor for reverse pagination (OpenAI only)
         source: Filter skills by source ('custom' or 'anthropic')
         extra_headers: Additional headers for the request
         extra_query: Additional query parameters
@@ -276,6 +277,7 @@ async def alist_skills(
             list_skills,
             limit=limit,
             page=page,
+            before=before,
             source=source,
             extra_headers=extra_headers,
             extra_query=extra_query,
@@ -307,6 +309,7 @@ async def alist_skills(
 def list_skills(
     limit: Optional[int] = None,
     page: Optional[str] = None,
+    before: Optional[str] = None,
     source: Optional[str] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
@@ -319,7 +322,10 @@ def list_skills(
     
     Args:
         limit: Number of results to return per page (max 100, default 20)
-        page: Pagination token for fetching a specific page of results
+        page: Pagination cursor for the next page.  For Anthropic this is
+              a page cursor; for OpenAI it maps to the ``after`` cursor.
+              Pass the ``next_page`` value from the previous response.
+        before: Cursor for reverse pagination (OpenAI only)
         source: Filter skills by source ('custom' or 'anthropic')
         extra_headers: Additional headers for the request
         extra_query: Additional query parameters
@@ -369,6 +375,8 @@ def list_skills(
             list_params["limit"] = limit
         if page is not None:
             list_params["page"] = page
+        if before is not None:
+            list_params["before"] = before
         if source is not None:
             list_params["source"] = source
 
@@ -544,14 +552,12 @@ def get_skill(
         )
 
         # Get API base
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
 
         # Transform request
         url, headers = skills_api_provider_config.transform_get_skill_request(
             skill_id=skill_id,
-            api_base=api_base or DEFAULT_ANTHROPIC_API_BASE,
+            api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -712,14 +718,12 @@ def delete_skill(
         )
 
         # Get API base
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
 
         # Transform request
         url, headers = skills_api_provider_config.transform_delete_skill_request(
             skill_id=skill_id,
-            api_base=api_base or DEFAULT_ANTHROPIC_API_BASE,
+            api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -736,6 +740,930 @@ def delete_skill(
 
         # Make HTTP request
         response = base_llm_http_handler.delete_skill_handler(
+            url=url,
+            skills_api_provider_config=skills_api_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=headers,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
+        )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+async def aupdate_skill(
+    skill_id: str,
+    default_version: Optional[Union[int, str]] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Dict:
+    """Async: update skill"""
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["aupdate_skill"] = True
+
+        func = partial(
+            update_skill,
+            skill_id=skill_id,
+            default_version=default_version,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def update_skill(
+    skill_id: str,
+    default_version: Optional[Union[int, str]] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+    """
+    Update Skill
+    """
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("aupdate_skill", False) is True
+
+        litellm_params = GenericLiteLLMParams(**kwargs)
+
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
+
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if skills_api_provider_config is None:
+            raise ValueError(
+                f"update_skill is not supported for {custom_llm_provider}"
+            )
+
+        headers = extra_headers or {}
+        headers = skills_api_provider_config.validate_environment(
+            headers=headers, litellm_params=litellm_params
+        )
+
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
+
+        update_data: Dict = {}
+        if default_version is not None:
+            update_data["default_version"] = default_version
+        if extra_body:
+            update_data.update(extra_body)
+
+        url, headers, request_body = skills_api_provider_config.transform_update_skill_request(
+            skill_id=skill_id, update_data=update_data, api_base=api_base, litellm_params=litellm_params, headers=headers,
+        )
+
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            optional_params={"skill_id": skill_id, "update_data": update_data},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        response = base_llm_http_handler.update_skill_handler(
+            url=url,
+            request_body=request_body,
+            skills_api_provider_config=skills_api_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=headers,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
+        )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+async def aget_skill_content(
+    skill_id: str,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Dict:
+    """Async: get skill content"""
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["aget_skill_content"] = True
+
+        func = partial(
+            get_skill_content,
+            skill_id=skill_id,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def get_skill_content(
+    skill_id: str,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+    """
+    Get Skill Content
+    """
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("aget_skill_content", False) is True
+
+        litellm_params = GenericLiteLLMParams(**kwargs)
+
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
+
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if skills_api_provider_config is None:
+            raise ValueError(
+                f"get_skill_content is not supported for {custom_llm_provider}"
+            )
+
+        headers = extra_headers or {}
+        headers = skills_api_provider_config.validate_environment(
+            headers=headers, litellm_params=litellm_params
+        )
+
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
+
+        url, headers = skills_api_provider_config.transform_get_skill_content_request(
+            skill_id=skill_id, api_base=api_base, litellm_params=litellm_params, headers=headers,
+        )
+
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            optional_params={"skill_id": skill_id},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        response = base_llm_http_handler.get_skill_content_handler(
+            url=url,
+            skills_api_provider_config=skills_api_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=headers,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
+        )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+async def acreate_skill_version(
+    skill_id: str,
+    files: Optional[List[Any]] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Dict:
+    """Async: create skill version"""
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["acreate_skill_version"] = True
+
+        func = partial(
+            create_skill_version,
+            skill_id=skill_id,
+            files=files,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def create_skill_version(
+    skill_id: str,
+    files: Optional[List[Any]] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+    """
+    Create Skill Version
+    """
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("acreate_skill_version", False) is True
+
+        litellm_params = GenericLiteLLMParams(**kwargs)
+
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
+
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if skills_api_provider_config is None:
+            raise ValueError(
+                f"create_skill_version is not supported for {custom_llm_provider}"
+            )
+
+        headers = extra_headers or {}
+        headers = skills_api_provider_config.validate_environment(
+            headers=headers, litellm_params=litellm_params
+        )
+
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
+
+        create_request: Dict = {}
+        if files is not None:
+            create_request["files"] = files
+        if extra_body:
+            create_request.update(extra_body)
+
+        url, headers, request_body = skills_api_provider_config.transform_create_skill_version_request(
+            skill_id=skill_id, create_request=create_request, api_base=api_base, litellm_params=litellm_params, headers=headers,
+        )
+
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            optional_params={"skill_id": skill_id},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        response = base_llm_http_handler.create_skill_version_handler(
+            url=url,
+            request_body=request_body,
+            skills_api_provider_config=skills_api_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=headers,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
+        )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+async def alist_skill_versions(
+    skill_id: str,
+    limit: Optional[int] = None,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Dict:
+    """Async: list skill versions"""
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["alist_skill_versions"] = True
+
+        func = partial(
+            list_skill_versions,
+            skill_id=skill_id,
+            limit=limit,
+            after=after,
+            before=before,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def list_skill_versions(
+    skill_id: str,
+    limit: Optional[int] = None,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+    """
+    List Skill Versions
+    """
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("alist_skill_versions", False) is True
+
+        litellm_params = GenericLiteLLMParams(**kwargs)
+
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
+
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if skills_api_provider_config is None:
+            raise ValueError(
+                f"list_skill_versions is not supported for {custom_llm_provider}"
+            )
+
+        headers = extra_headers or {}
+        headers = skills_api_provider_config.validate_environment(
+            headers=headers, litellm_params=litellm_params
+        )
+
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
+
+        list_params: Dict = {}
+        if limit is not None:
+            list_params["limit"] = limit
+        if after is not None:
+            list_params["after"] = after
+        if before is not None:
+            list_params["before"] = before
+        if extra_query:
+            list_params.update(extra_query)
+
+        url, headers, query_params = skills_api_provider_config.transform_list_skill_versions_request(
+            skill_id=skill_id, list_params=list_params, api_base=api_base, litellm_params=litellm_params, headers=headers,
+        )
+
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            optional_params={"skill_id": skill_id, "list_params": list_params},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        response = base_llm_http_handler.list_skill_versions_handler(
+            url=url,
+            query_params=query_params,
+            skills_api_provider_config=skills_api_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=headers,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
+        )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+async def aget_skill_version(
+    skill_id: str,
+    version: str,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Dict:
+    """Async: get skill version"""
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["aget_skill_version"] = True
+
+        func = partial(
+            get_skill_version,
+            skill_id=skill_id,
+            version=version,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def get_skill_version(
+    skill_id: str,
+    version: str,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+    """
+    Get Skill Version
+    """
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("aget_skill_version", False) is True
+
+        litellm_params = GenericLiteLLMParams(**kwargs)
+
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
+
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if skills_api_provider_config is None:
+            raise ValueError(
+                f"get_skill_version is not supported for {custom_llm_provider}"
+            )
+
+        headers = extra_headers or {}
+        headers = skills_api_provider_config.validate_environment(
+            headers=headers, litellm_params=litellm_params
+        )
+
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
+
+        url, headers = skills_api_provider_config.transform_get_skill_version_request(
+            skill_id=skill_id, version=version, api_base=api_base, litellm_params=litellm_params, headers=headers,
+        )
+
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            optional_params={"skill_id": skill_id, "version": version},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        response = base_llm_http_handler.get_skill_version_handler(
+            url=url,
+            skills_api_provider_config=skills_api_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=headers,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
+        )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+async def adelete_skill_version(
+    skill_id: str,
+    version: str,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Dict:
+    """Async: delete skill version"""
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["adelete_skill_version"] = True
+
+        func = partial(
+            delete_skill_version,
+            skill_id=skill_id,
+            version=version,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def delete_skill_version(
+    skill_id: str,
+    version: str,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+    """
+    Delete Skill Version
+    """
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("adelete_skill_version", False) is True
+
+        litellm_params = GenericLiteLLMParams(**kwargs)
+
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
+
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if skills_api_provider_config is None:
+            raise ValueError(
+                f"delete_skill_version is not supported for {custom_llm_provider}"
+            )
+
+        headers = extra_headers or {}
+        headers = skills_api_provider_config.validate_environment(
+            headers=headers, litellm_params=litellm_params
+        )
+
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
+
+        url, headers = skills_api_provider_config.transform_delete_skill_version_request(
+            skill_id=skill_id, version=version, api_base=api_base, litellm_params=litellm_params, headers=headers,
+        )
+
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            optional_params={"skill_id": skill_id, "version": version},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        response = base_llm_http_handler.delete_skill_version_handler(
+            url=url,
+            skills_api_provider_config=skills_api_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=headers,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
+        )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+async def aget_skill_version_content(
+    skill_id: str,
+    version: str,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Dict:
+    """Async: get skill version content"""
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["aget_skill_version_content"] = True
+
+        func = partial(
+            get_skill_version_content,
+            skill_id=skill_id,
+            version=version,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def get_skill_version_content(
+    skill_id: str,
+    version: str,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+    """
+    Get Skill Version Content
+    """
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("aget_skill_version_content", False) is True
+
+        litellm_params = GenericLiteLLMParams(**kwargs)
+
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
+
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if skills_api_provider_config is None:
+            raise ValueError(
+                f"get_skill_version_content is not supported for {custom_llm_provider}"
+            )
+
+        headers = extra_headers or {}
+        headers = skills_api_provider_config.validate_environment(
+            headers=headers, litellm_params=litellm_params
+        )
+
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
+
+        url, headers = skills_api_provider_config.transform_get_skill_version_content_request(
+            skill_id=skill_id, version=version, api_base=api_base, litellm_params=litellm_params, headers=headers,
+        )
+
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            optional_params={"skill_id": skill_id, "version": version},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        response = base_llm_http_handler.get_skill_version_content_handler(
             url=url,
             skills_api_provider_config=skills_api_provider_config,
             custom_llm_provider=custom_llm_provider,

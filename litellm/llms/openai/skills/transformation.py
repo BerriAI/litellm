@@ -1,0 +1,524 @@
+"""
+OpenAI Skills API configuration and transformations
+"""
+
+from typing import Any, Dict, Optional, Tuple
+
+import base64
+import datetime
+
+import httpx
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.llms.base_llm.skills.transformation import (
+    BaseSkillsAPIConfig,
+    LiteLLMLoggingObj,
+)
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.anthropic_skills import (
+    CreateSkillRequest,
+    DeleteSkillResponse,
+    DeleteSkillVersionResponse,
+    ListSkillsParams,
+    ListSkillsResponse,
+    ListSkillVersionsResponse,
+    Skill,
+    SkillVersion,
+)
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
+
+DEFAULT_OPENAI_API_BASE = "https://api.openai.com"
+
+
+class OpenAISkillsConfig(BaseSkillsAPIConfig):
+    """OpenAI-specific Skills API configuration"""
+
+    supported_operations: frozenset = frozenset(
+        {
+            "create", "list", "get", "delete",
+            "update", "content", "create_version", "list_versions",
+            "get_version", "delete_version", "get_version_content",
+        }
+    )
+
+    @property
+    def custom_llm_provider(self) -> LlmProviders:
+        return LlmProviders.OPENAI
+
+    def _get_api_key(
+        self, litellm_params: Optional[GenericLiteLLMParams]
+    ) -> Optional[str]:
+        """Resolve OpenAI API key from params, globals, or environment."""
+        api_key = None
+        if litellm_params:
+            api_key = litellm_params.api_key
+        return (
+            api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+        )
+
+    def _get_api_base(
+        self, litellm_params: Optional[GenericLiteLLMParams]
+    ) -> str:
+        """Resolve OpenAI API base URL."""
+        api_base = None
+        if litellm_params:
+            api_base = litellm_params.api_base
+        return (api_base or DEFAULT_OPENAI_API_BASE).rstrip("/")
+
+    def get_api_base(
+        self, litellm_params: Optional[GenericLiteLLMParams]
+    ) -> str:
+        """Resolve OpenAI API base URL (override for provider-agnostic dispatch)."""
+        return self._get_api_base(litellm_params)
+
+    def validate_environment(
+        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
+    ) -> dict:
+        """Add OpenAI-specific headers (Bearer token auth)."""
+        api_key = self._get_api_key(litellm_params)
+
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY is required for OpenAI Skills API")
+
+        headers["Authorization"] = f"Bearer {api_key}"
+
+        return headers
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        endpoint: str,
+        skill_id: Optional[str] = None,
+    ) -> str:
+        """Get complete URL for OpenAI Skills API."""
+        if api_base is None:
+            api_base = DEFAULT_OPENAI_API_BASE
+        api_base = api_base.rstrip("/")
+
+        if skill_id:
+            return f"{api_base}/v1/skills/{skill_id}"
+        return f"{api_base}/v1/{endpoint}"
+
+    def transform_create_skill_request(
+        self,
+        create_request: CreateSkillRequest,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """Transform create skill request for OpenAI (multipart passthrough).
+        
+        Maps canonical fields to OpenAI format:
+        - display_title is Anthropic-specific; OpenAI derives name from SKILL.md frontmatter
+        """
+        result = {k: v for k, v in create_request.items() if v is not None}
+        # Remove Anthropic-specific fields that OpenAI doesn't accept
+        result.pop("display_title", None)
+        result.pop("source", None)
+        return result
+
+    def transform_create_skill_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Skill:
+        """Transform OpenAI response to canonical Skill object."""
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        verbose_logger.debug(
+            "Transforming OpenAI create skill response: %s", response_json
+        )
+        return self._openai_skill_to_canonical(response_json)
+
+    def transform_list_skills_request(
+        self,
+        list_params: ListSkillsParams,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform list skills request for OpenAI."""
+        api_base = self._get_api_base(litellm_params)
+        url = self.get_complete_url(api_base=api_base, endpoint="skills")
+
+        query_params: Dict[str, Any] = {}
+        if "limit" in list_params and list_params["limit"] is not None:
+            query_params["limit"] = list_params["limit"]
+        # Map Anthropic-style 'page' to OpenAI-style 'after' if present
+        if "page" in list_params and list_params["page"] is not None:
+            query_params["after"] = list_params["page"]
+        if "before" in list_params and list_params["before"] is not None:
+            query_params["before"] = list_params["before"]
+
+        verbose_logger.debug(
+            "OpenAI list skills request with params: %s", query_params
+        )
+        return url, query_params
+
+    def transform_list_skills_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ListSkillsResponse:
+        """Transform OpenAI SkillList response to canonical ListSkillsResponse."""
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        verbose_logger.debug(
+            "Transforming OpenAI list skills response: %s", response_json
+        )
+
+        skills = [
+            self._openai_skill_to_canonical(s) for s in response_json.get("data", [])
+        ]
+
+        return ListSkillsResponse(
+            data=skills,
+            next_page=response_json.get("last_id"),
+            has_more=response_json.get("has_more", False),
+        )
+
+    def transform_get_skill_request(
+        self,
+        skill_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform get skill request for OpenAI."""
+        url = self.get_complete_url(
+            api_base=api_base, endpoint="skills", skill_id=skill_id
+        )
+        verbose_logger.debug("OpenAI get skill request - URL: %s", url)
+        return url, headers
+
+    def transform_get_skill_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Skill:
+        """Transform OpenAI response to canonical Skill object."""
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        verbose_logger.debug(
+            "Transforming OpenAI get skill response: %s", response_json
+        )
+        return self._openai_skill_to_canonical(response_json)
+
+    def transform_delete_skill_request(
+        self,
+        skill_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform delete skill request for OpenAI."""
+        url = self.get_complete_url(
+            api_base=api_base, endpoint="skills", skill_id=skill_id
+        )
+        verbose_logger.debug("OpenAI delete skill request - URL: %s", url)
+        return url, headers
+
+    def transform_delete_skill_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> DeleteSkillResponse:
+        """Transform OpenAI DeletedSkill response to canonical DeleteSkillResponse."""
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        verbose_logger.debug(
+            "Transforming OpenAI delete skill response: %s", response_json
+        )
+        return DeleteSkillResponse(
+            id=response_json["id"],
+            type="skill_deleted",
+        )
+
+    # ──────────────────────────────────────────────
+    # OpenAI-specific endpoints: update, content, versions
+    # ──────────────────────────────────────────────
+
+    def transform_update_skill_request(
+        self,
+        skill_id: str,
+        update_data: Dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """Transform update skill request (e.g. set default_version)."""
+        url = self.get_complete_url(
+            api_base=api_base, endpoint="skills", skill_id=skill_id
+        )
+        body = {k: v for k, v in update_data.items() if v is not None}
+        # OpenAI expects default_version as string
+        if "default_version" in body and isinstance(body["default_version"], int):
+            body["default_version"] = str(body["default_version"])
+        verbose_logger.debug("OpenAI update skill request - URL: %s, body: %s", url, body)
+        return url, headers, body
+
+    def transform_update_skill_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Skill:
+        """Transform OpenAI update skill response to canonical Skill."""
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        verbose_logger.debug("Transforming OpenAI update skill response: %s", response_json)
+        return self._openai_skill_to_canonical(response_json)
+
+    def transform_get_skill_content_request(
+        self,
+        skill_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform get skill content request → GET /v1/skills/{id}/content."""
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/content"
+        verbose_logger.debug("OpenAI get skill content request - URL: %s", url)
+        return url, headers
+
+    def transform_get_skill_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Any:
+        """Return skill content response. Content may be binary (zip) or JSON."""
+        raw_response.raise_for_status()
+        content_type = raw_response.headers.get("content-type", "")
+        if "json" in content_type:
+            return raw_response.json()
+        content = raw_response.content
+        if isinstance(content, bytes):
+            content = base64.b64encode(content).decode("ascii")
+        return {
+            "content": content,
+            "content_type": content_type,
+            "status_code": raw_response.status_code,
+        }
+
+    def transform_create_skill_version_request(
+        self,
+        skill_id: str,
+        create_request: Dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """Transform create skill version request → POST /v1/skills/{id}/versions."""
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions"
+        body = {k: v for k, v in create_request.items() if v is not None}
+        verbose_logger.debug("OpenAI create skill version request - URL: %s", url)
+        return url, headers, body
+
+    def transform_create_skill_version_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> SkillVersion:
+        """Transform create skill version response."""
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        verbose_logger.debug(
+            "Transforming OpenAI create skill version response: %s", response_json
+        )
+        return self._openai_version_to_canonical(response_json)
+
+    def transform_list_skill_versions_request(
+        self,
+        skill_id: str,
+        list_params: Dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """Transform list skill versions request → GET /v1/skills/{id}/versions."""
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions"
+        query_params: Dict[str, Any] = {}
+        if list_params.get("limit") is not None:
+            query_params["limit"] = list_params["limit"]
+        if list_params.get("after") is not None:
+            query_params["after"] = list_params["after"]
+        if list_params.get("before") is not None:
+            query_params["before"] = list_params["before"]
+        verbose_logger.debug(
+            "OpenAI list skill versions - URL: %s, params: %s", url, query_params
+        )
+        return url, headers, query_params
+
+    def transform_list_skill_versions_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ListSkillVersionsResponse:
+        """Transform list skill versions response."""
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        versions = [
+            self._openai_version_to_canonical(v)
+            for v in response_json.get("data", [])
+        ]
+        return ListSkillVersionsResponse(
+            data=versions,
+            first_id=response_json.get("first_id"),
+            last_id=response_json.get("last_id"),
+            has_more=response_json.get("has_more", False),
+        )
+
+    def transform_get_skill_version_request(
+        self,
+        skill_id: str,
+        version: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform get skill version request → GET /v1/skills/{id}/versions/{v}."""
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions/{version}"
+        verbose_logger.debug("OpenAI get skill version request - URL: %s", url)
+        return url, headers
+
+    def transform_get_skill_version_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> SkillVersion:
+        """Transform get skill version response."""
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        verbose_logger.debug(
+            "Transforming OpenAI get skill version response: %s", response_json
+        )
+        return self._openai_version_to_canonical(response_json)
+
+    def transform_delete_skill_version_request(
+        self,
+        skill_id: str,
+        version: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform delete skill version request → DELETE /v1/skills/{id}/versions/{v}."""
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions/{version}"
+        verbose_logger.debug("OpenAI delete skill version request - URL: %s", url)
+        return url, headers
+
+    def transform_delete_skill_version_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> DeleteSkillVersionResponse:
+        """Transform delete skill version response."""
+        raw_response.raise_for_status()
+        response_json = raw_response.json()
+        return DeleteSkillVersionResponse(
+            id=response_json["id"],
+            object=response_json.get("object", "skill.version.deleted"),
+            deleted=response_json.get("deleted", True),
+            version=response_json.get("version"),
+        )
+
+    def transform_get_skill_version_content_request(
+        self,
+        skill_id: str,
+        version: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform get version content request → GET /v1/skills/{id}/versions/{v}/content."""
+        url = f"{api_base.rstrip('/')}/v1/skills/{skill_id}/versions/{version}/content"
+        verbose_logger.debug("OpenAI get skill version content - URL: %s", url)
+        return url, headers
+
+    def transform_get_skill_version_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        """Transform get skill version content response. Content may be binary (zip) or JSON."""
+        raw_response.raise_for_status()
+        content_type = raw_response.headers.get("content-type", "")
+        if "json" in content_type:
+            return raw_response.json()
+        content = raw_response.content
+        if isinstance(content, bytes):
+            content = base64.b64encode(content).decode("ascii")
+        return {
+            "content": content,
+            "content_type": content_type,
+            "status_code": raw_response.status_code,
+        }
+
+    # ──────────────────────────────────────────────
+    # Internal helpers
+    # ──────────────────────────────────────────────
+
+    @staticmethod
+    def _openai_skill_to_canonical(data: dict) -> Skill:
+        """Map OpenAI Skill JSON to canonical litellm Skill model.
+
+        OpenAI fields → canonical fields:
+          - name → display_title
+          - created_at (unix int) → created_at (ISO string)
+          - object → type
+          - no 'source' field → default to 'custom'
+        """
+        created_ts = data.get("created_at", 0)
+        if isinstance(created_ts, (int, float)):
+            created_at_str = datetime.datetime.fromtimestamp(
+                created_ts, tz=datetime.timezone.utc
+            ).isoformat()
+        else:
+            created_at_str = str(created_ts)
+
+        updated_ts = data.get("updated_at")
+        if updated_ts is not None:
+            if isinstance(updated_ts, (int, float)):
+                updated_at_str = datetime.datetime.fromtimestamp(
+                    updated_ts, tz=datetime.timezone.utc
+                ).isoformat()
+            else:
+                updated_at_str = str(updated_ts)
+        else:
+            updated_at_str = created_at_str
+
+        return Skill(
+            id=data.get("id", ""),
+            created_at=created_at_str,
+            default_version=str(data["default_version"]) if data.get("default_version") is not None else None,
+            display_title=data.get("name"),
+            latest_version=str(data["latest_version"]) if data.get("latest_version") is not None else None,
+            source="custom",
+            type=data.get("object", "skill"),
+            updated_at=updated_at_str,
+        )
+
+    @staticmethod
+    def _openai_version_to_canonical(data: dict) -> SkillVersion:
+        """Map OpenAI Skill Version JSON to canonical SkillVersion model."""
+        created_ts = data.get("created_at", 0)
+        if isinstance(created_ts, (int, float)):
+            created_at_str = datetime.datetime.fromtimestamp(
+                created_ts, tz=datetime.timezone.utc
+            ).isoformat()
+        else:
+            created_at_str = str(created_ts)
+
+        return SkillVersion(
+            id=data.get("id", ""),
+            skill_id=data.get("skill_id", ""),
+            version=str(data["version"]) if data.get("version") is not None else None,
+            created_at=created_at_str,
+            display_title=data.get("name"),
+            description=data.get("description"),
+            instructions=data.get("instructions"),
+            metadata=data.get("metadata"),
+            type=data.get("object", "skill.version"),
+        )

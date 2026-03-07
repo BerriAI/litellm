@@ -2,10 +2,10 @@
 Type definitions for Anthropic Skills API
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-from typing_extensions import Required, TypedDict
+from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 # Skills API Request Types
@@ -28,6 +28,9 @@ class ListSkillsParams(TypedDict, total=False):
     page: Optional[str]
     """Pagination token for fetching a specific page of results"""
 
+    before: Optional[str]
+    """Cursor for reverse pagination (OpenAI only)"""
+
     source: Optional[str]
     """Filter skills by source ('custom' or 'anthropic')"""
 
@@ -44,6 +47,9 @@ class Skill(BaseModel):
 
     display_title: Optional[str] = None
     """Display title for the skill"""
+
+    default_version: Optional[str] = None
+    """Default version of the skill (OpenAI-specific, None for Anthropic)"""
 
     latest_version: Optional[str] = None
     """The latest version identifier for the skill"""
@@ -107,6 +113,9 @@ class SkillVersion(BaseModel):
     skill_id: str
     """ID of the parent skill"""
 
+    version: Optional[str] = None
+    """Version number (e.g. '1', '2')"""
+
     created_at: str
     """ISO 8601 timestamp of when the version was created"""
 
@@ -156,4 +165,7 @@ class DeleteSkillVersionResponse(BaseModel):
 
     deleted: bool
     """Whether the version was successfully deleted"""
+
+    version: Optional[str] = None
+    """Version number that was deleted"""
 

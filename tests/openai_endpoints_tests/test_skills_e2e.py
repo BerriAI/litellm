@@ -1,0 +1,367 @@
+"""
+End-to-end test for LiteLLM Skills with Messages API.
+
+Tests the slack-gif-creator skill with GPT-4o via messages API
+to verify skills work correctly and can generate a GIF.
+"""
+
+import os
+import zipfile
+from io import BytesIO
+from pathlib import Path
+from typing import Optional
+
+import pytest
+
+import litellm
+import litellm.proxy.proxy_server
+from litellm.caching.caching import DualCache
+from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+from litellm.proxy._types import NewSkillRequest, UserAPIKeyAuth
+from litellm.proxy.hooks.litellm_skills import SkillsInjectionHook
+from litellm.proxy.proxy_cli import append_query_params
+from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.types.llms.anthropic_skills import ListSkillsResponse
+from litellm.types.utils import CallTypes
+
+proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+
+def create_skill_zip_from_folder(skill_name: str) -> bytes:
+    """Create a ZIP file from a skill folder in test_skills_data."""
+    test_dir = Path(__file__).parent / "test_skills_data"
+    skill_dir = test_dir / skill_name
+    
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in skill_dir.rglob("*"):
+            if file_path.is_file():
+                arcname = f"{skill_name}/{file_path.relative_to(skill_dir)}"
+                zf.write(file_path, arcname=arcname)
+    
+    return zip_buffer.getvalue()
+
+
+@pytest.fixture
+def prisma_client():
+    """Set up prisma client for tests."""
+    params = {"connection_limit": 100, "pool_timeout": 60}
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL not set")
+    
+    modified_url = append_query_params(database_url, params)
+    os.environ["DATABASE_URL"] = modified_url
+
+    prisma_client = PrismaClient(
+        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
+    )
+
+    return prisma_client
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="local testing only")
+async def test_slack_gif_skill_creates_gif(prisma_client):
+    """
+    Test slack-gif-creator skill generates a GIF using GPT-4o via messages API.
+    
+    Flow:
+    1. Store skill in LiteLLM DB
+    2. Hook resolves skill, adds litellm_code_execution tool, injects SKILL.md
+    3. Make GPT-4o call via messages API
+    4. Hook handles code execution loop
+    5. Verify GIF is generated
+    """
+    litellm._turn_on_debug()
+    if not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("OPENAI_API_KEY not set")
+    
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # 1. Store skill in DB
+    skill_name = "slack-gif-creator"
+    zip_content = create_skill_zip_from_folder(skill_name)
+    
+    skill_request = NewSkillRequest(
+        display_title="Slack GIF Creator",
+        description="Create animated GIFs optimized for Slack",
+        instructions="Use this skill to create animated GIFs for Slack emoji",
+        file_content=zip_content,
+        file_name=f"{skill_name}.zip",
+        file_type="application/zip",
+    )
+    created_skill = await LiteLLMSkillsHandler.create_skill(
+        data=skill_request,
+        user_id="test_user",
+    )
+    
+    print(f"\nCreated skill: {created_skill.skill_id}")
+    
+    hook = SkillsInjectionHook()
+    
+    try:
+        # 2. Build request with container.skills (messages API spec)
+        request_data = {
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 4096,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Create a simple bouncing red ball GIF for Slack emoji."
+                }
+            ],
+            "container": {
+                "skills": [
+                    {"type": "custom", "skill_id": f"litellm:{created_skill.skill_id}"}
+                ]
+            },
+        }
+        
+        # 3. Pre-call hook resolves skill
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+        cache = DualCache()
+        
+        transformed = await hook.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=request_data,
+            call_type="anthropic_messages",
+        )
+        assert isinstance(transformed, dict)
+        
+        # Hook returns Anthropic-format tools for messages API
+        tool_names = [t.get('name') for t in transformed.get('tools', [])]
+        print(f"\nTools after hook: {tool_names}")
+        assert "litellm_code_execution" in tool_names, "Should have litellm_code_execution tool"
+        
+        # 4. Make GPT-4o call via messages API (tools already in Anthropic format)
+        print("\n--- Making GPT-4o call via messages API ---")
+        response = await litellm.anthropic.acreate(
+            model=transformed["model"],
+            max_tokens=transformed.get("max_tokens", 4096),
+            messages=transformed["messages"],
+            tools=transformed.get("tools"),
+        )
+        
+        print(f"Initial response: {response}")
+        
+        # 5. Post-call hook handles code execution loop
+        final_response = await hook.async_post_call_success_deployment_hook(
+            request_data=transformed,
+            response=response,
+            call_type=CallTypes.anthropic_messages,
+        )
+        
+        if final_response:
+            response = final_response
+            print("Code execution completed!")
+        
+        # 6. Check for generated files (handle both dict and object response)
+        if isinstance(response, dict):
+            generated_files = response.get("_litellm_generated_files", [])
+        else:
+            generated_files = getattr(response, "_litellm_generated_files", [])
+        print(f"\nGenerated files: {len(generated_files)}")
+        
+        if generated_files:
+            import base64
+            for f in generated_files:
+                print(f"  - {f['name']} ({f['size']} bytes)")
+                if f['name'].endswith('.gif'):
+                    content = base64.b64decode(f['content_base64'])
+                    assert content[:6] in [b'GIF89a', b'GIF87a'], "Should be valid GIF"
+                    print("    Valid GIF!")
+            print("\nSUCCESS - GIF generated!")
+        else:
+            # Print response for debugging
+            if hasattr(response, "choices"):
+                print(f"\nResponse: {response.choices[0].message}")
+            else:
+                print(f"\nResponse: {response}")
+    
+    finally:
+        await LiteLLMSkillsHandler.delete_skill(skill_id=created_skill.skill_id)
+
+
+# ──────────────────────────────────────────────────────────────
+# OpenAI Skills API E2E Tests
+# ──────────────────────────────────────────────────────────────
+
+
+class TestOpenAISkillsAPI:
+    """
+    E2E tests for OpenAI Skills API.
+
+    Requires OPENAI_API_KEY environment variable.
+    Tests OpenAI-specific endpoints (update, content, versions).
+    """
+
+    def get_api_key(self) -> Optional[str]:
+        return os.environ.get("OPENAI_API_KEY")
+
+    def get_api_base(self) -> Optional[str]:
+        return os.environ.get("OPENAI_API_BASE")
+
+    def test_update_skill(self):
+        """Test updating a skill's default version (OpenAI-specific)."""
+        api_key = self.get_api_key()
+        if not api_key:
+            pytest.skip("No OPENAI_API_KEY provided")
+
+        litellm.set_verbose = True
+
+        list_response = litellm.list_skills(
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert isinstance(list_response, ListSkillsResponse)
+        if not list_response.data:
+            pytest.skip("No skills available to update")
+
+        skill_id = list_response.data[0].id
+        response = litellm.update_skill(
+            skill_id=skill_id,
+            default_version=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert response is not None
+        print(f"Updated skill: {response}")
+
+    def test_get_skill_content(self):
+        """Test getting skill content (OpenAI-specific)."""
+        api_key = self.get_api_key()
+        if not api_key:
+            pytest.skip("No OPENAI_API_KEY provided")
+
+        litellm.set_verbose = True
+
+        list_response = litellm.list_skills(
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert isinstance(list_response, ListSkillsResponse)
+        if not list_response.data:
+            pytest.skip("No skills available")
+
+        skill_id = list_response.data[0].id
+        response = litellm.get_skill_content(
+            skill_id=skill_id,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert response is not None
+        print(f"Skill content: {response}")
+
+    def test_list_skill_versions(self):
+        """Test listing skill versions (OpenAI-specific)."""
+        api_key = self.get_api_key()
+        if not api_key:
+            pytest.skip("No OPENAI_API_KEY provided")
+
+        litellm.set_verbose = True
+
+        list_response = litellm.list_skills(
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert isinstance(list_response, ListSkillsResponse)
+        if not list_response.data:
+            pytest.skip("No skills available")
+
+        skill_id = list_response.data[0].id
+        response = litellm.list_skill_versions(
+            skill_id=skill_id,
+            limit=10,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert response is not None
+        assert "data" in response
+        print(f"Skill versions: {response}")
+
+    def test_get_skill_version(self):
+        """Test getting a specific skill version (OpenAI-specific)."""
+        api_key = self.get_api_key()
+        if not api_key:
+            pytest.skip("No OPENAI_API_KEY provided")
+
+        litellm.set_verbose = True
+
+        list_response = litellm.list_skills(
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert isinstance(list_response, ListSkillsResponse)
+        if not list_response.data:
+            pytest.skip("No skills available")
+
+        skill_id = list_response.data[0].id
+
+        versions_response = litellm.list_skill_versions(
+            skill_id=skill_id,
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        if not versions_response.get("data"):
+            pytest.skip("No versions available")
+
+        version = versions_response["data"][0]["version"]
+        response = litellm.get_skill_version(
+            skill_id=skill_id,
+            version=version,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert response is not None
+        print(f"Skill version: {response}")
+
+
+class TestProviderSupportsOperation:
+    """Test that provider-specific endpoints reject unsupported providers.
+
+    These tests import from litellm.proxy (FastAPI dependency), so they
+    live here rather than in tests/llm_translation/ (mock-only).
+    """
+
+    def test_validate_provider_supports_operation_accepts_openai(self):
+        from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+            _validate_provider_supports_operation,
+        )
+        # Should not raise
+        _validate_provider_supports_operation("update", "openai")
+
+    def test_validate_provider_supports_operation_rejects_anthropic(self):
+        from fastapi import HTTPException
+        from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+            _validate_provider_supports_operation,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_provider_supports_operation("update", "anthropic")
+        assert exc_info.value.status_code == 400
+        assert "not supported" in str(exc_info.value.detail)
+
+    def test_validate_provider_supports_operation_rejects_unknown(self):
+        from fastapi import HTTPException
+        from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+            _validate_provider_supports_operation,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_provider_supports_operation("content", "bedrock")
+        assert exc_info.value.status_code == 400
