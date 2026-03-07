@@ -506,6 +506,233 @@ response = embedding(
 print(response.data[0]["embedding"])  # Vector representation
 ```
 
+### Additional Modules
+The SAP Gen AI Hub includes additional modules for advanced use cases:
+- [Grounding](https://help.sap.com/docs/sap-ai-core/generative-ai/grounding-035c455a5a424697b60f4a24b6d791fe?locale=en-US)
+- [Translation](https://help.sap.com/docs/sap-ai-core/generative-ai/translation?locale=en-US)
+- [Data Masking](https://help.sap.com/docs/sap-ai-core/generative-ai/data-masking-d9a54d9ca54b40beacbd24e1663ec3b4?locale=en-US)
+- [Content Filtering](https://help.sap.com/docs/sap-ai-core/generative-ai/content-filtering?locale=en-US)
+
+#### Grounding
+Grounding is a service designed to handle data-related tasks, such as grounding and retrieval, using vector databases. It provides specialized data retrieval through these databases, grounding the retrieval process with your own external and context-relevant data. Grounding combines generative AI capabilities with the ability to use real-time, precise data to improve decision-making and business operations for specific AI-driven business solutions.
+##### Prerequisites
+To use the Grounding module in the orchestration pipeline, you need to prepare the knowledge base in advance.
+
+Generative AI hub offers multiple options for users to provide data (prepare a knowledge base):
+- For Option 1: Upload the documents to a supported data repository and run the data pipeline to vectorize the documents.
+- For Option 2: Provide the chunks of document via Vector API directly. 
+
+To use grounding, choose from one of the following options.
+
+Usage example:
+```python showLineNumbers title="Grounding Example"
+from litellm import completion
+
+grounding_config = {
+    'type': 'document_grounding_service',
+    'config': {
+        'filters': [
+            {'id': 's3-docs',
+             'data_repository_type': 'vector',
+             'search_config': {'max_chunk_count': 2},
+             'data_repositories': ['012345-6789-0123-4567-890123456789']
+             }
+        ],
+        'placeholders': {'input': ['user_query'], 'output': 'grounding_response'},
+        'metadata_params': ['source', 'webUrl', 'title', 'mimeType', 'fileSuffix']
+    }
+}
+
+response = completion(model="sap/gpt-4o",
+                      messages=[
+                          {"content":"""Facility Solutions Company provides services to luxury residential complexes, 
+                          apartments, individual homes, and commercial properties such as office buildings, retail 
+                          spaces, industrial facilities, and educational institutions. Customers are encouraged to 
+                          reach out with maintenance requests, service deficiencies, follow-ups, or any issues they 
+                          need by email.""", "role": "system"},
+                          {"content":"""You are a helpful assistant for any queries for answering questions. 
+                          Answer the request by providing relevant answers that fit to the request.
+                          Request: {{ ?user_query }}
+                          Context:{{ ?grounding_response }}""", "role": "user"}
+                      ],
+                      placeholder_values={"user_query": "Is there a complaint?"},
+                      grounding=grounding_config
+                      )
+print(response.choices[0].message.content)
+```
+For more information about all available grounding configurations, see the [documentation](https://help.sap.com/docs/sap-ai-core/generative-ai/using-grounding-module-e1c4dd100dfb42ab890e1d95f3516187?locale=en-US).
+
+#### Translation
+The translation module allows you to translate LLM text prompts into a chosen target language.
+
+```python showLineNumbers title="Translation Example"
+from litellm import completion
+
+translation_config = {
+    'input':
+        {'type': 'sap_document_translation',
+         'config':
+             {'source_language': 'en-US',
+              'target_language': 'de-DE'}
+         },
+    'output':
+        {'type': 'sap_document_translation',
+         'config':
+             {'source_language': 'de-DE',
+              'target_language': 'fr-FR'}
+         }
+}
+
+response = completion(model="sap/gpt-4o",
+                      messages=[{"role": "user", "content": "Hello world!"}],
+                      translation=translation_config)
+
+print(response.choices[0].message.content)
+```
+For more information about all available translation configurations, see the [documentation](https://help.sap.com/docs/sap-ai-core/generative-ai/translation?locale=en-US)
+
+#### Data Masking
+The data masking module serves to anonymize or pseudonymize personally identifiable information from the input for selected entities.
+
+```python showLineNumbers title="Data Masking Example"
+from litellm import completion
+masking_config = {
+            'providers':
+                [
+                    {
+                        'type': 'sap_data_privacy_integration',
+                        'method': 'anonymization',
+                        'entities': [
+                            {'type': 'profile-address'},
+                            {'type': 'profile-email'},
+                            {'type': 'profile-phone'},
+                            {'type': 'profile-person'},
+                            {'type': 'profile-location'}
+                        ]
+                    }
+                ]
+        }
+
+mock_cv = "some text with personal information"
+
+response = completion(model="sap/gpt-4o",
+                      messages=[{"role": "user", "content": "Give a one sentence summary of the CV. CV: {{?cv}}?"}],
+                      placeholder_values={"cv": mock_cv},
+                      masking=masking_config)
+print(response.choices[0].message.content)
+```
+For more information about all available data masking configurations, see the [documentation](https://help.sap.com/docs/sap-ai-core/generative-ai/enhancing-model-consumption-with-data-masking-66ad6f469afc4c2cbaa91a27a33f7b21?locale=en-US)
+
+#### Content Filtering
+The content filtering module allows you to filter input and output based on content safety criteria. 
+
+The module supports two services:
+* Azure Content Safety
+* Llama Guard 3
+
+```python showLineNumbers title="Content Filtering Example"
+from litellm import completion
+
+filtering_config_azure = {
+    'input':
+        {
+            'filters':
+                [
+                    {'type': 'azure_content_safety',
+                     'config':
+                         {'hate': 0,
+                          'sexual': 0,
+                          'violence': 0,
+                          'self_harm': 0
+                          }
+                     }
+                ]
+        },
+    'output':
+        {
+            'filters':
+                [
+                    {'type': 'azure_content_safety',
+                     'config': {'hate': 0,
+                          'sexual': 0,
+                          'violence': 0,
+                          'self_harm': 0
+                          }
+                     }
+                ]
+        }
+}
+
+response = completion(model="sap/gpt-4o",
+                      messages=[{"role": "user", "content": "Hello world!"}],
+                      filtering=filtering_config_azure)
+print(response.choices[0].message.content) 
+# The model responds normally because the content does not violate any safety rules.
+
+try:
+    response = completion(model="sap/gpt-4o",
+                          messages=[{"role": "user", "content": "I hate you"}],
+                          filtering=filtering_config_azure)
+except Exception as e:
+    print(e) 
+    # The service raises an error:
+    # "Input Filter: Content filtered due to safety violations. Please modify the prompt and try again."
+```
+For more information about all available content filtering configurations, see the [documentation](https://help.sap.com/docs/sap-ai-core/generative-ai/content-filtering?locale=en-US)
+
+#### List of moduls configuration for fallback
+SAP GEN AI Hub supports a fallback mechanism for handling errors. This mechanism allows you to specify a list of fallback modules to use in case of errors. The fallback modules should contain all parameters that are required for configuring the request.
+
+Required parameters:
+- `model` 
+- `messages`
+
+Optional parameters: 
+- `filterings`
+- `groundings`
+- `translations`
+- `masking`
+- `tools`
+
+- and any of model's specific parameters.
+
+
+```python showLineNumbers title="Fallback Example"
+from litellm import completion
+
+from litellm import completion
+
+translation_config = {
+    'input':
+        {'type': 'sap_document_translation',
+         'config':
+             {'source_language': 'en-US',
+              'target_language': 'de-DE'}
+         },
+    'output':
+        {'type': 'sap_document_translation',
+         'config':
+             {'source_language': 'de-DE',
+              'target_language': 'fr-FR'}
+         }
+}
+
+response = completion(model="sap/gpt-4o",
+                      messages=[{"role": "user", "content": "Hello world!"}],
+                      translation=translation_config,
+                      fallback_sap_modules=[{
+                          "model":"sap/gemini-2.5-flash",
+                          "messages":[{"role": "user", "content": "Hello world!"}],
+                          "translation":translation_config
+                      }])
+
+# In case of error with the first configuration (model gpt-4o), the fallback module is used.
+
+print(response.choices[0].message.content)
+
+```
+
+
 ## Reference
 
 ### Supported Parameters
