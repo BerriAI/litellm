@@ -26,6 +26,109 @@ This RFC proposes migrating LiteLLM from a **monolithic architecture** to a **hy
 
 ---
 
+## 0. Quick Wins — Immediate Value Without Migration
+
+The full microservices migration (Sections 2-4) requires planning, approval, and
+14+ weeks of execution. These quick wins can ship **this week** within the
+existing monolith, delivering measurable improvements while the RFC is under
+review.
+
+### QW-1: PgBouncer Deployment (1-2 days)
+
+**Problem**: Each proxy pod opens its own connection pool to PostgreSQL. Under
+autoscaling (10+ pods), connection count grows linearly and can exhaust
+PostgreSQL's `max_connections`.
+
+**Action**: Deploy PgBouncer as a sidecar or standalone service in front of
+PostgreSQL.
+
+**Impact**:
+- Connection count: 500 apparent → 50 actual (10x reduction)
+- Eliminates connection exhaustion during pod scale-up events
+- Zero code changes required
+
+**Validates Phase 0**: This is the same PgBouncer deployment planned for the
+microservices foundation — shipping it now de-risks the migration.
+
+---
+
+### QW-2: Serve Admin UI as a Separate Process (1 day)
+
+**Problem**: The Admin UI static files (17MB Next.js build) are served by the
+same FastAPI process that handles inference. A UI rendering issue or heavy
+static file serving contends with gateway resources.
+
+**Action**: Run a lightweight static file server (nginx or a second uvicorn
+instance) behind the existing ingress, routing `/ui/*` to it.
+
+**Impact**:
+- Eliminates blast radius from UI to Gateway (the most common low-severity
+  failure mode)
+- Reduces main process memory footprint by ~17MB per pod
+- No client-facing changes (same URLs)
+
+**Validates Phase 1**: Same separation planned for CDN extraction — this is the
+containerized stepping stone.
+
+---
+
+### QW-3: Spend Log Write Batching Tuning (1 day)
+
+**Problem**: Spend log insertion (`_insert_spend_log_to_db`) appends to an
+in-memory transaction list that is periodically flushed to PostgreSQL via
+`db_update_spend_transaction_handler`. The current flush interval and batch size
+are not tuned for high-throughput deployments — under sustained load, the
+in-memory list grows unbounded until the next flush, increasing memory pressure
+and making each flush a large single transaction.
+
+**Action**:
+- Make flush interval and max batch size configurable via environment variables
+  (`SPEND_LOG_FLUSH_INTERVAL_SECONDS`, `SPEND_LOG_MAX_BATCH_SIZE`)
+- Add a queue depth metric to Prometheus so operators can monitor backlog
+- Add a circuit breaker: if the queue exceeds a threshold, drop to sampling
+  mode (log 1-in-N) rather than OOMing
+
+**Impact**:
+- Predictable memory usage under load spikes
+- Observable queue depth (currently invisible)
+- Foundation for the Redis Streams migration in Phase 3
+
+---
+
+### QW-4: Health Check Crash Isolation (0.5 days)
+
+**Problem**: The proxy health check (`/health/liveliness`) runs in the same
+process as everything else. If the Admin UI middleware or a guardrail hook
+panics, the health check fails, Kubernetes restarts the pod, and inference
+traffic is disrupted.
+
+**Action**: Add a minimal standalone health endpoint (separate thread or
+lightweight subprocess) that only checks "can this pod accept TCP connections"
+— independent of application middleware.
+
+**Impact**:
+- Pod stays alive even if non-critical middleware fails
+- Kubernetes doesn't kill inference capacity due to unrelated component failure
+- Aligns with Phase 2-3 where each service has its own health contract
+
+---
+
+### Quick Wins Summary
+
+| Quick Win | Summary | Effort | Risk | Validates |
+|-----------|---------|--------|------|-----------|
+| PgBouncer | Pool DB connections | 1-2 days | Low | Phase 0: Infrastructure foundation |
+| Separate UI process | Isolate UI from gateway | 1 day | Low | Phase 1: Extract UI to CDN |
+| Spend log tuning | Tune flush batching | 1 day | Low | Phase 3: Separate Gateway from Mgmt |
+| Health check separation | Decouple from middleware | 0.5 days | Low | Phase 2-3: Isolate MCP / Separate Gateway |
+
+**Total effort**: ~4 days
+**Total risk**: Low (all reversible, no client-facing changes)
+**Key benefit**: Each quick win de-risks a phase of the full migration by
+validating the same architectural pattern at small scale first.
+
+---
+
 ## 1. Motivation
 
 ### Problem Statement
@@ -382,18 +485,30 @@ spec:
    - Keep `litellm.Router` in gateway
    - Embed `litellm-auth-sdk` (shared library)
 
-2. **Async Spend Logging**:
+2. **Cross-Pod Spend Aggregation via Redis Streams**:
+
+   The monolith already uses async in-memory queues (`SpendUpdateQueue` backed
+   by `asyncio.Queue`) with periodic batched DB flushes — spend logging does
+   **not** block the inference hot path today. However, each pod maintains its
+   own in-memory queue, which means:
+   - No cross-pod aggregation (each pod flushes independently)
+   - Pod crash loses buffered spend data
+   - No visibility into aggregate queue depth across the fleet
+
+   The microservices architecture replaces the per-pod in-memory queue with
+   Redis Streams, enabling cross-pod aggregation and crash-resilient buffering:
+
    ```python
-   # Gateway Service (fast path)
+   # Gateway Service (replaces per-pod asyncio.Queue)
    async def log_spend(cost: float, token: str):
        await redis.xadd("spend_log_stream", {
            "token": hash(token),
            "cost": cost,
            "timestamp": utcnow()
        })
-       # Return immediately, don't block on DB
+       # Survives pod crash, visible across fleet
 
-   # Management Service (Celery worker)
+   # Management Service (Celery worker, single consumer group)
    @celery.task
    def process_spend_log(spend_data: dict):
        db.update_spend(spend_data)
@@ -539,22 +654,31 @@ spec:
 
 ---
 
-### 4.4 Why Eventual Consistency for Spend Tracking?
+### 4.4 Why Redis Streams for Spend Tracking?
 
-**Trade-off**: Real-time consistency vs. performance
+**Current state**: Spend tracking already uses async in-memory queues
+(`SpendUpdateQueue` + `asyncio.Queue`) with periodic batched DB flushes. The
+inference hot path is **not blocked** by spend logging today.
 
-| Approach | Latency | Complexity | Data Consistency | Decision |
-|----------|---------|------------|------------------|----------|
-| **Async (Redis queue)** | <5ms | Low | <60s delay | ✅ **SELECTED** |
-| Sync (DB write) | +50ms | Low | Immediate | ❌ Blocks gateway |
-| 2-Phase Commit | +100ms | High | Immediate | ❌ Too slow |
+**Problem**: The in-memory queue is per-pod and volatile — a pod crash loses
+buffered spend data, and there is no cross-pod visibility into queue depth or
+aggregate backlog.
+
+**Trade-off**: Per-pod in-memory queue vs. shared Redis Streams
+
+| Approach | Pod Crash Safety | Cross-Pod Visibility | Complexity | Decision |
+|----------|-----------------|---------------------|------------|----------|
+| **Redis Streams** | Durable | Yes (single consumer group) | Low | ✅ **SELECTED** |
+| Per-pod asyncio.Queue (current) | Volatile | None | Lowest | ❌ Data loss risk |
+| 2-Phase Commit | Durable | Yes | High | ❌ Over-engineering |
 
 **Rationale**:
-- Spend tracking is **not on critical path** (doesn't affect inference)
-- 60-second delay acceptable for budget enforcement (budgets are daily/monthly)
-- Massive performance gain: 5ms vs. 50ms per request
+- Spend tracking is **not on the critical path** (doesn't affect inference) — this is already true today
+- Redis Streams add crash resilience and fleet-wide observability with minimal latency overhead (<5ms)
+- Consumer groups enable exactly-once processing across Management Service workers
+- 60-second eventual consistency acceptable for budget enforcement (budgets are daily/monthly)
 
-**Risk Mitigation**: Implement idempotency to prevent duplicate charges if message reprocessed.
+**Risk Mitigation**: Implement idempotency keys to prevent duplicate charges if a message is reprocessed after consumer failover.
 
 ---
 
