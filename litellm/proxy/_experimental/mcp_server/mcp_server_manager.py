@@ -315,6 +315,10 @@ class MCPServerManager:
                 command=server_config.get("command", None) or "",
                 args=server_config.get("args", None) or [],
                 env=server_config.get("env", None) or {},
+                # byok fields
+                is_byok=bool(server_config.get("is_byok", False)),
+                byok_description=server_config.get("byok_description", []) or [],
+                byok_api_key_help_url=server_config.get("byok_api_key_help_url", None),
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
@@ -1015,22 +1019,21 @@ class MCPServerManager:
                     extra_headers = {}
                 extra_headers.update(server.static_headers)
 
-            stdio_env = self._build_stdio_env(server, raw_headers)
-
-            client = await self._create_mcp_client(
-                server=server,
-                mcp_auth_header=mcp_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-            )
-
-            ## HANDLE OPENAPI TOOLS
+            ## HANDLE OPENAPI TOOLS — skip MCP client creation entirely
             if server.spec_path:
                 _tools = global_mcp_tool_registry.list_tools(tool_prefix=server.name)
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
                     _tools
                 )
             else:
+                stdio_env = self._build_stdio_env(server, raw_headers)
+
+                client = await self._create_mcp_client(
+                    server=server,
+                    mcp_auth_header=mcp_auth_header,
+                    extra_headers=extra_headers,
+                    stdio_env=stdio_env,
+                )
                 tools = await self._fetch_tools_with_timeout(client, server.name)
 
             prefixed_or_original_tools = self._create_prefixed_tools(
