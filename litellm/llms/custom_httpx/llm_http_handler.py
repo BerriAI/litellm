@@ -1905,8 +1905,8 @@ class BaseLLMHTTPHandler:
                     anthropic_messages_optional_request_params, path
                 )
 
-        # Prepare request body
-        request_body = anthropic_messages_provider_config.transform_anthropic_messages_request(
+        # Prepare request body (use async version to avoid blocking event loop)
+        request_body = await anthropic_messages_provider_config.async_transform_anthropic_messages_request(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
