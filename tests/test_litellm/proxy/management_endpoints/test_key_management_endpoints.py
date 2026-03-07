@@ -5985,7 +5985,6 @@ async def test_key_with_budget_id_does_not_store_budget_duration():
             team_table=None,
         )
 
-<<<<<<< HEAD
         # Verify duration was applied from defaults
         assert request.duration == "180d"
     finally:
@@ -6783,6 +6782,7 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("my-key-123")
         _validate_key_alias_format("user/user@example.com")
         _validate_key_alias_format("team/user@example.com")
+        litellm.enable_key_alias_format_validation = False
 
     def test_validate_key_alias_format_invalid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
@@ -6807,9 +6807,10 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+<<<<<<< HEAD
 
     # Verify generate_key_helper_fn was called
-=======
+
 >>>>>>> cf14f0c821 (change logic to match Kriish's input)
     mock_generate_key.assert_awaited_once()
     call_kwargs = mock_generate_key.call_args.kwargs
@@ -6888,3 +6889,5 @@ async def test_key_does_not_override_explicit_budget_duration():
 
     # The budget tier should NOT have been looked up since budget_duration was explicit
     mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
+=======
+        litellm.enable_key_alias_format_validation = False
