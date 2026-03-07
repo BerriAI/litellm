@@ -1,5 +1,8 @@
 from typing import Any, Dict, List, Optional, Tuple
 
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    convert_url_to_base64,
+)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -33,10 +36,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         """
         vertex_ai_project = VertexBase.safe_get_vertex_ai_project(litellm_params)
         vertex_ai_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
-        
+
         project_id: Optional[str] = None
         if "Authorization" not in headers:
-            vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params)
+            vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
+                litellm_params
+            )
 
             access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
@@ -62,11 +67,11 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
 
         headers["content-type"] = "application/json"
-        
+
         # Add beta headers for Vertex AI
         tools = optional_params.get("tools", [])
         beta_values: set[str] = set()
-        
+
         # Get existing beta headers if any
         existing_beta = headers.get("anthropic-beta")
         if existing_beta:
@@ -79,36 +84,42 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             edits = context_management_param.get("edits", [])
             has_compact = False
             has_other = False
-            
+
             for edit in edits:
                 edit_type = edit.get("type", "")
                 if edit_type == "compact_20260112":
                     has_compact = True
                 else:
                     has_other = True
-            
+
             # Add compact header if any compact edits exist
             if has_compact:
                 beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
-            
+
             # Add context management header if any other edits exist
             if has_other:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+                beta_values.add(
+                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                )
 
         # Check for web search tool
         for tool in tools:
-            if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value)
+            if isinstance(tool, dict) and tool.get("type", "").startswith(
+                ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value
+            ):
+                beta_values.add(
+                    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                )
                 break
-        
+
         # Check for tool search tools - Vertex AI uses different beta header
         anthropic_model_info = AnthropicModelInfo()
         if anthropic_model_info.is_tool_search_used(tools):
             beta_values.add(get_tool_search_beta_header("vertex_ai"))
-        
+
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)
-        
+
         return headers, api_base
 
     def get_complete_url(
@@ -126,6 +137,72 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
         return api_base  # no transformation is needed - handled in validate_environment
 
+    @staticmethod
+    def _convert_image_urls_to_base64(messages: List[Dict]) -> List[Dict]:
+        """
+        Convert image URL sources to base64 format for Vertex AI.
+
+        Vertex AI Anthropic does not support URL sources for images.
+        This method converts:
+        {"type": "image", "source": {"type": "url", "url": "https://..."}}
+        to:
+        {"type": "image", "source": {"type": "base64", "media_type": "...", "data": "..."}}
+        """
+        converted_messages = []
+        for message in messages:
+            if not isinstance(message, dict):
+                converted_messages.append(message)
+                continue
+
+            content = message.get("content")
+            if not isinstance(content, list):
+                converted_messages.append(message)
+                continue
+
+            new_content = []
+            for block in content:
+                if not isinstance(block, dict):
+                    new_content.append(block)
+                    continue
+
+                # Check if this is an image block with URL source
+                if block.get("type") == "image":
+                    source = block.get("source", {})
+                    if isinstance(source, dict) and source.get("type") == "url":
+                        url = source.get("url")
+                        if url:
+                            # Convert URL to base64
+                            base64_data_url = convert_url_to_base64(url=url)
+                            # Parse the data URL: data:image/jpeg;base64,<data>
+                            if base64_data_url.startswith("data:"):
+                                # Extract media type and data
+                                parts = base64_data_url.split(";base64,", 1)
+                                if len(parts) == 2:
+                                    media_type = parts[0].replace("data:", "")
+                                    data = parts[1]
+                                    new_block = {
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": media_type,
+                                            "data": data,
+                                        },
+                                    }
+                                    # Preserve cache_control if present
+                                    if "cache_control" in block:
+                                        new_block["cache_control"] = block[
+                                            "cache_control"
+                                        ]
+                                    new_content.append(new_block)
+                                    continue
+
+                new_content.append(block)
+
+            new_message = {**message, "content": new_content}
+            converted_messages.append(new_message)
+
+        return converted_messages
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -134,9 +211,13 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
+        # Convert image URLs to base64 for Vertex AI
+        # Vertex AI Anthropic does not support URL sources for images
+        converted_messages = self._convert_image_urls_to_base64(messages)
+
         anthropic_messages_request = super().transform_anthropic_messages_request(
             model=model,
-            messages=messages,
+            messages=converted_messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
