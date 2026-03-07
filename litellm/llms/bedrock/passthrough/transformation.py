@@ -93,6 +93,51 @@ class BedrockPassthroughConfig(
             endpoint = re.sub(r'model/[^/]+/', f'model/{encoded_model_id}/', endpoint)
         return self.format_url(endpoint, endpoint_url, request_query_params or {}), endpoint_url
 
+    # AWS Bedrock only supports a specific whitelist of beta flags
+    # Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
+    BEDROCK_SUPPORTED_BETAS = {
+        "computer-use-2024-10-22",  # Legacy computer use
+        "computer-use-2025-01-24",  # Current computer use (Claude 3.7 Sonnet)
+        "token-efficient-tools-2025-02-19",  # Tool use (Claude 3.7+ and Claude 4+)
+        "interleaved-thinking-2025-05-14",  # Interleaved thinking (Claude 4+)
+        "output-128k-2025-02-19",  # 128K output tokens (Claude 3.7 Sonnet)
+        "dev-full-thinking-2025-05-14",  # Developer mode for raw thinking (Claude 4+)
+        "context-1m-2025-08-07",  # 1 million tokens (Claude Sonnet 4)
+        "context-management-2025-06-27",  # Context management (Claude Sonnet/Haiku 4.5)
+        "effort-2025-11-24",  # Effort parameter (Claude Opus 4.5)
+        "tool-search-tool-2025-10-19",  # Tool search (Claude Opus 4.5)
+        "tool-examples-2025-10-29",  # Tool use examples (Claude Opus 4.5)
+    }
+
+    def _filter_anthropic_beta_header(self, headers: dict) -> dict:
+        """
+        Filter anthropic-beta header to only include Bedrock-supported beta flags.
+
+        AWS Bedrock doesn't support all Anthropic beta flags and will reject
+        requests with "invalid beta flag" error for unsupported ones
+        (e.g., mcp-servers-2025-12-04, oauth-2025-04-20 from Claude Code).
+
+        Args:
+            headers: Original request headers
+
+        Returns:
+            Headers with anthropic-beta filtered to only supported values
+        """
+        filtered_headers = {}
+        for key, value in headers.items():
+            if key.lower() == "anthropic-beta":
+                # Parse comma-separated beta values and filter to supported ones
+                beta_values = [b.strip() for b in value.split(",")]
+                supported_betas = [
+                    b for b in beta_values if b in self.BEDROCK_SUPPORTED_BETAS
+                ]
+                if supported_betas:
+                    filtered_headers[key] = ",".join(supported_betas)
+                # If no supported betas remain, omit the header entirely
+            else:
+                filtered_headers[key] = value
+        return filtered_headers
+
     def sign_request(
         self,
         headers: dict,
@@ -101,10 +146,13 @@ class BedrockPassthroughConfig(
         api_base: str,
         model: Optional[str] = None,
     ) -> Tuple[dict, Optional[bytes]]:
+        # Filter anthropic-beta header to only include Bedrock-supported beta flags
+        filtered_headers = self._filter_anthropic_beta_header(headers)
+
         optional_params = litellm_params.copy()
         return self._sign_request(
             service_name="bedrock",
-            headers=headers,
+            headers=filtered_headers,
             optional_params=optional_params,
             request_data=request_data or {},
             api_base=api_base,
