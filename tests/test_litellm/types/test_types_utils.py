@@ -223,3 +223,39 @@ def test_chat_completion_token_logprob_invalid_top_logprobs_rejected():
             logprob=-0.31725305,
             top_logprobs="invalid_string",
         )
+
+
+def test_usage_vllm_cached_tokens_mapping():
+    """
+    VLLM returns prompt_tokens_details.cached_tokens but not top-level
+    cache_read_input_tokens. Usage should map cached_tokens to both
+    _cache_read_input_tokens and cache_read_input_tokens for cost calc and UI.
+    """
+    from litellm.types.utils import Usage
+
+    vllm_usage = {
+        "total_tokens": 150687,
+        "prompt_tokens": 150383,
+        "completion_tokens": 304,
+        "prompt_tokens_details": {
+            "text_tokens": None,
+            "audio_tokens": None,
+            "image_tokens": None,
+            "cached_tokens": 149936,
+        },
+        "completion_tokens_details": {
+            "text_tokens": None,
+            "audio_tokens": None,
+            "image_tokens": None,
+            "reasoning_tokens": 15,
+        },
+    }
+
+    usage = Usage(**vllm_usage)
+
+    assert usage.prompt_tokens_details.cached_tokens == 149936
+    assert usage._cache_read_input_tokens == 149936
+    assert usage.get("cache_read_input_tokens") == 149936
+
+    dumped = usage.model_dump()
+    assert dumped.get("cache_read_input_tokens") == 149936
