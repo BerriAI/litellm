@@ -543,6 +543,87 @@
       "description": "Detects Singapore bank account numbers (XXX-XXXXX(X)-X(XX) format for DBS/POSB/OCBC/UOB)",
       "keyword_pattern": "\\b(?:bank\\s*account|account\\s*number|DBS|OCBC|UOB|POSB|savings|current\\s*account|bank\\s*statement)\\b",
       "allow_word_numbers": false
+    },
+    {
+      "name": "ca_sin",
+      "display_name": "SIN (Canadian Social Insurance Number)",
+      "pattern": "\\b[1-9]\\d{2}[\\-\\s]\\d{3}[\\-\\s]\\d{3}\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Canadian Social Insurance Numbers (9-digit federal identifier, dashed or spaced format, first digit 1-9)",
+      "keyword_pattern": "\\b(?:social\\s*insurance\\s*number|numéro\\s*d'assurance\\s*sociale|social\\s*insurance|SIN|NAS)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_ohip",
+      "display_name": "OHIP (Ontario Health Insurance Plan Number)",
+      "pattern": "\\b\\d{4}[\\-\\s]?\\d{3}[\\-\\s]?\\d{3}[\\-\\s]?[A-Z]{2}\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Ontario Health Insurance Plan numbers (10 digits + 2-letter version code)",
+      "keyword_pattern": "\\b(?:OHIP\\s*number|health\\s*card\\s*number|health\\s*insurance\\s*number|OHIP|health\\s*card|health\\s*insurance|ontario\\s*health|health\\s*number|carte\\s*santé)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_on_drivers_licence",
+      "display_name": "Driver's Licence (Ontario)",
+      "pattern": "\\b[A-Z]\\d{4}[\\-\\s]\\d{5}[\\-\\s]\\d{5}\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Ontario driver's licence numbers (1 letter + 14 digits, dashed format)",
+      "keyword_pattern": "\\b(?:driver'?s?\\s*licen[cs]e\\s*number|ontario\\s*licen[cs]e\\s*number|driver'?s?\\s*licen[cs]e|licen[cs]e\\s*number|DL\\s*number|ontario\\s*licen[cs]e|permis\\s*de\\s*conduire|numéro\\s*de\\s*permis)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_immigration_doc",
+      "display_name": "Immigration Document (Canada IRCC)",
+      "pattern": "\\b(?:\\d{4}[\\-\\s]\\d{4}[\\-\\s]\\d{2}|[TUFW]\\d{8,10}|IMM[\\-\\s]?\\d{4,5})\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Canadian immigration document numbers including UCI (10-digit), work/study permits, and IMM document references",
+      "keyword_pattern": "\\b(?:unique\\s*client\\s*identifier|study\\s*permit\\s*number|work\\s*permit\\s*number|study\\s*permit|work\\s*permit|UCI|immigration|IRCC|permanent\\s*resident|PR\\s*card|permis\\s*d'études|permis\\s*de\\s*travail|landed\\s*immigrant|temporary\\s*resident)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_bank_account",
+      "display_name": "Bank Account (Canada)",
+      "pattern": "\\b\\d{5}[\\-\\s]\\d{3}[\\-\\s]\\d{7,12}\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Canadian bank account routing information (transit-institution-account format)",
+      "keyword_pattern": "\\b(?:bank\\s*account|account\\s*number|transit\\s*number|institution\\s*number|branch\\s*number|routing\\s*number|direct\\s*deposit|void\\s*cheque|chequing|savings\\s*account|numéro\\s*de\\s*compte|dépôt\\s*direct)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_postal_code",
+      "display_name": "Postal Code (Canada)",
+      "pattern": "\\b[ABCEGHJ-NPRSTVXY]\\d[ABCEGHJ-NPRSTV-Z][\\-\\s]?\\d[ABCEGHJ-NPRSTV-Z]\\d\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Canadian postal codes (A1A 1A1 format, excludes invalid first-letter characters per Canada Post spec)",
+      "keyword_pattern": "\\b(?:postal\\s*code|zip\\s*code|mailing\\s*address|street\\s*address|shipping\\s*address|home\\s*address|code\\s*postal|postcode)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uoft_student_id",
+      "display_name": "Student/Employee Number (University of Toronto)",
+      "pattern": "\\b10\\d{8}\\b",
+      "category": "Canadian Institutional Identifiers (FIPPA)",
+      "description": "Detects University of Toronto student and employee numbers (10-digit, prefix '10'). Subject to Ontario FIPPA.",
+      "keyword_pattern": "\\b(?:student\\s*id\\s*number|student\\s*number|employee\\s*id\\s*number|employee\\s*number|student\\s*id|employee\\s*id|utorid|uoft\\s*id|university\\s*of\\s*toronto|u\\s*of\\s*t)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uoft_utorid",
+      "display_name": "UTORid (University of Toronto Login)",
+      "pattern": "\\b[a-z]{2,6}\\d{1,4}\\b",
+      "category": "Canadian Institutional Identifiers (FIPPA)",
+      "description": "Detects University of Toronto UTORid login identifiers (e.g. smithj12). Context keywords are essential due to the generic format.",
+      "keyword_pattern": "\\b(?:utorid|utoid|utor\\s*id|uoft\\s*login|university\\s*of\\s*toronto\\s*login|acorn\\s*login|acorn\\s*portal|quercus\\s*login|quercus\\s*course|portal\\s*login|weblogin|shibboleth)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uoft_tcard",
+      "display_name": "TCard Number (University of Toronto Campus ID)",
+      "pattern": "\\b\\d{16}\\b",
+      "category": "Canadian Institutional Identifiers (FIPPA)",
+      "description": "Detects University of Toronto TCard campus ID card numbers (16-digit). Context keywords are critical to distinguish from payment card numbers.",
+      "keyword_pattern": "\\b(?:tcard\\s*number|t-card\\s*number|tcard|t-card|campus\\s*card|campus\\s*id|university\\s*card)\\b",
+      "allow_word_numbers": false
     }
   ]
 }
