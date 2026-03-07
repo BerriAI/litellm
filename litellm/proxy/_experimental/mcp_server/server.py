@@ -1649,7 +1649,18 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            return
+            # Without a database we cannot verify whether the user has a stored
+            # credential, so we must deny access rather than silently bypass the
+            # BYOK check.  A 503 signals a configuration/infrastructure problem,
+            # not an auth failure, so clients can distinguish the two cases.
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "byok_store_unavailable",
+                    "server_id": mcp_server.server_id,
+                    "message": "Credential store is not available; cannot verify BYOK access.",
+                },
+            )
 
         raw_credential = await get_user_credential(
             prisma_client=prisma_client,
