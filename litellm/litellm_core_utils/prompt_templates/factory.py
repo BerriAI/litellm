@@ -1292,8 +1292,10 @@ def _get_thought_signature_from_tool(
     # First check tool's provider_specific_fields
     provider_fields = tool.get("provider_specific_fields") or {}
     if isinstance(provider_fields, dict):
-        signature = provider_fields.get("thought_signature")
+        signature = provider_fields.get("thought_signature") or provider_fields.get("thought_signatures")
         if signature:
+            if isinstance(signature, list) and len(signature) > 0:
+                return signature[0]
             return signature
 
     # Then check function's provider_specific_fields
@@ -1302,16 +1304,20 @@ def _get_thought_signature_from_tool(
         if isinstance(function, dict):
             func_provider_fields = function.get("provider_specific_fields") or {}
             if isinstance(func_provider_fields, dict):
-                signature = func_provider_fields.get("thought_signature")
+                signature = func_provider_fields.get("thought_signature") or func_provider_fields.get("thought_signatures")
                 if signature:
+                    if isinstance(signature, list) and len(signature) > 0:
+                        return signature[0]
                     return signature
         elif (
             hasattr(function, "provider_specific_fields")
             and function.provider_specific_fields
         ):
             if isinstance(function.provider_specific_fields, dict):
-                signature = function.provider_specific_fields.get("thought_signature")
+                signature = function.provider_specific_fields.get("thought_signature") or function.provider_specific_fields.get("thought_signatures")
                 if signature:
+                    if isinstance(signature, list) and len(signature) > 0:
+                        return signature[0]
                     return signature
     # Check if thought signature is embedded in tool call ID
     tool_call_id = tool.get("id")
