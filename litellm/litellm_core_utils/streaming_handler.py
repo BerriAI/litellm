@@ -2042,6 +2042,7 @@ class CustomStreamWrapper:
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
                 # example - boto3 bedrock llms
+                exhausted_sentinel = object()
                 while True:
                     if isinstance(self.completion_stream, str) or isinstance(
                         self.completion_stream, bytes
@@ -2053,11 +2054,10 @@ class CustomStreamWrapper:
                         # NOTE: We use a sentinel default because StopIteration cannot
                         # be stored in an asyncio.Future (raises TypeError), which
                         # would cause the await to hang forever.
-                        _EXHAUSTED = object()
                         chunk = await asyncio.to_thread(  # type: ignore[arg-type]
-                            next, self.completion_stream, _EXHAUSTED
+                            next, self.completion_stream, exhausted_sentinel
                         )
-                        if chunk is _EXHAUSTED:
+                        if chunk is exhausted_sentinel:
                             raise StopIteration
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)

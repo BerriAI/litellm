@@ -232,6 +232,7 @@ _ASYNC_CALL_TYPE_VALUES: frozenset[str] = frozenset(
         CallTypes.arerank.value,
         CallTypes.asearch.value,
         CallTypes.arealtime.value,
+        CallTypes.aresponses_websocket.value,
         CallTypes.acreate_batch.value,
         CallTypes.aretrieve_batch.value,
         CallTypes.acancel_batch.value,

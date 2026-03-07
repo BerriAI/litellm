@@ -1356,6 +1356,7 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
         f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
     )
 
+
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_anext_does_not_block_event_loop_for_sync_iterators(
     logging_obj: Logging,

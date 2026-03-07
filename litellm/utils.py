@@ -1799,8 +1799,6 @@ def client(original_function):  # noqa: PLR0915
             # Mark this logging object as async-driven so sync callback paths can
             # safely avoid duplicate standard payload/callback emission.
             logging_obj.litellm_params["async_call"] = True
-            logging_obj.model_call_details.setdefault("litellm_params", {})
-            logging_obj.model_call_details["litellm_params"]["async_call"] = True
 
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:

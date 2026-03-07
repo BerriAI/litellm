@@ -370,6 +370,7 @@ def test_success_handler_skips_sync_callbacks_for_async_requests(logging_obj, as
     [
         ("agenerate_content_stream", True),
         ("anthropic_messages", True),
+        ("_aresponses_websocket", True),
         ("add_message", False),
         ("completion", False),
     ],
