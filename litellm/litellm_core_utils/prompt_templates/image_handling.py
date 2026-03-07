@@ -36,11 +36,14 @@ def _infer_media_type_from_url(url: str) -> str:
     """
     # Strip query parameters for signed URLs (e.g., ?x-oss-signature=...)
     url_without_query = url.split("?")[0]
-    extension = url_without_query.split(".")[-1].lower()
+    # Only take the last path segment to avoid matching dots in the path
+    last_segment = url_without_query.rstrip("/").split("/")[-1]
+    # Check if the segment contains a dot (has an extension)
+    extension = last_segment.rsplit(".", 1)[-1].lower() if "." in last_segment else ""
     media_type = EXTENSION_TO_MEDIA_TYPE.get(extension)
     if media_type is None:
         raise Exception(
-            f"Error: Unsupported image format. Extension={extension}. "
+            f"Error: Unsupported image format. Could not infer media type from URL '{url}'. "
             f"Supported types = {list(SUPPORTED_IMAGE_TYPES)}"
         )
     return media_type

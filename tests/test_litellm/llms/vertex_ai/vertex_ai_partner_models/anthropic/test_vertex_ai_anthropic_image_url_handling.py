@@ -625,3 +625,219 @@ class TestVertexAIAnthropicPassThroughImageURLHandling:
         assert image2["source"]["type"] == "base64"
         assert image2["source"]["media_type"] == "image/png"
         assert image2["source"]["data"] == "iVBORw0image2"
+
+
+class TestVertexAIAnthropicPassThroughImageURLHandlingAsync:
+    """
+    Test the async version of image URL to base64 conversion for /v1/messages endpoint.
+
+    Issue: https://github.com/BerriAI/litellm/issues/23026
+    The sync version blocks the event loop. The async version uses async_convert_url_to_base64.
+    """
+
+    @patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.async_convert_url_to_base64"
+    )
+    def test_async_convert_image_urls_to_base64(self, mock_async_convert: MagicMock):
+        """
+        Test that the async version correctly converts image URLs to base64.
+        """
+        import asyncio
+
+        async def async_mock_return(url):
+            return "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ=="
+
+        mock_async_convert.side_effect = async_mock_return
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": "https://example.com/image.jpg",
+                        },
+                    },
+                ],
+            }
+        ]
+
+        config = VertexAIPartnerModelsAnthropicMessagesConfig()
+        converted = asyncio.run(config._convert_image_urls_to_base64_async(messages))
+
+        # Verify async_convert_url_to_base64 was called
+        mock_async_convert.assert_called_once_with("https://example.com/image.jpg")
+
+        # Check the result has base64 source type
+        user_message = converted[0]
+        assert user_message["role"] == "user"
+        image_content = user_message["content"][1]
+        assert image_content["type"] == "image"
+        assert image_content["source"]["type"] == "base64"
+        assert image_content["source"]["media_type"] == "image/jpeg"
+        assert image_content["source"]["data"] == "/9j/4AAQSkZJRgABAQAAAQ=="
+
+    @patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.async_convert_url_to_base64"
+    )
+    def test_async_preserves_base64_images(self, mock_async_convert: MagicMock):
+        """
+        Test that async version preserves images already in base64 format.
+        """
+        import asyncio
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "iVBORw0KGgo=",
+                        },
+                    },
+                ],
+            }
+        ]
+
+        config = VertexAIPartnerModelsAnthropicMessagesConfig()
+        converted = asyncio.run(config._convert_image_urls_to_base64_async(messages))
+
+        # async_convert_url_to_base64 should NOT be called for base64 images
+        mock_async_convert.assert_not_called()
+
+        # Check the image is unchanged
+        image_content = converted[0]["content"][1]
+        assert image_content["source"]["type"] == "base64"
+        assert image_content["source"]["media_type"] == "image/png"
+        assert image_content["source"]["data"] == "iVBORw0KGgo="
+
+    @patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.async_convert_url_to_base64"
+    )
+    def test_async_preserves_cache_control(self, mock_async_convert: MagicMock):
+        """
+        Test that async version preserves cache_control when converting image URLs.
+        """
+        import asyncio
+
+        async def async_mock_return(url):
+            return "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ=="
+
+        mock_async_convert.side_effect = async_mock_return
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": "https://example.com/image.jpg",
+                        },
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+            }
+        ]
+
+        config = VertexAIPartnerModelsAnthropicMessagesConfig()
+        converted = asyncio.run(config._convert_image_urls_to_base64_async(messages))
+
+        # Check cache_control is preserved
+        image_content = converted[0]["content"][0]
+        assert image_content["source"]["type"] == "base64"
+        assert image_content["cache_control"] == {"type": "ephemeral"}
+
+    @patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.async_convert_url_to_base64"
+    )
+    def test_async_converts_multiple_images(self, mock_async_convert: MagicMock):
+        """
+        Test that async version converts multiple image URLs in a message.
+        """
+        import asyncio
+
+        call_count = [0]
+        async def async_mock_return(url):
+            results = [
+                "data:image/jpeg;base64,/9j/image1",
+                "data:image/png;base64,iVBORw0image2",
+            ]
+            result = results[call_count[0]]
+            call_count[0] += 1
+            return result
+
+        mock_async_convert.side_effect = async_mock_return
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Compare these images"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": "https://example.com/image1.jpg",
+                        },
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": "https://example.com/image2.png",
+                        },
+                    },
+                ],
+            }
+        ]
+
+        config = VertexAIPartnerModelsAnthropicMessagesConfig()
+        converted = asyncio.run(config._convert_image_urls_to_base64_async(messages))
+
+        # Verify both URLs were converted
+        assert mock_async_convert.call_count == 2
+
+        # Check both images are converted to base64
+        image1 = converted[0]["content"][1]
+        assert image1["source"]["type"] == "base64"
+        assert image1["source"]["media_type"] == "image/jpeg"
+        assert image1["source"]["data"] == "/9j/image1"
+
+        image2 = converted[0]["content"][2]
+        assert image2["source"]["type"] == "base64"
+        assert image2["source"]["media_type"] == "image/png"
+        assert image2["source"]["data"] == "iVBORw0image2"
+
+    @patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation.async_convert_url_to_base64"
+    )
+    def test_async_handles_string_content(self, mock_async_convert: MagicMock):
+        """
+        Test that async version handles messages with string content correctly.
+        """
+        import asyncio
+
+        messages = [
+            {
+                "role": "user",
+                "content": "Hello, how are you?",
+            }
+        ]
+
+        config = VertexAIPartnerModelsAnthropicMessagesConfig()
+        converted = asyncio.run(config._convert_image_urls_to_base64_async(messages))
+
+        # async_convert_url_to_base64 should NOT be called for string content
+        mock_async_convert.assert_not_called()
+
+        # Check the message is unchanged
+        assert converted[0]["content"] == "Hello, how are you?"

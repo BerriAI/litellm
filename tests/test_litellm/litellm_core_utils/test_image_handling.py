@@ -286,6 +286,36 @@ class TestInferMediaTypeFromUrl:
         result = _infer_media_type_from_url("https://example.com/IMAGE.PNG")
         assert result == "image/png"
 
+    def test_url_without_extension_raises_with_clear_message(self):
+        """Test that URL without extension raises an exception with a clear message."""
+        url = "https://cdn.example.com/images/abc123"
+        with pytest.raises(Exception) as excinfo:
+            _infer_media_type_from_url(url)
+        error_msg = str(excinfo.value)
+        assert "Unsupported image format" in error_msg
+        # Should show the full URL for clarity, not just a confusing "extension"
+        assert url in error_msg
+        assert "Supported types" in error_msg
+
+    def test_url_with_trailing_slash_no_extension(self):
+        """Test URL with trailing slash and no extension."""
+        url = "https://cdn.example.com/images/abc123/"
+        with pytest.raises(Exception) as excinfo:
+            _infer_media_type_from_url(url)
+        error_msg = str(excinfo.value)
+        assert "Unsupported image format" in error_msg
+        assert url in error_msg
+
+    def test_url_with_dots_in_path_but_no_image_extension(self):
+        """Test URL with dots in path segments but no valid image extension."""
+        url = "https://api.example.com/v1.0/images/get"
+        with pytest.raises(Exception) as excinfo:
+            _infer_media_type_from_url(url)
+        error_msg = str(excinfo.value)
+        assert "Unsupported image format" in error_msg
+        # Should not confuse "0" from "v1.0" as the extension
+        assert url in error_msg
+
 
 class TestGetValidMediaType:
     """Tests for _get_valid_media_type function."""
