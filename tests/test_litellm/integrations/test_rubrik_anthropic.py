@@ -325,6 +325,46 @@ class TestAnthropicRoundTrip:
         assert original_response["stop_reason"] == "end_turn"
         assert isinstance(original_response["content"], list)
 
+    async def test_thinking_content_preserved_during_round_trip(self, handler):
+        """Test that thinking/citation blocks are preserved when tool calls are blocked."""
+        openai_dict: Dict[str, Any] = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Tool blocked by policy",
+                        "tool_calls": [],  # All tools blocked
+                    },
+                    "finish_reason": "stop",
+                },
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        original_response: Dict[str, Any] = {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Let me think about this..."},
+                {"type": "text", "text": "I'll use a tool."},
+                {"type": "tool_use", "id": "toolu_1", "name": "blocked_tool", "input": {"x": 1}},
+            ],
+            "stop_reason": "tool_use",
+            "model": "test-model",
+        }
+
+        handler._openai_dict_to_anthropic_response(openai_dict, original_response)
+
+        content_types = [b.get("type") for b in original_response["content"]]
+        assert "thinking" in content_types, "Thinking block should be preserved"
+        assert "text" in content_types, "Original text block should be preserved"
+        assert "tool_use" not in content_types, "Blocked tool should be removed"
+
     async def test_openai_dict_to_anthropic_with_usage_key(self, handler):
         """Test that _openai_dict_to_anthropic_response works normally when usage is present."""
         openai_dict: Dict[str, Any] = {

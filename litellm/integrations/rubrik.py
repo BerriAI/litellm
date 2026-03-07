@@ -36,6 +36,7 @@ from urllib.parse import urlparse
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.factory import get_attribute_or_key
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -534,6 +535,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         Returns:
             (blocked_content_indices, explanation)
         """
+        if not accumulated_tools:
+            return set(), None
+
         openai_format_tools = self._convert_anthropic_tools_to_openai_format(accumulated_tools)
         allowed_tools, explanation = await self._get_allowed_tool_calls(
             {tc.index: tc for tc in openai_format_tools},
@@ -805,12 +809,47 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         openai_dict: Dict[str, Any],
         original_response: Any,
     ) -> None:
-        """Convert OpenAI format dict back to Anthropic format, updating the original in-place."""
+        """Convert OpenAI format dict back to Anthropic format, updating the original in-place.
+
+        Preserves non-tool content blocks (thinking, citations, etc.) from the original
+        response and only replaces tool_use blocks based on the blocking service result.
+        """
         openai_dict.setdefault("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
         anthropic_response = self.anthropic_adapter.translate_openai_response_to_anthropic(
             response=ModelResponse(**openai_dict),
         )
-        original_response["content"] = anthropic_response.get("content", [])
+
+        # Extract the allowed tool IDs from the translated response
+        translated_content = anthropic_response.get("content") or []
+        allowed_tool_ids = {
+            get_attribute_or_key(block, "id")
+            for block in translated_content
+            if get_attribute_or_key(block, "type") == "tool_use" and get_attribute_or_key(block, "id") is not None
+        }
+
+        # Preserve non-tool blocks from original, filter tool blocks to allowed only
+        original_content = original_response.get("content") or []
+        filtered_content = []
+        for block in original_content:
+            if get_attribute_or_key(block, "type") == "tool_use":
+                if get_attribute_or_key(block, "id") in allowed_tool_ids:
+                    filtered_content.append(block)
+            else:
+                filtered_content.append(block)
+
+        # Add explanation text block if the blocking service added one
+        existing_texts = {
+            get_attribute_or_key(b, "text", "")
+            for b in original_content
+            if get_attribute_or_key(b, "type") == "text"
+        }
+        for block in translated_content:
+            if get_attribute_or_key(block, "type") == "text":
+                text = get_attribute_or_key(block, "text", "")
+                if text and text not in existing_texts:
+                    filtered_content.append(block)
+
+        original_response["content"] = filtered_content
         original_response["stop_reason"] = anthropic_response.get("stop_reason", "end_turn")
 
 
