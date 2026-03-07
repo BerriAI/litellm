@@ -2619,6 +2619,8 @@ class SSOAuthenticationHandler:
                     # cache misses so operators can investigate the correct root cause.
                     if _empty_value_in_dict:
                         # Dict format was correct but code_verifier was empty/null.
+                        # Best-effort cleanup: remove the corrupt entry before failing.
+                        await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
                         raise ProxyException(
                             message=(
                                 f"PKCE verifier for state '{state}' was found in cache but "
@@ -2630,6 +2632,8 @@ class SSOAuthenticationHandler:
                         )
                     elif cached_data is not None:
                         # Cache had data but in an unrecognised format (e.g. corrupt Redis value).
+                        # Best-effort cleanup: remove the corrupt entry before failing.
+                        await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
                         verbose_proxy_logger.error(
                             "PKCE verifier for state '%s' has an unrecognized format (type=%s); "
                             "treating as a cache miss. Investigate the cached value — it may be "

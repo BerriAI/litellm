@@ -3819,6 +3819,8 @@ class TestPKCEFunctionality:
 
         assert "cache" in exc_info.value.message.lower() or "verifier" in exc_info.value.message.lower() or "format" in exc_info.value.message.lower()
         assert str(exc_info.value.code) == "401"
+        # Strict mode should also clean up the corrupt cache entry before raising
+        mock_cache.async_delete_cache.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_non_strict_logs_warning_and_continues(self, caplog):
