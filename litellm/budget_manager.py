@@ -78,8 +78,10 @@ class BudgetManager:
         total_budget: float,
         user: str,
         duration: Optional[Literal["daily", "weekly", "monthly", "yearly"]] = None,
-        created_at: float = time.time(),
+        created_at: Optional[float] = None,
     ):
+        if created_at is None:
+            created_at = time.time()
         self.user_dict[user] = {"total_budget": total_budget}
         if duration is None:
             return self.user_dict[user]
