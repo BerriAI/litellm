@@ -95,7 +95,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     }));
   }, [keys?.keys, organization?.organization_id]);
 
-  const totalCount = keys?.total_count ?? 0;
   const pageCount = keys?.total_pages ?? 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
