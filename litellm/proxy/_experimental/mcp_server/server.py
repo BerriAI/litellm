@@ -108,10 +108,12 @@ def _write_byok_cred_cache(
     Evicts the oldest-inserted entry (FIFO) rather than clearing all at once to
     avoid a thundering-herd DB spike when the cache fills under load.
     """
-    if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
+    cache_key = (user_id, server_id)
+    # Only evict when the key is new — updates to existing entries don't grow the cache.
+    if cache_key not in _byok_cred_cache and len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
         oldest_key = next(iter(_byok_cred_cache))
         del _byok_cred_cache[oldest_key]
-    _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
+    _byok_cred_cache[cache_key] = (credential, time.monotonic())
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8

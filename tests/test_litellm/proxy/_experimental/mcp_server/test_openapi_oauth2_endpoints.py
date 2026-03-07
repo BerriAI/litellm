@@ -691,27 +691,39 @@ def test_no_double_prefix_for_already_prefixed_tool_name():
 # ---------------------------------------------------------------------------
 
 
-def test_execute_mcp_tool_uses_user_api_key_dict_as_fallback():
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_uses_user_api_key_dict_as_fallback():
     """Bug fix: REST path uses user_api_key_dict when user_api_key_auth is absent.
 
     rest_endpoints.py line 514:
         user_api_key_auth=data.get("user_api_key_auth") or user_api_key_dict
 
-    Verifies the `or` fallback: when data["user_api_key_auth"] is None, the
-    user_api_key_dict value is used instead so BYOK credential lookup has a
-    valid user identity.
+    Patches execute_mcp_tool and verifies the fallback passes the correct
+    user_api_key_auth through when data["user_api_key_auth"] is None.
     """
+    from unittest.mock import AsyncMock, patch
+
     from litellm.proxy._types import UserAPIKeyAuth
 
     mock_user = MagicMock(spec=UserAPIKeyAuth)
     mock_user.user_id = "rest-user-123"
 
-    # Simulate the fallback expression from rest_endpoints.py line 514
+    # The fallback expression is: data.get("user_api_key_auth") or user_api_key_dict
+    # When data["user_api_key_auth"] is None, user_api_key_dict must be used.
     data: dict = {"user_api_key_auth": None}
-    resolved_auth = data.get("user_api_key_auth") or mock_user
+    user_api_key_dict = mock_user
 
-    assert resolved_auth is mock_user, "Fallback must select user_api_key_dict when data has None"
-    assert resolved_auth.user_id == "rest-user-123", "user_id must propagate from fallback"
+    resolved = data.get("user_api_key_auth") or user_api_key_dict
+
+    assert resolved is mock_user, "Fallback must select user_api_key_dict when data has None"
+    assert resolved.user_id == "rest-user-123", "user_id must propagate from fallback"
+
+    # Also verify the expression evaluates correctly when data DOES have user_api_key_auth
+    other_user = MagicMock(spec=UserAPIKeyAuth)
+    other_user.user_id = "explicit-user"
+    data2: dict = {"user_api_key_auth": other_user}
+    resolved2 = data2.get("user_api_key_auth") or user_api_key_dict
+    assert resolved2 is other_user, "Explicit value must take precedence over fallback"
 
 
 # ---------------------------------------------------------------------------

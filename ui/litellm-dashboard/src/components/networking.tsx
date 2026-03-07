@@ -6429,31 +6429,27 @@ export const getMcpOAuth2Status = async (
   serverId: string,
   accessToken: string,
 ): Promise<{ connected: boolean }> => {
-  try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth2/status`
-      : `/v1/mcp/server/${serverId}/oauth2/status`;
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth2/status`
+    : `/v1/mcp/server/${serverId}/oauth2/status`;
 
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.GET,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-    });
+  const response = await fetch(url, {
+    method: HTTP_REQUEST.GET,
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    },
+  });
 
-    if (!response.ok) {
-      // Do NOT call handleError here: this function is used inside a polling
-      // loop that catches and ignores errors.  Calling handleError would cause
-      // UI notifications to fire on every failed poll tick.
-      const errorData = await response.json().catch(() => ({}));
-      const errorMessage = deriveErrorMessage(errorData);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
-  } catch (error) {
-    throw error;
+  if (!response.ok) {
+    // Do NOT call handleError here: this function is called inside a polling
+    // loop that silently ignores errors.  Calling handleError would surface
+    // UI notifications on every failed tick (e.g. transient 500s).
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    throw new Error(errorMessage);
   }
+
+  return await response.json();
 };
 
 export const createMCPServer = async (
