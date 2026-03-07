@@ -151,14 +151,12 @@ class HiddenlayerGuardrail(CustomGuardrail):
         project_id = headers.get("hl-project-id")
 
         if scan_params := inputs.get("structured_messages"):
-            # Convert AllMessageValues to simple dict format for HiddenLayer API
-            messages = [
-                {"role": msg.get("role", "user"), "content": msg.get("content", "")}
-                for msg in scan_params
-                if isinstance(msg, dict)
-            ]
+            last_msg = scan_params[-1]
             result = await self._call_hiddenlayer(
-                project_id, hl_request_metadata, {"messages": messages}, input_type
+                project_id,
+                hl_request_metadata,
+                {"messages": [{"role": last_msg.get("role", "user"), "content": last_msg.get("content", "")}]},
+                input_type,
             )
         elif text := inputs.get("texts"):
             result = await self._call_hiddenlayer(
@@ -171,11 +169,19 @@ class HiddenlayerGuardrail(CustomGuardrail):
             result = {}
 
         if result.get("evaluation", {}).get("action") == HiddenlayerAction.BLOCK:
+            detected_reasons = [
+                entry.get("name", "unknown")
+                for entry in result.get("analysis", [])
+                if entry.get("detected")
+            ]
+            threat_level = result.get("evaluation", {}).get("threat_level")
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": "Violated guardrail policy",
-                    "hiddenlayer_guardrail_response": HiddenlayerMessages.BLOCK_MESSAGE,
+                    "hiddenlayer_guardrail_response": HiddenlayerMessages.BLOCK_MESSAGE.value,
+                    "block_reasons": detected_reasons,
+                    "threat_level": threat_level,
                 },
             )
 
