@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
 from litellm.integrations.s3 import get_s3_object_key
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -446,8 +447,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
         s3_object_download_filename = f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{standard_logging_payload['id']}.json"
 
+        # Redact user API key info from metadata before creating payload
+        payload_dict = dict(standard_logging_payload)
+        if "metadata" in payload_dict and isinstance(payload_dict["metadata"], dict):
+            payload_dict["metadata"] = redact_user_api_key_info(metadata=payload_dict["metadata"])
+
         return s3BatchLoggingElement(
-            payload=dict(standard_logging_payload),
+            payload=payload_dict,
             s3_object_key=s3_object_key,
             s3_object_download_filename=s3_object_download_filename,
         )

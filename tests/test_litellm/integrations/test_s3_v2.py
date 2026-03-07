@@ -796,3 +796,122 @@ async def test_combined_prefix_reflects_in_s3_object_key():
     result = logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
     key = result.s3_object_key
     assert "myteam/apikey/" in key, f"Expected both prefixes in key: {key}"
+
+
+# --------------------------------------------------------------
+# Test API key redaction
+# --------------------------------------------------------------
+def test_redact_user_api_key_info_when_enabled():
+    """
+    Test that user_api_key fields are redacted from metadata when redact_user_api_key_info is True.
+    """
+    import litellm
+    
+    # Enable redaction
+    original_value = litellm.redact_user_api_key_info
+    litellm.redact_user_api_key_info = True
+    
+    try:
+        logger = S3Logger()
+        payload = StandardLoggingPayload(
+            id="redact-test",
+            metadata={
+                "user_api_key_team_alias": "team-redact",
+                "user_api_key_alias": "key-redact",
+                "user_api_key_user_id": "user-123",
+                "user_api_key_hash": "hash-abc",
+                "other_metadata": "should-remain",
+                "normal_field": "normal-value",
+            },
+            messages=[],
+        )
+        
+        result = logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
+        assert result is not None
+        
+        # Verify that user_api_key fields are removed
+        metadata = result.payload.get("metadata", {})
+        assert "user_api_key_team_alias" not in metadata, "user_api_key_team_alias should be redacted"
+        assert "user_api_key_alias" not in metadata, "user_api_key_alias should be redacted"
+        assert "user_api_key_user_id" not in metadata, "user_api_key_user_id should be redacted"
+        assert "user_api_key_hash" not in metadata, "user_api_key_hash should be redacted"
+        
+        # Verify that other fields remain
+        assert "other_metadata" in metadata, "other_metadata should remain"
+        assert metadata["other_metadata"] == "should-remain"
+        assert "normal_field" in metadata, "normal_field should remain"
+        assert metadata["normal_field"] == "normal-value"
+    finally:
+        # Restore original value
+        litellm.redact_user_api_key_info = original_value
+
+
+def test_redact_user_api_key_info_when_disabled():
+    """
+    Test that user_api_key fields are NOT redacted when redact_user_api_key_info is False or None.
+    """
+    import litellm
+    
+    # Disable redaction
+    original_value = litellm.redact_user_api_key_info
+    litellm.redact_user_api_key_info = False
+    
+    try:
+        logger = S3Logger()
+        payload = StandardLoggingPayload(
+            id="no-redact-test",
+            metadata={
+                "user_api_key_team_alias": "team-keep",
+                "user_api_key_alias": "key-keep",
+                "other_metadata": "should-remain",
+            },
+            messages=[],
+        )
+        
+        result = logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
+        assert result is not None
+        
+        # Verify that user_api_key fields are NOT removed
+        metadata = result.payload.get("metadata", {})
+        assert "user_api_key_team_alias" in metadata, "user_api_key_team_alias should NOT be redacted when flag is False"
+        assert metadata["user_api_key_team_alias"] == "team-keep"
+        assert "user_api_key_alias" in metadata, "user_api_key_alias should NOT be redacted when flag is False"
+        assert metadata["user_api_key_alias"] == "key-keep"
+        assert "other_metadata" in metadata, "other_metadata should remain"
+    finally:
+        # Restore original value
+        litellm.redact_user_api_key_info = original_value
+
+
+def test_redact_user_api_key_info_with_no_metadata():
+    """
+    Test that redaction works correctly when metadata is None or empty.
+    """
+    import litellm
+    
+    original_value = litellm.redact_user_api_key_info
+    litellm.redact_user_api_key_info = True
+    
+    try:
+        logger = S3Logger()
+        
+        # Test with None metadata
+        payload1 = StandardLoggingPayload(
+            id="no-metadata-test",
+            metadata=None,
+            messages=[],
+        )
+        result1 = logger.create_s3_batch_logging_element(datetime.utcnow(), payload1)
+        assert result1 is not None
+        
+        # Test with empty metadata
+        payload2 = StandardLoggingPayload(
+            id="empty-metadata-test",
+            metadata={},
+            messages=[],
+        )
+        result2 = logger.create_s3_batch_logging_element(datetime.utcnow(), payload2)
+        assert result2 is not None
+        assert result2.payload.get("metadata") == {}
+    finally:
+        litellm.redact_user_api_key_info = original_value
