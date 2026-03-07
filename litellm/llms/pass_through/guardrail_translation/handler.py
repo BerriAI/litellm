@@ -185,7 +185,10 @@ class PassThroughEndpointHandler(BaseTranslation):
         if user_metadata:
             effective_request_data["litellm_metadata"] = user_metadata
 
-        # Apply guardrail (pass-through doesn't modify the text, just checks it)
+        # Apply guardrail — pass-through supports rejection guardrails only (which raise
+        # exceptions). Text mutation (e.g. PII unmasking) is not applied back to the
+        # response because pass-through payloads use arbitrary JSON structures with no
+        # generic field injection mechanism.
         inputs = GenericGuardrailAPIInputs(texts=[text_to_check])
         # Include model information from the response if available
         response_model = response.get("model") if isinstance(response, dict) else None
