@@ -587,6 +587,17 @@ async def openapi_oauth2_status(
         )
         connected = False
 
+    # Populate cache so subsequent polls within the TTL window skip the DB.
+    # Use a non-None sentinel ("") for connected=True to satisfy the cache's
+    # None-means-no-credential invariant; invalidation via _invalidate_byok_cred_cache
+    # is still the authoritative signal when a new token is stored.
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _write_byok_cred_cache
+
+        _write_byok_cred_cache(user_id, server_id, "" if connected else None)
+    except Exception:
+        pass  # Best-effort; never block the response
+
     return JSONResponse(
         {"connected": connected, "server_id": server_id, "server_name": server_name}
     )

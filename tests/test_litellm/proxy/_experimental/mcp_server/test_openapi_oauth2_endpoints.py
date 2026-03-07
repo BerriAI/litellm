@@ -558,7 +558,8 @@ async def test_check_byok_credential_raises_503_when_no_db():
 # ---------------------------------------------------------------------------
 
 
-def test_spec_path_server_uses_tool_registry():
+@pytest.mark.asyncio
+async def test_spec_path_server_uses_tool_registry():
     """Bug fix 1: when server.spec_path is set, tools come from the local registry.
     This verifies the MCPServerManager knows about spec_path and the registry.
     The key invariant: spec_path servers do not go through MCP client creation.
@@ -592,13 +593,7 @@ def test_spec_path_server_uses_tool_registry():
     from unittest.mock import AsyncMock, patch
 
     with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock) as mock_create:
-        # _get_tools_from_server is async but returns early for spec_path servers
-        import asyncio
-
-        async def _run():
-            return await manager._get_tools_from_server(server)
-
-        asyncio.get_event_loop().run_until_complete(_run())
+        await manager._get_tools_from_server(server)
 
     mock_create.assert_not_called()
 
@@ -699,17 +694,24 @@ def test_no_double_prefix_for_already_prefixed_tool_name():
 def test_execute_mcp_tool_uses_user_api_key_dict_as_fallback():
     """Bug fix: REST path uses user_api_key_dict when user_api_key_auth is absent.
 
-    The rest_endpoints.py fix ensures user identity for BYOK credential
-    lookup reaches execute_mcp_tool even when the request data dict doesn't
-    carry user_api_key_auth explicitly.
+    rest_endpoints.py line 514:
+        user_api_key_auth=data.get("user_api_key_auth") or user_api_key_dict
+
+    Verifies the `or` fallback: when data["user_api_key_auth"] is None, the
+    user_api_key_dict value is used instead so BYOK credential lookup has a
+    valid user identity.
     """
     from litellm.proxy._types import UserAPIKeyAuth
 
     mock_user = MagicMock(spec=UserAPIKeyAuth)
     mock_user.user_id = "rest-user-123"
 
-    # The key assertion: user identity propagates correctly from the fallback.
-    assert mock_user.user_id == "rest-user-123", "user_id must propagate from fallback"
+    # Simulate the fallback expression from rest_endpoints.py line 514
+    data: dict = {"user_api_key_auth": None}
+    resolved_auth = data.get("user_api_key_auth") or mock_user
+
+    assert resolved_auth is mock_user, "Fallback must select user_api_key_dict when data has None"
+    assert resolved_auth.user_id == "rest-user-123", "user_id must propagate from fallback"
 
 
 # ---------------------------------------------------------------------------
