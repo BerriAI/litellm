@@ -21983,7 +21983,7 @@
         "supported_modalities": [
             "text"
         ],
-        "supports_tool_choice": false
+        "supports_tool_choice": true
     },
     "gradient_ai/openai-gpt-4o-mini": {
         "litellm_provider": "gradient_ai",
@@ -21995,7 +21995,7 @@
         "supported_modalities": [
             "text"
         ],
-        "supports_tool_choice": false
+        "supports_tool_choice": true
     },
     "gradient_ai/openai-o3": {
         "input_cost_per_token": 2e-06,
@@ -22009,7 +22009,7 @@
         "supported_modalities": [
             "text"
         ],
-        "supports_tool_choice": false
+        "supports_tool_choice": true
     },
     "gradient_ai/openai-o3-mini": {
         "input_cost_per_token": 1.1e-06,
@@ -22023,7 +22023,7 @@
         "supported_modalities": [
             "text"
         ],
-        "supports_tool_choice": false
+        "supports_tool_choice": true
     },
     "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": {
         "input_cost_per_token": 0,
