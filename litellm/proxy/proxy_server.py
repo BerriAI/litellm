@@ -5632,11 +5632,6 @@ class ProxyStartupEvent:
         """
         Validates that when use_redis_transaction_buffer is enabled,
         a Redis cache is properly configured in litellm_settings.
-
-        Without Redis, spend updates are silently dropped because:
-        - In-memory queues are drained but never pushed to Redis
-        - The pod lock manager cannot acquire locks for DB commits
-        - No fallback to direct DB writes occurs
         """
         from litellm.secret_managers.main import str_to_bool
 
@@ -5648,10 +5643,9 @@ class ProxyStartupEvent:
 
         if _use_redis_transaction_buffer and redis_usage_cache is None:
             raise ValueError(
-                "`use_redis_transaction_buffer` is enabled in general_settings, "
-                "but no Redis cache is configured. Spend tracking will silently "
-                "fail without Redis. Please add a Redis cache configuration in "
-                "litellm_settings:\n\n"
+                "`use_redis_transaction_buffer` is enabled in general_settings "
+                "but no Redis cache is configured. This will cause spend updates "
+                "to not be tracked. Add a Redis cache in litellm_settings:\n\n"
                 "litellm_settings:\n"
                 "  cache: true\n"
                 "  cache_params:\n"
