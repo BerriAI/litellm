@@ -957,31 +957,41 @@ def test_managed_files_with_loadbalancing(mocker: MockerFixture, monkeypatch, ll
         async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
     
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
     proxy_logging_obj.proxy_hook_mapping["managed_files"] = ManagedFilesWithLoadbalancing()
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
-    # Disable auth so the test doesn't depend on master_key state from other tests
-    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
-    
-    # Create batch file content
-    test_file_content = b'{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}}'
-    test_file = ("batch_data.jsonl", test_file_content, "application/jsonl")
-    
-    # Make request with both target_model_names AND enable_loadbalancing_on_batch_endpoints
-    response = client.post(
-        "/v1/files",
-        files={"file": test_file},
-        data={
-            "purpose": "batch",
-            "target_model_names": "azure-gpt-3-5-turbo,gpt-3.5-turbo",  # Multiple models
-        },
-        headers={"Authorization": "Bearer test-key"},
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    # Override auth to avoid dependence on shared proxy state in parallel CI
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN
     )
     
-    # Verify success
-    assert response.status_code == 200
+    try:
+        # Create batch file content
+        test_file_content = b'{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}}'
+        test_file = ("batch_data.jsonl", test_file_content, "application/jsonl")
+        
+        # Make request with both target_model_names AND enable_loadbalancing_on_batch_endpoints
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data={
+                "purpose": "batch",
+                "target_model_names": "azure-gpt-3-5-turbo,gpt-3.5-turbo",  # Multiple models
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
+        
+        # Verify success
+        assert response.status_code == 200, response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
     result = response.json()
     assert result["id"] == "litellm_managed_file_abc123"
     assert result["purpose"] == "batch"
