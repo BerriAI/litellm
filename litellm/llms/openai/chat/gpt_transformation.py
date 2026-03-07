@@ -2,11 +2,14 @@
 Support for gpt model family
 """
 
+import hashlib
+import re
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
     Coroutine,
+    Dict,
     Iterator,
     List,
     Literal,
@@ -20,6 +23,10 @@ from typing import (
 import httpx
 
 import litellm
+
+# Pre-compiled pattern for validating OpenAI-compatible tool call IDs.
+# Strict providers (e.g. Mistral) reject IDs that don't match this.
+_VALID_TOOL_CALL_ID_RE = re.compile(r"^[a-zA-Z0-9]{1,64}$")
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
@@ -431,6 +438,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         messages = self._transform_messages(messages=messages, model=model)
+        messages = self._normalize_tool_call_ids(messages)
         messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
             model=model, messages=messages, tools=optional_params.get("tools", [])
         )
@@ -456,6 +464,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         transformed_messages = await self._transform_messages(
             messages=messages, model=model, is_async=True
         )
+        transformed_messages = self._normalize_tool_call_ids(transformed_messages)
         transformed_messages, tools = (
             self.remove_cache_control_flag_from_messages_and_tools(
                 model=model,
@@ -476,6 +485,74 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             return self.transform_request(
                 model, messages, optional_params, litellm_params, headers
             )
+
+    def _normalize_tool_call_ids(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        Normalize non-compliant tool call IDs in message history to satisfy strict
+        OpenAI-compatible providers (e.g. Mistral) that require IDs matching
+        ^[a-zA-Z0-9]{1,64}$.
+
+        Some providers (e.g. MiniMax via OpenRouter) return IDs like
+        ``call_function_jlv0n7uyomle_1`` which contain underscores and are longer
+        than 9 characters.  When those IDs are forwarded in a subsequent request to
+        a strict provider the request is rejected with a 400 BadRequestError.
+
+        This method scans the message list once, collects every non-compliant ID,
+        builds a stable deterministic remapping using an MD5 hash (truncated to 9
+        characters), and then rewrites:
+
+        * ``tool_calls[].id`` on assistant messages
+        * ``tool_call_id`` on tool/function result messages
+
+        IDs that already satisfy ``^[a-zA-Z0-9]{1,64}$`` are left unchanged so
+        there is zero overhead for well-behaved providers.
+        """
+        def _remap_id(original: str, mapping: Dict[str, str]) -> str:
+            if original not in mapping:
+                digest = hashlib.md5(original.encode()).hexdigest()[:9]
+                mapping[original] = digest
+            return mapping[original]
+
+        # First pass: collect all non-compliant IDs that appear in assistant messages.
+        id_mapping: Dict[str, str] = {}
+        for message in messages:
+            role = message.get("role")
+            if role == "assistant":
+                tool_calls = message.get("tool_calls")  # type: ignore[union-attr]
+                if tool_calls:
+                    for tc in tool_calls:
+                        tc_id = (
+                            tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                        )
+                        if tc_id and not _VALID_TOOL_CALL_ID_RE.match(tc_id):
+                            _remap_id(tc_id, id_mapping)
+
+        if not id_mapping:
+            return messages
+
+        # Second pass: rewrite IDs in-place.
+        for message in messages:
+            role = message.get("role")
+            if role == "assistant":
+                tool_calls = message.get("tool_calls")  # type: ignore[union-attr]
+                if tool_calls:
+                    for tc in tool_calls:
+                        if isinstance(tc, dict):
+                            tc_id = tc.get("id")
+                            if tc_id and tc_id in id_mapping:
+                                tc["id"] = id_mapping[tc_id]
+                        else:
+                            tc_id = getattr(tc, "id", None)
+                            if tc_id and tc_id in id_mapping:
+                                tc.id = id_mapping[tc_id]  # type: ignore[union-attr]
+            elif role in ("tool", "function"):
+                tc_id = message.get("tool_call_id")  # type: ignore[union-attr]
+                if tc_id and tc_id in id_mapping:
+                    message["tool_call_id"] = id_mapping[tc_id]  # type: ignore[index]
+
+        return messages
 
     def _passed_in_tools(self, optional_params: dict) -> bool:
         return optional_params.get("tools", None) is not None
