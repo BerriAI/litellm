@@ -9,7 +9,6 @@ import datetime
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
 
-import httpx
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
