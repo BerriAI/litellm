@@ -508,6 +508,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         restValues.transport = "http";
       }
 
+      // Translate synthetic "byok" auth_type to actual type + is_byok flag
+      if (restValues.auth_type === "byok") {
+        restValues.auth_type = restValues.byok_key_format || "bearer_token";
+        restValues.is_byok = true;
+      }
+      delete restValues.byok_key_format;
+
       // Prepare the payload with cost configuration and allowed tools
       const payload: Record<string, any> = {
         ...restValues,
@@ -576,7 +583,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (value === "stdio") {
       form.setFieldsValue({ url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined });
     } else if (value === TRANSPORT.OPENAPI) {
-      form.setFieldsValue({ url: undefined, command: undefined, args: undefined, env: undefined });
+      form.setFieldsValue({ url: undefined, command: undefined, args: undefined, env: undefined, auth_type: "none" });
     } else {
       form.setFieldsValue({ spec_path: undefined, command: undefined, args: undefined, env: undefined });
     }
@@ -889,105 +896,100 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </>
             )}
 
-            {/* BYOK toggle - only for OpenAPI */}
-            {transportType === TRANSPORT.OPENAPI && (
-              <>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
-                      BYOK (Bring Your Own Key)
-                      <Tooltip title="When enabled, each user provides their own API key for this service. Keys are stored per-user and never shared.">
-                        <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="is_byok"
-                  valuePropName="checked"
-                >
-                  <Switch />
-                </Form.Item>
-
-                <Form.Item noStyle shouldUpdate={(prev, cur) => prev.is_byok !== cur.is_byok || prev.auth_type !== cur.auth_type}>
-                  {({ getFieldValue }) =>
-                    getFieldValue("is_byok") ? (
-                      <>
-                        {/* Auth format hint */}
-                        {getFieldValue("auth_type") && getFieldValue("auth_type") !== "none" && (
-                          <div className="mb-4 p-3 bg-blue-50 rounded-lg text-sm text-blue-700 flex items-start gap-2">
-                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
-                            <span>
-                              User keys will be sent as:{" "}
-                              <code className="font-mono bg-blue-100 px-1 rounded">
-                                {getFieldValue("auth_type") === "bearer_token" && "Authorization: Bearer {key}"}
-                                {getFieldValue("auth_type") === "api_key" && "x-api-key: {key}"}
-                                {getFieldValue("auth_type") === "basic" && "Authorization: Basic {key}"}
-                                {getFieldValue("auth_type") === "authorization" && "Authorization: {key}"}
-                              </code>
-                              {!getFieldValue("auth_type") && "Set Authentication Type below to specify the format."}
-                            </span>
-                          </div>
-                        )}
-                        {!getFieldValue("auth_type") && (
-                          <div className="mb-4 p-3 bg-yellow-50 rounded-lg text-sm text-yellow-700 flex items-start gap-2">
-                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
-                            <span>Set the <strong>Authentication Type</strong> below to specify how user keys are sent (e.g., Bearer Token, API Key header).</span>
-                          </div>
-                        )}
-                        <Form.Item
-                          label={
-                            <span className="text-sm font-medium text-gray-700">
-                              Access Description
-                              <Tooltip title="List of permissions shown to users in the connection modal (e.g. 'Create and manage Jira issues')">
-                                <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                              </Tooltip>
-                            </span>
-                          }
-                          name="byok_description"
-                        >
-                          <Select
-                            mode="tags"
-                            placeholder="Add access description items (press Enter after each)"
-                            className="w-full"
-                            tokenSeparators={[","]}
-                          />
-                        </Form.Item>
-
-                        <Form.Item
-                          label={
-                            <span className="text-sm font-medium text-gray-700">
-                              API Key Help URL
-                              <Tooltip title="Optional link shown to users to help them find their API key">
-                                <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                              </Tooltip>
-                            </span>
-                          }
-                          name="byok_api_key_help_url"
-                        >
-                          <Input placeholder="https://docs.example.com/api-keys" />
-                        </Form.Item>
-                      </>
-                    ) : null
-                  }
-                </Form.Item>
-              </>
-            )}
-
             {/* Authentication - show for HTTP, SSE, and OpenAPI */}
             {transportType !== "stdio" && transportType !== "" && (
               <Form.Item
                 label={<span className="text-sm font-medium text-gray-700">Authentication</span>}
                 name="auth_type"
-                rules={[{ required: true, message: "Please select an auth type" }]}
+                rules={[{ required: transportType !== TRANSPORT.OPENAPI, message: "Please select an auth type" }]}
               >
                 <Select placeholder="Select auth type" className="rounded-lg" size="large">
                   <Select.Option value="none">None</Select.Option>
                   <Select.Option value="api_key">API Key</Select.Option>
                   <Select.Option value="bearer_token">Bearer Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
-                  <Select.Option value="oauth2">OAuth</Select.Option>
+                  <Select.Option value="oauth2">OAuth 2.0</Select.Option>
+                  {transportType === TRANSPORT.OPENAPI && (
+                    <Select.Option value="byok">
+                      BYOK — users bring their own key
+                    </Select.Option>
+                  )}
                 </Select>
               </Form.Item>
             )}
+
+            {/* BYOK fields — shown when auth_type is "byok" */}
+            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.auth_type !== cur.auth_type}>
+              {({ getFieldValue }) =>
+                getFieldValue("auth_type") === "byok" ? (
+                  <>
+                    <div className="p-4 bg-blue-50 rounded-lg border border-blue-100 mb-4">
+                      <div className="flex items-start gap-2">
+                        <InfoCircleOutlined className="mt-0.5 text-blue-500 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-blue-900 mb-1">Bring Your Own Key (BYOK)</p>
+                          <p className="text-sm text-blue-700">
+                            Each user connects this API with their own key — keys are stored per-user and never shared. Users will be prompted to enter their key in the ChatUI before using this tool.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <Form.Item
+                      label={<span className="text-sm font-medium text-gray-700">Key Format</span>}
+                      name="byok_key_format"
+                      initialValue="bearer_token"
+                      rules={[{ required: true, message: "Please select how the key is sent" }]}
+                    >
+                      <Select size="large">
+                        <Select.Option value="bearer_token">
+                          Bearer Token — <code className="text-xs">Authorization: Bearer &#123;key&#125;</code>
+                        </Select.Option>
+                        <Select.Option value="api_key">
+                          API Key header — <code className="text-xs">x-api-key: &#123;key&#125;</code>
+                        </Select.Option>
+                        <Select.Option value="basic">
+                          Basic Auth — <code className="text-xs">Authorization: Basic &#123;key&#125;</code>
+                        </Select.Option>
+                      </Select>
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <span className="text-sm font-medium text-gray-700">
+                          Access Description
+                          <Tooltip title="Optional: list permissions shown to users in the connect modal (e.g. 'Read and manage issues')">
+                            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="byok_description"
+                    >
+                      <Select
+                        mode="tags"
+                        placeholder="e.g. Read and manage issues (press Enter after each)"
+                        className="w-full"
+                        tokenSeparators={[","]}
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <span className="text-sm font-medium text-gray-700">
+                          API Key Help URL
+                          <Tooltip title="Optional link shown to users to help them find or create their API key">
+                            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="byok_api_key_help_url"
+                    >
+                      <Input placeholder="https://docs.example.com/api-keys" />
+                    </Form.Item>
+                  </>
+                ) : null
+              }
+            </Form.Item>
 
             {transportType !== "stdio" && transportType !== "" && shouldShowAuthValueField && (
               <Form.Item

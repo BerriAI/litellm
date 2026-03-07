@@ -55,13 +55,15 @@ export const useTestMCPConnection = ({
   // Check if we have the minimum required fields to fetch tools
   const isM2MOAuth = formValues.auth_type === AUTH_TYPE.OAUTH2
     && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
-  const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth;
   const isOpenAPITransport = formValues.transport === TRANSPORT.OPENAPI;
+  // For OpenAPI transport, tools are listed from the spec file — no OAuth token needed
+  const requiresOAuthToken = !isOpenAPITransport && formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth;
   const hasEndpoint = isOpenAPITransport ? !!formValues.spec_path : !!formValues.url;
   const canFetchTools = !!(
     hasEndpoint &&
     formValues.transport &&
-    formValues.auth_type &&
+    // auth_type not required for OpenAPI (spec listing works without auth)
+    (isOpenAPITransport || formValues.auth_type) &&
     accessToken &&
     (!requiresOAuthToken || oauthAccessToken)
   );
