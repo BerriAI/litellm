@@ -1683,7 +1683,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-
 class ModelResponseBase(OpenAIObject):
     id: str
     """A unique identifier for the completion."""
@@ -2440,6 +2439,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
+    user_api_key_agent_id: Optional[str]
     user_api_key_request_route: Optional[str]
     user_api_key_auth_metadata: Optional[Dict[str, str]]
 

@@ -390,7 +390,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
             <div className="space-y-4">
               {!requireTraceIdOutbound && (
                 <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
-                  Enable &quot;Require x-litellm-trace-id on calls BY this agent&quot; in Tracing to configure budgets and rate limits.
+                  Enable &quot;Require x-litellm-trace-id on calls BY this agent&quot; in Tracing to configure per-session budgets and rate limits.
                 </div>
               )}
 
@@ -431,10 +431,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
               </p>
               <div className="grid grid-cols-2 gap-4">
                 <Form.Item label="TPM Limit" name="tpm_limit" className="mb-0">
-                  <InputNumber className="w-full" min={0} placeholder="e.g. 100000" disabled={!requireTraceIdOutbound} />
+                  <InputNumber className="w-full" min={0} placeholder="e.g. 100000" />
                 </Form.Item>
                 <Form.Item label="RPM Limit" name="rpm_limit" className="mb-0">
-                  <InputNumber className="w-full" min={0} placeholder="e.g. 100" disabled={!requireTraceIdOutbound} />
+                  <InputNumber className="w-full" min={0} placeholder="e.g. 100" />
                 </Form.Item>
               </div>
 

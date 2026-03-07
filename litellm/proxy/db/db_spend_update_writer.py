@@ -856,9 +856,7 @@ class DBSpendUpdateWriter:
                             or {}
                         ),
                         len(
-                            db_spend_update_transactions.get(
-                                "agent_list_transactions"
-                            )
+                            db_spend_update_transactions.get("agent_list_transactions")
                             or {}
                         ),
                     )
@@ -1345,7 +1343,9 @@ class DBSpendUpdateWriter:
         )
 
         ### UPDATE AGENT TABLE ###
-        agent_list_transactions = db_spend_update_transactions["agent_list_transactions"]
+        agent_list_transactions = db_spend_update_transactions[
+            "agent_list_transactions"
+        ]
         await DBSpendUpdateWriter._update_entity_spend_in_db(
             entity_name="Agent",
             transactions=agent_list_transactions,
@@ -1355,6 +1355,17 @@ class DBSpendUpdateWriter:
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+        # Also update in-memory agent registry so GET /v1/agents returns fresh spend
+        if agent_list_transactions:
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+            )
+
+            for agent_id, response_cost in agent_list_transactions.items():
+                agent = global_agent_registry.get_agent_by_id(agent_id=agent_id)
+                if agent is not None:
+                    agent.spend = (agent.spend or 0) + response_cost
 
     @staticmethod
     async def _update_entity_spend_in_db(
@@ -1615,14 +1626,14 @@ class DBSpendUpdateWriter:
 
                                 # Add cache-related fields if they exist
                                 if "cache_read_input_tokens" in transaction:
-                                    common_data["cache_read_input_tokens"] = (
-                                        transaction.get("cache_read_input_tokens", 0)
-                                    )
+                                    common_data[
+                                        "cache_read_input_tokens"
+                                    ] = transaction.get("cache_read_input_tokens", 0)
                                 if "cache_creation_input_tokens" in transaction:
-                                    common_data["cache_creation_input_tokens"] = (
-                                        transaction.get(
-                                            "cache_creation_input_tokens", 0
-                                        )
+                                    common_data[
+                                        "cache_creation_input_tokens"
+                                    ] = transaction.get(
+                                        "cache_creation_input_tokens", 0
                                     )
 
                                 if entity_type == "tag" and "request_id" in transaction:

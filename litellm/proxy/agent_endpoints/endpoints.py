@@ -14,16 +14,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import (CommonProxyErrors, LitellmUserRoles,
-                                  UserAPIKeyAuth)
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_daily_activity import \
-    get_daily_activity
-from litellm.types.agents import (AgentConfig, AgentMakePublicResponse,
-                                  AgentResponse, MakeAgentsPublicRequest,
-                                  PatchAgentRequest)
-from litellm.types.proxy.management_endpoints.common_daily_activity import \
-    SpendAnalyticsPaginatedResponse
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.types.agents import (
+    AgentConfig,
+    AgentMakePublicResponse,
+    AgentResponse,
+    MakeAgentsPublicRequest,
+    PatchAgentRequest,
+)
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
 
 router = APIRouter()
 
@@ -66,10 +69,10 @@ async def get_agents(
     Returns: List[AgentResponse]
 
     """
-    from litellm.proxy.agent_endpoints.agent_registry import \
-        global_agent_registry
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import \
-        AgentRequestHandler
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
 
     try:
         returned_agents: List[AgentResponse] = []
@@ -96,27 +99,14 @@ async def get_agents(
                     agent for agent in all_agents if agent.agent_id in allowed_agent_ids
                 ]
 
-        # Fetch current spend from DB for all returned agents
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is not None:
-            agent_ids = [agent.agent_id for agent in returned_agents]
-            if agent_ids:
-                db_agents = await prisma_client.db.litellm_agentstable.find_many(
-                    where={"agent_id": {"in": agent_ids}},
-                )
-                spend_map = {a.agent_id: a.spend for a in db_agents}
-                for agent in returned_agents:
-                    if agent.agent_id in spend_map:
-                        agent.spend = spend_map[agent.agent_id]
-
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params["is_public"] = (
-                litellm.public_agent_groups is not None
-                and (agent.agent_id in litellm.public_agent_groups)
+            agent.litellm_params[
+                "is_public"
+            ] = litellm.public_agent_groups is not None and (
+                agent.agent_id in litellm.public_agent_groups
             )
 
         return returned_agents
@@ -135,8 +125,9 @@ async def get_agents(
 
 #### CRUD ENDPOINTS FOR AGENTS ####
 
-from litellm.proxy.agent_endpoints.agent_registry import \
-    global_agent_registry as AGENT_REGISTRY
+from litellm.proxy.agent_endpoints.agent_registry import (
+    global_agent_registry as AGENT_REGISTRY,
+)
 
 
 @router.post(
@@ -265,25 +256,21 @@ async def get_agent_by_id(agent_id: str):
                 include={"object_permission": True},
             )
             if agent_row is not None:
-                agent_dict = agent_row.model_dump()
+                from litellm.proxy.agent_endpoints.agent_registry import (
+                    _parse_json_fields,
+                )
+
+                agent_dict = _parse_json_fields(agent_row.model_dump())
                 if agent_row.object_permission is not None:
                     try:
-                        agent_dict["object_permission"] = (
-                            agent_row.object_permission.model_dump()
-                        )
+                        agent_dict[
+                            "object_permission"
+                        ] = agent_row.object_permission.model_dump()
                     except Exception:
-                        agent_dict["object_permission"] = (
-                            agent_row.object_permission.dict()
-                        )
+                        agent_dict[
+                            "object_permission"
+                        ] = agent_row.object_permission.dict()
                 agent = AgentResponse(**agent_dict)  # type: ignore
-        else:
-            # Agent found in memory — refresh spend from DB
-            db_row = await prisma_client.db.litellm_agentstable.find_unique(
-                where={"agent_id": agent_id}
-            )
-            if db_row is not None:
-                agent.spend = db_row.spend
-
         if agent is None:
             raise HTTPException(
                 status_code=404, detail=f"Agent with ID {agent_id} not found"
@@ -584,8 +571,9 @@ async def make_agent_public(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.agent_endpoints.agent_registry import \
-            global_agent_registry as AGENT_REGISTRY
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
         from litellm.proxy.proxy_server import proxy_config
 
         # Check if user has admin permissions
@@ -606,7 +594,11 @@ async def make_agent_public(
                 where={"agent_id": agent_id}
             )
             if agent is not None:
-                agent = AgentResponse(**agent.model_dump())  # type: ignore
+                from litellm.proxy.agent_endpoints.agent_registry import (
+                    _parse_json_fields,
+                )
+
+                agent = AgentResponse(**_parse_json_fields(agent.model_dump()))  # type: ignore
 
             if agent is None:
                 raise HTTPException(
@@ -700,8 +692,9 @@ async def make_agents_public(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.agent_endpoints.agent_registry import \
-            global_agent_registry as AGENT_REGISTRY
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
         from litellm.proxy.proxy_server import proxy_config
 
         # Load existing config
@@ -728,7 +721,11 @@ async def make_agents_public(
                     where={"agent_id": agent_id}
                 )
                 if agent is not None:
-                    agent = AgentResponse(**agent.model_dump())  # type: ignore
+                    from litellm.proxy.agent_endpoints.agent_registry import (
+                        _parse_json_fields,
+                    )
+
+                    agent = AgentResponse(**_parse_json_fields(agent.model_dump()))  # type: ignore
 
                 if agent is None:
                     raise HTTPException(
