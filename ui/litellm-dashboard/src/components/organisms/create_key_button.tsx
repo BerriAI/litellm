@@ -1,9 +1,35 @@
 "use client";
-
+import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, message } from "antd";
+import { Button as Button2, Form, Input, message, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
+import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
+import { rolesWithWriteAccess } from "../../utils/roles";
+import AgentSelector from "../agent_management/AgentSelector";
+import { mapDisplayToInternalNames } from "../callback_info_helpers";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import SchemaFormFields from "../common_components/check_openapi_schema";
+import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
+import ModelAliasManager from "../common_components/ModelAliasManager";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import TeamDropdown from "../common_components/team_dropdown";
+import ProjectDropdown from "../common_components/ProjectDropdown";
+import { CreateUserButton } from "../CreateUserButton";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { Team } from "../key_team_helpers/key_list";
+import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import NotificationsManager from "../molecules/notifications_manager";
 import {
   getAgentsList,
   getGuardrailsList,
@@ -16,38 +42,10 @@ import {
   proxyBaseUrl,
   userFilterUICall,
 } from "../networking";
-
-import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import AgentSelector from "../agent_management/AgentSelector";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
-import { CreateUserButton } from "../CreateUserButton";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
-import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import ModelAliasManager from "../common_components/ModelAliasManager";
-import NotificationsManager from "../molecules/notifications_manager";
 import NumericalInput from "../shared/numerical_input";
-import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
-import ProjectDropdown from "../common_components/ProjectDropdown";
-import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
-import SchemaFormFields from "../common_components/check_openapi_schema";
-import { Team } from "../key_team_helpers/key_list";
-import TeamDropdown from "../common_components/team_dropdown";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import debounce from "lodash/debounce";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { mapDisplayToInternalNames } from "../callback_info_helpers";
-import { rolesWithWriteAccess } from "../../utils/roles";
 import { simplifyKeyGenerateError } from "./utils";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
-import { useQueryClient } from "@tanstack/react-query";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
 const { Option } = Select;
 
