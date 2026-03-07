@@ -326,6 +326,9 @@ class MCPServerManager:
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
                 registration_url=resolved_registration_url,
+                token_endpoint_auth_method=server_config.get(
+                    "token_endpoint_auth_method", "post"
+                ),
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
                 auth_type=auth_type,
