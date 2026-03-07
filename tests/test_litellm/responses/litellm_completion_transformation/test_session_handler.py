@@ -343,7 +343,9 @@ async def test_should_check_cold_storage_for_full_payload():
     # Test case 4: None request (should return True)
     proxy_request_none = None
     
-    with patch("litellm.cold_storage_custom_logger", return_value="s3"):
+    # Use patch.object to properly set the attribute value (not a mock)
+    # This ensures consistent behavior across all test environments
+    with patch.object(litellm, 'cold_storage_custom_logger', 's3'):
         # Test case 1: Should return True for truncated content
         result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
         assert result1 == True, "Should return True for proxy request with truncated PDF content"
