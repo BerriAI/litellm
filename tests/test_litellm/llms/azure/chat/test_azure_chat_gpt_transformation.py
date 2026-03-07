@@ -55,3 +55,68 @@ def test_map_openai_params_with_preview_api_version():
     assert config.map_openai_params(
         non_default_params, optional_params, model, drop_params, api_version
     )
+
+
+def test_azure_strips_output_config_with_effort():
+    """Test that Azure strips output_config containing effort parameter.
+
+    See: https://github.com/BerriAI/litellm/issues/22963
+    """
+    config = AzureOpenAIConfig()
+    request = config.transform_request(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "output_config": {"effort": "high"},
+            "temperature": 0.7,
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "output_config" not in request
+    assert request["temperature"] == 0.7
+
+
+def test_azure_strips_output_config_with_format():
+    """Test that Azure strips output_config containing format/schema.
+
+    See: https://github.com/BerriAI/litellm/issues/22963
+    """
+    config = AzureOpenAIConfig()
+    request = config.transform_request(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "output_config": {
+                "format": {
+                    "type": "json_schema",
+                    "schema": {"type": "object", "properties": {"name": {"type": "string"}}},
+                }
+            },
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "output_config" not in request
+
+
+def test_azure_works_without_output_config():
+    """Test that Azure requests work normally when output_config is not present.
+
+    output_config is only sent when extended thinking or effort is enabled.
+    Most requests won't include it.
+    """
+    config = AzureOpenAIConfig()
+    request = config.transform_request(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "temperature": 0.7,
+            "max_tokens": 100,
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "output_config" not in request
+    assert request["temperature"] == 0.7
+    assert request["max_tokens"] == 100
