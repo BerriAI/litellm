@@ -216,6 +216,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_version: Optional[int] = None,
         ignore_prompt_manager_model: Optional[bool] = False,
         ignore_prompt_manager_optional_params: Optional[bool] = False,
+        tools: Optional[List[Dict]] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
