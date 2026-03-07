@@ -431,3 +431,332 @@ class TestVoyageContextualEmbeddings:
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+
+# Tests for Voyage Multimodal Embeddings
+class TestVoyageMultimodalEmbeddings:
+    """Test suite for Voyage multimodal embeddings functionality"""
+
+    def test_multimodal_embedding_model_detection(self):
+        """Test that multimodal models are correctly identified"""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+
+        # Test multimodal model detection
+        assert config.is_multimodal_embedding("voyage-multimodal-3") is True
+        assert config.is_multimodal_embedding("voyage-multimodal-3.5") is True
+        assert config.is_multimodal_embedding("multimodal-model") is True
+
+        # Test non-multimodal model detection
+        assert config.is_multimodal_embedding("voyage-3-lite") is False
+        assert config.is_multimodal_embedding("voyage-context-3") is False
+        assert config.is_multimodal_embedding("regular-model") is False
+
+    def test_multimodal_embedding_url_generation(self):
+        """Test URL generation for multimodal embeddings"""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+
+        # Test default URL
+        url = config.get_complete_url(None, None, "voyage-multimodal-3.5", {}, {})
+        assert url == "https://api.voyageai.com/v1/multimodalembeddings"
+
+        # Test custom API base
+        url = config.get_complete_url(
+            "https://custom.api.com", None, "voyage-multimodal-3.5", {}, {}
+        )
+        assert url == "https://custom.api.com/multimodalembeddings"
+
+        # Test API base that already ends with endpoint
+        url = config.get_complete_url(
+            "https://custom.api.com/multimodalembeddings",
+            None,
+            "voyage-multimodal-3.5",
+            {},
+            {},
+        )
+        assert url == "https://custom.api.com/multimodalembeddings"
+
+    def test_multimodal_embedding_request_transformation_text_only(self):
+        """Test request transformation for text-only multimodal embeddings"""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+
+        # Test with simple text input
+        input_data = ["Hello world", "Test text"]
+        optional_params = {}
+
+        transformed = config.transform_embedding_request(
+            "voyage-multimodal-3.5", input_data, optional_params, {}
+        )
+
+        assert transformed["model"] == "voyage-multimodal-3.5"
+        assert len(transformed["inputs"]) == 2
+        assert transformed["inputs"][0] == {"content": [{"type": "text", "text": "Hello world"}]}
+        assert transformed["inputs"][1] == {"content": [{"type": "text", "text": "Test text"}]}
+
+    def test_multimodal_embedding_request_transformation_with_images(self):
+        """Test request transformation for multimodal embeddings with images"""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+
+        # Test with content array format (already in correct format)
+        input_data = [
+            {
+                "content": [
+                    {"type": "text", "text": "A sunset"},
+                    {"type": "image_url", "image_url": "https://example.com/sunset.jpg"}
+                ]
+            }
+        ]
+
+        transformed = config.transform_embedding_request(
+            "voyage-multimodal-3.5", input_data, {}, {}
+        )
+
+        assert transformed["model"] == "voyage-multimodal-3.5"
+        assert len(transformed["inputs"]) == 1
+        assert transformed["inputs"][0]["content"][0]["type"] == "text"
+        assert transformed["inputs"][0]["content"][1]["type"] == "image_url"
+
+    def test_multimodal_embedding_request_transformation_explicit_content_list(self):
+        """Test request transformation for explicit content list format"""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+
+        # Test with list of explicit content dicts
+        input_data = [
+            [
+                {"type": "text", "text": "Some text"},
+                {"type": "image_url", "image_url": "https://example.com/image.jpg"},
+                {"type": "video_url", "video_url": "https://example.com/video.mp4"}
+            ]
+        ]
+
+        transformed = config.transform_embedding_request(
+            "voyage-multimodal-3.5", input_data, {}, {}
+        )
+
+        assert transformed["model"] == "voyage-multimodal-3.5"
+        assert len(transformed["inputs"]) == 1
+        content = transformed["inputs"][0]["content"]
+        assert len(content) == 3
+        assert content[0]["type"] == "text"
+        assert content[0]["text"] == "Some text"
+        assert content[1]["type"] == "image_url"
+        assert content[1]["image_url"] == "https://example.com/image.jpg"
+        assert content[2]["type"] == "video_url"
+        assert content[2]["video_url"] == "https://example.com/video.mp4"
+
+    def test_multimodal_embedding_response_transformation(self):
+        """Test response transformation for multimodal embeddings"""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+        from litellm.types.utils import EmbeddingResponse
+
+        config = VoyageMultimodalEmbeddingConfig()
+
+        # Mock the response structure from Voyage multimodal embeddings
+        mock_response_data = {
+            "object": "list",
+            "data": [
+                {
+                    "object": "embedding",
+                    "embedding": [0.1, 0.2, 0.3],
+                    "index": 0,
+                }
+            ],
+            "model": "voyage-multimodal-3.5",
+            "usage": {"text_tokens": 10, "image_pixels": 50000, "total_tokens": 100},
+        }
+
+        # Create mock response
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_response_data
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(mock_response_data)
+
+        # Create model response
+        model_response = EmbeddingResponse()
+
+        # Transform response
+        transformed = config.transform_embedding_response(
+            "voyage-multimodal-3.5", mock_response, model_response, MagicMock()
+        )
+
+        # Assert the transformation
+        assert transformed.model == "voyage-multimodal-3.5"
+        assert transformed.object == "list"
+        assert transformed.data == mock_response_data["data"]
+        assert transformed.usage.prompt_tokens == 10  # text_tokens
+        assert transformed.usage.total_tokens == 100
+
+    def test_multimodal_embedding_parameter_mapping(self):
+        """Test parameter mapping for multimodal embeddings"""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+
+        non_default_params = {
+            "encoding_format": "float",
+            "dimensions": 512,
+            "input_type": "document",
+            "truncation": True
+        }
+        optional_params = {}
+
+        mapped = config.map_openai_params(
+            non_default_params, optional_params, "voyage-multimodal-3.5", False
+        )
+
+        assert mapped["encoding_format"] == "float"
+        assert mapped["output_dimension"] == 512
+        assert mapped["input_type"] == "document"
+        assert mapped["truncation"] is True
+
+    def test_multimodal_embedding_environment_validation(self):
+        """Test environment validation for multimodal embeddings"""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+
+        # Test with API key in environment
+        os.environ["VOYAGE_API_KEY"] = "test-key"
+
+        headers = config.validate_environment({}, "voyage-multimodal-3.5", [], {}, {})
+        assert headers["Authorization"] == "Bearer test-key"
+
+        # Test with custom API key
+        headers = config.validate_environment(
+            {}, "voyage-multimodal-3.5", [], {}, {}, api_key="custom-key"
+        )
+        assert headers["Authorization"] == "Bearer custom-key"
+
+    def test_multimodal_embedding_error_handling(self):
+        """Test error handling for multimodal embeddings"""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+            VoyageMultimodalError,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+
+        # Test error class creation
+        error = config.get_error_class("Test error", 400, {})
+        assert isinstance(error, VoyageMultimodalError)
+        assert error.status_code == 400
+        assert error.message == "Test error"
+
+    def test_multimodal_vs_regular_embedding_differences(self):
+        """Test that multimodal and regular embeddings are handled differently"""
+        from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        regular_config = VoyageEmbeddingConfig()
+        multimodal_config = VoyageMultimodalEmbeddingConfig()
+
+        # Test URL differences
+        regular_url = regular_config.get_complete_url(
+            None, None, "voyage-3-lite", {}, {}
+        )
+        multimodal_url = multimodal_config.get_complete_url(
+            None, None, "voyage-multimodal-3.5", {}, {}
+        )
+
+        assert regular_url == "https://api.voyageai.com/v1/embeddings"
+        assert multimodal_url == "https://api.voyageai.com/v1/multimodalembeddings"
+
+        # Test request transformation differences
+        regular_transformed = regular_config.transform_embedding_request(
+            "voyage-3-lite", ["Hello"], {}, {}
+        )
+        multimodal_transformed = multimodal_config.transform_embedding_request(
+            "voyage-multimodal-3.5", ["Hello"], {}, {}
+        )
+
+        assert regular_transformed["input"] == ["Hello"]
+        assert multimodal_transformed["inputs"] == [{"content": [{"type": "text", "text": "Hello"}]}]
+
+    def test_multimodal_embedding_integration(self):
+        """Test full integration of multimodal embeddings"""
+        try:
+            # Mock the entire embedding function to avoid API calls
+            with patch("litellm.embedding") as mock_embedding:
+                # Create a mock response that matches the expected structure
+                mock_response = MagicMock()
+                mock_response.model = "voyage-multimodal-3.5"
+                mock_response.usage.total_tokens = 100
+                mock_response.usage.prompt_tokens = 10
+                mock_response.data = [
+                    {
+                        "object": "embedding",
+                        "embedding": [0.1, 0.2, 0.3],
+                        "index": 0,
+                    }
+                ]
+                mock_embedding.return_value = mock_response
+
+                response = litellm.embedding(
+                    model="voyage/voyage-multimodal-3.5",
+                    input=["Hello world"],
+                )
+
+                # Verify the function was called with correct parameters
+                mock_embedding.assert_called_once()
+                call_args = mock_embedding.call_args
+                assert call_args[1]["model"] == "voyage/voyage-multimodal-3.5"
+                assert call_args[1]["input"] == ["Hello world"]
+
+                # Assert the response structure
+                assert response.model == "voyage-multimodal-3.5"
+                assert response.usage.total_tokens == 100
+
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
+
+    def test_multimodal_provider_config_resolution(self):
+        """Test that the correct config is returned for multimodal models"""
+        from litellm.utils import ProviderConfigManager
+
+        # Test multimodal model
+        multimodal_config = ProviderConfigManager.get_provider_embedding_config(
+            model="voyage-multimodal-3.5",
+            provider=litellm.LlmProviders.VOYAGE
+        )
+        assert type(multimodal_config).__name__ == "VoyageMultimodalEmbeddingConfig"
+
+        # Test regular model
+        regular_config = ProviderConfigManager.get_provider_embedding_config(
+            model="voyage-3-lite",
+            provider=litellm.LlmProviders.VOYAGE
+        )
+        assert type(regular_config).__name__ == "VoyageEmbeddingConfig"
+
+        # Test contextual model
+        contextual_config = ProviderConfigManager.get_provider_embedding_config(
+            model="voyage-context-3",
+            provider=litellm.LlmProviders.VOYAGE
+        )
+        assert type(contextual_config).__name__ == "VoyageContextualEmbeddingConfig"

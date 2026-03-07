@@ -71,6 +71,8 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-01               | `embedding(model="voyage/voyage-01", input)`               | 
 | voyage-lite-01          | `embedding(model="voyage/voyage-lite-01", input)`          |
 | voyage-lite-01-instruct | `embedding(model="voyage/voyage-lite-01-instruct", input)` |
+| voyage-multimodal-3     | `embedding(model="voyage/voyage-multimodal-3", input)`     |
+| voyage-multimodal-3.5   | `embedding(model="voyage/voyage-multimodal-3.5", input)`   |
 
 ## Contextual Embeddings (voyage-context-3)
 
@@ -139,6 +141,96 @@ print(f"Processed {len(response.data)} documents")
 - Document context is not relevant
 - You need faster/cheaper processing
 
+## Multimodal Embeddings (voyage-multimodal-3, voyage-multimodal-3.5)
+
+VoyageAI's multimodal embedding models can embed text, images, and video (3.5 only) into a unified vector space, enabling cross-modal semantic search and retrieval.
+
+### Supported Content Types
+
+| Type | Format | Description |
+|------|--------|-------------|
+| `text` | `{"type": "text", "text": "..."}` | Plain text content |
+| `image_url` | `{"type": "image_url", "image_url": "https://..."}` | Image from URL |
+| `image_base64` | `{"type": "image_base64", "image_base64": "..."}` | Base64-encoded image |
+| `video_url` | `{"type": "video_url", "video_url": "https://..."}` | Video from URL (3.5 only) |
+| `video_base64` | `{"type": "video_base64", "video_base64": "..."}` | Base64-encoded video (3.5 only) |
+
+### Usage
+
+Multimodal embeddings use an explicit content format:
+
+```python
+from litellm import embedding
+import os
+
+os.environ['VOYAGE_API_KEY'] = "your-api-key"
+
+# Text only (simple format still works)
+response = embedding(
+    model="voyage/voyage-multimodal-3.5",
+    input=["A beautiful sunset over the ocean"]
+)
+
+# Text + Image
+response = embedding(
+    model="voyage/voyage-multimodal-3.5",
+    input=[
+        {
+            "content": [
+                {"type": "text", "text": "A beach scene"},
+                {"type": "image_url", "image_url": "https://example.com/beach.jpg"}
+            ]
+        }
+    ]
+)
+print(f"Embedding dimensions: {len(response.data[0]['embedding'])}")
+
+# Multiple inputs with mixed content
+response = embedding(
+    model="voyage/voyage-multimodal-3.5",
+    input=[
+        {
+            "content": [
+                {"type": "text", "text": "Product photo"},
+                {"type": "image_url", "image_url": "https://example.com/product.jpg"}
+            ]
+        },
+        {
+            "content": [
+                {"type": "text", "text": "Demo video"},
+                {"type": "video_url", "video_url": "https://example.com/demo.mp4"}
+            ]
+        }
+    ]
+)
+```
+
+### Specifications
+
+| Feature | voyage-multimodal-3 | voyage-multimodal-3.5 |
+|---------|---------------------|----------------------|
+| Text | ✓ | ✓ |
+| Images | ✓ | ✓ |
+| Video | ✗ | ✓ |
+| Max tokens | 32,000 | 32,000 |
+| Output dimensions | 256, 512, 1024, 2048 | 256, 512, 1024, 2048 |
+| Max image size | 16M pixels, 20MB | 16M pixels, 20MB |
+| Max video size | - | 20MB |
+| Pricing | $0.12/M tokens | $0.12/M tokens |
+
+### When to Use Multimodal Embeddings
+
+**Use multimodal models when:**
+- Building image or video search systems
+- Processing documents with embedded images (PDFs, slides)
+- Creating cross-modal retrieval (search images with text queries)
+- Embedding mixed-media content
+
+**Use standard text models when:**
+- Processing text-only content
+- Lower latency is required
+- Cost optimization is important
+
 ## Model Selection Guide
 
 | Model | Best For | Context Length | Price/M Tokens |
@@ -150,6 +242,8 @@ print(f"Processed {len(response.data)} documents")
 | voyage-finance-2 | Financial documents | 32K | $0.12 |
 | voyage-law-2 | Legal documents | 16K | $0.12 |
 | voyage-context-3 | Contextual document embeddings | 32K | $0.18 |
+| voyage-multimodal-3 | Text and image embeddings | 32K | $0.12 |
+| voyage-multimodal-3.5 | Text, image, and video embeddings | 32K | $0.12 |
 
 ## Rerank
 
