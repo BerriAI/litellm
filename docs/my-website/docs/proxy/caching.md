@@ -453,6 +453,11 @@ $ litellm --config /path/to/config.yaml
 
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 
+Install redisvl client if missing in requirements.txt
+```shell
+pip install redisvl==0.12.1
+```
+
 #### Step 1: Add `cache` to the config.yaml
 
 ```yaml
@@ -474,6 +479,10 @@ litellm_settings:
     type: "redis-semantic"
     similarity_threshold: 0.8 # similarity threshold for semantic cache
     redis_semantic_cache_embedding_model: azure-embedding-model # set this to a model_name set in model_list
+    redis_semantic_cache_index_name: litellm-redis-semantic-cache-index # OPTIONAL, default is litellm_semantic_cache_index
+    embedding_cache_enabled: True # OPTIONAL, default is False
+    embedding_cache_ttl: 120 # OPTIONAL, default is None
+    embedding_cache_name: litellm-embeddings-cache # OPTIONAL, default is litellm_redis_semantic_embeddings_cache
 ```
 
 #### Step 2: Add Redis Credentials to .env
