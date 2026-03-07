@@ -507,6 +507,7 @@ LITELLM_CHAT_PROVIDERS = [
     "azure_ai",
     "sagemaker",
     "sagemaker_chat",
+    "sagemaker_nova",
     "bedrock",
     "vllm",
     "nlp_cloud",

@@ -167,6 +167,7 @@ LLM_CONFIG_NAMES = (
     "OllamaConfig",
     "SagemakerConfig",
     "SagemakerChatConfig",
+    "SagemakerNovaConfig",
     "CohereChatConfig",
     "AnthropicMessagesConfig",
     "AmazonAnthropicClaudeMessagesConfig",
@@ -697,6 +698,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "SagemakerChatConfig": (
         ".llms.sagemaker.chat.transformation",
         "SagemakerChatConfig",
+    ),
+    "SagemakerNovaConfig": (
+        ".llms.sagemaker.nova.transformation",
+        "SagemakerNovaConfig",
     ),
     "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
     "AnthropicMessagesConfig": (
