@@ -187,6 +187,13 @@ describe("UserDropdown", () => {
 
   it("should toggle hide all prompts switch", async () => {
     const user = userEvent.setup();
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user-id",
+      userEmail: "test@example.com",
+      userRole: "Admin",
+      premiumUser: true,
+    });
+    mockUseDisableShowPromptsImpl = () => false;
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
     await user.click(screen.getByText("User"));
@@ -207,6 +214,12 @@ describe("UserDropdown", () => {
 
   it("should toggle hide all prompts switch off", async () => {
     const user = userEvent.setup();
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user-id",
+      userEmail: "test@example.com",
+      userRole: "Admin",
+      premiumUser: true,
+    });
     mockUseDisableShowPromptsImpl = () => true;
     mockGetLocalStorageItemImpl = (key: string): string | null => {
       if (key === "disableShowPrompts") return "true";
@@ -227,7 +240,7 @@ describe("UserDropdown", () => {
     await user.click(toggle);
 
     const localStorageUtils = vi.mocked(await import("@/utils/localStorageUtils"));
-    expect(localStorageUtils.removeLocalStorageItem).toHaveBeenCalledWith("disableShowPrompts");
+    expect(localStorageUtils.setLocalStorageItem).toHaveBeenCalledWith("disableShowPrompts", "false");
     expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowPrompts");
   });
 
