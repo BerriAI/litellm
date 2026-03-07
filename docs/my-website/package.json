@@ -15,10 +15,10 @@
   },
   "dependencies": {
     "@docusaurus/core": "3.8.1",
-    "@docusaurus/plugin-google-gtag": "^3.5.2",
+    "@docusaurus/plugin-google-gtag": "3.8.1",
     "@docusaurus/plugin-ideal-image": "3.8.1",
-    "@docusaurus/preset-classic": "^3.5.2",
-    "@docusaurus/theme-mermaid": "^3.5.2",
+    "@docusaurus/preset-classic": "3.8.1",
+    "@docusaurus/theme-mermaid": "3.8.1",
     "@inkeep/cxkit-docusaurus": "^0.5.89",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^1.2.1",

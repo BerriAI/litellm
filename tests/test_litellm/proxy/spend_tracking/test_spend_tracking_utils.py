@@ -16,7 +16,11 @@ sys.path.insert(
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
-from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, REDACTED_BY_LITELM_STRING
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    REDACTED_BY_LITELM_STRING,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_messages_for_spend_logs_payload,
@@ -60,7 +64,7 @@ def test_sanitize_request_body_for_spend_logs_payload_long_string():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - (start_chars + end_chars)
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["text"]) == expected_length
@@ -86,7 +90,7 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_dict():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["outer"]["inner"]["text"]) == expected_length
@@ -111,7 +115,7 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_list():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["items"][0]["text"]) == expected_length
@@ -151,7 +155,7 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["text"]) == expected_length
@@ -394,6 +398,78 @@ def test_get_response_for_spend_logs_payload_truncates_large_embedding(mock_shou
     assert len(truncated_value) < len(large_embedding)
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_value
     assert parsed["data"][0]["other_field"] == "value"
+
+
+def test_truncation_includes_db_safeguard_note():
+    """
+    Test that truncated content includes the DB safeguard note explaining
+    that full data is available in OTEL/other logging integrations.
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    large_error = "Error: " + "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 1000)
+    request_body = {"error_trace": large_error}
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    truncated = sanitized["error_trace"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated
+    assert LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE in truncated
+    assert "DB storage safeguard" in truncated
+    assert "logging callbacks" in truncated.lower() or "logging integrations" in truncated.lower() or "logging callbacks" in truncated
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_response_truncation_logs_info_message(mock_should_store):
+    """
+    Test that when response is truncated before DB storage, an info log is emitted
+    noting that full data is available in OTEL/other integrations.
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    mock_should_store.return_value = True
+    large_text = "B" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": {"data": [{"content": large_text}]}},
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.verbose_proxy_logger"
+    ) as mock_logger:
+        _get_response_for_spend_logs_payload(payload)
+        mock_logger.info.assert_called_once()
+        log_msg = mock_logger.info.call_args[0][0]
+        assert "response was truncated" in log_msg
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_request_body_truncation_logs_info_message(mock_should_store):
+    """
+    Test that when request body is truncated before DB storage, an info log is emitted.
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    mock_should_store.return_value = True
+    large_prompt = "C" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {"messages": [{"role": "user", "content": large_prompt}]}
+        }
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.verbose_proxy_logger"
+    ) as mock_logger:
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={}, litellm_params=litellm_params, kwargs={}
+        )
+        mock_logger.info.assert_called_once()
+        log_msg = mock_logger.info.call_args[0][0]
+        assert "request body was truncated" in log_msg
 
 
 def test_safe_dumps_handles_circular_references():

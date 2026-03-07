@@ -1495,6 +1495,49 @@ def test_anthropic_thinking_param_via_map_openai_params():
     assert thinking_config_2["thinkingBudget"] == 10000
 
 
+def test_gemini_31_flash_lite_reasoning_effort_minimal():
+    """
+    Test that reasoning_effort='minimal' correctly maps to thinkingLevel='minimal'
+    for gemini-3.1-flash-lite-preview (not 'low').
+
+    Regression test for: "minimal" reasoning_effort not supported for gemini-3.1-flash-lite-preview
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # gemini-3.1-flash-lite-preview should map "minimal" -> thinkingLevel "minimal"
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        reasoning_effort="minimal",
+        model="gemini-3.1-flash-lite-preview",
+    )
+    assert result["thinkingLevel"] == "minimal", (
+        f"Expected thinkingLevel='minimal' for gemini-3.1-flash-lite-preview, got '{result['thinkingLevel']}'"
+    )
+    assert result["includeThoughts"] is True
+
+    # Also verify via the full map_openai_params flow
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-3.1-flash-lite-preview",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "reasoning_effort": "minimal",
+        },
+    )
+    generation_config = raw_request["raw_request_body"]["generationConfig"]
+    thinking_config = generation_config["thinkingConfig"]
+    assert thinking_config.get("thinkingLevel") == "minimal", (
+        f"Expected thinkingLevel='minimal' via full flow, got {thinking_config}"
+    )
+    assert "thinkingBudget" not in thinking_config, (
+        "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
+    )
+
+
 def test_gemini_image_size_limit_exceeded():
     """
     Test that large images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected.

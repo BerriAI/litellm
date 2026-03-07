@@ -269,6 +269,23 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
     agentData.litellm_params = params;
   }
 
+  // static_headers: convert [{header, value}, ...] → {header: value, ...}
+  if (Array.isArray(values.static_headers) && values.static_headers.length > 0) {
+    const staticHeaders: Record<string, string> = {};
+    values.static_headers.forEach((entry: { header?: string; value?: string }) => {
+      const key = entry?.header?.trim();
+      if (key) staticHeaders[key] = entry?.value ?? "";
+    });
+    if (Object.keys(staticHeaders).length > 0) {
+      agentData.static_headers = staticHeaders;
+    }
+  }
+
+  // extra_headers: already an array of strings from Select tags
+  if (Array.isArray(values.extra_headers) && values.extra_headers.length > 0) {
+    agentData.extra_headers = values.extra_headers;
+  }
+
   return agentData;
 };
 
@@ -302,5 +319,14 @@ export const parseAgentForForm = (agent: any) => {
     cost_per_query: agent.litellm_params?.cost_per_query,
     input_cost_per_token: agent.litellm_params?.input_cost_per_token,
     output_cost_per_token: agent.litellm_params?.output_cost_per_token,
+    // static_headers: {key: value} → [{header, value}, ...]
+    static_headers: agent.static_headers
+      ? Object.entries(agent.static_headers as Record<string, string>).map(([header, value]) => ({
+          header,
+          value,
+        }))
+      : [],
+    // extra_headers: already an array of strings
+    extra_headers: agent.extra_headers ?? [],
   };
 };

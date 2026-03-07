@@ -6,10 +6,10 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Form, Tag } from "antd";
+import { Form, Modal, Tag } from "antd";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import { useEffect, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "../../utils/roles";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -18,6 +18,7 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
+import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
 import { parseErrorMessage } from "../shared/errorUtils";
@@ -49,6 +50,7 @@ export default function KeyInfoView({
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -59,6 +61,8 @@ export default function KeyInfoView({
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
+  const [isResetSpendModalOpen, setIsResetSpendModalOpen] = useState(false);
+  const { mutate: resetKeySpend, isPending: resetSpendLoading } = useResetKeySpend();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
@@ -137,7 +141,7 @@ export default function KeyInfoView({
       formValues.key = currentKey;
 
       // Guard premium features
-      if (!premiumUser) {
+      if (!canEditGuardrails) {
         delete formValues.guardrails;
         delete formValues.prompts;
       }
@@ -337,6 +341,31 @@ export default function KeyInfoView({
       )) ||
     (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
 
+  const canResetSpend =
+    isProxyAdminRole(userRole || "") ||
+    (teamsData &&
+      isUserTeamAdminForSingleTeam(
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
+        userID || "",
+      ));
+
+  const handleResetSpend = () => {
+    resetKeySpend(currentKeyData.token || currentKeyData.token_id, {
+      onSuccess: () => {
+        setCurrentKeyData((prevData) => (prevData ? { ...prevData, spend: 0 } : undefined));
+        if (onKeyDataUpdate) {
+          onKeyDataUpdate({ spend: 0 });
+        }
+        NotificationManager.success("Key spend reset to $0");
+        setIsResetSpendModalOpen(false);
+      },
+      onError: (error) => {
+        NotificationManager.fromBackend(parseErrorMessage(error));
+        console.error("Error resetting key spend:", error);
+      },
+    });
+  };
+
   return (
     <div className="w-full h-screen p-4">
       <KeyInfoHeader
@@ -353,6 +382,7 @@ export default function KeyInfoView({
         onBack={onClose}
         onRegenerate={() => setIsRegenerateModalOpen(true)}
         onDelete={() => setIsDeleteModalOpen(true)}
+        onResetSpend={canResetSpend ? () => setIsResetSpendModalOpen(true) : undefined}
         canModifyKey={canModifyKey}
         backButtonText={backButtonText}
         regenerateDisabled={!premiumUser}
@@ -406,6 +436,26 @@ export default function KeyInfoView({
         confirmLoading={deleteLoading}
         requiredConfirmation={currentKeyData?.key_alias}
       />
+
+      {/* Reset Spend Confirmation Modal */}
+      <Modal
+        title="Reset Key Spend"
+        open={isResetSpendModalOpen}
+        onOk={handleResetSpend}
+        onCancel={() => setIsResetSpendModalOpen(false)}
+        okText="Reset"
+        okButtonProps={{ danger: true }}
+        confirmLoading={resetSpendLoading}
+      >
+        <p>
+          Reset spend for <strong>{currentKeyData?.key_alias || currentKeyData?.token_id || "this key"}</strong> to{" "}
+          <strong>$0</strong>?
+        </p>
+        <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
+          Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. Spend history is
+          preserved in logs. This resets the current period spend counter, the same as an automatic budget reset.
+        </p>
+      </Modal>
 
       <TabGroup>
         <TabList className="mb-4">
@@ -594,7 +644,7 @@ export default function KeyInfoView({
 
                   <div>
                     <Text className="font-medium">Organization</Text>
-                    <Text>{currentKeyData.organization_id || "Not Set"}</Text>
+                    <Text>{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</Text>
                   </div>
 
                   <div>

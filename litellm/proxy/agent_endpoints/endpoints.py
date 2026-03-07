@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.types.agents import (
     AgentConfig,
@@ -69,6 +70,8 @@ async def get_agents(
     Returns: List[AgentResponse]
 
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
@@ -179,6 +182,8 @@ async def create_agent(
         }'
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     _check_agent_management_permission(user_api_key_dict)
@@ -233,7 +238,10 @@ async def create_agent(
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
-async def get_agent_by_id(agent_id: str):
+async def get_agent_by_id(
+    agent_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Get a specific agent by ID
 
@@ -243,6 +251,8 @@ async def get_agent_by_id(agent_id: str):
         -H "Authorization: Bearer <your_api_key>"
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -319,6 +329,8 @@ async def update_agent(
         }'
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     _check_agent_management_permission(user_api_key_dict)
@@ -410,6 +422,8 @@ async def patch_agent(
         }'
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     _check_agent_management_permission(user_api_key_dict)
@@ -484,6 +498,8 @@ async def delete_agent(
     }
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     _check_agent_management_permission(user_api_key_dict)
@@ -763,6 +779,8 @@ async def get_agent_daily_activity(
     """
     Get daily activity for specific agents or all accessible agents.
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:

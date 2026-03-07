@@ -1773,7 +1773,7 @@ class ProxyLogging:
         """
 
         #########################################################
-        # Only log LLM API errors for proxy level hooks
+        # Only log LLM API and info route errors for proxy level hooks
         # eg. Authentication errors, rate limit errors, etc.
         # Note: This fixes a security issue where we
         #       would log temporary keys/auth info
@@ -1781,7 +1781,10 @@ class ProxyLogging:
         #########################################################
         if route is None:
             return False
-        if RouteChecks.is_llm_api_route(route) is not True:
+        if not (
+            RouteChecks.is_llm_api_route(route) or
+            RouteChecks.is_info_route(route)
+        ):
             return False
 
         return isinstance(original_exception, HTTPException) or (
@@ -2303,6 +2306,10 @@ class PrismaClient:
         self._db_auth_reconnect_lock_timeout_seconds: float = max(
             0.0,
             float(os.getenv("PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS", "0.1")),
+        )
+        self._consecutive_reconnect_failures: int = 0
+        self._reconnect_escalation_threshold: int = max(
+            1, int(os.getenv("PRISMA_RECONNECT_ESCALATION_THRESHOLD", "3"))
         )
         self._engine_pidfd: int = -1
         self._engine_pid: int = 0
@@ -3579,8 +3586,9 @@ class PrismaClient:
     def _get_engine_pid(self) -> int:
         try:
             engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
-            if engine is not None and engine.process is not None:
-                return engine.process.pid
+            process = getattr(engine, "process", None) if engine is not None else None
+            if process is not None:
+                return process.pid
         except (AttributeError, TypeError):
             pass
         return 0
@@ -3917,6 +3925,19 @@ class PrismaClient:
             )
             return False
 
+        # Escalate to heavy reconnect after consecutive lightweight failures.
+        # When the Prisma engine process is alive but not accepting connections
+        # (e.g., startup race condition), lightweight reconnects (disconnect +
+        # connect) will never succeed. Force a full Prisma client recreation
+        # to recover from this state.
+        if self._consecutive_reconnect_failures >= self._reconnect_escalation_threshold:
+            verbose_proxy_logger.warning(
+                "Escalating to heavy reconnect after %d consecutive failures. reason=%s",
+                self._consecutive_reconnect_failures,
+                reason,
+            )
+            self._engine_confirmed_dead = True
+
         verbose_proxy_logger.warning(
             "Attempting Prisma DB reconnect. reason=%s", reason
         )
@@ -3925,12 +3946,15 @@ class PrismaClient:
         try:
             await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
             reconnect_succeeded = True
+            self._consecutive_reconnect_failures = 0
             verbose_proxy_logger.info(
                 "Prisma DB reconnect succeeded. reason=%s", reason
             )
         except Exception as reconnect_err:
+            self._consecutive_reconnect_failures += 1
             verbose_proxy_logger.error(
-                "Prisma DB reconnect failed. reason=%s error=%s",
+                "Prisma DB reconnect failed (%d consecutive). reason=%s error=%s",
+                self._consecutive_reconnect_failures,
                 reason,
                 reconnect_err,
             )
@@ -4666,6 +4690,19 @@ async def update_spend_logs_job(
         verbose_proxy_logger.warning(
             "Spend tracking - guardrail usage tracking failed (non-fatal): %s",
             guardrail_tracking_err,
+        )
+
+    # Tool usage tracking (same batch): SpendLogToolIndex for "last N requests for tool X"
+    try:
+        from litellm.proxy.db.spend_log_tool_index import process_spend_logs_tool_usage
+        await process_spend_logs_tool_usage(
+            prisma_client=prisma_client,
+            logs_to_process=logs_to_process,
+        )
+    except Exception as tool_tracking_err:
+        verbose_proxy_logger.warning(
+            "Spend tracking - tool usage tracking failed (non-fatal): %s",
+            tool_tracking_err,
         )
 
 

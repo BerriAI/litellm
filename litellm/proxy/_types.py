@@ -77,6 +77,8 @@ class SupportedDBObjectType(str, enum.Enum):
     PASS_THROUGH_ENDPOINTS = "pass_through_endpoints"
     PROMPTS = "prompts"
     MODEL_COST_MAP = "model_cost_map"
+    TOOLS = "tools"
+    CONFIG_OVERRIDES = "config_overrides"
 
     def __str__(self):
         return str(self.value)
@@ -512,6 +514,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
+        KeyManagementRoutes.KEY_RESET_SPEND.value,
     ]
 
     management_routes = [
@@ -541,6 +544,11 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/model/info",
+        "/jwt/key/mapping/new",
+        "/jwt/key/mapping/update",
+        "/jwt/key/mapping/delete",
+        "/jwt/key/mapping/list",
+        "/jwt/key/mapping/info",
     ] + key_management_routes
 
     spend_tracking_routes = [
@@ -620,6 +628,8 @@ class LiteLLMRoutes(enum.Enum):
             "/global/activity/model",
             "/v1/models/{model_id}",
             "/models/{model_id}",
+            "/guardrails/list",
+            "/v2/guardrails/list",
         ]
         + spend_tracking_routes
         + key_management_routes
@@ -646,6 +656,8 @@ class LiteLLMRoutes(enum.Enum):
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
         "/invitation/new",
         "/invitation/delete",
+        # Team guardrail submission - requires team-scoped key; endpoint enforces team_id
+        "/guardrails/register",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -1084,6 +1096,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
+    tool_name_to_display_name: Optional[Dict[str, str]] = None
+    tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
     # Stdio-specific fields
@@ -1095,6 +1109,9 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1138,6 +1155,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
+    tool_name_to_display_name: Optional[Dict[str, str]] = None
+    tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
     # Stdio-specific fields
@@ -1149,6 +1168,9 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1187,6 +1209,8 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: List[str] = Field(default_factory=list)
+    tool_name_to_display_name: Optional[Dict[str, str]] = None
+    tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     static_headers: Optional[Dict[str, str]] = None
@@ -1206,10 +1230,24 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
+    has_user_credential: Optional[bool] = None
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
     mcp_server_ids: List[str]
+
+
+class MCPUserCredentialRequest(LiteLLMPydanticObjectBase):
+    credential: str
+    save: bool = True
+
+
+class MCPUserCredentialResponse(LiteLLMPydanticObjectBase):
+    server_id: str
+    has_credential: bool
 
 
 ######## Skills API Types ########
@@ -1549,6 +1587,8 @@ class NewTeamRequest(TeamBase):
     ] = None  # allow user to set TPM limit for all team members
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
+    enforced_batch_output_expires_after: Optional[dict] = None
+    enforced_file_expires_after: Optional[dict] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1604,6 +1644,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
+    enforced_batch_output_expires_after: Optional[dict] = None
+    enforced_file_expires_after: Optional[dict] = None
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
 
@@ -2126,7 +2168,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     user_header_mappings: Optional[List[UserHeaderMapping]] = None
     supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
         None,
-        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map'. If not set, all objects are loaded (default behavior).",
+        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
     )
     user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
         None,
@@ -2862,6 +2904,9 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
     """
 
+    tools: Optional[List[dict]] = None
+    system: Optional[Any] = None
+
 
 class CallInfo(LiteLLMPydanticObjectBase):
     """Used for slack budget alerting"""
@@ -3367,6 +3412,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Team member is already in team
     """
 
+    tool_access_denied = "tool_access_denied"
+    """
+    Tool is not in the allowed tools list for this key/team
+    """
+
     @classmethod
     def get_model_access_error_type_for_object(
         cls, object_type: Literal["key", "user", "team", "org", "project"]
@@ -3667,6 +3717,36 @@ class KeyHealthResponse(TypedDict, total=False):
     logging_callbacks: Optional[LoggingCallbackStatus]
 
 
+class CreateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
+    jwt_claim_name: str
+    jwt_claim_value: str
+    key: str
+    description: Optional[str] = None
+
+
+class UpdateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
+    id: str
+    key: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class DeleteJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
+    id: str
+
+
+class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
+    id: str
+    jwt_claim_name: str
+    jwt_claim_value: str
+    description: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
+
+
 class SpecialHeaders(enum.Enum):
     """Used by user_api_key_auth.py to get litellm key"""
 
@@ -3778,6 +3858,8 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "temp_budget_increase",
     "temp_budget_expiry",
     "allowed_vector_store_indexes",
+    "enforced_batch_output_expires_after",
+    "enforced_file_expires_after",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
@@ -3837,6 +3919,7 @@ class JWTAuthBuilderResult(TypedDict):
     end_user_id: Optional[str]
     org_id: Optional[str]
     team_membership: Optional[LiteLLM_TeamMembership]
+    jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
 
 
 class ClientSideFallbackModel(TypedDict, total=False):
@@ -3979,6 +4062,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     oidc_userinfo_cache_ttl: float = Field(
         default=300,
         description="TTL (in seconds) for caching UserInfo responses. Default: 300s (5 minutes).",
+    )
+    # JWT-to-Virtual-Key Mapping
+    virtual_key_claim_field: Optional[str] = Field(
+        default=None,
+        description="JWT claim field for virtual key mapping lookup (e.g. 'sub', 'email'). Supports dot notation.",
+    )
+    virtual_key_mapping_cache_ttl: float = Field(
+        default=300,
+        description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
     )
     #########################################################
 
@@ -4149,6 +4241,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     key_hash: Optional[str]  # hash of virtual key that triggered discovery
     team_id: Optional[str]  # team that triggered discovery
     key_alias: Optional[str]  # human-readable key alias
+    user_agent: Optional[str]  # HTTP User-Agent of the caller
 
 
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):

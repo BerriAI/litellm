@@ -41,13 +41,13 @@ class InFlightRequestsMiddleware:
         InFlightRequestsMiddleware._in_flight += 1
         gauge = InFlightRequestsMiddleware._get_gauge()
         if gauge is not None:
-            gauge.inc()  # type: ignore[attr-defined]
+            gauge.inc()  # type: ignore
         try:
             await self.app(scope, receive, send)
         finally:
             InFlightRequestsMiddleware._in_flight -= 1
             if gauge is not None:
-                gauge.dec()  # type: ignore[attr-defined]
+                gauge.dec()  # type: ignore
 
     @staticmethod
     def get_count() -> int:
@@ -64,12 +64,16 @@ class InFlightRequestsMiddleware:
 
             if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
                 # livesum aggregates across all worker processes in the scrape response
-                kwargs["multiprocess_mode"] = "livesum"
-            InFlightRequestsMiddleware._gauge = Gauge(
-                "litellm_in_flight_requests",
-                "Number of HTTP requests currently in-flight on this uvicorn worker",
-                **kwargs,  # type: ignore[arg-type]
-            )
+                InFlightRequestsMiddleware._gauge = Gauge(
+                    "litellm_in_flight_requests",
+                    "Number of HTTP requests currently in-flight on this uvicorn worker",
+                    multiprocess_mode="livesum",
+                )
+            else:
+                InFlightRequestsMiddleware._gauge = Gauge(
+                    "litellm_in_flight_requests",
+                    "Number of HTTP requests currently in-flight on this uvicorn worker",
+                )
         except Exception:
             InFlightRequestsMiddleware._gauge = None
         return InFlightRequestsMiddleware._gauge
