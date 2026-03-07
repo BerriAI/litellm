@@ -948,8 +948,32 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    ## Initialize Rust sidecar client (optional, for high-perf forwarding)
+    _use_sidecar = os.environ.get("USE_SIDECAR", "").lower() == "true" or general_settings.get("use_sidecar", False)
+    if _use_sidecar:
+        from litellm.proxy.sidecar_client import init_sidecar_client
+
+        _sidecar_port = int(os.environ.get("SIDECAR_PORT", general_settings.get("sidecar_port", 8787)))
+        _sidecar_binary = os.environ.get("SIDECAR_BINARY", general_settings.get("sidecar_binary", ""))
+        await init_sidecar_client(
+            port=_sidecar_port,
+            binary=_sidecar_binary or None,
+            auto_start=bool(_sidecar_binary),
+        )
+
     # End of startup event
     yield
+
+    # Shutdown event - close sidecar client
+    try:
+        from litellm.proxy.sidecar_client import get_sidecar_client
+
+        _sc = get_sidecar_client()
+        if _sc is not None:
+            await _sc.close()
+            verbose_proxy_logger.info("Sidecar client closed")
+    except Exception:
+        pass
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:

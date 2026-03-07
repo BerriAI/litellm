@@ -143,6 +143,38 @@ def add_shared_session_to_data(data: dict) -> None:
         pass
 
 
+async def _try_sidecar_route(
+    data: dict,
+    llm_router: Optional[LitellmRouter],
+    route_type: str,
+) -> "Any | None":
+    """
+    Attempt to route an acompletion request through the Rust sidecar.
+    Returns None if the sidecar is not available or not applicable.
+    """
+    if route_type != "acompletion":
+        return None
+
+    from litellm.proxy.sidecar_handler import is_sidecar_enabled, sidecar_acompletion
+
+    if not is_sidecar_enabled():
+        return None
+    if llm_router is None:
+        return None
+
+    try:
+        deployment = await llm_router.async_get_available_deployment(
+            model=data.get("model", ""),
+            messages=data.get("messages"),
+            request_kwargs=data,
+        )
+        if deployment is None:
+            return None
+        return await sidecar_acompletion(data, deployment)
+    except Exception:
+        return None
+
+
 async def route_request(  # noqa: PLR0915 - Complex routing function, refactoring tracked separately
     data: dict,
     llm_router: Optional[LitellmRouter],
@@ -221,6 +253,14 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
     """
     Common helper to route the request
     """
+    # Fast path: try Rust sidecar for acompletion requests
+    sidecar_result = await _try_sidecar_route(data, llm_router, route_type)
+    if sidecar_result is not None:
+        # Wrap in a coroutine to match the expected interface (result goes into asyncio.gather)
+        async def _resolved():
+            return sidecar_result
+        return _resolved()
+
     add_shared_session_to_data(data)
 
     team_id = get_team_id_from_data(data)
