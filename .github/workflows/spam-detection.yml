@@ -1,0 +1,164 @@
+name: Spam Detection
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  detect-spam:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Check for spam
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const user = issue.user;
+            const body = issue.body || '';
+            const title = issue.title || '';
+
+            let spamScore = 0;
+            const reasons = [];
+
+            // 1. New account (created < 7 days ago)
+            const userDetails = await github.rest.users.getByUsername({
+              username: user.login,
+            });
+            const accountAge = (Date.now() - new Date(userDetails.data.created_at).getTime()) / (1000 * 60 * 60 * 24);
+            if (accountAge < 7) {
+              spamScore += 3;
+              reasons.push(`Account is ${Math.floor(accountAge)} days old`);
+            }
+
+            // 2. No repos, no followers — likely throwaway
+            if (userDetails.data.public_repos === 0 && userDetails.data.followers === 0) {
+              spamScore += 2;
+              reasons.push('No public repos or followers');
+            }
+
+            // 3. Body is very short or empty (low effort)
+            if (body.length < 30) {
+              spamScore += 3;
+              reasons.push(`Body too short (${body.length} chars)`);
+            }
+
+            // 4. Known spam patterns (URLs, crypto, promotion)
+            const spamPatterns = [
+              { regex: /https?:\/\/[^\s]*\.(xyz|tk|ml|ga|cf)\b/i, desc: 'Suspicious TLD link' },
+              { regex: /\b(crypto|nft|airdrop|whitelist|web3|token sale)\b/i, desc: 'Crypto/NFT spam' },
+              { regex: /\b(buy now|limited offer|act fast|click here|free money)\b/i, desc: 'Promotional spam' },
+              { regex: /\b(SEO|backlink|guest post|link building)\b/i, desc: 'SEO spam' },
+              { regex: /(.)\1{10,}/, desc: 'Repeated characters' },
+              { regex: /\b(casino|poker|betting|gambling)\b/i, desc: 'Gambling spam' },
+              { regex: /\b(viagra|cialis|pharmacy|pills)\b/i, desc: 'Pharma spam' },
+            ];
+            for (const { regex, desc } of spamPatterns) {
+              if (regex.test(title) || regex.test(body)) {
+                spamScore += 4;
+                reasons.push(`Matched pattern: ${desc}`);
+              }
+            }
+
+            // 5. Check how many issues this user created in last 24h
+            // Note: the `since` API param filters by updated_at, not created_at,
+            // so we fetch recent issues and filter by created_at client-side.
+            const recentIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              creator: user.login,
+              state: 'all',
+              per_page: 30,
+              sort: 'created',
+              direction: 'desc',
+            });
+            const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+            const createdInLast24h = recentIssues.data.filter(
+              i => new Date(i.created_at).getTime() > oneDayAgo
+            ).length;
+            if (createdInLast24h > 5) {
+              spamScore += 5;
+              reasons.push(`User created ${createdInLast24h} issues in 24h`);
+            } else if (createdInLast24h > 3) {
+              spamScore += 2;
+              reasons.push(`User created ${createdInLast24h} issues in 24h`);
+            }
+
+            // 6. Didn't use a template (check for labels from actual template fields)
+            // bug_report.yml: "What happened?", "Steps to Reproduce", "Relevant log output"
+            // feature_request.yml: "The Feature", "Motivation, pitch"
+            const templateMarkers = [
+              'What happened?',
+              'Steps to Reproduce',
+              'Relevant log output',
+              'The Feature',
+              'Motivation, pitch',
+            ];
+            const usedTemplate = templateMarkers.some(marker => body.includes(marker));
+            if (!usedTemplate && body.length > 0) {
+              spamScore += 2;
+              reasons.push('Did not use issue template');
+            }
+
+            console.log(`Spam score for #${issue.number} by @${user.login}: ${spamScore}`);
+            console.log(`Reasons: ${reasons.join(', ')}`);
+
+            // Threshold: close and label if score >= 7
+            if (spamScore >= 7) {
+              // Ensure the spam label exists
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'spam',
+                });
+              } catch {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'spam',
+                  color: 'B60205',
+                  description: 'Spam or bot-generated issue',
+                });
+              }
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['spam'],
+              });
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'not_planned',
+              });
+
+              // Post comment BEFORE locking — comments on locked issues silently fail
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: [
+                  'This issue was automatically closed as potential spam.',
+                  '',
+                  '**Reasons:**',
+                  ...reasons.map(r => `- ${r}`),
+                  '',
+                  `If this is a legitimate issue, please reopen it using our [issue templates](https://github.com/${context.repo.owner}/${context.repo.repo}/issues/new/choose) and a maintainer will review.`,
+                ].join('\n'),
+              });
+
+              await github.rest.issues.lock({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                lock_reason: 'spam',
+              });
+
+              console.log(`Closed, commented, and locked issue #${issue.number} as spam`);
+            }
