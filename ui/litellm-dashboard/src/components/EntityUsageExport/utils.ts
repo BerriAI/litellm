@@ -82,8 +82,9 @@ export const generateDailyData = (
   spendData.results.forEach((day) => {
     Object.entries(day.breakdown.entities || {}).forEach(([entity, data]: [string, any]) => {
       // Extract team_id from api_key_breakdown metadata (not data.metadata which is empty)
-      const teamId = extractTeamIdFromApiKeyBreakdown(data.api_key_breakdown);
-      const teamAlias = teamId ? teamAliasMap[teamId] || null : null;
+      // Fall back to entity key itself, which for customer entity type is the end_user value
+      const teamId = extractTeamIdFromApiKeyBreakdown(data.api_key_breakdown) || entity;
+      const teamAlias = teamAliasMap[teamId] || null;
 
       dailyBreakdown.push({
         Date: day.date,
@@ -232,8 +233,9 @@ export const generateDailyWithModelsData = (
     Object.entries(dailyEntityModels).forEach(([entity, models]) => {
       const entityData = day.breakdown.entities?.[entity];
       // Extract team_id from api_key_breakdown metadata (not entityData.metadata which is empty)
-      const teamId = extractTeamIdFromApiKeyBreakdown(entityData?.api_key_breakdown);
-      const teamAlias = teamId ? teamAliasMap[teamId] || null : null;
+      // Fall back to entity key itself, which for customer entity type is the end_user value
+      const teamId = extractTeamIdFromApiKeyBreakdown(entityData?.api_key_breakdown) || entity;
+      const teamAlias = teamAliasMap[teamId] || null;
 
       Object.entries(models).forEach(([model, metrics]: [string, any]) => {
         dailyModelBreakdown.push({
