@@ -215,15 +215,21 @@ async def openapi_oauth2_connect(
 
     timestamp = time.time()
     state = _make_state_token()
+    base_url = _get_callback_base_url(request)
+    callback_url = f"{base_url}/v1/mcp/oauth2/callback"
+
+    # Store callback_url alongside the state so the /callback handler reuses
+    # the exact same value when constructing the token-exchange redirect_uri.
+    # Re-deriving it from the /callback request headers can produce a different
+    # string (e.g. different proto/host due to reverse-proxy routing), causing
+    # redirect_uri_mismatch errors at the provider.
     _pending_oauth2_states[state] = {
         "server_id": server_id,
         "user_id": user_id,
         "timestamp": timestamp,
         "expires_at": timestamp + _STATE_TTL_SECONDS,
+        "callback_url": callback_url,
     }
-
-    base_url = _get_callback_base_url(request)
-    callback_url = f"{base_url}/v1/mcp/oauth2/callback"
 
     # NOTE: PKCE (RFC 7636 / OAuth 2.1) is not implemented here because this is
     # a server-side *confidential* client that always presents a client_secret.
@@ -332,8 +338,12 @@ async def openapi_oauth2_callback(
             status_code=500,
         )
 
-    base_url = _get_callback_base_url(request)
-    callback_url = f"{base_url}/v1/mcp/oauth2/callback"
+    # Reuse the callback_url stored during /connect so the redirect_uri
+    # exactly matches what was sent to the provider, regardless of how the
+    # two requests are routed through reverse proxies.
+    callback_url = state_data.get("callback_url") or (
+        f"{_get_callback_base_url(request)}/v1/mcp/oauth2/callback"
+    )
 
     token_request_data = {
         "client_id": server.client_id or "",

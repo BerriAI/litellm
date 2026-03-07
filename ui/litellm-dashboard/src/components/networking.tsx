@@ -6412,7 +6412,7 @@ export const getMcpOAuth2ConnectUrl = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
       const errorMessage = deriveErrorMessage(errorData);
       handleError(errorMessage);
       throw new Error(errorMessage);
