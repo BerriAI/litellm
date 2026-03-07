@@ -1587,11 +1587,10 @@ if MCP_AVAILABLE:
 
         if prisma_client is None:
             # Without a database we cannot fetch the per-user credential.
-            # When require_byok_credential_store is True (default) we raise 503
-            # so callers can distinguish "no credential" (401) from
-            # "credential store unavailable" (503).
-            # Set litellm.require_byok_credential_store = False to restore the
-            # legacy silent-bypass behaviour for stateless deployments.
+            # litellm.require_byok_credential_store defaults to False (legacy
+            # silent-bypass).  Set it to True to raise 503 so callers can
+            # distinguish "no credential" (401) from "credential store
+            # unavailable" (503).
             if litellm.require_byok_credential_store:
                 raise HTTPException(
                     status_code=503,
@@ -1675,11 +1674,10 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            # Without a database we cannot verify whether the user has a stored
-            # credential.  When require_byok_credential_store is True (default)
-            # we raise 503 to distinguish infra failures from missing credentials.
-            # Set litellm.require_byok_credential_store = False to restore the
-            # legacy silent-bypass behaviour for stateless deployments.
+            # Without a database we cannot verify the credential.
+            # litellm.require_byok_credential_store defaults to False (legacy
+            # silent-bypass).  Set it to True to raise 503 and distinguish
+            # infra failures from missing credentials.
             if litellm.require_byok_credential_store:
                 raise HTTPException(
                     status_code=503,
