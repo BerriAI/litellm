@@ -131,6 +131,30 @@ def test_get_model_info_bedrock_region():
     assert info["litellm_provider"] == "bedrock"
 
 
+def test_get_model_info_glm_4_7_flash_bedrock_converse(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+
+    model = "zai.glm-4.7-flash"
+    assert model in litellm.BEDROCK_CONVERSE_MODELS
+    assert model in litellm.bedrock_converse_models
+
+    info = litellm.get_model_info(model)
+    assert info["litellm_provider"] == "bedrock_converse"
+    assert info["max_input_tokens"] == 200000
+    assert info["max_output_tokens"] == 128000
+    assert info["supports_reasoning"] is True
+    assert info["supports_tool_choice"] is True
+
+    regional_model = "bedrock/us-east-1/zai.glm-4.7-flash"
+    regional_info = litellm.get_model_info(regional_model)
+    assert regional_info["key"] == regional_model
+    assert regional_info["litellm_provider"] == "bedrock_converse"
+    assert regional_info["input_cost_per_token"] == pytest.approx(7e-08)
+    assert regional_info["output_cost_per_token_priority"] == pytest.approx(7e-07)
+
+
 @pytest.mark.parametrize(
     "model",
     [
