@@ -1644,6 +1644,51 @@ class Router:
             try:
                 async for item in model_response:
                     yield item
+            except litellm.ContextWindowExceededError as e:
+                # Handle ContextWindowExceededError raised mid-stream
+                # (e.g. by sglang frameworks that return context window
+                # errors during streaming instead of at request time).
+                # Trigger context_window_fallbacks directly.
+                try:
+                    model_group = cast(str, initial_kwargs.get("model"))
+                    fallbacks: Optional[List] = initial_kwargs.get(
+                        "fallbacks", self.fallbacks
+                    )
+                    context_window_fallbacks: Optional[List] = initial_kwargs.get(
+                        "context_window_fallbacks", self.context_window_fallbacks
+                    )
+                    content_policy_fallbacks: Optional[List] = initial_kwargs.get(
+                        "content_policy_fallbacks", self.content_policy_fallbacks
+                    )
+                    initial_kwargs["original_function"] = self._acompletion
+                    initial_kwargs["messages"] = messages
+                    self._update_kwargs_before_fallbacks(
+                        model=model_group, kwargs=initial_kwargs
+                    )
+                    fallback_response = (
+                        await self.async_function_with_fallbacks_common_utils(
+                            e=e,
+                            disable_fallbacks=False,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                            model_group=model_group,
+                            args=(),
+                            kwargs=initial_kwargs,
+                        )
+                    )
+
+                    if hasattr(fallback_response, "__aiter__"):
+                        async for fallback_item in fallback_response:  # type: ignore
+                            yield fallback_item
+                    else:
+                        yield None
+
+                except Exception as fallback_error:
+                    verbose_router_logger.error(
+                        f"Context window fallback also failed: {fallback_error}"
+                    )
+                    raise fallback_error
             except MidStreamFallbackError as e:
                 from litellm.main import stream_chunk_builder
 
@@ -1788,6 +1833,49 @@ class Router:
             try:
                 for item in model_response:
                     yield item
+            except litellm.ContextWindowExceededError as e:
+                # Handle ContextWindowExceededError raised mid-stream
+                # (e.g. by sglang frameworks that return context window
+                # errors during streaming instead of at request time).
+                # Trigger context_window_fallbacks directly.
+                try:
+                    model_group = cast(str, initial_kwargs.get("model"))
+                    fallbacks: Optional[List] = initial_kwargs.get(
+                        "fallbacks", router_self.fallbacks
+                    )
+                    context_window_fallbacks: Optional[List] = initial_kwargs.get(
+                        "context_window_fallbacks",
+                        router_self.context_window_fallbacks,
+                    )
+                    content_policy_fallbacks: Optional[List] = initial_kwargs.get(
+                        "content_policy_fallbacks",
+                        router_self.content_policy_fallbacks,
+                    )
+                    initial_kwargs["original_function"] = router_self._completion
+                    initial_kwargs["messages"] = messages
+                    router_self._update_kwargs_before_fallbacks(
+                        model=model_group, kwargs=initial_kwargs
+                    )
+                    fallback_response = (
+                        router_self.function_with_fallbacks(
+                            **initial_kwargs,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                        )
+                    )
+
+                    if hasattr(fallback_response, "__iter__"):
+                        for fallback_item in fallback_response:
+                            yield fallback_item
+                    else:
+                        yield None
+
+                except Exception as fallback_error:
+                    verbose_router_logger.error(
+                        f"Context window fallback also failed: {fallback_error}"
+                    )
+                    raise fallback_error
             except MidStreamFallbackError as e:
                 from litellm.main import stream_chunk_builder
 
