@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReasoningContent from "../playground/chat_ui/ReasoningContent";
+import MCPEventsDisplay, { MCPEvent } from "../playground/chat_ui/MCPEventsDisplay";
 import { ChatMessage } from "./types";
 
 const { Panel } = Collapse;
@@ -237,6 +238,7 @@ interface AssistantBubbleProps {
   isLastMessage: boolean;
   isStreaming: boolean;
   isTypingIndicator: boolean;
+  mcpEvents?: MCPEvent[];
 }
 
 function AssistantBubble({
@@ -244,6 +246,7 @@ function AssistantBubble({
   isLastMessage,
   isStreaming,
   isTypingIndicator,
+  mcpEvents,
 }: AssistantBubbleProps) {
   // Ref to control ReasoningContent collapse on streaming end.
   // ReasoningContent manages its own expanded state; we use a key to
@@ -297,6 +300,13 @@ function AssistantBubble({
             reasoningContent={message.reasoningContent!}
           />
         )
+      )}
+
+      {/* MCP tool events (list tools, tool calls, results) */}
+      {mcpEvents && mcpEvents.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <MCPEventsDisplay events={mcpEvents} />
+        </div>
       )}
 
       <div
@@ -531,9 +541,10 @@ interface Props {
   messages: ChatMessage[];
   isStreaming: boolean;
   onEditMessage?: (messageId: string, newContent: string) => void;
+  mcpEvents?: MCPEvent[];
 }
 
-const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage }) => {
+const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage, mcpEvents }) => {
   // Scrolling is managed by ChatPage.tsx (scroll lock during streaming,
   // scroll-to-bottom on new message). No auto-scroll here.
 
@@ -566,6 +577,7 @@ const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage })
             isLastMessage={isLastMessage}
             isStreaming={isStreaming}
             isTypingIndicator={isLastMessage && isTypingIndicator}
+            mcpEvents={isLastMessage ? mcpEvents : undefined}
           />
         );
       })}

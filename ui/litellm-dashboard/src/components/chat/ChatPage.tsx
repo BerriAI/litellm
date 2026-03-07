@@ -26,7 +26,9 @@ import MCPConnectPicker from "./MCPConnectPicker";
 import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
-import { serverRootPath, getProxyBaseUrl } from "@/components/networking";
+import { MCPEvent } from "../playground/chat_ui/MCPEventsDisplay";
+import { serverRootPath, getProxyBaseUrl, fetchMCPServers } from "@/components/networking";
+import { MCPServer } from "../mcp_tools/types";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 
 interface ChatPageProps {
@@ -100,6 +102,8 @@ async function streamToModel(
   signal: AbortSignal,
   onChunk: (model: string, chunk: string) => void,
   onDone: (model: string) => void,
+  mcpServerObjects?: MCPServer[],
+  onMCPEvent?: (event: MCPEvent) => void,
 ): Promise<void> {
   try {
     await makeOpenAIChatCompletionRequest(
@@ -112,9 +116,12 @@ async function streamToModel(
       undefined, // onReasoningContent
       undefined, undefined, undefined, undefined, undefined, undefined, // positions 8-13
       mcpServers.length > 0 ? mcpServers : undefined, // position 14: selectedMCPServers
+      undefined, undefined, undefined, undefined, undefined, undefined, // positions 15-20
+      mcpServerObjects, // position 21: mcpServers (MCPServer[])
+      undefined, // position 22: mcpServerToolRestrictions
+      onMCPEvent, // position 23: onMCPEvent
     );
   } catch (err: unknown) {
-    // Surface real errors in the response card; ignore user-triggered aborts
     if (!(err instanceof Error && err.name === "AbortError")) {
       const msg = err instanceof Error ? err.message : String(err);
       onChunk(model, `\n\n_Error: ${msg}_`);
@@ -137,6 +144,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const [modelSearchText, setModelSearchText] = useState("");
 
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
+  const [mcpServerObjects, setMcpServerObjects] = useState<MCPServer[]>([]);
+  const [mcpEvents, setMcpEvents] = useState<MCPEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
@@ -201,6 +210,27 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 
+  // Load MCP server objects for tool resolution
+  useEffect(() => {
+    if (!accessToken) return;
+    fetchMCPServers(accessToken)
+      .then((data) => {
+        const list: MCPServer[] = Array.isArray(data) ? data : (data?.data ?? []);
+        setMcpServerObjects(list);
+      })
+      .catch(() => setMcpServerObjects([]));
+  }, [accessToken]);
+
+  const handleMCPEvent = useCallback((event: MCPEvent) => {
+    setMcpEvents((prev) => {
+      const isDuplicate = event.item_id
+        ? prev.some((e) => e.item_id === event.item_id && e.type === event.type)
+        : false;
+      if (isDuplicate) return prev;
+      return [...prev, event];
+    });
+  }, []);
+
   useEffect(() => {
     if (staleId) router.replace(getChatUrl());
   }, [staleId, router]);
@@ -254,6 +284,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
       let accumulatedContent = "";
       let accumulatedReasoning = "";
+      setMcpEvents([]);
 
       try {
         await makeOpenAIChatCompletionRequest(
@@ -272,6 +303,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           },
           undefined, undefined, undefined, undefined, undefined, undefined,
           selectedMCPServers.length > 0 ? selectedMCPServers : undefined,
+          undefined, undefined, undefined, undefined, undefined, undefined,
+          mcpServerObjects.length > 0 ? mcpServerObjects : undefined,
+          undefined,
+          handleMCPEvent,
         );
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
@@ -289,7 +324,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       }
     },
     [activeConversationId, activeConversation, selectedModels, selectedMCPServers, accessToken,
-      createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming],
+      createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming,
+      mcpServerObjects, handleMCPEvent],
   );
 
   const handleSendComparison = useCallback(
@@ -297,6 +333,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       const trimmed = text.trim();
       if (!trimmed || selectedModels.length === 0 || isAnyStreaming) return;
       setInputText("");
+      setMcpEvents([]);
 
       // Append a new exchange with empty responses
       const newExchange: ComparisonExchange = { userMessage: trimmed, responses: {} };
@@ -326,7 +363,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             accessToken,
             selectedMCPServers,
             controllers[model].signal,
-            (m, chunk) => setComparisonExchanges((prev) => {
+            (m, chunk: string) => setComparisonExchanges((prev) => {
               const updated = [...prev];
               const ex = { ...updated[newExchangeIdx] };
               ex.responses = { ...ex.responses, [m]: (ex.responses[m] ?? "") + chunk };
@@ -1111,6 +1148,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                     messages={activeConversation!.messages}
                     isStreaming={isStreaming}
                     onEditMessage={handleEditAndResend}
+                    mcpEvents={mcpEvents}
                   />
                 )}
               </div>
