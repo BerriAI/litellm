@@ -59,9 +59,20 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
         return;
       }
 
-      // Stop if popup was closed by user
+      // Stop if popup was closed by user; do one final status check first so
+      // that fast OAuth flows (popup auto-closes before the first poll fires)
+      // are not silently missed.
       if (popupRef.current && popupRef.current.closed) {
         stopPolling();
+        try {
+          const finalStatus = await getMcpOAuth2Status(server.server_id, accessToken);
+          if (finalStatus.connected) {
+            handleConnected();
+            return;
+          }
+        } catch {
+          // ignore — popup was closed by user without completing auth
+        }
         setLoading(false);
         return;
       }

@@ -451,11 +451,6 @@ async def openapi_oauth2_callback(
             server_id=server_id,
             credential=credential_to_store,
         )
-        from litellm.proxy._experimental.mcp_server.server import (
-            _invalidate_byok_cred_cache,
-        )
-
-        _invalidate_byok_cred_cache(user_id, server_id)
     except Exception as exc:
         verbose_proxy_logger.error(
             "openapi_oauth2_callback: failed to store credential user=%s server=%s: %s",
@@ -469,6 +464,21 @@ async def openapi_oauth2_callback(
                 "Failed to store the access token. Please try again.",
             ),
             status_code=500,
+        )
+
+    # Best-effort cache flush; a failure here must NOT mask the successful write above.
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _invalidate_byok_cred_cache,
+        )
+
+        _invalidate_byok_cred_cache(user_id, server_id)
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "openapi_oauth2_callback: cache invalidation failed (credential was stored) user=%s server=%s: %s",
+            user_id,
+            server_id,
+            exc,
         )
 
     verbose_proxy_logger.info(

@@ -105,10 +105,12 @@ async def test_connect_missing_client_secret_raises_400():
     mock_server.client_id = "my-client-id"
     mock_server.client_secret = None  # missing
 
+    # master_key is imported inline via `from litellm.proxy.proxy_server import master_key`;
+    # patch at the source so the function sees the mock value.
     with patch(
         "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.global_mcp_server_manager"
     ) as mock_mgr, patch(
-        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.master_key",
+        "litellm.proxy.proxy_server.master_key",
         "sk-test",
         create=True,
     ):
@@ -207,10 +209,13 @@ async def test_status_no_prisma_returns_not_connected():
     mock_server.server_name = "GitHub"
     mock_server.name = "github"
 
+    # prisma_client is imported inside the function via
+    # `from litellm.proxy.proxy_server import prisma_client`, so we must patch
+    # it at the source module rather than on the endpoint module.
     with patch(
         "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.global_mcp_server_manager"
     ) as mock_mgr, patch(
-        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.prisma_client",
+        "litellm.proxy.proxy_server.prisma_client",
         None,
         create=True,
     ):
