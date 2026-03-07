@@ -3801,6 +3801,7 @@ class TestPKCEFunctionality:
         # Cache returns an integer — unexpected format
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=12345)
+        mock_cache.async_delete_cache = AsyncMock()
 
         mock_request = MagicMock(spec=Request)
         mock_request.query_params = {"state": "bad_format_state"}
@@ -3917,6 +3918,7 @@ class TestPKCEFunctionality:
         # Cache returns an integer — unexpected format
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=12345)
+        mock_cache.async_delete_cache = AsyncMock()
 
         mock_request = MagicMock(spec=Request)
         mock_request.query_params = {"state": "bad_format_non_strict"}
@@ -3948,6 +3950,8 @@ class TestPKCEFunctionality:
             for r in caplog.records
             if r.levelno >= logging.WARNING
         ), f"Expected a format/cache warning. Records: {[r.message for r in caplog.records]}"
+        # Verify cleanup was attempted for the corrupt/stale cache entry
+        mock_cache.async_delete_cache.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_pkce_legacy_string_cache_format_backward_compat(self):
