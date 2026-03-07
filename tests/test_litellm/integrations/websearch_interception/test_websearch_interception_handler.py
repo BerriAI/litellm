@@ -273,3 +273,102 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Full kwargs preserved
     assert result["model"] == "openai/gpt-4o-mini"
     assert result["api_key"] == "fake-key"
+
+
+def test_fake_anthropic_messages_stream_iterator_includes_output_tokens():
+    """Test that FakeAnthropicMessagesStreamIterator includes output_tokens in message_delta.
+
+    Regression test for issue #20187 - Output tokens showing as 0 in Claude Code session logs.
+    The FakeAnthropicMessagesStreamIterator must include output_tokens in the message_delta event.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+
+    # Create a sample non-streaming response
+    response = {
+        "id": "msg_test123",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {"type": "text", "text": "Here is the response to your query."}
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50
+        }
+    }
+
+    # Create the fake stream iterator
+    iterator = FakeAnthropicMessagesStreamIterator(response=response)
+
+    # Collect all chunks
+    chunks = list(iterator)
+
+    # Find the message_delta event
+    message_delta_found = False
+    output_tokens_in_delta = None
+    for chunk in chunks:
+        chunk_str = chunk.decode("utf-8")
+        if "message_delta" in chunk_str:
+            message_delta_found = True
+            import json
+            # Parse the data line
+            for line in chunk_str.split("\n"):
+                if line.startswith("data: "):
+                    data = json.loads(line[6:])
+                    output_tokens_in_delta = data.get("usage", {}).get("output_tokens")
+                    break
+
+    assert message_delta_found, "message_delta event not found in fake stream"
+    assert output_tokens_in_delta == 50, f"Expected output_tokens=50, got {output_tokens_in_delta}"
+
+
+def test_fake_anthropic_messages_stream_iterator_preserves_stop_reason():
+    """Test that FakeAnthropicMessagesStreamIterator preserves stop_reason in message_delta.
+
+    Regression test for issue #20187 - The stop_reason must be included in the message_delta event.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+
+    # Create a sample non-streaming response
+    response = {
+        "id": "msg_test456",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {"type": "text", "text": "Response text."}
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 50,
+            "output_tokens": 25
+        }
+    }
+
+    # Create the fake stream iterator
+    iterator = FakeAnthropicMessagesStreamIterator(response=response)
+
+    # Collect all chunks
+    chunks = list(iterator)
+
+    # Find the message_delta event and verify stop_reason
+    stop_reason_found = None
+    for chunk in chunks:
+        chunk_str = chunk.decode("utf-8")
+        if "message_delta" in chunk_str:
+            import json
+            for line in chunk_str.split("\n"):
+                if line.startswith("data: "):
+                    data = json.loads(line[6:])
+                    stop_reason_found = data.get("delta", {}).get("stop_reason")
+                    break
+
+    assert stop_reason_found == "end_turn", f"Expected stop_reason='end_turn', got {stop_reason_found}"
