@@ -238,6 +238,9 @@ from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     router as mcp_discoverable_endpoints_router,
 )
+from litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints import (
+    router as mcp_openapi_oauth2_router,
+)
 from litellm.proxy._experimental.mcp_server.rest_endpoints import (
     router as mcp_rest_endpoints_router,
 )
@@ -13153,6 +13156,7 @@ app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(mcp_byok_oauth_router)
+app.include_router(mcp_openapi_oauth2_router)
 app.include_router(anthropic_router)
 app.include_router(anthropic_skills_router)
 app.include_router(evals_router)
