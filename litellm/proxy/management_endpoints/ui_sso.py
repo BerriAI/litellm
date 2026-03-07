@@ -782,8 +782,7 @@ async def get_generic_sso_response(
                 key, value = header.split("=")
                 additional_generic_sso_headers_dict[key] = value
 
-    # Initialized here so it's visible in the except block for error-hint logic
-    code_verifier: Optional[str] = None
+    code_verifier: Optional[str] = None  # assigned inside try; initialized for type tracking
 
     try:
         token_exchange_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
@@ -2905,9 +2904,12 @@ class SSOAuthenticationHandler:
 
         # Merge: userinfo takes precedence for identity claims (sub, email, name, …) per
         # the OpenID Connect spec (userinfo is the authoritative source for identity).
-        # But bearer credentials (access_token, id_token, refresh_token) must always come
-        # from the token endpoint, not from userinfo (non-standard providers occasionally
-        # include these fields in userinfo, which would otherwise shadow the real bearer token).
+        # Bearer credentials (access_token, id_token, refresh_token) from the token endpoint
+        # take precedence over same-named fields in userinfo — non-standard providers sometimes
+        # include token fields in userinfo, which must not shadow the real bearer token.
+        # If a bearer field is absent from the token response, any userinfo-provided value
+        # is preserved as a fallback (useful for non-standard providers that omit id_token
+        # from the token response but include it in userinfo).
         #
         # Three-way merge semantics for each bearer-credential field:
         #   1. token_response has a non-null value → use it (token endpoint is authoritative)
