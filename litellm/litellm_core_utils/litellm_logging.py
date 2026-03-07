@@ -217,6 +217,76 @@ _CUSTOM_PRICING_KEYS: frozenset = frozenset(
     CustomPricingLiteLLMParams.model_fields.keys()
 )
 
+# Explicit allowlist of CallTypes that represent async requests.
+# Keep this list explicit to avoid accidental classification from naming heuristics.
+_ASYNC_CALL_TYPE_VALUES: frozenset[str] = frozenset(
+    {
+        CallTypes.aembedding.value,
+        CallTypes.acompletion.value,
+        CallTypes.atext_completion.value,
+        CallTypes.aimage_generation.value,
+        CallTypes.aimage_edit.value,
+        CallTypes.amoderation.value,
+        CallTypes.atranscription.value,
+        CallTypes.aspeech.value,
+        CallTypes.arerank.value,
+        CallTypes.asearch.value,
+        CallTypes.arealtime.value,
+        CallTypes.aresponses_websocket.value,
+        CallTypes.acreate_batch.value,
+        CallTypes.aretrieve_batch.value,
+        CallTypes.acancel_batch.value,
+        CallTypes.anthropic_messages.value,
+        CallTypes.aget_assistants.value,
+        CallTypes.acreate_assistants.value,
+        CallTypes.adelete_assistant.value,
+        CallTypes.acreate_thread.value,
+        CallTypes.aget_thread.value,
+        CallTypes.a_add_message.value,
+        CallTypes.aget_messages.value,
+        CallTypes.arun_thread.value,
+        CallTypes.arun_thread_stream.value,
+        CallTypes.afile_retrieve.value,
+        CallTypes.afile_delete.value,
+        CallTypes.afile_list.value,
+        CallTypes.acreate_file.value,
+        CallTypes.afile_content.value,
+        CallTypes.acreate_fine_tuning_job.value,
+        CallTypes.acreate_video.value,
+        CallTypes.avideo_retrieve.value,
+        CallTypes.avideo_content.value,
+        CallTypes.avideo_remix.value,
+        CallTypes.avideo_list.value,
+        CallTypes.avideo_retrieve_job.value,
+        CallTypes.avideo_delete.value,
+        CallTypes.avector_store_file_create.value,
+        CallTypes.avector_store_file_list.value,
+        CallTypes.avector_store_file_retrieve.value,
+        CallTypes.avector_store_file_content.value,
+        CallTypes.avector_store_file_update.value,
+        CallTypes.avector_store_file_delete.value,
+        CallTypes.avector_store_create.value,
+        CallTypes.avector_store_search.value,
+        CallTypes.acreate_container.value,
+        CallTypes.alist_containers.value,
+        CallTypes.aretrieve_container.value,
+        CallTypes.adelete_container.value,
+        CallTypes.alist_container_files.value,
+        CallTypes.aupload_container_file.value,
+        CallTypes.acancel_fine_tuning_job.value,
+        CallTypes.alist_fine_tuning_jobs.value,
+        CallTypes.aretrieve_fine_tuning_job.value,
+        CallTypes.aresponses.value,
+        CallTypes.alist_input_items.value,
+        CallTypes.allm_passthrough_route.value,
+        CallTypes.agenerate_content.value,
+        CallTypes.agenerate_content_stream.value,
+        CallTypes.aocr.value,
+        CallTypes.asend_message.value,
+        CallTypes.acreate_skill.value,
+    }
+)
+
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
@@ -1581,6 +1651,30 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return True
 
+    def _is_async_litellm_request(self, litellm_params: Dict[str, Any]) -> bool:
+        """
+        Best-effort async request detection for logging flows.
+
+        We need this to prevent sync handler payload/callback duplication when the same
+        request is processed by both async and sync callback paths.
+        """
+        if litellm_params.get("async_call", False) is True:
+            return True
+
+        for async_call_type in _ASYNC_CALL_TYPE_VALUES:
+            if litellm_params.get(async_call_type, False) is True:
+                return True
+
+        call_type = self.call_type
+        if isinstance(call_type, CallTypes):
+            call_type_value = call_type.value
+        else:
+            call_type_value = str(call_type)
+            if call_type_value.startswith("CallTypes."):
+                call_type_value = call_type_value.split("CallTypes.", 1)[1]
+
+        return call_type_value in _ASYNC_CALL_TYPE_VALUES
+
     def _update_completion_start_time(self, completion_start_time: datetime.datetime):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = self.completion_start_time
@@ -1918,12 +2012,8 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = (
-            litellm_params.get(CallTypes.acompletion.value, False) is not True
-            and litellm_params.get(CallTypes.aresponses.value, False) is not True
-            and litellm_params.get(CallTypes.aembedding.value, False) is not True
-            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
-            and litellm_params.get(CallTypes.atranscription.value, False) is not True
+        is_sync_request = not self._is_async_litellm_request(
+            litellm_params=litellm_params
         )
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
@@ -1961,7 +2051,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                 ) is not None:
                     # Only emit for sync requests (async_success_handler handles async)
-                    if is_sync_request:
+                    if (
+                        is_sync_request
+                        and kwargs.get("called_from_async", False) is not True
+                    ):
                         emit_standard_logging_payload(standard_logging_payload)
             callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
@@ -2821,12 +2914,8 @@ class Logging(LiteLLMLoggingBaseClass):
         ):  # prevent double logging
             return
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = (
-            litellm_params.get(CallTypes.acompletion.value, False) is not True
-            and litellm_params.get(CallTypes.aresponses.value, False) is not True
-            and litellm_params.get(CallTypes.aembedding.value, False) is not True
-            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
-            and litellm_params.get(CallTypes.atranscription.value, False) is not True
+        is_sync_request = not self._is_async_litellm_request(
+            litellm_params=litellm_params
         )
 
         try:
@@ -3153,6 +3242,7 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time,
             end_time,
             cache_hit,
+            called_from_async=True,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:

@@ -165,6 +165,40 @@ class TestManagedWebSocketHandlerIntegration:
         assert handler.timeout == 30.0
         assert handler.custom_llm_provider == "test_provider"
 
+    @pytest.mark.asyncio
+    async def test_websocket_log_messages_marks_sync_success_handler_as_async_origin(
+        self,
+    ):
+        """WebSocket logging should suppress duplicate standard payload emission."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.async_success_handler = AsyncMock()
+        mock_logging_obj.success_handler = MagicMock()
+        mock_logging_obj.model_call_details = {}
+
+        streaming = ResponsesWebSocketStreaming(
+            websocket=MagicMock(),
+            backend_ws=MagicMock(),
+            logging_obj=mock_logging_obj,
+        )
+        streaming.messages = [{"type": "response.completed"}]
+        streaming.input_messages = [{"role": "user", "content": "hello"}]
+
+        with patch(
+            "litellm.responses.streaming_iterator._ws_executor.submit"
+        ) as mock_submit:
+            await streaming._log_messages()
+
+        assert mock_logging_obj.model_call_details["messages"] == streaming.input_messages
+        assert mock_submit.call_args.args == (
+            mock_logging_obj.success_handler,
+            streaming.messages,
+        )
+        assert mock_submit.call_args.kwargs.get("called_from_async") is True
+
 
 class TestChunkTransformation:
     """Test chunk serialization and transformation for WebSocket streaming"""

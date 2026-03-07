@@ -218,7 +218,11 @@ class RealTimeStreaming:
             # Create an event loop for the new thread
             asyncio.create_task(self.logging_obj.async_success_handler(self.messages))
             ## SYNC LOGGING
-            executor.submit(self.logging_obj.success_handler(self.messages))
+            executor.submit(
+                self.logging_obj.success_handler,
+                self.messages,
+                called_from_async=True,
+            )
 
     async def _send_to_backend(self, message: str) -> None:
         """Send a message to the backend WebSocket.
