@@ -37,7 +37,7 @@ impl Sidecar {
             return client.clone();
         }
         let client = Client::builder()
-            .pool_max_idle_per_host(100)
+            .pool_max_idle_per_host(200)
             .pool_idle_timeout(std::time::Duration::from_secs(90))
             .tcp_keepalive(std::time::Duration::from_secs(60))
             .tcp_nodelay(true)
@@ -57,19 +57,14 @@ async fn handle_request(
 
     let path = req.uri().path();
     if path == "/health" {
+        let total = sidecar.total_latency_us.load(Ordering::Relaxed);
+        let count = sidecar.total_requests.load(Ordering::Relaxed);
+        let avg = if count > 0 { total / count } else { 0 };
         let stats = format!(
             r#"{{"status":"ok","requests":{},"errors":{},"avg_latency_us":{}}}"#,
-            sidecar.total_requests.load(Ordering::Relaxed),
+            count,
             sidecar.total_errors.load(Ordering::Relaxed),
-            {
-                let total = sidecar.total_latency_us.load(Ordering::Relaxed);
-                let count = sidecar.total_requests.load(Ordering::Relaxed);
-                if count > 0 {
-                    total / count
-                } else {
-                    0
-                }
-            }
+            avg,
         );
         return Ok(Response::builder()
             .status(200)
@@ -78,6 +73,7 @@ async fn handle_request(
             .unwrap());
     }
 
+    // Extract routing metadata from X-LiteLLM-* headers
     let provider_url = match req.headers().get("x-litellm-provider-url") {
         Some(v) => v.to_str().unwrap_or("").to_string(),
         None => {
@@ -85,15 +81,20 @@ async fn handle_request(
             return Ok(Response::builder()
                 .status(400)
                 .body(
-                    Full::new(Bytes::from(
-                        r#"{"error":"Missing X-LiteLLM-Provider-URL header"}"#,
-                    ))
-                    .map_err(|e| match e {})
-                    .boxed(),
+                    Full::new(Bytes::from(r#"{"error":"Missing X-LiteLLM-Provider-URL"}"#))
+                        .map_err(|e| match e {})
+                        .boxed(),
                 )
                 .unwrap());
         }
     };
+
+    let request_path = req
+        .headers()
+        .get("x-litellm-path")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("/chat/completions")
+        .to_string();
 
     let api_key = req
         .headers()
@@ -116,12 +117,23 @@ async fn handle_request(
         .map(|v| v == "true")
         .unwrap_or(false);
 
-    let request_path = req
+    let content_type = req
         .headers()
-        .get("x-litellm-path")
+        .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("/chat/completions")
+        .unwrap_or("application/json")
         .to_string();
+
+    // Collect forwarded headers (X-LiteLLM-Fwd-*)
+    let mut fwd_headers: Vec<(String, String)> = Vec::new();
+    for (name, value) in req.headers() {
+        let name_str = name.as_str();
+        if let Some(orig_name) = name_str.strip_prefix("x-litellm-fwd-") {
+            if let Ok(val) = value.to_str() {
+                fwd_headers.push((orig_name.to_string(), val.to_string()));
+            }
+        }
+    }
 
     let body_bytes = match req.collect().await {
         Ok(collected) => collected.to_bytes(),
@@ -130,11 +142,9 @@ async fn handle_request(
             return Ok(Response::builder()
                 .status(400)
                 .body(
-                    Full::new(Bytes::from(
-                        r#"{"error":"Failed to read request body"}"#,
-                    ))
-                    .map_err(|e| match e {})
-                    .boxed(),
+                    Full::new(Bytes::from(r#"{"error":"Failed to read request body"}"#))
+                        .map_err(|e| match e {})
+                        .boxed(),
                 )
                 .unwrap());
         }
@@ -145,12 +155,11 @@ async fn handle_request(
         .unwrap_or_else(|_| "unknown".to_string());
 
     let client = sidecar.get_or_create_client(&host);
-
     let full_url = format!("{}{}", provider_url.trim_end_matches('/'), request_path);
 
     let mut req_builder = client
         .post(&full_url)
-        .header("content-type", "application/json")
+        .header("content-type", &content_type)
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .body(body_bytes.to_vec());
 
@@ -158,23 +167,21 @@ async fn handle_request(
         req_builder = req_builder.header("authorization", format!("Bearer {}", api_key));
     }
 
+    for (name, value) in &fwd_headers {
+        req_builder = req_builder.header(name.as_str(), value.as_str());
+    }
+
     let provider_response = match req_builder.send().await {
         Ok(resp) => resp,
         Err(e) => {
             sidecar.total_errors.fetch_add(1, Ordering::Relaxed);
             let elapsed = start.elapsed().as_micros() as u64;
-            sidecar
-                .total_latency_us
-                .fetch_add(elapsed, Ordering::Relaxed);
+            sidecar.total_latency_us.fetch_add(elapsed, Ordering::Relaxed);
             let error_body = format!(r#"{{"error":"Provider request failed: {}"}}"#, e);
             return Ok(Response::builder()
                 .status(502)
                 .header("content-type", "application/json")
-                .body(
-                    Full::new(Bytes::from(error_body))
-                        .map_err(|e| match e {})
-                        .boxed(),
-                )
+                .body(Full::new(Bytes::from(error_body)).map_err(|e| match e {}).boxed())
                 .unwrap());
         }
     };
@@ -182,23 +189,20 @@ async fn handle_request(
     let status = provider_response.status();
     let status_code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
 
+    // Forward response headers from provider
+    let mut resp_builder = Response::builder().status(status_code);
+    for (name, value) in provider_response.headers() {
+        resp_builder = resp_builder.header(name.as_str(), value.as_bytes());
+    }
+
     if is_stream {
         let stream = provider_response.bytes_stream().map(|result| {
-            let frame = result
-                .map(Frame::data)
-                .unwrap_or_else(|_| Frame::data(Bytes::new()));
-            Ok::<_, Infallible>(frame)
+            Ok::<_, Infallible>(Frame::data(result.unwrap_or_default()))
         });
-        let body = StreamBody::new(stream);
         let elapsed = start.elapsed().as_micros() as u64;
-        sidecar
-            .total_latency_us
-            .fetch_add(elapsed, Ordering::Relaxed);
-        Ok(Response::builder()
-            .status(status_code)
-            .header("content-type", "text/event-stream")
-            .header("transfer-encoding", "chunked")
-            .body(BodyExt::boxed(body))
+        sidecar.total_latency_us.fetch_add(elapsed, Ordering::Relaxed);
+        Ok(resp_builder
+            .body(BodyExt::boxed(StreamBody::new(stream)))
             .unwrap())
     } else {
         let resp_bytes = match provider_response.bytes().await {
@@ -206,33 +210,18 @@ async fn handle_request(
             Err(e) => {
                 sidecar.total_errors.fetch_add(1, Ordering::Relaxed);
                 let elapsed = start.elapsed().as_micros() as u64;
-                sidecar
-                    .total_latency_us
-                    .fetch_add(elapsed, Ordering::Relaxed);
-                let error_body =
-                    format!(r#"{{"error":"Failed to read provider response: {}"}}"#, e);
+                sidecar.total_latency_us.fetch_add(elapsed, Ordering::Relaxed);
+                let error_body = format!(r#"{{"error":"Failed to read response: {}"}}"#, e);
                 return Ok(Response::builder()
                     .status(502)
-                    .body(
-                        Full::new(Bytes::from(error_body))
-                            .map_err(|e| match e {})
-                            .boxed(),
-                    )
+                    .body(Full::new(Bytes::from(error_body)).map_err(|e| match e {}).boxed())
                     .unwrap());
             }
         };
         let elapsed = start.elapsed().as_micros() as u64;
-        sidecar
-            .total_latency_us
-            .fetch_add(elapsed, Ordering::Relaxed);
-        Ok(Response::builder()
-            .status(status_code)
-            .header("content-type", "application/json")
-            .body(
-                Full::new(resp_bytes)
-                    .map_err(|e| match e {})
-                    .boxed(),
-            )
+        sidecar.total_latency_us.fetch_add(elapsed, Ordering::Relaxed);
+        Ok(resp_builder
+            .body(Full::new(resp_bytes).map_err(|e| match e {}).boxed())
             .unwrap())
     }
 }

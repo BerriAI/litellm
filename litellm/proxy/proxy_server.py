@@ -6639,21 +6639,25 @@ async def model_info(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    response_class=ORJSONResponse,
 )
 @router.post(
     "/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    response_class=ORJSONResponse,
 )
 @router.post(
     "/engines/{model:path}/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    response_class=ORJSONResponse,
 )
 @router.post(
     "/openai/deployments/{model:path}/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    response_class=ORJSONResponse,
     responses={200: {"description": "Successful response"}, **ERROR_RESPONSES},
 )  # azure compatible endpoint
 async def chat_completion(  # noqa: PLR0915
