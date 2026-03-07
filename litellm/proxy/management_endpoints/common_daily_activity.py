@@ -881,16 +881,11 @@ async def _get_aggregated_with_entity_breakdown(
 ) -> SpendAnalyticsPaginatedResponse:
     """Multi-query aggregation for entity-breakdown views (e.g. team usage).
 
-    Runs three concurrent queries instead of one whose GROUP BY matches
-    the table's unique key (~150k rows unchanged):
+    Runs 3 concurrent queries:
 
-      Q0 — detail query WITHOUT entity_id  (~5-10k rows)
-      Q1 — per-entity per-date             (~entities × days rows)
-      Q2 — entity × API key                (~entities × keys rows)
-
-    Q0 feeds model / key / provider / endpoint breakdowns via the
-    existing ``_aggregate_spend_records`` helper.  Q1 and Q2 provide
-    per-entity data that is merged into the result.
+      Q0 — detail without entity_id (~5-10k rows) for model/key/provider/endpoint breakdowns
+      Q1 — per-entity per-date (~entities × days rows) for entity daily chart
+      Q2 — entity × API key for entity → key correlation
     """
     pg_table = _PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
@@ -909,19 +904,19 @@ async def _get_aggregated_with_entity_breakdown(
     m = _METRIC_SUM_EXPR
     base = f'FROM "{pg_table}" WHERE {where_clause}'
 
-    # Q0 — detail without entity_id (collapses entity dimension)
+    # Q0 — collapse across entities for model/key/provider/endpoint breakdowns
     q_detail = (
         f"SELECT date, api_key, model, model_group, custom_llm_provider, "
         f"mcp_namespaced_tool_name, endpoint, {m} {base} "
         f"GROUP BY date, api_key, model, model_group, custom_llm_provider, "
         f"mcp_namespaced_tool_name, endpoint ORDER BY date DESC"
     )
-    # Q1 — per-entity per-date (for chart tooltip + daily entity table)
+    # Q1 — per-entity per-date
     q_entity_daily = (
         f'SELECT "{entity_id_field}", date, {m} {base} '
         f'GROUP BY "{entity_id_field}", date ORDER BY date DESC'
     )
-    # Q2 — entity × API key (for entity → key correlation)
+    # Q2 — entity × API key (cross-date totals)
     q_entity_key = (
         f'SELECT "{entity_id_field}", api_key, {m} {base} '
         f'GROUP BY "{entity_id_field}", api_key'
@@ -933,12 +928,13 @@ async def _get_aggregated_with_entity_breakdown(
         prisma_client.db.query_raw(q_entity_key, *params),
     )
 
-    # Collect all api_keys from Q0 + Q2 and fetch metadata once
+    detail_records = [SimpleNamespace(**row) for row in (raw_detail or [])]
+
+    # Collect all API keys from Q0 + Q2 for a single metadata fetch
     all_api_keys: Set[str] = set()
-    for row in (raw_detail or []):
-        ak = row.get("api_key")
-        if ak:
-            all_api_keys.add(ak)
+    for record in detail_records:
+        if record.api_key:
+            all_api_keys.add(record.api_key)
     for row in (raw_entity_key or []):
         ak = row.get("api_key")
         if ak:
@@ -946,12 +942,9 @@ async def _get_aggregated_with_entity_breakdown(
 
     api_key_metadata: Dict[str, Dict[str, Any]] = {}
     if all_api_keys:
-        api_key_metadata = await get_api_key_metadata(
-            prisma_client, all_api_keys
-        )
+        api_key_metadata = await get_api_key_metadata(prisma_client, all_api_keys)
 
-    # Process detail rows for model / key / provider / endpoint breakdowns
-    detail_records = [SimpleNamespace(**row) for row in (raw_detail or [])]
+    # Process Q0 through _aggregate_spend_records (model/key/provider/endpoint breakdowns)
     aggregated = await _aggregate_spend_records(
         prisma_client=prisma_client,
         records=detail_records,
@@ -959,87 +952,65 @@ async def _get_aggregated_with_entity_breakdown(
         entity_metadata_field=None,
         api_key_metadata=api_key_metadata,
     )
+    detail_by_date: Dict[str, DailySpendData] = {
+        d.date.strftime("%Y-%m-%d"): d for d in aggregated["results"]
+    }
 
-    # Build entity → key mapping (cross-date totals)
+    # Build entity → key map from Q2
     entity_key_map: Dict[str, Dict[str, SpendMetrics]] = {}
     for row in (raw_entity_key or []):
         eid = row.get(entity_id_field) or "Unassigned"
         ak = row.get("api_key")
         if ak:
-            entity_key_map.setdefault(eid, {})[ak] = (
-                _row_to_spend_metrics(row)
-            )
+            entity_key_map.setdefault(eid, {})[ak] = _row_to_spend_metrics(row)
 
-    # Group entity-daily rows by date
+    # Group Q1 by date
     date_entity_rows: Dict[str, List[dict]] = {}
     for row in (raw_entity_daily or []):
         date_entity_rows.setdefault(row["date"], []).append(row)
 
-    # Index detail-aggregated results by date for merging
-    date_to_detail: Dict[str, DailySpendData] = {
-        str(r.date): r for r in aggregated["results"]
-    }
-
-    # Merge entity data into per-date results
+    # Merge entity data into per-date breakdowns from Q0
     total_metrics = SpendMetrics()
     results: List[DailySpendData] = []
-    sorted_dates = sorted(date_entity_rows.keys(), reverse=True)
-    # Track which entities already got their api_key_breakdown attached
-    # so we only attach it once (on the most recent date each entity appears).
-    entities_with_key_breakdown: set = set()
+    entities_with_key_breakdown: Set[str] = set()
 
-    for date_str in sorted_dates:
+    all_dates = set(detail_by_date.keys()) | set(date_entity_rows.keys())
+    for date_str in sorted(all_dates, reverse=True):
+        day_data = detail_by_date.get(date_str)
+        breakdown = day_data.breakdown if day_data else BreakdownMetrics()
+
         day_metrics = SpendMetrics()
-        day_entities: Dict[str, MetricWithMetadata] = {}
-
-        for row in date_entity_rows[date_str]:
+        for row in date_entity_rows.get(date_str, []):
             eid = row.get(entity_id_field) or "Unassigned"
             entity_metrics = _row_to_spend_metrics(row)
             _add_metrics(day_metrics, entity_metrics)
 
             entity_meta = (
-                entity_metadata_field.get(eid, {})
-                if entity_metadata_field
-                else {}
+                entity_metadata_field.get(eid, {}) if entity_metadata_field else {}
             )
-            entity_entry = MetricWithMetadata(
-                metrics=entity_metrics, metadata=entity_meta
-            )
+            entity_entry = MetricWithMetadata(metrics=entity_metrics, metadata=entity_meta)
 
-            # Attach per-key breakdown on the first (most recent) date
-            # each entity appears. The UI sums across dates for the
-            # entity → key table, so we only need it once per entity.
+            # Attach api_key_breakdown on the first (most recent) date each entity appears
             if eid not in entities_with_key_breakdown:
                 for ak, ak_metrics in entity_key_map.get(eid, {}).items():
                     meta = api_key_metadata.get(ak, {})
-                    entity_entry.api_key_breakdown[ak] = (
-                        KeyMetricWithMetadata(
-                            metrics=ak_metrics,
-                            metadata=KeyMetadata(
-                                key_alias=meta.get("key_alias"),
-                                team_id=meta.get("team_id"),
-                            ),
-                        )
+                    entity_entry.api_key_breakdown[ak] = KeyMetricWithMetadata(
+                        metrics=ak_metrics,
+                        metadata=KeyMetadata(
+                            key_alias=meta.get("key_alias"),
+                            team_id=meta.get("team_id"),
+                        ),
                     )
                 entities_with_key_breakdown.add(eid)
 
-            day_entities[eid] = entity_entry
+            breakdown.entities[eid] = entity_entry
 
         _add_metrics(total_metrics, day_metrics)
-
-        # Merge model / key / provider breakdowns from the detail query
-        detail_day = date_to_detail.get(date_str)
-        if detail_day:
-            day_breakdown = detail_day.breakdown
-            day_breakdown.entities = day_entities
-        else:
-            day_breakdown = BreakdownMetrics(entities=day_entities)
-
         results.append(
             DailySpendData(
                 date=datetime.strptime(date_str, "%Y-%m-%d").date(),
                 metrics=day_metrics,
-                breakdown=day_breakdown,
+                breakdown=breakdown,
             )
         )
 

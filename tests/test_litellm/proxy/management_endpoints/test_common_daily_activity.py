@@ -473,19 +473,19 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
 
 @pytest.mark.asyncio
 async def test_get_daily_activity_aggregated_entity_breakdown_multi_query():
-    """Test the optimised multi-query path used when include_entity_breakdown=True.
+    """Test the 3-query path used when include_entity_breakdown=True.
 
     Verifies that:
     - per-entity per-date data appears in each day's breakdown.entities
-    - cross-date model/provider/key breakdowns appear on the first date only
+    - model/key/provider/endpoint breakdowns come from the detail query (Q0)
     - entity → API key correlation is present on the first date's entities
     - total metrics are correctly accumulated
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
 
-    # Mock rows for the 3 concurrent queries.
-    # Q0 (detail without entity): full-dimension rows collapsed across teams
+    # Q0 — detail rows (GROUP BY date, api_key, model, model_group,
+    #                   custom_llm_provider, mcp_namespaced_tool_name, endpoint)
     detail_rows = [
         {
             "date": "2024-01-02",
@@ -521,7 +521,6 @@ async def test_get_daily_activity_aggregated_entity_breakdown_multi_query():
             "successful_requests": 2,
             "failed_requests": 0,
         },
-        # team-c's spend on day1 via key-2 (collapsed across entities in detail query)
         {
             "date": "2024-01-01",
             "api_key": "key-2",
@@ -635,9 +634,13 @@ async def test_get_daily_activity_aggregated_entity_breakdown_multi_query():
         },
     ]
 
-    # Return different results per query_raw call
+    # Return different results per query_raw call (3 queries: detail, entity_daily, entity_key)
     mock_prisma.db.query_raw = AsyncMock(
-        side_effect=[detail_rows, entity_daily_rows, entity_key_rows]
+        side_effect=[
+            detail_rows,
+            entity_daily_rows,
+            entity_key_rows,
+        ]
     )
 
     # API key metadata
