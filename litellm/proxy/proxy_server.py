@@ -7168,6 +7168,11 @@ async def moderations(
             proxy_config=proxy_config,
         )
 
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+        _add_dd_apm_tags_for_litellm_call_id(data.get("litellm_call_id"))
+
         data["model"] = (
             general_settings.get("moderation_model", None)  # server default
             or user_model  # model name passed via cli args
@@ -7208,6 +7213,7 @@ async def moderations(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -7747,6 +7753,10 @@ async def get_assistants(
             proxy_config=proxy_config,
         )
 
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(
@@ -7770,6 +7780,7 @@ async def get_assistants(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -7846,6 +7857,10 @@ async def create_assistant(
             proxy_config=proxy_config,
         )
 
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(
@@ -7869,6 +7884,7 @@ async def create_assistant(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -7943,6 +7959,10 @@ async def delete_assistant(
             proxy_config=proxy_config,
         )
 
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(
@@ -7966,6 +7986,7 @@ async def delete_assistant(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -8040,6 +8061,10 @@ async def create_threads(
             proxy_config=proxy_config,
         )
 
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(
@@ -8063,6 +8088,7 @@ async def create_threads(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -8135,6 +8161,10 @@ async def get_thread(
             proxy_config=proxy_config,
         )
 
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(
@@ -8158,6 +8188,7 @@ async def get_thread(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -8234,6 +8265,10 @@ async def add_messages(
             proxy_config=proxy_config,
         )
 
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(
@@ -8257,6 +8292,7 @@ async def add_messages(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -8329,6 +8365,10 @@ async def get_messages(
             proxy_config=proxy_config,
         )
 
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(
@@ -8352,6 +8392,7 @@ async def get_messages(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -8426,6 +8467,10 @@ async def run_thread(
             proxy_config=proxy_config,
         )
 
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(
@@ -8462,6 +8507,7 @@ async def run_thread(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,

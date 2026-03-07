@@ -480,6 +480,47 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-margin-amount" not in headers
         assert "x-litellm-response-cost-margin-percent" not in headers
 
+    def test_get_custom_headers_includes_call_id(self):
+        """
+        Test that x-litellm-call-id header is included when call_id is provided.
+        Ensures endpoints that generate litellm_call_id properly pass it through
+        to get_custom_headers and it appears in the response.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        test_call_id = "test-call-id-12345"
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id=test_call_id,
+        )
+
+        assert "x-litellm-call-id" in headers
+        assert headers["x-litellm-call-id"] == test_call_id
+
+    def test_get_custom_headers_excludes_call_id_when_none(self):
+        """
+        Test that x-litellm-call-id header is excluded when call_id is None.
+        This was the bug: endpoints that didn't generate litellm_call_id would
+        pass None, and the header would be silently omitted.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id=None,
+        )
+
+        assert "x-litellm-call-id" not in headers
+
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
         Test the helper function that extracts cost breakdown information.
