@@ -59,6 +59,13 @@ except ImportError:
 def map_aiohttp_exceptions() -> typing.Iterator[None]:
     try:
         yield
+    except asyncio.CancelledError as exc:
+        # asyncio.CancelledError inherits from BaseException (not Exception) in Python 3.9+,
+        # so it bypasses the `except Exception` block below and must be caught explicitly.
+        # Map to ConnectError so the router treats it as a retryable connection failure
+        # and can failover to alternative deployments (e.g., during intermittent DNS issues).
+        message = f"Request cancelled during DNS resolution or connection: {str(exc)}"
+        raise httpx.ConnectError(message) from exc
     except Exception as exc:
         mapped_exc = None
 
