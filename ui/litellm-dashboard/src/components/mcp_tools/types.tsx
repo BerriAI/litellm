@@ -202,6 +202,7 @@ export interface DiscoverableMCPServer {
   registry_url?: string | null;
   transport: string;
   url?: string | null;
+  auth_type?: string | null;
   command?: string | null;
   args?: string[] | null;
   env_vars?: Array<{ name: string; description?: string; secret?: boolean }> | null;

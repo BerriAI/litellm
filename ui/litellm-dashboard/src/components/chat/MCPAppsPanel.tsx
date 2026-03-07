@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Switch, Spin, Input, Button } from "antd";
-import { SearchOutlined, ArrowLeftOutlined, RightOutlined } from "@ant-design/icons";
-import { fetchMCPServers, listMCPTools } from "../networking";
-import { MCPServer } from "../mcp_tools/types";
+import { SearchOutlined, ArrowLeftOutlined, RightOutlined, LockOutlined, CheckCircleOutlined } from "@ant-design/icons";
+import { fetchMCPServers, listMCPTools, registerMcpOAuthClient, buildMcpOAuthAuthorizeUrl, exchangeMcpOAuthToken, cacheTemporaryMcpServer } from "../networking";
+import { MCPServer, AUTH_TYPE } from "../mcp_tools/types";
 import { message } from "antd";
 
 interface Props {
@@ -24,6 +24,38 @@ function getAvatarColor(name: string): string {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
+const OAUTH_TOKEN_STORAGE_PREFIX = "litellm-mcp-user-oauth-token-";
+const OAUTH_FLOW_STATE_KEY = "litellm-mcp-chat-oauth-flow-state";
+const OAUTH_RESULT_KEY = "litellm-mcp-oauth-result";
+const OAUTH_RETURN_URL_KEY = "litellm-mcp-oauth-return-url";
+const CHAT_OAUTH_SELECTED_SERVERS_KEY = "litellm-mcp-chat-selected-servers";
+
+function getStoredOAuthToken(serverId: string): string | null {
+  try {
+    const stored = sessionStorage.getItem(OAUTH_TOKEN_STORAGE_PREFIX + serverId) ||
+                   localStorage.getItem(OAUTH_TOKEN_STORAGE_PREFIX + serverId);
+    return stored || null;
+  } catch { return null; }
+}
+
+function storeOAuthToken(serverId: string, token: string) {
+  try {
+    sessionStorage.setItem(OAUTH_TOKEN_STORAGE_PREFIX + serverId, token);
+    localStorage.setItem(OAUTH_TOKEN_STORAGE_PREFIX + serverId, token);
+  } catch { /* ignore */ }
+}
+
+function isOAuthServer(server: MCPServer): boolean {
+  return server.auth_type === AUTH_TYPE.OAUTH2 || server.auth_type === "oauth2";
+}
+
+const base64UrlEncode = (buffer: ArrayBuffer) => {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  bytes.forEach((b) => (binary += String.fromCharCode(b)));
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+
 type TabKey = "all" | "connected";
 
 const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange }) => {
@@ -33,6 +65,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
   const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
+  const [oauthAuthorizing, setOauthAuthorizing] = useState(false);
+  const [oauthTokens, setOauthTokens] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -42,6 +76,14 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         if (cancelled) return;
         const list: MCPServer[] = Array.isArray(data) ? data : (data?.data ?? []);
         setServers(list);
+        const tokens: Record<string, string> = {};
+        list.forEach((s) => {
+          if (isOAuthServer(s)) {
+            const t = getStoredOAuthToken(s.server_id);
+            if (t) tokens[s.server_id] = t;
+          }
+        });
+        setOauthTokens(tokens);
       })
       .catch(() => {
         if (!cancelled) setServers([]);
@@ -51,6 +93,147 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
       });
     return () => { cancelled = true; };
   }, [accessToken]);
+
+  // Resume OAuth flow after redirect
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedResult = sessionStorage.getItem(OAUTH_RESULT_KEY) || localStorage.getItem(OAUTH_RESULT_KEY);
+    const storedFlowState = sessionStorage.getItem(OAUTH_FLOW_STATE_KEY) || localStorage.getItem(OAUTH_FLOW_STATE_KEY);
+    if (!storedResult || !storedFlowState) return;
+
+    const resumeOAuth = async () => {
+      try {
+        const result = JSON.parse(storedResult);
+        const flowState = JSON.parse(storedFlowState);
+        // Clean up storage
+        [sessionStorage, localStorage].forEach((s) => {
+          try {
+            s.removeItem(OAUTH_RESULT_KEY);
+            s.removeItem(OAUTH_FLOW_STATE_KEY);
+            s.removeItem(OAUTH_RETURN_URL_KEY);
+          } catch { /* ignore */ }
+        });
+
+        if (result.error) {
+          message.error(result.error_description || result.error);
+          return;
+        }
+        if (!result.code || !flowState.state || result.state !== flowState.state) {
+          message.error("OAuth state mismatch. Please try again.");
+          return;
+        }
+
+        const token = await exchangeMcpOAuthToken({
+          serverId: flowState.serverId,
+          code: result.code,
+          clientId: flowState.clientId,
+          clientSecret: flowState.clientSecret,
+          codeVerifier: flowState.codeVerifier,
+          redirectUri: flowState.redirectUri,
+        });
+
+        if (token?.access_token) {
+          storeOAuthToken(flowState.originalServerId || flowState.serverId, token.access_token);
+          setOauthTokens((prev) => ({ ...prev, [flowState.originalServerId || flowState.serverId]: token.access_token }));
+          message.success("Connected successfully!");
+
+          // Restore selected servers and auto-connect
+          try {
+            const savedServers = sessionStorage.getItem(CHAT_OAUTH_SELECTED_SERVERS_KEY);
+            if (savedServers) {
+              const parsed = JSON.parse(savedServers);
+              sessionStorage.removeItem(CHAT_OAUTH_SELECTED_SERVERS_KEY);
+              if (Array.isArray(parsed)) {
+                onChange(parsed);
+              }
+            }
+          } catch { /* ignore */ }
+        }
+      } catch (err) {
+        message.error("Failed to complete OAuth authorization.");
+      }
+    };
+
+    resumeOAuth();
+  }, [accessToken, onChange]);
+
+  const startOAuthForServer = useCallback(async (server: MCPServer) => {
+    if (!accessToken) return;
+    setOauthAuthorizing(true);
+
+    try {
+      const serverPayload = {
+        server_id: server.server_id,
+        server_name: server.server_name,
+        alias: server.alias,
+        description: server.description,
+        url: server.url,
+        transport: server.transport || "http",
+        auth_type: AUTH_TYPE.OAUTH2,
+      };
+
+      const cached = await cacheTemporaryMcpServer(accessToken, serverPayload);
+      const serverId = cached?.server_id?.trim();
+      if (!serverId) throw new Error("Failed to prepare OAuth session");
+
+      let registeredClient: { clientId?: string; clientSecret?: string } = {};
+      const registration = await registerMcpOAuthClient(accessToken, serverId, {
+        client_name: server.alias || server.server_name || serverId,
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      });
+      registeredClient = {
+        clientId: registration?.client_id,
+        clientSecret: registration?.client_secret,
+      };
+
+      const verifierArray = new Uint8Array(32);
+      crypto.getRandomValues(verifierArray);
+      const verifier = base64UrlEncode(verifierArray.buffer);
+      const challengeData = new TextEncoder().encode(verifier);
+      const digest = await crypto.subtle.digest("SHA-256", challengeData);
+      const challenge = base64UrlEncode(digest);
+      const state = crypto.randomUUID();
+
+      const path = window.location.pathname || "";
+      const uiIndex = path.indexOf("/ui");
+      const uiPrefix = uiIndex >= 0 ? path.slice(0, uiIndex + 3) : "";
+      const redirectUri = `${window.location.origin}${uiPrefix}/mcp/oauth/callback`;
+
+      const authorizeUrl = buildMcpOAuthAuthorizeUrl({
+        serverId,
+        clientId: registeredClient.clientId,
+        redirectUri,
+        state,
+        codeChallenge: challenge,
+      });
+
+      const flowState = {
+        state,
+        codeVerifier: verifier,
+        clientId: registeredClient.clientId,
+        clientSecret: registeredClient.clientSecret,
+        serverId,
+        originalServerId: server.server_id,
+        redirectUri,
+      };
+
+      // Persist state for after redirect
+      [sessionStorage, localStorage].forEach((s) => {
+        try {
+          s.setItem(OAUTH_FLOW_STATE_KEY, JSON.stringify(flowState));
+          s.setItem(OAUTH_RETURN_URL_KEY, window.location.href);
+          s.setItem(CHAT_OAUTH_SELECTED_SERVERS_KEY, JSON.stringify(selectedServers));
+        } catch { /* ignore */ }
+      });
+
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to start OAuth flow");
+      setOauthAuthorizing(false);
+    }
+  }, [accessToken, selectedServers]);
 
   const handleToggle = async (serverName: string, checked: boolean) => {
     if (!checked) {
@@ -95,6 +278,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     const isConnected = selectedServers.includes(name);
     const isTogglingOn = togglingOn.has(name);
     const color = getAvatarColor(name);
+    const isOAuth = isOAuthServer(detailServer);
+    const hasOAuthToken = Boolean(oauthTokens[detailServer.server_id]);
 
     return (
       <div style={{ width: "100%" }}>
@@ -122,18 +307,59 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             {name.charAt(0).toUpperCase()}
           </div>
           <div style={{ flex: 1 }}>
-            <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, color: "#111827" }}>{name}</h2>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#111827" }}>{name}</h2>
+              {isOAuth && (
+                <span style={{
+                  fontSize: 10, fontWeight: 600,
+                  color: hasOAuthToken ? "#059669" : "#d97706",
+                  background: hasOAuthToken ? "#ecfdf5" : "#fffbeb",
+                  borderRadius: 4, padding: "2px 6px",
+                  display: "inline-flex", alignItems: "center", gap: 3,
+                }}>
+                  {hasOAuthToken ? <><CheckCircleOutlined style={{ fontSize: 10 }} /> Authorized</> : <><LockOutlined style={{ fontSize: 10 }} /> OAuth</>}
+                </span>
+              )}
+            </div>
             <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>{detailServer.description ?? "MCP server"}</p>
           </div>
-          <Button
-            type={isConnected ? "default" : "primary"}
-            loading={isTogglingOn}
-            onClick={() => handleToggle(name, !isConnected)}
-            style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
-          >
-            {isConnected ? "Disconnect" : "Connect"}
-          </Button>
+          {isOAuth && !hasOAuthToken ? (
+            <Button
+              type="primary"
+              loading={oauthAuthorizing}
+              onClick={() => startOAuthForServer(detailServer)}
+              style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 130 }}
+              icon={<LockOutlined />}
+            >
+              Authorize
+            </Button>
+          ) : (
+            <Button
+              type={isConnected ? "default" : "primary"}
+              loading={isTogglingOn}
+              onClick={() => handleToggle(name, !isConnected)}
+              style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
+            >
+              {isConnected ? "Disconnect" : "Connect"}
+            </Button>
+          )}
         </div>
+
+        {/* OAuth notice for unauthenticated OAuth servers */}
+        {isOAuth && !hasOAuthToken && (
+          <div style={{
+            background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10,
+            padding: "14px 16px", marginBottom: 20, fontSize: 13, color: "#92400e",
+            display: "flex", alignItems: "flex-start", gap: 10,
+          }}>
+            <LockOutlined style={{ marginTop: 2, flexShrink: 0 }} />
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Authorization required</div>
+              This server uses OAuth 2.0. Click &ldquo;Authorize&rdquo; to sign in with the service
+              provider and grant access to your account. Your credentials are not shared with LiteLLM.
+            </div>
+          </div>
+        )}
 
         {/* Info table */}
         <h3 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 600, color: "#111827" }}>Information</h3>
@@ -141,7 +367,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
           {[
             ["Server ID", detailServer.server_id],
             ["Transport", (detailServer as MCPServer & { mcp_info?: { server_url?: string } }).mcp_info?.server_url ? "HTTP" : "stdio"],
-            ["Status", isConnected ? "Connected" : "Not connected"],
+            ["Authentication", isOAuth ? "OAuth 2.0" : (detailServer.auth_type || "None")],
+            ["Status", isConnected ? "Connected" : (isOAuth && !hasOAuthToken ? "Not authorized" : "Not connected")],
           ].filter(([, v]) => v).map(([label, value], i, arr) => (
             <div key={label} style={{
               display: "flex",
@@ -227,6 +454,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             const isConnected = selectedServers.includes(name);
             const color = getAvatarColor(name);
             const isLeftCol = idx % 2 === 0;
+            const isOAuth = isOAuthServer(server);
+            const hasToken = Boolean(oauthTokens[server.server_id]);
 
             return (
               <div
@@ -251,8 +480,13 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                   {name.charAt(0).toUpperCase()}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 500, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {name}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 14, fontWeight: 500, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {name}
+                    </span>
+                    {isOAuth && (
+                      <LockOutlined style={{ fontSize: 11, color: hasToken ? "#059669" : "#d97706", flexShrink: 0 }} />
+                    )}
                   </div>
                   <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {server.description ?? "MCP server"}

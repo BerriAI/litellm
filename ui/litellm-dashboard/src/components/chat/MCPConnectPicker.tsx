@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Switch, Spin, message } from "antd";
+import { LockOutlined } from "@ant-design/icons";
 import { fetchMCPServers, listMCPTools } from "../networking";
-import { MCPServer } from "../mcp_tools/types";
+import { MCPServer, AUTH_TYPE } from "../mcp_tools/types";
 
 interface Props {
   accessToken: string;
@@ -9,10 +10,13 @@ interface Props {
   onChange: (servers: string[]) => void;
 }
 
+function isOAuthServer(server: MCPServer): boolean {
+  return server.auth_type === AUTH_TYPE.OAUTH2 || server.auth_type === "oauth2";
+}
+
 const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onChange }) => {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loadingServers, setLoadingServers] = useState(true);
-  // Track which individual servers are being toggled on (verifying tools)
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -23,7 +27,6 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
       try {
         const data = await fetchMCPServers(accessToken);
         if (cancelled) return;
-        // API returns { data: MCPServer[] } or MCPServer[]
         const list: MCPServer[] = Array.isArray(data) ? data : (data?.data ?? []);
         setServers(list);
       } catch {
@@ -46,21 +49,17 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
 
   const handleToggle = async (serverName: string, checked: boolean) => {
     if (!checked) {
-      // Toggle OFF — remove immediately, no tool fetch needed
       onChange(selectedServers.filter((s) => s !== serverName));
       return;
     }
 
-    // Toggle ON — verify tools are reachable first
     setTogglingOn((prev) => new Set(prev).add(serverName));
     try {
       const result = await listMCPTools(accessToken, serverName);
-      // listMCPTools never throws; it returns { tools, error, message } on failure
       if (result?.error) {
         message.warning(
           `Could not load tools for ${serverName} — it will be excluded from this message.`
         );
-        // Do not add to selectedServers
         return;
       }
       onChange([...selectedServers, serverName]);
@@ -68,7 +67,6 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
       message.warning(
         `Could not load tools for ${serverName} — it will be excluded from this message.`
       );
-      // Do not add to selectedServers
     } finally {
       setTogglingOn((prev) => {
         const next = new Set(prev);
@@ -100,6 +98,7 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
           const name = server.server_name ?? server.alias ?? server.server_id;
           const isSelected = selectedServers.includes(name);
           const isTogglingOn = togglingOn.has(name);
+          const isOAuth = isOAuthServer(server);
 
           return (
             <div
@@ -121,9 +120,15 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
                   }}
                 >
                   {name}
+                  {isOAuth && (
+                    <LockOutlined style={{ fontSize: 10, color: "#d97706", flexShrink: 0 }} />
+                  )}
                 </div>
                 {server.description && (
                   <div

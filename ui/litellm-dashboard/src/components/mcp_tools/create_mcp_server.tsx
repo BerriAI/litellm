@@ -13,6 +13,7 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
+import { parseErrorMessage } from "../shared/errorUtils";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 
 const asset_logos_folder = "../ui/assets/logos/";
@@ -249,6 +250,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     form.setFieldsValue(prefillValues);
     setFormValues(prefillValues);
     setAliasManuallyEdited(false);
+
+    // Auth type must be set after a render cycle so the auth dropdown is mounted
+    if (prefillData.auth_type && transport !== "stdio") {
+      requestAnimationFrame(() => {
+        form.setFieldsValue({ auth_type: prefillData.auth_type });
+        setFormValues((prev) => ({ ...prev, auth_type: prefillData.auth_type }));
+      });
+    }
   }, [isModalVisible, prefillData, form]);
 
   const handleCreate = async (values: Record<string, any>) => {
@@ -385,7 +394,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         onCreateSuccess(response);
       }
     } catch (error) {
-      NotificationsManager.fromBackend("Error creating MCP Server: " + error);
+      NotificationsManager.fromBackend("Error creating MCP Server: " + parseErrorMessage(error));
     } finally {
       setIsLoading(false);
     }

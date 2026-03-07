@@ -8799,13 +8799,14 @@ export const perUserAnalyticsCall = async (
 };
 
 export const deriveErrorMessage = (errorData: any): string => {
-  return (
+  const raw =
     (errorData?.error && (errorData.error.message || errorData.error)) ||
     errorData?.message ||
     errorData?.detail ||
     errorData?.error ||
-    JSON.stringify(errorData)
-  );
+    errorData;
+  if (typeof raw === "string") return raw;
+  return JSON.stringify(raw);
 };
 
 export interface LoginRequest {

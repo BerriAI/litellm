@@ -35,6 +35,7 @@
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.atlassian%2Fatlassian-mcp-server",
       "transport": "sse",
       "url": "https://mcp.atlassian.com/v1/sse",
+      "auth_type": "oauth2",
       "env_vars": []
     },
     {
@@ -46,6 +47,7 @@
       "registry_url": "https://registry.modelcontextprotocol.io/servers/app.linear%2Flinear",
       "transport": "sse",
       "url": "https://mcp.linear.app/sse",
+      "auth_type": "oauth2",
       "env_vars": []
     },
     {

@@ -160,6 +160,10 @@ async def acompletion_with_mcp(  # noqa: PLR0915
     # Remove keys that shouldn't be passed to acompletion
     clean_kwargs = {k: v for k, v in kwargs.items() if k not in ["acompletion"]}
 
+    # If no tools were resolved, also drop tool_choice to avoid provider errors
+    if not all_tools:
+        clean_kwargs.pop("tool_choice", None)
+
     base_call_args = {
         "model": model,
         "messages": messages,
