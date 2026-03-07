@@ -77,11 +77,11 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
     npm cache clean --force && \
     # Remove the apk-tracked npm so its stale SBOM metadata (tar 7.5.9) is
     # no longer visible to image scanners.  The globally installed npm@latest
+    npm cache clean --force && \
+    # Remove the apk-tracked npm so its stale SBOM metadata (tar 7.5.9) is
+    # no longer visible to image scanners.  The globally installed npm@latest
     # at /usr/local/lib/node_modules/npm/ remains fully functional.
     { apk del --no-cache npm 2>/dev/null || true; }
-
-WORKDIR /app
-# Copy the current directory contents into the container at /app
 COPY . .
 RUN ls -la /app
 
