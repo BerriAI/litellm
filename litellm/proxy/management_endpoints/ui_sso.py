@@ -2980,8 +2980,9 @@ class SSOAuthenticationHandler:
                             )
                     else:
                         verbose_proxy_logger.warning(
-                            "Userinfo endpoint returned %s, falling back to id_token",
+                            "Userinfo endpoint returned %s (body: %s), falling back to id_token",
                             resp.status_code,
+                            resp.text[:500],
                         )
             except Exception as e:
                 verbose_proxy_logger.warning(

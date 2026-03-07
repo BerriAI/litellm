@@ -3422,9 +3422,11 @@ class TestPKCEFunctionality:
             assert "auth" in kwargs
             assert isinstance(kwargs["auth"], httpx.BasicAuth)
             # Verify code_verifier is in the POST body (essential PKCE field)
-            assert kwargs.get("data", {}).get("code_verifier") == "verifier_abc"
-            # Verify credentials are NOT double-sent in the POST body when using Basic Auth
             post_data = kwargs.get("data", {})
+            assert post_data.get("code_verifier") == "verifier_abc"
+            # Verify redirect_uri is forwarded (required by strict OAuth providers)
+            assert post_data.get("redirect_uri") == "https://proxy.example.com/callback"
+            # Verify credentials are NOT double-sent in the POST body when using Basic Auth
             assert "client_secret" not in post_data, "client_secret must not appear in POST body when using Basic Auth"
             assert "client_id" not in post_data, "client_id must not appear in POST body when using Basic Auth (include_client_id=False)"
             return mock_response
@@ -3484,6 +3486,7 @@ class TestPKCEFunctionality:
             assert "client_id" in data
             assert "client_secret" in data
             assert data.get("code_verifier") == "verifier_xyz", "code_verifier must be in POST body"
+            assert data.get("redirect_uri") == "https://proxy.example.com/callback", "redirect_uri must be forwarded"
             mock = MagicMock()
             mock.status_code = 200
             mock.json.return_value = token_resp
