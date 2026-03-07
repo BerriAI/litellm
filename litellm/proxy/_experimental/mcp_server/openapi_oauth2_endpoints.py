@@ -202,9 +202,15 @@ async def openapi_oauth2_connect(
             detail="Database is not configured. Cannot initiate OAuth2 flow.",
         )
 
-    user_id = user_api_key_dict.user_id or user_api_key_dict.api_key or ""
+    # Require an explicit user_id so that credentials are scoped to users, not API keys.
+    # Falling back to the raw api_key would allow multiple users sharing a key to
+    # silently share OAuth2 credentials and orphan them when the key is rotated.
+    user_id = user_api_key_dict.user_id or ""
     if not user_id:
-        raise HTTPException(status_code=400, detail="Cannot determine user identity from token")
+        raise HTTPException(
+            status_code=400,
+            detail="user_id is required for OAuth2 flow. Ensure your API key is tied to a user.",
+        )
 
     _purge_expired_states()
     if len(_pending_oauth2_states) >= _STATES_MAX_SIZE:
@@ -379,7 +385,7 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
                 headers=token_headers,
                 timeout=30.0,
             )
-        response.raise_for_status()
+            response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         verbose_proxy_logger.error(
             "openapi_oauth2_callback: token exchange HTTP error user=%s server=%s status=%s",
@@ -555,7 +561,8 @@ async def openapi_oauth2_status(
     if server is None:
         raise HTTPException(status_code=404, detail=f"MCP server '{server_id}' not found")
 
-    user_id = user_api_key_dict.user_id or user_api_key_dict.api_key or ""
+    # Use only user_id (not api_key) to avoid sharing credentials across users.
+    user_id = user_api_key_dict.user_id or ""
     server_name = server.server_name or server.name or server_id
 
     if prisma_client is None or not user_id:

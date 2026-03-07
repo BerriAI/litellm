@@ -9,6 +9,7 @@ import json
 import time
 import traceback
 import uuid
+from collections import OrderedDict
 from datetime import datetime
 from typing import (
     Any,
@@ -67,7 +68,7 @@ from litellm.utils import Rules, client, function_setup
 # a brief 401 window (up to _BYOK_CRED_CACHE_TTL seconds) after a token expires at the
 # provider before the cache entry is evicted and a fresh DB lookup is made.  Mitigating
 # this (e.g. by storing and checking `expires_in`) is a future improvement.
-_byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
+_byok_cred_cache: OrderedDict[Tuple[str, str], Tuple[Optional[str], float]] = OrderedDict()
 _BYOK_CRED_CACHE_TTL = 60  # seconds
 _BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
 
@@ -103,17 +104,19 @@ def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
 def _write_byok_cred_cache(
     user_id: str, server_id: str, credential: Optional[str]
 ) -> None:
-    """Write a credential value to the cache, evicting the oldest entry if at capacity.
+    """Write a credential value to the cache with LRU eviction.
 
-    Evicts the oldest-inserted entry (FIFO) rather than clearing all at once to
-    avoid a thundering-herd DB spike when the cache fills under load.
+    Uses OrderedDict.move_to_end() so that every write (new or update) moves
+    the entry to the most-recently-used position.  When at capacity, the
+    least-recently-used (oldest) entry at the front is evicted.
     """
     cache_key = (user_id, server_id)
-    # Only evict when the key is new — updates to existing entries don't grow the cache.
-    if cache_key not in _byok_cred_cache and len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
-        oldest_key = next(iter(_byok_cred_cache))
-        del _byok_cred_cache[oldest_key]
+    is_new = cache_key not in _byok_cred_cache
+    if is_new and len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
+        _byok_cred_cache.popitem(last=False)  # evict LRU (front of OrderedDict)
     _byok_cred_cache[cache_key] = (credential, time.monotonic())
+    if not is_new:
+        _byok_cred_cache.move_to_end(cache_key)  # promote to most-recently-used
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
