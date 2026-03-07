@@ -81,6 +81,99 @@ def _write_byok_cred_cache(
         _byok_cred_cache.clear()
     _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
 
+
+def _resolve_oauth_access_token(credential: Optional[str]) -> Optional[str]:
+    """Extract the access_token from an OAuth credential JSON, or return
+    the credential as-is if it's a plain string (BYOK)."""
+    if not credential:
+        return credential
+    try:
+        import json
+        data = json.loads(credential)
+        if isinstance(data, dict) and "access_token" in data:
+            expires_at = data.get("expires_at")
+            if expires_at and time.time() > expires_at:
+                return None
+            return data["access_token"]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return credential
+
+
+async def _maybe_refresh_oauth_token(
+    credential: str,
+    mcp_server: "MCPServer",
+    user_id: str,
+    prisma_client: Any,
+) -> str:
+    """If the OAuth credential contains an expired access_token and a
+    refresh_token, attempt to refresh. Returns the (possibly updated)
+    credential JSON string."""
+    import json
+    try:
+        data = json.loads(credential)
+    except (json.JSONDecodeError, TypeError):
+        return credential
+
+    if not isinstance(data, dict) or "access_token" not in data:
+        return credential
+
+    expires_at = data.get("expires_at")
+    if not expires_at or time.time() < expires_at - 30:
+        return credential
+
+    refresh_token = data.get("refresh_token")
+    if not refresh_token:
+        return credential
+
+    try:
+        from litellm.proxy._experimental.mcp_server.db import store_user_credential
+        import httpx
+
+        token_url = mcp_server.token_url
+        if not token_url:
+            return credential
+
+        client_id = None
+        client_secret = None
+        creds = mcp_server.credentials
+        if isinstance(creds, dict):
+            client_id = creds.get("client_id")
+            client_secret = creds.get("client_secret")
+
+        body = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }
+        if client_id:
+            body["client_id"] = client_id
+        if client_secret:
+            body["client_secret"] = client_secret
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(token_url, data=body)
+            if resp.status_code != 200:
+                return credential
+            token_data = resp.json()
+
+        new_access_token = token_data.get("access_token")
+        if not new_access_token:
+            return credential
+
+        new_expires_in = token_data.get("expires_in", 3600)
+        data["access_token"] = new_access_token
+        data["expires_at"] = time.time() + int(new_expires_in)
+        if token_data.get("refresh_token"):
+            data["refresh_token"] = token_data["refresh_token"]
+
+        new_credential = json.dumps(data)
+        await store_user_credential(prisma_client, user_id, mcp_server.server_id, new_credential)
+        _invalidate_byok_cred_cache(user_id, mcp_server.server_id)
+        return new_credential
+    except Exception:
+        return credential
+
+
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
 # We're making this conditional import to avoid breaking users who use python 3.8.
@@ -1532,12 +1625,17 @@ if MCP_AVAILABLE:
         mcp_server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
     ) -> Optional[str]:
-        """Retrieve the stored BYOK credential for a user+server pair.
+        """Retrieve the stored BYOK or OAuth credential for a user+server pair.
 
         Uses the shared _byok_cred_cache to avoid a DB round-trip on every
         tool call within the TTL window.
+
+        For OAuth credentials stored as JSON (with access_token, refresh_token,
+        expires_at), this function handles automatic token refresh when the
+        access_token has expired.
         """
-        if not mcp_server.is_byok:
+        is_oauth = getattr(mcp_server, "auth_type", "") == "oauth2"
+        if not mcp_server.is_byok and not is_oauth:
             return None
         user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
         if not user_id:
@@ -1548,7 +1646,9 @@ if MCP_AVAILABLE:
         if cached is not None:
             credential, ts = cached
             if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                return credential
+                resolved = _resolve_oauth_access_token(credential)
+                if resolved is not None:
+                    return resolved
 
         from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
@@ -1560,8 +1660,14 @@ if MCP_AVAILABLE:
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
+
+        if credential and is_oauth:
+            credential = await _maybe_refresh_oauth_token(
+                credential, mcp_server, user_id, prisma_client
+            )
+
         _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
-        return credential
+        return _resolve_oauth_access_token(credential) if credential else credential
 
     async def _check_byok_credential(
         mcp_server: MCPServer,
@@ -1733,9 +1839,9 @@ if MCP_AVAILABLE:
                     "mcp_tool_call_metadata"
                 ] = standard_logging_mcp_tool_call
 
-            # BYOK: retrieve the stored per-user credential.  A single DB call
-            # both checks existence and fetches the value, avoiding a double query.
-            if mcp_server.is_byok and not mcp_auth_header:
+            # BYOK / OAuth2: retrieve the stored per-user credential.
+            is_user_auth_server = mcp_server.is_byok or getattr(mcp_server, "auth_type", "") == "oauth2"
+            if is_user_auth_server and not mcp_auth_header:
                 byok_cred = await _get_byok_credential(mcp_server, user_api_key_auth)
                 if byok_cred is None:
                     raise HTTPException(
@@ -1745,8 +1851,8 @@ if MCP_AVAILABLE:
                             "server_id": mcp_server.server_id,
                             "server_name": mcp_server.server_name or mcp_server.name,
                             "message": (
-                                "No stored credential found for this BYOK server. "
-                                "Complete the OAuth authorization flow to provide your API key."
+                                "No stored credential found for this server. "
+                                "Complete the OAuth authorization flow to provide access."
                             ),
                         },
                         headers={
@@ -1754,7 +1860,7 @@ if MCP_AVAILABLE:
                         },
                     )
                 mcp_auth_header = byok_cred
-            elif mcp_server.is_byok:
+            elif is_user_auth_server:
                 # External auth header supplied; still enforce user-identity check.
                 await _check_byok_credential(mcp_server, user_api_key_auth)
 

@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Switch, Spin, Input, Button } from "antd";
 import { SearchOutlined, ArrowLeftOutlined, RightOutlined, LockOutlined, CheckCircleOutlined } from "@ant-design/icons";
-import { fetchMCPServers, listMCPTools, registerMcpOAuthClient, buildMcpOAuthAuthorizeUrl, exchangeMcpOAuthToken, cacheTemporaryMcpServer } from "../networking";
+import { fetchMCPServers, listMCPTools, registerMcpOAuthClient, buildMcpOAuthAuthorizeUrl, exchangeMcpOAuthToken, cacheTemporaryMcpServer, storeMCPUserCredential } from "../networking";
 import { MCPServer, AUTH_TYPE } from "../mcp_tools/types";
 import { message } from "antd";
 
@@ -77,10 +77,14 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         const list: MCPServer[] = Array.isArray(data) ? data : (data?.data ?? []);
         setServers(list);
         const tokens: Record<string, string> = {};
-        list.forEach((s) => {
+        list.forEach((s: any) => {
           if (isOAuthServer(s)) {
-            const t = getStoredOAuthToken(s.server_id);
-            if (t) tokens[s.server_id] = t;
+            if (s.has_user_credential) {
+              tokens[s.server_id] = "stored";
+            } else {
+              const t = getStoredOAuthToken(s.server_id);
+              if (t) tokens[s.server_id] = t;
+            }
           }
         });
         setOauthTokens(tokens);
@@ -133,8 +137,21 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         });
 
         if (token?.access_token) {
-          storeOAuthToken(flowState.originalServerId || flowState.serverId, token.access_token);
-          setOauthTokens((prev) => ({ ...prev, [flowState.originalServerId || flowState.serverId]: token.access_token }));
+          const servId = flowState.originalServerId || flowState.serverId;
+          storeOAuthToken(servId, token.access_token);
+          setOauthTokens((prev) => ({ ...prev, [servId]: token.access_token }));
+
+          // Store full token (with refresh_token + expires_at) in the backend
+          const credentialPayload = JSON.stringify({
+            access_token: token.access_token,
+            ...(token.refresh_token && { refresh_token: token.refresh_token }),
+            ...(token.expires_in && { expires_at: Math.floor(Date.now() / 1000) + Number(token.expires_in) }),
+          });
+          try {
+            await storeMCPUserCredential(accessToken, servId, credentialPayload);
+          } catch (err) {
+            console.warn("Failed to persist OAuth credential to backend:", err);
+          }
           message.success("Connected successfully!");
 
           // Restore selected servers and auto-connect

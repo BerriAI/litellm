@@ -604,23 +604,23 @@ if MCP_AVAILABLE:
                         server.mcp_info = {}
                     server.mcp_info["is_public"] = True
 
-        # Annotate has_user_credential for BYOK servers (single batched query)
+        # Annotate has_user_credential for BYOK and OAuth servers (single batched query)
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
 
         user_id = user_api_key_dict.user_id or ""
         if user_id and _byok_prisma_client is not None:
-            byok_server_ids = [
+            user_cred_server_ids = [
                 s.server_id
                 for s in redacted_mcp_servers
-                if getattr(s, "is_byok", False)
+                if getattr(s, "is_byok", False) or getattr(s, "auth_type", "") == "oauth2"
             ]
-            if byok_server_ids:
+            if user_cred_server_ids:
                 cred_rows = await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
-                    where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
+                    where={"user_id": user_id, "server_id": {"in": user_cred_server_ids}}
                 )
                 cred_set = {r.server_id for r in cred_rows}
                 for server in redacted_mcp_servers:
-                    if getattr(server, "is_byok", False):
+                    if getattr(server, "is_byok", False) or getattr(server, "auth_type", "") == "oauth2":
                         server.has_user_credential = server.server_id in cred_set
 
         # Virtual keys only get a sanitized discovery view.
@@ -1062,7 +1062,7 @@ if MCP_AVAILABLE:
 
     @router.post(
         "/server/{server_id}/user-credential",
-        description="Store or update the calling user's API key for a BYOK MCP server",
+        description="Store or update the calling user's credential for a BYOK or OAuth MCP server",
         dependencies=[Depends(user_api_key_auth)],
         response_model=MCPUserCredentialResponse,
     )
@@ -1072,7 +1072,7 @@ if MCP_AVAILABLE:
         payload: MCPUserCredentialRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
-        """Store a BYOK credential for the calling user."""
+        """Store a BYOK or OAuth credential for the calling user."""
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
@@ -1082,10 +1082,12 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server {server_id} not found"},
             )
-        if not getattr(mcp_server, "is_byok", False):
+        is_byok = getattr(mcp_server, "is_byok", False)
+        is_oauth = getattr(mcp_server, "auth_type", "") == "oauth2"
+        if not is_byok and not is_oauth:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "This MCP server does not support BYOK credentials"},
+                detail={"error": "This MCP server does not support user credentials"},
             )
         user_id = user_api_key_dict.user_id or ""
         if not user_id:
@@ -1100,7 +1102,6 @@ if MCP_AVAILABLE:
             )
             _invalidate_byok_cred_cache(user_id, server_id)
             return MCPUserCredentialResponse(server_id=server_id, has_credential=True)
-        # save=False: credential not persisted
         return MCPUserCredentialResponse(server_id=server_id, has_credential=False)
 
     @router.delete(

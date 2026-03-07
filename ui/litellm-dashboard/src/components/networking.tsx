@@ -8421,6 +8421,29 @@ export const exchangeMcpOAuthToken = async ({
   return data;
 };
 
+export const storeMCPUserCredential = async (
+  accessToken: string,
+  serverId: string,
+  credential: string,
+): Promise<any> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${encodeURIComponent(serverId)}/user-credential`
+    : `/v1/mcp/server/${encodeURIComponent(serverId)}/user-credential`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ credential, save: true }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(deriveErrorMessage(data) || "Failed to store credential");
+  }
+  return data;
+};
+
 export const vectorStoreSearchCall = async (
   accessToken: string,
   vectorStoreId: string,
