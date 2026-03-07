@@ -104,13 +104,13 @@ async def test_connect_missing_client_secret_raises_400():
     mock_server.client_id = "my-client-id"
     mock_server.client_secret = None  # missing
 
-    # master_key is imported inline via `from litellm.proxy.proxy_server import master_key`;
-    # patch at the source so the function sees the mock value.
+    # Also mock prisma_client as non-None so the 400 assertion is robust to
+    # future validation reordering (without a DB mock the test would get 503).
     with patch(
         "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.global_mcp_server_manager"
     ) as mock_mgr, patch(
-        "litellm.proxy.proxy_server.master_key",
-        "sk-test",
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
         create=True,
     ):
         mock_mgr.get_mcp_server_by_id.return_value = mock_server

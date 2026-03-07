@@ -291,7 +291,8 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
             status_code=400,
         )
 
-    _purge_expired_states()
+    # Check state before purging so expired tokens get a descriptive "State expired"
+    # error instead of a misleading "Invalid state" error.
     state_data = _pending_oauth2_states.get(state)
     if state_data is None:
         return HTMLResponse(
@@ -303,6 +304,7 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
         )
     if time.time() > state_data["expires_at"]:
         del _pending_oauth2_states[state]
+        _purge_expired_states()  # best-effort cleanup of other expired entries
         return HTMLResponse(
             content=_build_error_html(
                 "State expired",
@@ -311,8 +313,9 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
             status_code=400,
         )
 
-    # Consume the state (one-time use)
+    # Consume the state (one-time use), then do best-effort cleanup of other entries.
     del _pending_oauth2_states[state]
+    _purge_expired_states()
 
     server_id: str = state_data["server_id"]
     user_id: str = state_data["user_id"]
@@ -555,10 +558,12 @@ async def openapi_oauth2_status(
         )
 
     # Check the shared credential cache before issuing a DB query.
-    # The frontend polls this endpoint every 2 s; the cache avoids a raw DB
-    # hit on each poll.  The callback explicitly invalidates the cache entry
-    # via _invalidate_byok_cred_cache, so the next poll after a successful
-    # authorization always falls through to the DB and returns connected=True.
+    # The cache is written by _get_byok_credential / _check_byok_credential when
+    # a tool call fetches the real token.  If the token is already cached (i.e.
+    # the user has made at least one tool call), we can skip the DB entirely.
+    # We intentionally do NOT write to the cache here: writing a sentinel value
+    # would create dual interpretations of the same cache key across status and
+    # auth functions, making the cache contract subtle and fragile.
     try:
         import time as _time
 
@@ -573,7 +578,7 @@ async def openapi_oauth2_status(
             if _time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
                 return JSONResponse(
                     {
-                        "connected": cached_cred is not None,
+                        "connected": bool(cached_cred),
                         "server_id": server_id,
                         "server_name": server_name,
                     }
@@ -595,17 +600,6 @@ async def openapi_oauth2_status(
             exc,
         )
         connected = False
-
-    # Populate cache so subsequent polls within the TTL window skip the DB.
-    # Use a non-None sentinel ("") for connected=True to satisfy the cache's
-    # None-means-no-credential invariant; invalidation via _invalidate_byok_cred_cache
-    # is still the authoritative signal when a new token is stored.
-    try:
-        from litellm.proxy._experimental.mcp_server.server import _write_byok_cred_cache
-
-        _write_byok_cred_cache(user_id, server_id, "" if connected else None)
-    except Exception:
-        pass  # Best-effort; never block the response
 
     return JSONResponse(
         {"connected": connected, "server_id": server_id, "server_name": server_name}
