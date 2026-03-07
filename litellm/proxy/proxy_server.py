@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import enum
+import importlib
 import inspect
 import io
 import os
@@ -768,6 +769,35 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     import json
 
     init_verbose_loggers()
+
+    ## RUN WORKER STARTUP HOOKS (e.g., gflags initialization) ##
+    _startup_hooks_env = os.environ.get("LITELLM_WORKER_STARTUP_HOOKS", "")
+    if _startup_hooks_env:
+        for _hook_spec in _startup_hooks_env.split(","):
+            _hook_spec = _hook_spec.strip()
+            if not _hook_spec:
+                continue
+            try:
+                if ":" not in _hook_spec:
+                    raise ValueError(
+                        f"Invalid hook spec '{_hook_spec}': expected format is 'module.path:function_name'"
+                    )
+                _module_path, _func_name = _hook_spec.rsplit(":", 1)
+                _module = importlib.import_module(_module_path)
+                _hook_fn = getattr(_module, _func_name)
+                if inspect.iscoroutinefunction(_hook_fn):
+                    await _hook_fn()
+                else:
+                    _hook_fn()
+                verbose_proxy_logger.info(
+                    "Worker startup hook '%s' executed successfully", _hook_spec
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Worker startup hook '%s' failed: %s", _hook_spec, e
+                )
+                raise
+
     ## CHECK PREMIUM USER
     verbose_proxy_logger.debug(
         "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
