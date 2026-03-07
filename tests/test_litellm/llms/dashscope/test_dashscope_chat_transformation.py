@@ -113,6 +113,79 @@ class TestDashScopeConfig:
         assert "```python" in response.choices[0].message.content
         assert "Hey from LiteLLM" in response.choices[0].message.content
 
+    def test_dashscope_preserves_cache_control_in_messages(self):
+        """
+        Test that DashScopeChatConfig does not strip cache_control from messages.
+        DashScope supports cache_control, so it should be preserved unlike the
+        default OpenAIGPTConfig behavior which strips it.
+        """
+        config = DashScopeChatConfig()
+
+        messages: list[AllMessageValues] = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant.",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+            },
+        ]
+
+        result_messages, result_tools = (
+            config.remove_cache_control_flag_from_messages_and_tools(
+                model="qwen-turbo",
+                messages=messages,
+                tools=None,
+            )
+        )
+
+        assert result_messages[0].get("cache_control") == {"type": "ephemeral"}
+        assert result_messages[1]["content"][0].get("cache_control") == {
+            "type": "ephemeral"
+        }
+        assert result_tools is None
+
+    def test_dashscope_preserves_cache_control_in_tools(self):
+        """
+        Test that DashScopeChatConfig preserves cache_control in tools.
+        """
+        config = DashScopeChatConfig()
+
+        messages: list[AllMessageValues] = [
+            {"role": "user", "content": "Hello"},
+        ]
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+
+        result_messages, result_tools = (
+            config.remove_cache_control_flag_from_messages_and_tools(
+                model="qwen-turbo",
+                messages=messages,
+                tools=tools,
+            )
+        )
+
+        assert result_tools is not None
+        assert result_tools[0].get("cache_control") == {"type": "ephemeral"}
+
     def test_dashscope_no_longer_transforms_content_list(self):
         """
         Test that DashScopeChatConfig does not transform content lists to strings.
