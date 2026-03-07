@@ -43,7 +43,7 @@ def _infer_media_type_from_url(url: str) -> str:
     extension = last_segment.rsplit(".", 1)[-1].lower() if "." in last_segment else ""
     media_type = EXTENSION_TO_MEDIA_TYPE.get(extension)
     if media_type is None:
-        raise Exception(
+        raise litellm.ImageFetchError(
             f"Error: Unsupported image format. Could not infer media type from URL '{url}'. "
             f"Supported types = {list(SUPPORTED_IMAGE_TYPES)}"
         )
