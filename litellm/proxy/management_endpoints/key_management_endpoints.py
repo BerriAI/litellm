@@ -64,6 +64,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    validate_key_mcp_servers_against_team,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -637,6 +638,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             data_json["metadata"]["tags"] = data_json["tags"]
 
         data_json.pop("tags")
+
+    await validate_key_mcp_servers_against_team(
+        data_json.get("object_permission"),
+        team_table,
+    )
 
     data_json = await _set_object_permission(
         data_json=data_json,
@@ -1753,7 +1759,7 @@ async def _process_single_key_update(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
-async def update_key_fn(
+async def update_key_fn(  # noqa: PLR0915
     request: Request,
     data: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1946,6 +1952,22 @@ async def update_key_fn(
             )
 
             # Set Management Endpoint Metadata Fields
+
+        # Validate MCP servers in object_permission against the key's effective team
+        if "object_permission" in data_json:
+            effective_team_id = data.team_id or existing_key_row.team_id
+            effective_team_obj = team_obj
+            if effective_team_obj is None and effective_team_id is not None:
+                effective_team_obj = await get_team_object(
+                    team_id=effective_team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+            await validate_key_mcp_servers_against_team(
+                data_json.get("object_permission"),
+                effective_team_obj,
+            )
 
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
