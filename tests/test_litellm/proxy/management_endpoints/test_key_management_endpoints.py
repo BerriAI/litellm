@@ -6356,6 +6356,13 @@ async def test_generate_key_helper_fn_agent_id():
     )
 
 
+def _make_admin_key_dict() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        user_id="admin-user",
+    )
+
+
 @pytest.mark.asyncio
 async def test_key_aliases_response_shape():
     """Test that key_aliases returns the correct paginated response shape."""
@@ -6368,7 +6375,10 @@ async def test_key_aliases_response_shape():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-        result = await key_aliases(page=1, size=50, search=None)
+        result = await key_aliases(
+            user_api_key_dict=_make_admin_key_dict(),
+            page=1, size=50, search=None,
+        )
 
     assert result["aliases"] == ["alias-alpha", "alias-beta"]
     assert result["total_count"] == 2
@@ -6395,7 +6405,10 @@ async def test_key_aliases_pagination_skip_take():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-        result = await key_aliases(page=3, size=25, search=None)
+        result = await key_aliases(
+            user_api_key_dict=_make_admin_key_dict(),
+            page=3, size=25, search=None,
+        )
 
     assert result["current_page"] == 3
     assert result["size"] == 25
@@ -6420,7 +6433,10 @@ async def test_key_aliases_search_filter():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-        await key_aliases(page=1, size=50, search="my-key")
+        await key_aliases(
+            user_api_key_dict=_make_admin_key_dict(),
+            page=1, size=50, search="my-key",
+        )
 
     count_call = mock_prisma_client.db.query_raw.call_args_list[0]
     count_sql = count_call.args[0]
@@ -6442,10 +6458,86 @@ async def test_key_aliases_no_search_omits_ilike_filter():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-        await key_aliases(page=1, size=50, search=None)
+        await key_aliases(
+            user_api_key_dict=_make_admin_key_dict(),
+            page=1, size=50, search=None,
+        )
 
     count_sql = mock_prisma_client.db.query_raw.call_args_list[0].args[0]
     assert "ILIKE" not in count_sql
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_internal_user_scoped_to_own_keys_and_teams():
+    """Test that internal users only see aliases for their own keys and team keys."""
+    mock_prisma_client = AsyncMock()
+
+    # Mock user table lookup to return teams
+    mock_user_row = MagicMock()
+    mock_user_row.teams = ["team-abc", "team-xyz"]
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mock_user_row
+    )
+
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 1}],
+            [{"key_alias": "my-alias"}],
+        ]
+    )
+
+    internal_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        user_id="user-123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await key_aliases(
+            user_api_key_dict=internal_user,
+            page=1, size=50, search=None,
+        )
+
+    assert result["aliases"] == ["my-alias"]
+
+    # Verify the SQL includes user_id and team_id scoping
+    count_sql = mock_prisma_client.db.query_raw.call_args_list[0].args[0]
+    assert "user_id = " in count_sql
+    assert "team_id IN " in count_sql
+
+    # Verify the params include user_id and team IDs
+    count_params = mock_prisma_client.db.query_raw.call_args_list[0].args[1:]
+    assert "user-123" in count_params
+    assert "team-abc" in count_params
+    assert "team-xyz" in count_params
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_admin_sees_all():
+    """Test that proxy admins see all aliases without user/team scoping."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 3}],
+            [
+                {"key_alias": "alias-a"},
+                {"key_alias": "alias-b"},
+                {"key_alias": "alias-c"},
+            ],
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await key_aliases(
+            user_api_key_dict=_make_admin_key_dict(),
+            page=1, size=50, search=None,
+        )
+
+    assert len(result["aliases"]) == 3
+
+    # Admin queries should NOT have user_id or team_id scoping
+    count_sql = mock_prisma_client.db.query_raw.call_args_list[0].args[0]
+    assert "user_id = " not in count_sql
+    assert "team_id IN " not in count_sql
 
 
 
