@@ -226,7 +226,6 @@ def test_build_vertex_schema():
                     "callbacks": {
                         "anyOf": [
                             {"type": "array", "nullable": True},
-                            {"nullable": True},
                         ]
                     },
                     "run_name": {"type": "string"},
