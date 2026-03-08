@@ -610,6 +610,10 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     if _budget_id is not None:
         data_json["budget_id"] = _budget_id
 
+    # Only set budget_duration on key when explicitly provided. Keys with budget_id
+    # but no explicit budget_duration follow their linked budget tier's schedule;
+    # reset_budget_for_keys_linked_to_budgets() resets them when the tier resets.
+    # This avoids duplicating budget_duration on keys so tier updates apply automatically.
     if "budget_duration" in data_json:
         data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
@@ -4136,6 +4140,7 @@ async def list_keys(
 )
 @management_endpoint_wrapper
 async def key_aliases(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(50, ge=1, le=100, description="Page size"),
     search: Optional[str] = Query(
@@ -4144,6 +4149,9 @@ async def key_aliases(
 ) -> Dict[str, Any]:
     """
     Lists key aliases with pagination and optional search.
+
+    Non-admin users only see aliases for keys they own or keys belonging to
+    their teams.
 
     Returns:
         {
@@ -4174,6 +4182,41 @@ async def key_aliases(
             "key_alias != ''",
             "(team_id IS NULL OR team_id != $1)",
         ]
+
+        # Scope results for non-admin users: only show aliases for keys the
+        # user owns or keys belonging to teams they are a member of.
+        is_proxy_admin = user_api_key_dict.user_role in [
+            LitellmUserRoles.PROXY_ADMIN.value,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        ]
+        if not is_proxy_admin:
+            scope_conditions: List[str] = []
+            if user_api_key_dict.user_id:
+                query_params.append(user_api_key_dict.user_id)
+                scope_conditions.append(f"user_id = ${len(query_params)}")
+
+            # Look up the user's teams from the user table
+            user_teams: List[str] = []
+            if user_api_key_dict.user_id:
+                user_row = await prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_id": user_api_key_dict.user_id}
+                )
+                if user_row is not None:
+                    user_teams = getattr(user_row, "teams", []) or []
+
+            if user_teams:
+                team_placeholders = ", ".join(
+                    f"${len(query_params) + i + 1}" for i in range(len(user_teams))
+                )
+                query_params.extend(user_teams)
+                scope_conditions.append(f"team_id IN ({team_placeholders})")
+
+            if scope_conditions:
+                where_parts.append(f"({' OR '.join(scope_conditions)})")
+            else:
+                # No user_id and no teams — return nothing
+                where_parts.append("FALSE")
+
         if search:
             query_params.append(f"%{search}%")
             where_parts.append(f"key_alias ILIKE ${len(query_params)}")
@@ -4302,8 +4345,6 @@ def _build_key_filter_conditions(
     user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
         user_condition["user_id"] = user_id
-    if team_id and isinstance(team_id, str):
-        user_condition["team_id"] = team_id
     if key_alias and isinstance(key_alias, str):
         user_condition["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
@@ -4371,8 +4412,10 @@ def _build_key_filter_conditions(
     elif len(or_conditions) == 1:
         where.update(or_conditions[0])
 
-    # Apply project_id and access_group_id as global AND filters so they
+    # Apply team_id, project_id and access_group_id as global AND filters so they
     # narrow results across all visibility conditions (own keys, team keys, etc.)
+    if team_id and isinstance(team_id, str):
+        where = {"AND": [where, {"team_id": team_id}]}
     if project_id:
         where = {"AND": [where, {"project_id": project_id}]}
     if access_group_id:
@@ -4991,25 +5034,31 @@ async def test_key_logging(
         )
 
 
-_KEY_ALIAS_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.]{0,253}[a-zA-Z0-9]$")
+_KEY_ALIAS_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.@]{0,253}[a-zA-Z0-9]$")
 
 
 def _validate_key_alias_format(key_alias: Optional[str]) -> None:
     """
     Validate the format of the key_alias.
 
-    Rules:
+    Gated behind ``litellm.enable_key_alias_format_validation`` (default **False**).
+    When disabled, no validation is performed so existing workflows are not broken.
+
+    Rules (when enabled):
     - None is OK (no alias).
     - Otherwise must be 2–255 chars
     - start/end with alphanumeric
-    - only allow a-zA-Z0-9_-/.
+    - only allow a-zA-Z0-9_-/.@
     """
+    if not litellm.enable_key_alias_format_validation:
+        return
+
     if key_alias is None:
         return
 
     if not _KEY_ALIAS_PATTERN.match(key_alias):
         raise ProxyException(
-            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.",
+            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.@.",
             type=ProxyErrorTypes.bad_request_error,
             param="key_alias",
             code=400,

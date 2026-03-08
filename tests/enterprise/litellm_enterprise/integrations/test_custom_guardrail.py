@@ -134,6 +134,78 @@ def test_custom_guardrail_with_mode_no_default(monkeypatch):
     )
 
 
+def test_custom_guardrail_with_mode_tag_value_list(monkeypatch):
+    """Test Mode with tag value as a list of modes (e.g. tags: {"tag": ["pre_call", "post_call"]})"""
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    cg = CustomGuardrail(
+        guardrail_name="test_guardrail",
+        supported_event_hooks=[
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.logging_only,
+        ],
+        event_hook=Mode(
+            tags={"test_tag": ["pre_call", "post_call"]},
+            default="logging_only",
+        ),
+        default_on=True,
+    )
+
+    # Tag matches → pre_call should fire (in tag's list)
+    assert (
+        cg.should_run_guardrail(
+            data={
+                "messages": [{"role": "user", "content": "test"}],
+                "litellm_metadata": {"tags": ["test_tag"]},
+            },
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        is True
+    )
+
+    # Tag matches → post_call should fire (in tag's list)
+    assert (
+        cg.should_run_guardrail(
+            data={
+                "messages": [{"role": "user", "content": "test"}],
+                "litellm_metadata": {"tags": ["test_tag"]},
+            },
+            event_type=GuardrailEventHooks.post_call,
+        )
+        is True
+    )
+
+    # Tag matches → logging_only should NOT fire (not in tag's list)
+    assert (
+        cg.should_run_guardrail(
+            data={
+                "messages": [{"role": "user", "content": "test"}],
+                "litellm_metadata": {"tags": ["test_tag"]},
+            },
+            event_type=GuardrailEventHooks.logging_only,
+        )
+        is False
+    )
+
+    # No tag match → default fires for logging_only
+    assert (
+        cg.should_run_guardrail(
+            data={"messages": [{"role": "user", "content": "test"}]},
+            event_type=GuardrailEventHooks.logging_only,
+        )
+        is True
+    )
+
+    # No tag match → pre_call should NOT fire (not in default)
+    assert (
+        cg.should_run_guardrail(
+            data={"messages": [{"role": "user", "content": "test"}]},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        is False
+    )
+
+
 def test_custom_guardrail_with_mode(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.premium_user", True

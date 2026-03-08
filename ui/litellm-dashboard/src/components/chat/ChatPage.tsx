@@ -26,7 +26,8 @@ import MCPConnectPicker from "./MCPConnectPicker";
 import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
-import { serverRootPath, getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl } from "@/components/networking";
+import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 
 interface ChatPageProps {
@@ -47,23 +48,16 @@ function getGreeting(): string {
   return "Good evening";
 }
 
-// Build the chat UI URL respecting server root path (e.g. /litellm/ui/chat)
-function getChatUrl(id?: string): string {
-  const root = serverRootPath && serverRootPath !== "/" ? serverRootPath.replace(/\/+$/, "") : "";
+// Build the chat UI URL respecting server root path (e.g. /api/v1/ui/chat)
+function getChatUrl(root: string, id?: string): string {
   return id ? `${root}/ui/chat?id=${id}` : `${root}/ui/chat`;
 }
 
-// Build the dashboard root URL
-function getDashboardUrl(): string {
+// Build the dashboard root URL (e.g. /api/v1/ui/)
+function getDashboardUrl(root: string): string {
   const base = process.env.NEXT_PUBLIC_BASE_URL ?? "";
   const trimmed = base.replace(/^\/+|\/+$/g, "");
-  const uiPath = trimmed ? `/${trimmed}/` : "/";
-  if (serverRootPath && serverRootPath !== "/") {
-    const cleanRoot = serverRootPath.replace(/\/+$/, "");
-    const cleanUi = uiPath.replace(/^\/+/, "");
-    return `${cleanRoot}/${cleanUi}`;
-  }
-  return uiPath;
+  return trimmed ? `${root}/${trimmed}/` : `${root}/`;
 }
 
 // Extract provider from model name for logo lookup.
@@ -128,6 +122,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const router = useRouter();
   const searchParams = useSearchParams();
   const activeConversationId = searchParams.get("id");
+  const { data: uiConfig } = useUIConfig();
+  const uiRoot = uiConfig?.server_root_path && uiConfig.server_root_path !== "/"
+    ? uiConfig.server_root_path.replace(/\/+$/, "")
+    : "";
   const logoSrc = `${getProxyBaseUrl()}/get_image`;
 
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
@@ -202,7 +200,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   }, [accessToken]);
 
   useEffect(() => {
-    if (staleId) router.replace(getChatUrl());
+    if (staleId) router.replace(getChatUrl(uiRoot));
   }, [staleId, router]);
 
   const toggleModel = useCallback((model: string) => {
@@ -233,7 +231,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       let convId = activeConversationId;
       if (!convId) {
         convId = createConversation(model);
-        router.push(getChatUrl(convId));
+        router.push(getChatUrl(uiRoot, convId));
       }
 
       appendMessage(convId, { role: "user", content: trimmed });
@@ -439,7 +437,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     : comparisonExchanges.length === 0;
   const displayName = userEmail?.split("@")[0] ?? userId ?? "";
   const greeting = displayName ? `${getGreeting()}, ${displayName}` : getGreeting();
-  const dashboardUrl = getDashboardUrl();
+  const dashboardUrl = getDashboardUrl(uiRoot);
 
   // Filtered models: selected ones float to the top, then alphabetical
   const filteredModels = (modelSearchText
@@ -801,7 +799,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
         {/* Sidebar nav buttons */}
         <div style={{ padding: "0 8px 4px", flexShrink: 0 }}>
-          {sidebarNavItem(<EditOutlined />, "New chat", () => router.push(getChatUrl()))}
+          {sidebarNavItem(<EditOutlined />, "New chat", () => router.push(getChatUrl(uiRoot)))}
           {sidebarNavItem(<SearchOutlined />, "Search chats", () => setSidebarView("chats"))}
         </div>
 
@@ -850,9 +848,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             <ConversationList
               conversations={conversations}
               activeConversationId={activeConversationId}
-              onSelect={(id) => router.push(getChatUrl(id))}
+              onSelect={(id) => router.push(getChatUrl(uiRoot, id))}
               onDelete={deleteConversation}
-              onNewChat={() => router.push(getChatUrl())}
+              onNewChat={() => router.push(getChatUrl(uiRoot))}
               onRename={renameConversation}
             />
           </div>

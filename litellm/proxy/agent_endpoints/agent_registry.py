@@ -5,9 +5,8 @@ from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.management_helpers.object_permission_utils import (
-    handle_update_object_permission_common,
-)
+from litellm.proxy.management_helpers.object_permission_utils import \
+    handle_update_object_permission_common
 from litellm.proxy.utils import PrismaClient
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
@@ -152,6 +151,11 @@ class AgentRegistry:
             if object_permission_id is not None:
                 create_data["object_permission_id"] = object_permission_id
 
+            for rate_field in ("tpm_limit", "rpm_limit", "session_tpm_limit", "session_rpm_limit"):
+                _val = agent.get(rate_field)
+                if _val is not None:
+                    create_data[rate_field] = _val
+
             # Create agent in DB
             created_agent = await prisma_client.db.litellm_agentstable.create(
                 data=create_data,
@@ -226,6 +230,10 @@ class AgentRegistry:
                 update_data["agent_card_params"] = safe_dumps(
                     augment_agent.get("agent_card_params")
                 )
+
+            for rate_field in ("tpm_limit", "rpm_limit", "session_tpm_limit", "session_rpm_limit"):
+                if rate_field in agent:
+                    update_data[rate_field] = agent.get(rate_field)
             if "static_headers" in agent:
                 headers_value = agent.get("static_headers")
                 update_data["static_headers"] = safe_dumps(
@@ -321,6 +329,12 @@ class AgentRegistry:
                 "updated_by": updated_by,
                 "updated_at": datetime.now(timezone.utc),
             }
+
+            for rate_field in ("tpm_limit", "rpm_limit", "session_tpm_limit", "session_rpm_limit"):
+                _val = agent.get(rate_field)
+                if _val is not None:
+                    update_data[rate_field] = _val
+
             if agent.get("object_permission") is not None:
                 existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
                     where={"agent_id": agent_id}

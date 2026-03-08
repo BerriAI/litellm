@@ -764,6 +764,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/vertex_ai/live",
                         ],
                     },
                 },
@@ -3471,6 +3472,53 @@ class TestDropParamsWithPromptCacheKey:
         assert "prompt_cache_key" not in result
         # temperature should remain (it's supported by Bedrock)
         assert result.get("temperature") == 0.7
+
+
+class TestGetOptionalParamsDeepSeek:
+    """Tests that deepseek provider uses DeepSeekChatConfig for parameter mapping."""
+
+    def test_deepseek_supports_thinking_param(self):
+        """
+        Verify that get_optional_params for deepseek accepts the 'thinking' param,
+        which is only supported by DeepSeekChatConfig, not OpenAIConfig.
+        """
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="deepseek-reasoner",
+            custom_llm_provider="deepseek",
+            thinking={"type": "enabled"},
+        )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_deepseek_supports_reasoning_effort_param(self):
+        """
+        Verify that get_optional_params for deepseek accepts 'reasoning_effort',
+        which is only supported by DeepSeekChatConfig, not OpenAIConfig.
+        """
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="deepseek-reasoner",
+            custom_llm_provider="deepseek",
+            reasoning_effort="high",
+        )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_deepseek_thinking_strips_budget_tokens(self):
+        """
+        DeepSeekChatConfig strips budget_tokens from thinking param.
+        This would not happen with OpenAIConfig.
+        """
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="deepseek-reasoner",
+            custom_llm_provider="deepseek",
+            thinking={"type": "enabled", "budget_tokens": 5000},
+        )
+        assert "budget_tokens" not in result.get("thinking", {})
+        assert result.get("thinking") == {"type": "enabled"}
 
 
 class TestIsStreamingRequest:
