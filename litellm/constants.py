@@ -205,6 +205,12 @@ AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(
 )
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+# TCP keepalive prevents Kubernetes/cloud load balancers from closing idle connections
+# during long-running requests (e.g., Azure reasoning models taking >60s)
+AIOHTTP_TCP_KEEPALIVE = os.getenv("AIOHTTP_TCP_KEEPALIVE", "true").lower() != "false"
+AIOHTTP_TCP_KEEPALIVE_IDLE = int(os.getenv("AIOHTTP_TCP_KEEPALIVE_IDLE", 30))
+AIOHTTP_TCP_KEEPALIVE_INTERVAL = int(os.getenv("AIOHTTP_TCP_KEEPALIVE_INTERVAL", 10))
+AIOHTTP_TCP_KEEPALIVE_COUNT = int(os.getenv("AIOHTTP_TCP_KEEPALIVE_COUNT", 5))
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import socket
 import ssl
 import sys
 import time
@@ -29,6 +30,10 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
+    AIOHTTP_TCP_KEEPALIVE,
+    AIOHTTP_TCP_KEEPALIVE_COUNT,
+    AIOHTTP_TCP_KEEPALIVE_IDLE,
+    AIOHTTP_TCP_KEEPALIVE_INTERVAL,
     AIOHTTP_TTL_DNS_CACHE,
     DEFAULT_SSL_CIPHERS,
 )
@@ -821,6 +826,40 @@ class AsyncHTTPHandler:
         return connector_kwargs
 
     @staticmethod
+    def _make_tcp_keepalive_socket_factory(
+        idle: int = AIOHTTP_TCP_KEEPALIVE_IDLE,
+        interval: int = AIOHTTP_TCP_KEEPALIVE_INTERVAL,
+        count: int = AIOHTTP_TCP_KEEPALIVE_COUNT,
+    ) -> Callable:
+        """
+        Returns a socket factory for aiohttp TCPConnector that enables TCP keepalive.
+
+        TCP keepalive sends OS-level probe packets on idle connections, preventing
+        Kubernetes/OpenShift/cloud load balancers from silently closing connections
+        that are idle during long-running requests (e.g., Azure reasoning models
+        that may take >60 seconds without sending data).
+        """
+
+        def socket_factory(
+            addr_info: Tuple,
+        ) -> socket.socket:
+            af, sock_type, proto, _canonname, _sockaddr = addr_info
+            sock = socket.socket(af, sock_type, proto)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if hasattr(socket, "TCP_KEEPIDLE"):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, idle)
+                if hasattr(socket, "TCP_KEEPINTVL"):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval)
+                if hasattr(socket, "TCP_KEEPCNT"):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, count)
+            except (OSError, AttributeError):
+                pass
+            return sock
+
+        return socket_factory
+
+    @staticmethod
     def _create_aiohttp_transport(
         ssl_verify: Optional[bool] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
@@ -879,6 +918,10 @@ class AsyncHTTPHandler:
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
             **connector_kwargs,
         }
+        if AIOHTTP_TCP_KEEPALIVE:
+            transport_connector_kwargs["socket_factory"] = (
+                AsyncHTTPHandler._make_tcp_keepalive_socket_factory()
+            )
         if AIOHTTP_NEEDS_CLEANUP_CLOSED:
             transport_connector_kwargs["enable_cleanup_closed"] = True
         if AIOHTTP_CONNECTOR_LIMIT > 0:
