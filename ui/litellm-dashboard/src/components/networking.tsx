@@ -9408,3 +9408,20 @@ export const deleteToolPolicyOverride = async (
   }
   return response.json();
 };
+
+export const getDeploymentCooldownStatus = async (accessToken: string) => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/model/cooldowns`
+    : `/model/cooldowns`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    return { cooldowns: [], healthy: [] };
+  }
+  return response.json();
+};

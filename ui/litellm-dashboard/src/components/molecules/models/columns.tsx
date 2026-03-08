@@ -3,6 +3,7 @@ import { TrashIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Button, Icon } from "@tremor/react";
 import { Divider, Flex, Popover, Space, Tooltip, Typography } from "antd";
+import { CooldownBadge } from "../../model_dashboard/cooldown_badge";
 import { ModelData } from "../../model_dashboard/types";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -52,6 +53,7 @@ export const columns = (
   handleRefreshClick: () => void,
   expandedRows: Set<string>,
   setExpandedRows: (expandedRows: Set<string>) => void,
+  cooldownMap?: Map<string, any>,
 ): ColumnDef<ModelData>[] => [
     {
       header: () => <span className="text-sm font-semibold">Model ID</span>,
@@ -367,6 +369,33 @@ export const columns = (
             )}
           </div>
         );
+      },
+    },
+    {
+      header: () => <span className="text-sm font-semibold">Health</span>,
+      id: "cooldown_status",
+      enableSorting: false,
+      size: 120,
+      minSize: 80,
+      cell: ({ row }) => {
+        const model = row.original;
+        const modelId = model.model_info?.id;
+        if (!cooldownMap || !modelId) {
+          return <span className="text-xs text-gray-400">-</span>;
+        }
+        const cooldownInfo = cooldownMap.get(modelId);
+        if (cooldownInfo) {
+          return (
+            <CooldownBadge
+              status="cooldown"
+              remainingSeconds={cooldownInfo.remaining_seconds}
+              cooldownTime={cooldownInfo.cooldown_time}
+              exception={cooldownInfo.exception}
+              statusCode={cooldownInfo.status_code}
+            />
+          );
+        }
+        return <CooldownBadge status="healthy" />;
       },
     },
     {

@@ -5,7 +5,9 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import { AllModelsDataTable } from "@/components/model_dashboard/all_models_table";
 import { columns } from "@/components/molecules/models/columns";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
+import { getDeploymentCooldownStatus } from "@/components/networking";
 import { InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
 import { PaginationState, SortingState } from "@tanstack/react-table";
 import { Grid, TabPanel } from "@tremor/react";
 import { Badge, Button, Select, Skeleton, Space, Typography } from "antd";
@@ -35,8 +37,25 @@ const AllModelsTab = ({
   setSelectedTeamId,
 }: AllModelsTabProps) => {
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
-  const { userId, userRole, premiumUser } = useAuthorized();
+  const { userId, userRole, premiumUser, accessToken } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
+
+  const { data: cooldownData } = useQuery({
+    queryKey: ["deployment-cooldowns"],
+    queryFn: () => getDeploymentCooldownStatus(accessToken!),
+    refetchInterval: 5000,
+    enabled: !!accessToken,
+  });
+
+  const cooldownMap = useMemo(() => {
+    const map = new Map<string, any>();
+    if (cooldownData?.cooldowns) {
+      for (const cd of cooldownData.cooldowns) {
+        map.set(cd.model_id, cd);
+      }
+    }
+    return map;
+  }, [cooldownData]);
 
   const [modelNameSearch, setModelNameSearch] = useState<string>("");
   const [debouncedSearch, setDebouncedSearch] = useState<string>("");
@@ -504,6 +523,7 @@ const AllModelsTab = ({
                 () => { },
                 expandedRows,
                 setExpandedRows,
+                cooldownMap,
               )}
               data={filteredData}
               isLoading={isLoadingModelsInfo}
