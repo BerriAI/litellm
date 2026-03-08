@@ -888,6 +888,16 @@ class AmazonConverseConfig(BaseConfig):
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
+                try:
+                    model_info = litellm.get_model_info(model=model)
+                    model_max = model_info.get("max_output_tokens")
+                    if model_max is not None and isinstance(model_max, int) and isinstance(value, int) and value > model_max:
+                        verbose_logger.debug(
+                            f"Capping max_tokens from {value} to model limit {model_max} for {model}"
+                        )
+                        value = model_max
+                except Exception:
+                    pass
                 optional_params["maxTokens"] = value
             if param == "stream":
                 optional_params["stream"] = value

@@ -4235,3 +4235,46 @@ def test_bedrock_nova_grounding_request_transformation():
 
             assert system_tool_found, "systemTool with nova_grounding should be present"
             print("✓ web_search_options correctly transformed to systemTool")
+
+
+def test_bedrock_converse_max_tokens_capped_to_model_limit():
+    """
+    Nova Pro has a max_output_tokens of 10000. If a caller sends max_tokens=16000,
+    the Converse transformation should silently cap it to 10000 before the request
+    reaches Bedrock, preventing a 400 error.
+    """
+    import os
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    # Over the limit — should be capped
+    result = config.map_openai_params(
+        non_default_params={"max_tokens": 16000},
+        optional_params={},
+        model="us.amazon.nova-pro-v1:0",
+        drop_params=False,
+    )
+    assert result["maxTokens"] == 10000, f"Expected 10000, got {result['maxTokens']}"
+
+    # Under the limit — should be unchanged
+    result2 = config.map_openai_params(
+        non_default_params={"max_tokens": 5000},
+        optional_params={},
+        model="us.amazon.nova-pro-v1:0",
+        drop_params=False,
+    )
+    assert result2["maxTokens"] == 5000, f"Expected 5000, got {result2['maxTokens']}"
+
+    # Model with no known limit — should be passed through unchanged
+    result3 = config.map_openai_params(
+        non_default_params={"max_tokens": 16000},
+        optional_params={},
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        drop_params=False,
+    )
+    assert result3["maxTokens"] == 16000, f"Expected 16000, got {result3['maxTokens']}"
