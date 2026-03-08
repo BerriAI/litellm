@@ -279,8 +279,6 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
     error: Optional[str] = Query(default=None),
     error_description: Optional[str] = Query(default=None),
 ) -> Response:
-    from litellm.proxy.proxy_server import prisma_client
-
     if error:
         # Consume the state on denial/error so orphaned entries don't fill the store.
         # RFC 6749 §4.1.2.1 requires the provider to echo back the state in error
@@ -334,6 +332,10 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
 
     server_id: str = state_data["server_id"]
     user_id: str = state_data["user_id"]
+
+    # Import prisma_client here, after all early-exit paths, so it is only
+    # imported when actually needed for the token exchange path.
+    from litellm.proxy.proxy_server import prisma_client
 
     server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
     if server is None:
@@ -574,31 +576,24 @@ async def openapi_oauth2_status(
         )
 
     # Check the shared credential cache before issuing a DB query.
-    # The cache is written by _get_byok_credential / _check_byok_credential when
-    # a tool call fetches the real token.  If the token is already cached (i.e.
-    # the user has made at least one tool call), we can skip the DB entirely.
-    # We intentionally do NOT write to the cache here: writing a sentinel value
-    # would create dual interpretations of the same cache key across status and
-    # auth functions, making the cache contract subtle and fragile.
+    # The cache is populated by _get_byok_credential / _check_byok_credential
+    # when a tool call fetches the real token.  We access it via the public
+    # get_cached_byok_credential() helper to avoid tight coupling to internals.
     try:
-        import time as _time
-
         from litellm.proxy._experimental.mcp_server.server import (
-            _BYOK_CRED_CACHE_TTL,
-            _byok_cred_cache,
+            get_cached_byok_credential,
         )
 
-        cached = _byok_cred_cache.get((user_id, server_id))
-        if cached is not None:
-            cached_cred, ts = cached
-            if _time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                return JSONResponse(
-                    {
-                        "connected": bool(cached_cred),
-                        "server_id": server_id,
-                        "server_name": server_name,
-                    }
-                )
+        result = get_cached_byok_credential(user_id, server_id)
+        if result is not None:
+            cached_cred, _ = result
+            return JSONResponse(
+                {
+                    "connected": bool(cached_cred),
+                    "server_id": server_id,
+                    "server_name": server_name,
+                }
+            )
     except Exception:
         pass  # If cache import fails, fall through to DB
 

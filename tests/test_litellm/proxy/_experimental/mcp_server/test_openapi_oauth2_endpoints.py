@@ -463,6 +463,141 @@ async def test_callback_uses_basic_auth_when_token_endpoint_auth_method_is_basic
 
 
 # ---------------------------------------------------------------------------
+# URL-encoded form response path (provider compatibility)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_callback_url_encoded_success_response():
+    """URL-encoded form response (e.g. GitHub default) — token extracted as plain string."""
+    from litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints import (
+        _pending_oauth2_states,
+        openapi_oauth2_callback,
+    )
+
+    state = "test-state-url-encoded-ok"
+    now = time.time()
+    _pending_oauth2_states[state] = {
+        "server_id": "server1",
+        "user_id": "user1",
+        "timestamp": now,
+        "expires_at": now + 600,
+        "callback_url": "http://localhost:4000/v1/mcp/oauth2/callback",
+    }
+
+    mock_server = MagicMock()
+    mock_server.token_url = "https://github.com/login/oauth/access_token"
+    mock_server.client_id = "cid"
+    mock_server.client_secret = "csecret"
+    mock_server.server_name = "GitHub"
+    mock_server.name = "github"
+
+    mock_response = MagicMock()
+    # GitHub returns URL-encoded form by default when Accept header is not set
+    mock_response.headers = {"content-type": "application/x-www-form-urlencoded"}
+    mock_response.text = "access_token=ghu_form_token&scope=repo&token_type=bearer"
+    mock_response.raise_for_status = MagicMock()
+
+    stored_credentials: list = []
+
+    async def fake_store(prisma_client, user_id, server_id, credential):
+        stored_credentials.append(credential)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.global_mcp_server_manager"
+    ) as mock_mgr, patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.store_user_credential",
+        side_effect=fake_store,
+    ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+        create=True,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+        MagicMock(),
+    ), patch(
+        "httpx.AsyncClient"
+    ) as mock_client_cls:
+        mock_mgr.get_mcp_server_by_id.return_value = mock_server
+        mock_async_client = AsyncMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await openapi_oauth2_callback(
+            request=MagicMock(),
+            code="form-auth-code",
+            state=state,
+            error=None,
+            error_description=None,
+        )
+
+    assert len(stored_credentials) == 1
+    assert stored_credentials[0] == "ghu_form_token"
+
+
+@pytest.mark.asyncio
+async def test_callback_url_encoded_error_response():
+    """URL-encoded form error body from provider returns 502 error page."""
+    from fastapi.responses import HTMLResponse
+
+    from litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints import (
+        _pending_oauth2_states,
+        openapi_oauth2_callback,
+    )
+
+    state = "test-state-url-encoded-err"
+    now = time.time()
+    _pending_oauth2_states[state] = {
+        "server_id": "server1",
+        "user_id": "user1",
+        "timestamp": now,
+        "expires_at": now + 600,
+        "callback_url": "http://localhost:4000/v1/mcp/oauth2/callback",
+    }
+
+    mock_server = MagicMock()
+    mock_server.token_url = "https://github.com/login/oauth/access_token"
+    mock_server.client_id = "cid"
+    mock_server.client_secret = "csecret"
+    mock_server.server_name = "GitHub"
+    mock_server.name = "github"
+
+    mock_response = MagicMock()
+    mock_response.headers = {"content-type": "application/x-www-form-urlencoded"}
+    mock_response.text = "error=bad_verification_code&error_description=The+code+is+expired"
+    mock_response.raise_for_status = MagicMock()
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.global_mcp_server_manager"
+    ) as mock_mgr, patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+        create=True,
+    ), patch(
+        "httpx.AsyncClient"
+    ) as mock_client_cls:
+        mock_mgr.get_mcp_server_by_id.return_value = mock_server
+        mock_async_client = AsyncMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        result = await openapi_oauth2_callback(
+            request=MagicMock(),
+            code="expired-auth-code",
+            state=state,
+            error=None,
+            error_description=None,
+        )
+
+    assert isinstance(result, HTMLResponse)
+    assert result.status_code == 502
+    body_bytes = bytes(result.body) if not isinstance(result.body, bytes) else result.body
+    assert b"bad_verification_code" in body_bytes
+
+
+# ---------------------------------------------------------------------------
 # _extract_access_token (server.py helper)
 # ---------------------------------------------------------------------------
 

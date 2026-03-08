@@ -101,6 +101,24 @@ def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
     _byok_cred_cache.pop((user_id, server_id), None)
 
 
+def get_cached_byok_credential(
+    user_id: str, server_id: str
+) -> Optional[Tuple[Optional[str], bool]]:
+    """Return (credential, True) if a valid cache entry exists, else None.
+
+    Promotes the entry to MRU on hit.  Returns None for expired or missing
+    entries so callers fall through to the DB without accessing cache internals.
+    """
+    cached = _byok_cred_cache.get((user_id, server_id))
+    if cached is None:
+        return None
+    cred, ts = cached
+    if time.monotonic() - ts >= _BYOK_CRED_CACHE_TTL:
+        return None
+    _byok_cred_cache.move_to_end((user_id, server_id))
+    return cred, True
+
+
 def _write_byok_cred_cache(
     user_id: str, server_id: str, credential: Optional[str]
 ) -> None:
