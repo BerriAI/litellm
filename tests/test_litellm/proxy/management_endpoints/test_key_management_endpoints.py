@@ -6345,6 +6345,45 @@ async def test_build_key_filter_project_id_and_access_group_id():
 
 
 @pytest.mark.asyncio
+async def test_build_key_filter_team_id_scoped():
+    """
+    When team_id is provided, it should act as a global AND filter so keys
+    from other teams are excluded — even when the user is admin of multiple teams.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="multi-team-user",
+        team_id="team-A",
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-A", "team-B"],
+        member_team_ids=["team-A", "team-B"],
+        include_created_by_keys=True,
+    )
+
+    def _collect_team_id_filters(d):
+        results = []
+        if isinstance(d, dict):
+            for k, v in d.items():
+                if k == "team_id":
+                    results.append(v)
+                else:
+                    results.extend(_collect_team_id_filters(v))
+        elif isinstance(d, list):
+            for item in d:
+                results.extend(_collect_team_id_filters(item))
+        return results
+
+    team_id_filters = _collect_team_id_filters(where)
+    assert "team-A" in team_id_filters, f"Expected global team_id='team-A' AND filter, got: {where}"
+
+
+@pytest.mark.asyncio
 async def test_get_member_team_ids():
     """
     Test that get_member_team_ids returns all teams where user is a member
