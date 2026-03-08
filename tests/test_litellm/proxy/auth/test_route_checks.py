@@ -1190,3 +1190,41 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
             request_data={},
         )
     assert "Only proxy admin can be used to generate" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    ],
+)
+def test_available_roles_accessible_to_non_admin_users(user_role):
+    """
+    /user/available_roles is read-only role metadata that any authenticated user
+    (including org admins and team admins) needs when inviting users. It should
+    pass the route check for all non-proxy-admin roles without requiring an
+    organization_id in the request body.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=user_role,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    # Should not raise — /user/available_roles is in self_managed_routes
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route="/user/available_roles",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
