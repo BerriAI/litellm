@@ -712,20 +712,6 @@ def convert_anyof_null_to_nullable(schema, depth=0):
             )
 
         if contains_null:
-            # Drop any-type schemas (bare {}) from anyOf before adding nullable=True.
-            # Adding nullable=True to {} produces {"nullable": True} with no type field,
-            # which Gemini rejects as an anyOf entry without a concrete type.
-            for atype in list(anyof):
-                if isinstance(atype, dict) and _is_any_type_schema(atype):
-                    anyof.remove(atype)
-
-            if len(anyof) == 0:
-                # All remaining entries were any-type schemas (e.g. anyOf: [{}, null]).
-                # This means "any nullable value" — collapse anyOf and mark parent nullable.
-                del schema["anyOf"]
-                schema["nullable"] = True
-                return
-
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
             for atype in anyof:
                 # Remove items field if type is array and items is empty
