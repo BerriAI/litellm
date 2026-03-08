@@ -102,10 +102,15 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     """
     if not headers:
         return None
-    normalized = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
-    return normalized.get("x-litellm-trace-id") or normalized.get(
-        "x-litellm-session-id"
-    )
+    session_id = None
+    for k, v in headers.items():
+        if isinstance(k, str):
+            k_lower = k.lower()
+            if k_lower == "x-litellm-trace-id":
+                return v
+            elif session_id is None and k_lower == "x-litellm-session-id":
+                session_id = v
+    return session_id
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):

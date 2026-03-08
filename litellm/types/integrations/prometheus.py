@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 from typing_extensions import Annotated
 
 import litellm
@@ -722,12 +722,20 @@ class UserAPIKeyLabelValues(BaseModel):
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.STREAM.value)
     ] = None
 
+    _cached_dump: Optional[Dict[str, Any]] = PrivateAttr(default=None)
+
     @field_validator("stream", mode="before")
     @classmethod
     def coerce_stream_to_str(cls, v: Any) -> Optional[str]:
         if v is None:
             return None
         return str(v)
+
+    def get_label_dict(self) -> Dict[str, Any]:
+        """Return cached model_dump() dict to avoid re-serializing on every prometheus_label_factory call."""
+        if self._cached_dump is None:
+            self._cached_dump = self.model_dump()
+        return self._cached_dump
 
 
 class PrometheusMetricsConfig(BaseModel):

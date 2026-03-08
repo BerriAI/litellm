@@ -5,6 +5,7 @@ If weights are provided, it will return a deployment based on the weights.
 
 """
 
+import logging
 import random
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
@@ -52,9 +53,13 @@ def simple_shuffle(
             selected_index = random.choices(range(len(weights)), weights=weights)[0]
             verbose_router_logger.debug(f"\n selected index, {selected_index}")
             deployment = healthy_deployments[selected_index]
-            verbose_router_logger.info(
-                f"get_available_deployment for model: {model}, Selected deployment: {llm_router_instance.print_deployment(deployment) or deployment[0]} for model: {model}"
-            )
+            if verbose_router_logger.isEnabledFor(logging.INFO):
+                verbose_router_logger.info(
+                    "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
+                    model,
+                    llm_router_instance.print_deployment(deployment) or deployment[0],
+                    model,
+                )
             return deployment or deployment[0]
 
 
