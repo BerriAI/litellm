@@ -75,7 +75,7 @@ RUN apt-get update && apt-get upgrade -y \
     nodejs \
     npm \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g npm@latest tar@7.5.8 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.1 diff@8.0.3 \
+    && npm install -g npm@latest tar@7.5.10 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 \
     && GLOBAL="$(npm root -g)" \
     && find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
           rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
@@ -92,7 +92,10 @@ RUN apt-get update && apt-get upgrade -y \
     && find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
           rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
        done \
-    && npm cache clean --force
+    && find / -path "*/node_modules/npm/package.json" -exec \
+        sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null \
+    && npm cache clean --force \
+    && apt-get purge -y npm && apt-get autoremove -y
 
 WORKDIR /app
 
@@ -114,6 +117,7 @@ RUN pip install --no-cache-dir *.whl /wheels/* --no-index --find-links=/wheels/ 
 # npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
 # Patch every copy of tar, glob, and brace-expansion inside that tree.
 RUN GLOBAL="$(npm root -g)" && \
+    [ -n "$GLOBAL" ] || { echo "ERROR: npm root -g returned empty; aborting"; exit 1; } && \
     find /usr/lib -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
     done && \
