@@ -13,6 +13,7 @@ Endpoints:
 import base64
 import html as _html_module
 import json
+import os
 import secrets
 import time
 from typing import Dict, Optional
@@ -65,6 +66,7 @@ _STATES_MAX_SIZE = 1000
 # _byok_cred_cache; status polling only uses _byok_status_neg_cache.
 _byok_status_neg_cache: Dict[tuple, float] = {}
 _BYOK_STATUS_NEG_TTL = 5  # seconds — short enough that polling sees "connected" quickly
+_BYOK_STATUS_NEG_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth in multi-tenant deployments
 
 router = APIRouter(tags=["mcp"])
 
@@ -82,8 +84,6 @@ def _get_callback_base_url(request: "Request") -> str:
     potentially-spoofable X-Forwarded-Host headers in the OAuth2 security
     context.  Falls back to the request-derived URL when the env var is unset.
     """
-    import os
-
     static_base = os.environ.get("LITELLM_PROXY_BASE_URL", "").rstrip("/")
     if static_base:
         return static_base
@@ -662,6 +662,9 @@ async def openapi_oauth2_status(
         connected = False
 
     if not connected:
+        # Evict one entry when at capacity before writing the new one.
+        if len(_byok_status_neg_cache) >= _BYOK_STATUS_NEG_CACHE_MAX_SIZE:
+            _byok_status_neg_cache.pop(next(iter(_byok_status_neg_cache)), None)
         _byok_status_neg_cache[neg_key] = time.monotonic()
     else:
         # Positive result: clear the negative cache entry if it exists.
