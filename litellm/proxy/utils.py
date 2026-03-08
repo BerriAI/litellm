@@ -5279,7 +5279,7 @@ async def get_available_models_for_user(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
+        await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
         team_models = team_object.models
 
     team_models = get_team_models(
