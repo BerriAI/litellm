@@ -45,6 +45,7 @@ def image_url():
 
     # Load the image into a file-like object
     image_file = BytesIO(response.content)
+    image_file.name = "litellm_logo.png"
 
     return image_file
 
