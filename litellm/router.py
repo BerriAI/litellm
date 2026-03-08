@@ -495,10 +495,13 @@ class Router:
 
         if num_retries is not None:
             self.num_retries = num_retries
+            self._num_retries_is_user_set = True
         elif litellm.num_retries is not None:
             self.num_retries = litellm.num_retries
+            self._num_retries_is_user_set = True
         else:
             self.num_retries = openai.DEFAULT_MAX_RETRIES
+            self._num_retries_is_user_set = False
 
         if max_fallbacks is not None:
             self.max_fallbacks = max_fallbacks
@@ -2090,7 +2093,17 @@ class Router:
         - litellm_trace_id
         - metadata
         """
-        kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+        if "num_retries" not in kwargs and not self._num_retries_is_user_set:
+            # Auto-set num_retries based on deployment count for this model group
+            model_list = self.get_model_list(model_name=model)
+            if model_list is not None and len(model_list) > 1:
+                kwargs["num_retries"] = len(model_list) - 1
+            elif model_list is not None and len(model_list) == 1:
+                kwargs["num_retries"] = 0
+            else:
+                kwargs["num_retries"] = self.num_retries
+        else:
+            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
         model_group_alias: Optional[str] = None
         if self._get_model_from_alias(model=model):

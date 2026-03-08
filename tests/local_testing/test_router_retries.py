@@ -141,7 +141,7 @@ async def test_router_retries_errors(sync_mode, error_type):
     if error_type == "Authorization Error":
         assert customHandler.previous_models == 0  # 0 retries
     else:
-        assert customHandler.previous_models == 2  # 2 retries
+        assert customHandler.previous_models == 1  # 1 retry (2 deployments - 1)
 
 
 @pytest.mark.asyncio
