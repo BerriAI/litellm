@@ -7607,9 +7607,10 @@ export const getMajorAirlines = async (accessToken: string) => {
   }
 };
 
-export const getAgentsList = async (accessToken: string) => {
+export const getAgentsList = async (accessToken: string, healthCheck: boolean = false) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
+    const params = healthCheck ? "?health_check=true" : "";
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents${params}` : `/v1/agents${params}`;
 
     const response = await fetch(url, {
       method: "GET",
