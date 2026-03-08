@@ -148,7 +148,8 @@ jobs:
 
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-
       - run:
           name: Install Dependencies
           command: |
@@ -189,7 +190,6 @@ jobs:
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
-            pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
             pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
@@ -204,8 +204,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - ~/.cache/pip
+          key: v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -243,7 +243,7 @@ jobs:
                 -n 4 \
                 --timeout=300 \
                 --timeout_method=thread"
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -276,7 +276,8 @@ jobs:
 
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-
       - run:
           name: Install Dependencies
           command: |
@@ -317,7 +318,6 @@ jobs:
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
-            pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
             pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
@@ -332,8 +332,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - ~/.cache/pip
+          key: v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -341,14 +341,6 @@ jobs:
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
             set -e
-      - run:
-          name: Black Formatting
-          command: |
-            cd litellm
-            python -m pip install black
-            python -m black .
-            cd ..
-
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests (Part 2 - N-Z)
@@ -371,7 +363,7 @@ jobs:
                 -n 4 \
                 --timeout=300 \
                 --timeout_method=thread"
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -404,7 +396,8 @@ jobs:
 
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-
       - run:
           name: Install Dependencies
           command: |
@@ -445,7 +438,6 @@ jobs:
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
-            pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
             pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
@@ -455,8 +447,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - ~/.cache/pip
+          key: v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -472,7 +464,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "langfuse"
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -511,7 +503,8 @@ jobs:
 
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-
       - run:
           name: Install Dependencies
           command: |
@@ -552,7 +545,6 @@ jobs:
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
-            pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
             pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
@@ -562,8 +554,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - ~/.cache/pip
+          key: v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -579,7 +571,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "caching or cache"
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -605,6 +597,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - restore_cache:
+          keys:
+            - v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-
       - run:
           name: Install Dependencies
           command: |
@@ -616,8 +612,8 @@ jobs:
             pip install "pytest-cov==5.0.0"
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - ~/.cache/pip
+          key: v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -632,7 +628,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/proxy_admin_ui_tests -x --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
 
       - run:
           name: Rename the coverage files
@@ -681,7 +677,7 @@ jobs:
             pwd
             ls
             python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -729,7 +725,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/router_unit_tests --cov=litellm --cov-report=xml -x -s --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -762,17 +758,28 @@ jobs:
             curl -fsSL https://get.docker.com | sh
             sudo usermod -aG docker $USER
             docker version
+      - restore_cache:
+          keys:
+            - v1-miniconda-py313-{{ arch }}
       - run:
-          name: Install Python 3.13
+          name: Install Python 3.13 via Miniconda
           command: |
-            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
-            bash miniconda.sh -b -p $HOME/miniconda
+            if [ ! -d "$HOME/miniconda" ]; then
+              curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+              bash miniconda.sh -b -p $HOME/miniconda
+            fi
             export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
             conda init bash
-            source ~/.bashrc
-            conda create -n myenv python=3.13 -y
+            if ! conda env list | grep -q "^myenv "; then
+              conda create -n myenv python=3.13 -y
+            fi
             conda activate myenv
             python --version
+      - save_cache:
+          key: v1-miniconda-py313-{{ arch }}
+          paths:
+            - ~/miniconda
       - run:
           name: Install Dependencies
           command: |
@@ -900,7 +907,8 @@ jobs:
             sudo apt-get install -y postgresql-14 postgresql-contrib-14
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-
       - run:
           name: Install Dependencies
           command: |
@@ -944,7 +952,6 @@ jobs:
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
-            pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
             pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
@@ -955,8 +962,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - ~/.cache/pip
+          key: v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -971,7 +978,7 @@ jobs:
             ls
             # Run without -n flag to avoid pytest-xdist event loop conflicts with logging worker
             python -m pytest tests/proxy_unit_tests/test_key_generate_prisma.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-key-generation.xml --durations=10 --timeout=300 -vv --log-cli-level=INFO
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1006,7 +1013,8 @@ jobs:
             sudo apt-get install -y postgresql-14 postgresql-contrib-14
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-
       - run:
           name: Install Dependencies
           command: |
@@ -1050,7 +1058,6 @@ jobs:
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
-            pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
             pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
@@ -1062,8 +1069,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - ~/.cache/pip
+          key: v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -1078,7 +1085,7 @@ jobs:
             ls
             # Run auth tests with parallel execution (test_key_generate_prisma moved to separate job to avoid event loop issues)
             python -m pytest tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part1.xml --durations=10 -n 8 --timeout=300 -vv --log-cli-level=INFO
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1113,7 +1120,8 @@ jobs:
             sudo apt-get install -y postgresql-14 postgresql-contrib-14
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-dependencies-
       - run:
           name: Install Dependencies
           command: |
@@ -1157,7 +1165,6 @@ jobs:
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
-            pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
             pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
@@ -1169,8 +1176,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - ~/.cache/pip
+          key: v2-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -1184,7 +1191,7 @@ jobs:
             pwd
             ls
             python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part2.xml --durations=10 -n 8 --timeout=300 -vv --log-cli-level=INFO
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1228,7 +1235,7 @@ jobs:
             pwd
             ls
             python -m pytest tests/local_testing/ -vv -k "assistants" --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1282,7 +1289,7 @@ jobs:
               IGNORE_ARGS="$IGNORE_ARGS --ignore=$dir"
             done
             python -m pytest -vv tests/llm_translation $IGNORE_ARGS --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1330,7 +1337,7 @@ jobs:
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
             python -m pytest -vv tests/llm_translation/realtime --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1375,7 +1382,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/mcp_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1420,7 +1427,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1465,7 +1472,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/guardrails_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1510,7 +1517,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1554,7 +1561,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/llm_responses_api_testing --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1597,7 +1604,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/ocr_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1640,7 +1647,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1728,7 +1735,7 @@ jobs:
           name: Run LLM provider tests
           command: |
             python -m pytest tests/test_litellm/llms --cov=litellm --cov-report=xml --junitxml=test-results/junit-llms.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1755,7 +1762,7 @@ jobs:
           name: Run core tests
           command: |
             python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --ignore=tests/test_litellm/integrations --ignore=tests/test_litellm/litellm_core_utils --ignore=tests/test_litellm/experimental_mcp_client --cov=litellm --cov-report=xml --junitxml=test-results/junit-core.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1782,7 +1789,7 @@ jobs:
           name: Run litellm_core_utils tests
           command: |
             python -m pytest tests/test_litellm/litellm_core_utils --cov=litellm --cov-report=xml --junitxml=test-results/junit-litellm-core-utils.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1809,7 +1816,7 @@ jobs:
           name: Run MCP client tests
           command: |
             python -m pytest tests/test_litellm/experimental_mcp_client --cov=litellm --cov-report=xml --junitxml=test-results/junit-mcps.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1836,7 +1843,7 @@ jobs:
           name: Run integrations tests
           command: |
             python -m pytest tests/test_litellm/integrations --cov=litellm --cov-report=xml --junitxml=test-results/junit-integrations.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1887,7 +1894,7 @@ jobs:
             ls
             prisma generate
             python -m pytest -vv tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-enterprise.xml --durations=10 -n 8
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1932,7 +1939,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -1979,7 +1986,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -2023,7 +2030,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -2067,7 +2074,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/image_gen_tests -n 4 --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -2118,7 +2125,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/logging_callback_tests --cov=litellm -n 4 --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -2161,7 +2168,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/audio_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
@@ -2452,7 +2459,7 @@ jobs:
           name: Run Basic Proxy Startup Tests (Health Readiness and Chat Completion)
           command: |
             python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
-          no_output_timeout: 120m
+          no_output_timeout: 60m
 
   build_and_test:
     machine:
@@ -4311,18 +4318,6 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - e2e_ui_testing:
-          name: e2e_ui_testing_firefox
-          browser: firefox
-          context: e2e_ui_tests
-          requires:
-            - ui_build
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - build_and_test:
           filters:
             branches:
@@ -4643,7 +4638,6 @@ workflows:
             - auth_ui_unit_tests
             - db_migration_disable_update_check
             - e2e_ui_testing_chromium
-            - e2e_ui_testing_firefox
             - litellm_proxy_unit_testing_key_generation
             - litellm_proxy_unit_testing_part1
             - litellm_proxy_unit_testing_part2
@@ -4659,3 +4653,22 @@ workflows:
             - check_code_and_doc_quality
             - publish_proxy_extras
             - guardrails_testing
+
+  nightly:
+    triggers:
+      - schedule:
+          cron: "0 3 * * *"  # 3:00 AM UTC daily
+          filters:
+            branches:
+              only:
+                - main
+    jobs:
+      - ui_build
+      - build_docker_database_image
+      - e2e_ui_testing:
+          name: e2e_ui_testing_firefox
+          browser: firefox
+          context: e2e_ui_tests
+          requires:
+            - ui_build
+            - build_docker_database_image
