@@ -45,7 +45,7 @@ interface CreateuserProps {
   possibleUIRoles: null | Record<string, Record<string, string>>;
   onUserCreated?: (userId: string) => void;
   isEmbedded?: boolean;
-  organizationId?: string | null;
+  organizationIds?: string[] | null;
 }
 
 // Define an interface for the UI settings
@@ -57,7 +57,7 @@ interface UISettings {
 }
 
 export const CreateUserButton: React.FC<CreateuserProps> = ({
-  userID, accessToken, teams, possibleUIRoles, onUserCreated, isEmbedded = false, organizationId }) => {
+  userID, accessToken, teams, possibleUIRoles, onUserCreated, isEmbedded = false, organizationIds }) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
@@ -100,7 +100,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string }) => {
+  const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string; organization_id?: string }) => {
     try {
       NotificationsManager.info("Making API Call");
       if (!isEmbedded) {
@@ -114,15 +114,17 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;
 
-      // Auto-add user to the org admin's organization
-      if (organizationId && user_id) {
+      // Auto-add user to the selected organization (org admin flow)
+      const targetOrgId = formValues.organization_id || (organizationIds?.length === 1 ? organizationIds[0] : null);
+      if (targetOrgId && user_id) {
         try {
-          await organizationMemberAddCall(accessToken, organizationId, {
+          await organizationMemberAddCall(accessToken, targetOrgId, {
             role: "internal_user",
             user_id: user_id,
           });
         } catch (orgError) {
           console.error("Failed to add user to organization:", orgError);
+          NotificationsManager.fromBackend("User created but failed to add to organization. Please add them manually.");
         }
       }
 
@@ -292,6 +294,21 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           >
             <TeamDropdown teams={teams} />
           </Form.Item>
+
+          {organizationIds && organizationIds.length > 1 && (
+            <Form.Item
+              label="Organization"
+              name="organization_id"
+              initialValue={organizationIds[0]}
+              help="The user will be added to this organization."
+            >
+              <Select placeholder="Select Organization" style={{ width: "100%" }}>
+                {organizationIds.map((orgId) => (
+                  <Option key={orgId} value={orgId}>{orgId}</Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
 
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />

@@ -13,13 +13,19 @@ const UsersPage = () => {
   const [keys, setKeys] = useState<null | any[]>([]);
 
   const { teams } = useTeams();
-  const { data: organizations } = useOrganizations();
+  const { data: organizations, isLoading: isOrgsLoading } = useOrganizations();
 
-  // Compute org IDs where the user is an org_admin, but only if they're NOT a proxy admin
-  const orgAdminOrgIds = useMemo(() => {
-    if (!userId || !organizations || !userRole) return null;
+  // Three states:
+  // - undefined: org data still loading (non-proxy-admin) — query should wait
+  // - null: proxy admin or no org filtering needed — query runs unfiltered
+  // - string[]: org admin org IDs — query runs filtered
+  const orgAdminOrgIds = useMemo((): string[] | null | undefined => {
+    if (!userId || !userRole) return null;
     // Proxy admins see all users — no org filtering
     if (isProxyAdminRole(userRole)) return null;
+
+    // Still loading org data — signal "not ready yet"
+    if (isOrgsLoading || !organizations) return undefined;
 
     const adminOrgIds = organizations
       .filter((org: Organization) =>
@@ -28,7 +34,7 @@ const UsersPage = () => {
       .map((org: Organization) => org.organization_id);
 
     return adminOrgIds.length > 0 ? adminOrgIds : null;
-  }, [userId, organizations, userRole]);
+  }, [userId, organizations, userRole, isOrgsLoading]);
 
   return (
     <ViewUserDashboard
