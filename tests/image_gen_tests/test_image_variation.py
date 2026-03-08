@@ -45,10 +45,15 @@ def image_url():
 
     # Load the image into a file-like object
     image_file = BytesIO(response.content)
+    image_file.name = "litellm_logo.png"
 
     return image_file
 
 
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set",
+)
 def test_openai_image_variation_openai_sdk(image_url):
     from openai import OpenAI
 
