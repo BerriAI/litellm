@@ -9,6 +9,7 @@ Follows the A2A Spec.
 """
 
 import asyncio
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -52,7 +53,12 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         )
 
 
-AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = 5.0
+AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = float(
+    os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0")
+)
+AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS = float(
+    os.environ.get("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", "30.0")
+)
 
 
 async def _check_agent_url_health(
@@ -66,7 +72,7 @@ async def _check_agent_url_health(
     """
     url = (agent.agent_card_params or {}).get("url")
     if not url:
-        return {"agent_id": agent.agent_id, "healthy": False, "error": "No URL configured"}
+        return {"agent_id": agent.agent_id, "healthy": True}
 
     try:
         client = get_async_httpx_client(
@@ -174,9 +180,22 @@ async def get_agents(
                 for agent in returned_agents
                 if not (agent.agent_card_params or {}).get("url")
             ]
-            health_results = await asyncio.gather(
-                *[_check_agent_url_health(agent) for agent in agents_with_url]
-            )
+            try:
+                health_results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[_check_agent_url_health(agent) for agent in agents_with_url]
+                    ),
+                    timeout=AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                verbose_proxy_logger.warning(
+                    "Agent health check gather timed out after %s seconds",
+                    AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
+                )
+                health_results = [
+                    {"agent_id": agent.agent_id, "healthy": False, "error": "Health check timed out"}
+                    for agent in agents_with_url
+                ]
             healthy_ids = {
                 result["agent_id"]
                 for result in health_results
