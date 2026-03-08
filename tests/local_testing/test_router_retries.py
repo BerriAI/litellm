@@ -678,11 +678,10 @@ def test_no_retry_for_not_found_error_404():
 
 def test_no_retry_for_bad_request_error_400():
     """
-    Test that 400 BadRequestError is NOT retried, even if healthy deployments exist.
-    This tests the fix for GitHub issue #19216.
+    Test that 400 BadRequestError IS retried when healthy deployments exist,
+    since all error types should be retried across deployments.
+    When no healthy deployments remain, the error is raised.
     """
-    healthy_deployments = ["deployment1", "deployment2"]  # Multiple healthy deployments
-
     router = Router(
         model_list=[
             {
@@ -697,29 +696,32 @@ def test_no_retry_for_bad_request_error_400():
         ]
     )
 
-    # Act & Assert
     error = litellm.BadRequestError(
         message="400 Invalid request parameters",
         model="gpt-3.5-turbo",
         llm_provider="azure",
     )
-    try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
+
+    # With healthy deployments: should allow retry (return True)
+    healthy_deployments = ["deployment1", "deployment2"]
+    result = router.should_retry_this_error(
+        error=error, healthy_deployments=healthy_deployments
+    )
+    assert result is True
+
+    # Without healthy deployments: should raise
+    with pytest.raises(litellm.BadRequestError):
+        router.should_retry_this_error(
+            error=error, healthy_deployments=[]
         )
-        pytest.fail(
-            "Should have raised BadRequestError - 400 errors should never be retried"
-        )
-    except litellm.BadRequestError as e:
-        print("Correctly raised BadRequestError without retry:", e)
 
 
 def test_no_retry_for_unprocessable_entity_error_422():
     """
-    Test that 422 UnprocessableEntityError is NOT retried, even if healthy deployments exist.
+    Test that 422 UnprocessableEntityError IS retried when healthy deployments exist,
+    since all error types should be retried across deployments.
+    When no healthy deployments remain, the error is raised.
     """
-    healthy_deployments = ["deployment1", "deployment2"]  # Multiple healthy deployments
-
     router = Router(
         model_list=[
             {
@@ -734,7 +736,6 @@ def test_no_retry_for_unprocessable_entity_error_422():
         ]
     )
 
-    # Act & Assert
     error = litellm.UnprocessableEntityError(
         message="422 Unprocessable Entity",
         model="gpt-3.5-turbo",
@@ -744,15 +745,19 @@ def test_no_retry_for_unprocessable_entity_error_422():
             request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
         ),
     )
-    try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
+
+    # With healthy deployments: should allow retry (return True)
+    healthy_deployments = ["deployment1", "deployment2"]
+    result = router.should_retry_this_error(
+        error=error, healthy_deployments=healthy_deployments
+    )
+    assert result is True
+
+    # Without healthy deployments: should raise
+    with pytest.raises(litellm.UnprocessableEntityError):
+        router.should_retry_this_error(
+            error=error, healthy_deployments=[]
         )
-        pytest.fail(
-            "Should have raised UnprocessableEntityError - 422 errors should never be retried"
-        )
-    except litellm.UnprocessableEntityError as e:
-        print("Correctly raised UnprocessableEntityError without retry:", e)
 
 
 internal_server_error = litellm.InternalServerError(

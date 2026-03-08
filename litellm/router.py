@@ -5587,22 +5587,17 @@ class Router:
         regular_fallbacks: Optional[List] = None,
     ):
         """
-        1. raise an exception for ContextWindowExceededError if context_window_fallbacks is not None
-        2. raise an exception for ContentPolicyViolationError if content_policy_fallbacks is not None
+        Decide whether to retry on a different deployment.
 
-        2. raise an exception for RateLimitError if
-            - there are no fallbacks
-            - there are no healthy deployments in the same model group
+        Only raises (stops retrying) when there are no healthy deployments left.
+        All error types are retried as long as alternative deployments exist.
         """
         _num_healthy_deployments = 0
         if healthy_deployments is not None and isinstance(healthy_deployments, list):
             _num_healthy_deployments = len(healthy_deployments)
 
-        _num_all_deployments = 0
-        if all_deployments is not None and isinstance(all_deployments, list):
-            _num_all_deployments = len(all_deployments)
-
-        ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR / CONTENT POLICY VIOLATION ERROR w/ fallbacks available / Bad Request Error
+        # If context_window_fallbacks or content_policy_fallbacks are configured,
+        # raise so the fallback handler can route to the appropriate fallback model
         if (
             isinstance(error, litellm.ContextWindowExceededError)
             and context_window_fallbacks is not None
@@ -5615,36 +5610,8 @@ class Router:
         ):
             raise error
 
-        status_code = getattr(error, "status_code", None)
-        if status_code is not None and not litellm._should_retry(status_code):
-            # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
-            if status_code not in (401, 403):
-                raise error
-
-        if isinstance(error, litellm.NotFoundError):
-            raise error
-        # Error we should only retry if there are other deployments
-        if isinstance(error, openai.RateLimitError):
-            if (
-                _num_healthy_deployments <= 0  # if no healthy deployments
-                and regular_fallbacks is not None  # and fallbacks available
-                and len(regular_fallbacks) > 0
-            ):
-                raise error  # then raise the error
-
-        if isinstance(error, openai.AuthenticationError):
-            """
-            - if other deployments available -> retry
-            - else -> raise error
-            """
-            if (
-                _num_all_deployments <= 1
-            ):  # if there is only 1 deployment for this model group then don't retry
-                raise error  # then raise error
-
-        # Do not retry if there are no healthy deployments
-        # just raise the error
-        if _num_healthy_deployments <= 0:  # if no healthy deployments
+        # Only stop retrying when no healthy deployments remain
+        if _num_healthy_deployments <= 0:
             raise error
 
         return True
