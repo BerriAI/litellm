@@ -29,6 +29,8 @@ class CooldownCacheValue(TypedDict):
 
 
 class CooldownCache:
+    MAX_COOLDOWN_TIME = 60.0
+
     def __init__(self, cache: DualCache, default_cooldown_time: float):
         self.cache = cache
         self.default_cooldown_time = default_cooldown_time
@@ -39,6 +41,24 @@ class CooldownCache:
             visible_suffix=0,  # Show last 0 characters
             mask_char="*",  # Use * for masking
         )
+
+    def _get_and_increment_failure_count(self, model_id: str) -> int:
+        """Get current consecutive failure count and increment it. Returns the count BEFORE increment."""
+        fail_count_key = f"deployment:{model_id}:consecutive_fails"
+        current_count = self.in_memory_cache.get_cache(key=fail_count_key) or 0
+        self.in_memory_cache.set_cache(key=fail_count_key, value=current_count + 1)
+        return current_count
+
+    def reset_deployment_failure_count(self, model_id: str) -> None:
+        """Reset consecutive failure count for a deployment (call on success)."""
+        fail_count_key = f"deployment:{model_id}:consecutive_fails"
+        self.in_memory_cache.set_cache(key=fail_count_key, value=0)
+
+    def _calculate_exponential_cooldown(self, model_id: str, base_cooldown: float) -> float:
+        """Calculate cooldown with exponential backoff: base * 2^fails, capped at MAX_COOLDOWN_TIME."""
+        fail_count = self._get_and_increment_failure_count(model_id)
+        cooldown = base_cooldown * (2 ** fail_count)
+        return min(cooldown, self.MAX_COOLDOWN_TIME)
 
     def _common_add_cooldown_logic(
         self, model_id: str, original_exception, exception_status, cooldown_time: float
@@ -76,11 +96,15 @@ class CooldownCache:
         try:
             #########################################################
             # get cooldown time
-            # 1. If dynamic cooldown time is set for the model/deployment, use that
-            # 2. If no dynamic cooldown time is set, use the default cooldown time set on CooldownCache
-            _cooldown_time = cooldown_time
-            if _cooldown_time is None:
-                _cooldown_time = self.default_cooldown_time
+            # 1. If explicit cooldown time is set, use that (still increment fail count)
+            # 2. If no explicit cooldown time, use exponential backoff
+            if cooldown_time is not None:
+                _cooldown_time = cooldown_time
+                self._get_and_increment_failure_count(model_id)
+            else:
+                _cooldown_time = self._calculate_exponential_cooldown(
+                    model_id, self.default_cooldown_time
+                )
             #########################################################
 
             cooldown_key, cooldown_data = self._common_add_cooldown_logic(

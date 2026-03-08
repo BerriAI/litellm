@@ -33,6 +33,13 @@ def increment_deployment_successes_for_current_minute(
         value=1,
         ttl=60,
     )
+
+    # Reset consecutive failure count on success (for exponential cooldown)
+    if hasattr(litellm_router_instance, "cooldown_cache"):
+        litellm_router_instance.cooldown_cache.reset_deployment_failure_count(
+            model_id=deployment_id
+        )
+
     return key
 
 
