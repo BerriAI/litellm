@@ -2082,7 +2082,10 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     "reasoning_effort,expected_include_thoughts",
     [
         ("minimal", True),
+        ("low", True),
         ("medium", True),
+        ("high", True),
+        ("disable", False),
         ("none", False),
     ],
 )
