@@ -1640,15 +1640,14 @@ async def test_pii_tokens_stored_in_metadata_not_top_level(presidio_guardrail):
 
     async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
         # Simulate PII masking with token storage (mimics real anonymize_text behavior)
-        import uuid
-
         if request_data is not None and output_parse_pii:
             if "metadata" not in request_data:
                 request_data["metadata"] = {}
             if "pii_tokens" not in request_data["metadata"]:
                 request_data["metadata"]["pii_tokens"] = {}
             pii_tokens = request_data["metadata"]["pii_tokens"]
-            token = f"<PERSON>_{str(uuid.uuid4())[:12]}"
+            seq = len(pii_tokens) + 1
+            token = f"<PERSON_{seq}>"
             pii_tokens[token] = "John"
             text = text.replace("John", token)
         return text
@@ -1685,7 +1684,7 @@ async def test_pii_tokens_in_metadata_used_for_unmasking():
         output_parse_pii=True,
     )
 
-    token_key = "<PERSON>_abc123def456"
+    token_key = "<PERSON_1>"
     request_data = {
         "model": "claude-haiku-4-5-20251001",
         "metadata": {"pii_tokens": {token_key: "John"}},
@@ -1755,7 +1754,7 @@ async def test_metadata_none_does_not_crash():
         output_parse_pii=True,
     )
 
-    token_key = "<PERSON>_abc123def456"
+    token_key = "<PERSON_1>"
     # metadata explicitly None — must not crash
     request_data = {
         "model": "gpt-3.5-turbo",
@@ -1786,3 +1785,61 @@ async def test_metadata_none_does_not_crash():
     assert (
         response.choices[0].message.content == f"Hello {token_key}, how can I help you?"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests for sequential-numbered token unmasking in _unmask_pii_text
+# ---------------------------------------------------------------------------
+
+
+def test_unmask_exact_match_with_sequential_tokens():
+    """
+    Normal unmasking: LLM echoes numbered tokens verbatim → original PII restored.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    pii_tokens = {
+        "<PERSON_1>": "John Smith",
+        "<PHONE_NUMBER_1>": "555-123-4567",
+    }
+    text = "Hello <PERSON_1>, your number is <PHONE_NUMBER_1>."
+    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
+    assert result == "Hello John Smith, your number is 555-123-4567."
+
+
+def test_unmask_multiple_same_entity_type():
+    """
+    Two phone numbers get distinct numbered tokens and unmask correctly.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    pii_tokens = {
+        "<PHONE_NUMBER_1>": "555-111-0000",
+        "<PHONE_NUMBER_2>": "555-222-0000",
+    }
+    text = "Call <PHONE_NUMBER_1> or <PHONE_NUMBER_2>."
+    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
+    assert result == "Call 555-111-0000 or 555-222-0000."
+
+
+def test_unmask_graceful_degradation():
+    """
+    If the LLM doesn't echo the token back, the numbered label stays
+    in the output — clean and readable, not garbage hex.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    pii_tokens = {
+        "<PERSON_1>": "John",
+    }
+    # LLM paraphrased instead of echoing the token
+    text = "I see you provided a name."
+    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
+    # No change — no garbage, just clean text
+    assert result == text

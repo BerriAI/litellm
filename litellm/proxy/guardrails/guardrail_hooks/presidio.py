@@ -36,7 +36,6 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
@@ -490,8 +489,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     end = item["end"]
                     replacement = item["text"]  # replacement token
                     if item["operator"] == "replace" and output_parse_pii is True:
-                        # check if token in dict
-                        # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
                         if request_data is None:
                             verbose_proxy_logger.warning(
                                 "Presidio anonymize_text called without request_data — "
@@ -507,9 +504,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             request_data["metadata"]["pii_tokens"] = {}
                         pii_tokens = request_data["metadata"]["pii_tokens"]
 
-                        # Always append a UUID to ensure the replacement token is unique to this request and session.
-                        # This prevents collisions where the LLM might hallucinate a generic token like [PHONE_NUMBER].
-                        replacement = f"{replacement}_{str(uuid.uuid4())[:12]}"
+                        # Append a sequential number to make each token unique
+                        # per request, so unmasking maps back to the correct
+                        # original value.  Format: <PHONE_NUMBER_1>, <PHONE_NUMBER_2>
+                        # This is LLM-friendly and degrades gracefully if the
+                        # LLM doesn't echo the token verbatim.
+                        seq = len(pii_tokens) + 1
+                        if replacement.endswith(">"):
+                            replacement = f"{replacement[:-1]}_{seq}>"
+                        else:
+                            replacement = f"{replacement}_{seq}"
 
                         pii_tokens[replacement] = new_text[
                             start:end
@@ -521,12 +525,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         masked_entity_count[entity_type] = (
                             masked_entity_count.get(entity_type, 0) + 1
                         )
-                # When output_parse_pii is True, new_text contains UUID-suffixed
-                # tokens that match the keys in pii_tokens.  Returning
-                # redacted_text["text"] (Presidio's original output) would send
-                # un-suffixed tokens to the LLM, making unmasking impossible.
+                # When output_parse_pii is True, new_text contains sequentially
+                # numbered tokens (e.g. <PHONE_NUMBER_1>) that match the keys
+                # in pii_tokens.  Returning redacted_text["text"] (Presidio's
+                # original output) would send un-numbered tokens to the LLM,
+                # making unmasking impossible.
                 # When output_parse_pii is False, new_text == redacted_text["text"]
-                # because no UUID suffix is appended.
+                # because no suffix is appended.
                 return new_text
             else:
                 raise Exception("Invalid anonymizer response: received None")
