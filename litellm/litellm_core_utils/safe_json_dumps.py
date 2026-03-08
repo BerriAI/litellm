@@ -1,9 +1,16 @@
+import json
 from typing import Any, Union
 
-import orjson
 from pydantic import BaseModel
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+try:
+    import orjson
+
+    _has_orjson = True
+except ImportError:
+    _has_orjson = False
 
 
 def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
@@ -52,4 +59,6 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
                 return "Unserializable Object"
 
     safe_data = _serialize(data, set(), 0)
-    return orjson.dumps(safe_data, default=str).decode()
+    if _has_orjson:
+        return orjson.dumps(safe_data, default=str).decode()
+    return json.dumps(safe_data, default=str)

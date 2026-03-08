@@ -1314,9 +1314,10 @@ class Router:
 
     def print_deployment(self, deployment: dict):
         """
-        returns a copy of the deployment with the api key masked
+        Returns a lightweight dict with model_name + litellm_params (api key masked).
 
-        Only returns 2 characters of the api key and masks the rest with * (10 *).
+        Only includes model_name and litellm_params to avoid deep-copying
+        the full deployment dict on every log call.
         """
         try:
             litellm_params: dict = deployment.get("litellm_params", {})

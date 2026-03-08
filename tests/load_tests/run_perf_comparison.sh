@@ -84,7 +84,7 @@ PROXY_PID=$!
 wait_for_service "http://localhost:4000/health/liveliness" "LiteLLM Proxy (baseline)" 60
 
 echo "  Running baseline locust test..."
-cd "$WORKSPACE" && poetry run locust -f tests/load_tests/locustfile.py \
+cd "$WORKSPACE" && poetry run locust -f tests/load_tests/locustfile_perf.py \
     --headless -u "$USERS" -r "$SPAWN_RATE" --run-time "$DURATION" \
     --host http://localhost:4000 \
     --csv "$RESULTS_DIR/baseline" \
@@ -122,7 +122,7 @@ PROXY_PID=$!
 wait_for_service "http://localhost:4000/health/liveliness" "LiteLLM Proxy (optimized)" 60
 
 echo "  Running optimized locust test..."
-cd "$WORKSPACE" && poetry run locust -f tests/load_tests/locustfile.py \
+cd "$WORKSPACE" && poetry run locust -f tests/load_tests/locustfile_perf.py \
     --headless -u "$USERS" -r "$SPAWN_RATE" --run-time "$DURATION" \
     --host http://localhost:4000 \
     --csv "$RESULTS_DIR/optimized" \
