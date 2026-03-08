@@ -427,7 +427,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             )
 
         response = litellm.module_level_client.get(
-            url=f"{api_base}/v1/accounts/{account_id}/models",
+            url=f"{api_base}/accounts/{account_id}/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
