@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import os
 import socket
 import ssl
@@ -21,6 +22,13 @@ import httpx
 from aiohttp import ClientSession, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
+
+# socket_factory was added to aiohttp.TCPConnector in 3.12.0.
+# This project requires >=3.10, so we check at import time to avoid a
+# TypeError on older versions when the lambda creates the connector.
+_AIOHTTP_SUPPORTS_SOCKET_FACTORY: bool = (
+    "socket_factory" in inspect.signature(TCPConnector.__init__).parameters
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -919,9 +927,16 @@ class AsyncHTTPHandler:
             **connector_kwargs,
         }
         if AIOHTTP_TCP_KEEPALIVE:
-            transport_connector_kwargs["socket_factory"] = (
-                AsyncHTTPHandler._make_tcp_keepalive_socket_factory()
-            )
+            if _AIOHTTP_SUPPORTS_SOCKET_FACTORY:
+                transport_connector_kwargs["socket_factory"] = (
+                    AsyncHTTPHandler._make_tcp_keepalive_socket_factory()
+                )
+            else:
+                verbose_logger.debug(
+                    "AIOHTTP_TCP_KEEPALIVE=true but aiohttp<3.12 does not support "
+                    "socket_factory on TCPConnector; TCP keepalive will not be enabled. "
+                    "Upgrade to aiohttp>=3.12 to enable this feature."
+                )
         if AIOHTTP_NEEDS_CLEANUP_CLOSED:
             transport_connector_kwargs["enable_cleanup_closed"] = True
         if AIOHTTP_CONNECTOR_LIMIT > 0:

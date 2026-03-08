@@ -23,7 +23,10 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    _AIOHTTP_SUPPORTS_SOCKET_FACTORY,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -330,3 +333,76 @@ async def test_client_timeout_total_is_300_when_no_read_timeout():
         "to preserve the safety net against hung servers"
     )
     assert client_timeout.sock_read is None
+
+
+@pytest.mark.asyncio
+async def test_client_timeout_total_is_300_when_opt_out_flag_set():
+    """
+    When AIOHTTP_KEEP_TOTAL_TIMEOUT_CAP=true, the old 300 s total cap must be
+    restored even when an explicit read timeout is configured, allowing users to
+    opt back into the previous behaviour without upgrading.
+    """
+    captured = {}
+
+    class FakeSession:
+        closed = False
+        _loop = None
+
+        def request(self, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+
+            class Resp:
+                status = 200
+                headers = {}
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *a):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, _size):
+                            yield b""
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
+
+    request = httpx.Request("POST", "https://example.com/")
+    request.extensions["timeout"] = {"connect": 5.0, "read": 600.0, "pool": 5.0}
+
+    with patch(
+        "litellm.llms.custom_httpx.aiohttp_transport.AIOHTTP_KEEP_TOTAL_TIMEOUT_CAP",
+        True,
+    ):
+        await transport.handle_async_request(request)
+
+    client_timeout: aiohttp.ClientTimeout = captured["timeout"]
+    assert client_timeout.total == 300, (
+        "ClientTimeout.total must be 300 s when AIOHTTP_KEEP_TOTAL_TIMEOUT_CAP=true"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tcp_connector_accepts_socket_factory_on_supported_aiohttp():
+    """
+    On aiohttp>=3.12 (where socket_factory is supported), TCPConnector must be
+    instantiable with the factory returned by _make_tcp_keepalive_socket_factory
+    without raising TypeError.  On older versions the test is skipped.
+
+    This is the regression guard the reviewer requested: the tests that check
+    whether _make_tcp_keepalive_socket_factory is *called* do not catch a
+    TypeError raised when TCPConnector is actually *instantiated* with the kwarg.
+    """
+    if not _AIOHTTP_SUPPORTS_SOCKET_FACTORY:
+        pytest.skip("socket_factory not supported in this aiohttp version (<3.12)")
+
+    factory = AsyncHTTPHandler._make_tcp_keepalive_socket_factory()
+    # Must not raise TypeError
+    connector = aiohttp.TCPConnector(socket_factory=factory)
+    await connector.close()

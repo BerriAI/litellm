@@ -211,6 +211,12 @@ AIOHTTP_TCP_KEEPALIVE = os.getenv("AIOHTTP_TCP_KEEPALIVE", "true").lower() != "f
 AIOHTTP_TCP_KEEPALIVE_IDLE = int(os.getenv("AIOHTTP_TCP_KEEPALIVE_IDLE", 30))
 AIOHTTP_TCP_KEEPALIVE_INTERVAL = int(os.getenv("AIOHTTP_TCP_KEEPALIVE_INTERVAL", 10))
 AIOHTTP_TCP_KEEPALIVE_COUNT = int(os.getenv("AIOHTTP_TCP_KEEPALIVE_COUNT", 5))
+# When an explicit read timeout is present, suppress aiohttp's implicit 300 s
+# total-request cap so the user's configured timeout is fully respected.
+# Set AIOHTTP_KEEP_TOTAL_TIMEOUT_CAP=true to restore the old 300 s behaviour.
+AIOHTTP_KEEP_TOTAL_TIMEOUT_CAP: bool = (
+    os.getenv("AIOHTTP_KEEP_TOTAL_TIMEOUT_CAP", "false").lower() == "true"
+)
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78

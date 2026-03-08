@@ -14,6 +14,7 @@ from aiohttp.client import ClientResponse, ClientSession
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import AIOHTTP_KEEP_TOTAL_TIMEOUT_CAP
 from litellm.secret_managers.main import str_to_bool
 
 AIOHTTP_EXC_MAP: Dict = {
@@ -262,11 +263,18 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             "allow_redirects": False,
             "auto_decompress": False,
             "timeout": ClientTimeout(
-                # Only suppress aiohttp's implicit 300 s total cap when the
-                # caller has provided an explicit read timeout. Without an
-                # explicit sock_read the 300 s default acts as a safety net
-                # against hung servers and should be preserved.
-                total=None if timeout.get("read") is not None else 300,
+                # Suppress aiohttp's implicit 300 s total cap when the caller
+                # has provided an explicit read timeout, so the user-configured
+                # value is fully respected (e.g. timeout=600 for Azure
+                # reasoning).  Without an explicit sock_read the 300 s default
+                # is preserved as a safety net against hung servers.
+                # Set AIOHTTP_KEEP_TOTAL_TIMEOUT_CAP=true to restore the old
+                # 300 s cap even when an explicit read timeout is present.
+                total=(
+                    300
+                    if AIOHTTP_KEEP_TOTAL_TIMEOUT_CAP or timeout.get("read") is None
+                    else None
+                ),
                 sock_connect=timeout.get("connect"),
                 sock_read=timeout.get("read"),
                 connect=timeout.get("pool"),
