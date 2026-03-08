@@ -4827,9 +4827,16 @@ class StandardLoggingPayloadSetup:
         else:
             final_response_obj = {}
 
+        # Pass the original BaseModel object to redaction so isinstance checks inside
+        # perform_redaction work correctly (a plain dict never matches ModelResponse etc.)
+        redaction_input = (
+            init_response_obj
+            if isinstance(init_response_obj, BaseModel)
+            else final_response_obj
+        )
         modified_final_response_obj = redact_message_input_output_from_logging(
             model_call_details=kwargs,
-            result=final_response_obj,
+            result=redaction_input,
         )
 
         if modified_final_response_obj is not None and isinstance(
