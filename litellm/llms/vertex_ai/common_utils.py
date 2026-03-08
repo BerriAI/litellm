@@ -571,38 +571,14 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
     return schema_dict
 
 
-def _is_any_type_schema(schema: dict) -> bool:
-    """
-    Detect schemas that represent "any JSON value" (no type constraints).
-
-    In JSON Schema, an empty schema {} means "any value is valid".
-    Schemas with only metadata keys (title, description, default, examples)
-    but no type-constraining keywords also represent "any type".
-
-    Gemini's Schema proto uses TYPE_UNSPECIFIED (0) as default,
-    so omitting the type field is valid and means "any type".
-    """
-    type_constraining_keys = {
-        "type",
-        "properties",
-        "items",
-        "anyOf",
-        "oneOf",
-        "allOf",
-        "enum",
-        "required",
-        "$ref",
-        "$schema",
-    }
-    return not any(key in type_constraining_keys for key in schema.keys())
-
-
 def process_items(schema, depth=0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     if isinstance(schema, dict):
+        if "items" in schema and schema["items"] == {}:
+            schema["items"] = {"type": "object"}
         for key, value in schema.items():
             if isinstance(value, dict):
                 process_items(value, depth + 1)
@@ -701,8 +677,9 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
-            elif isinstance(atype, dict) and _is_any_type_schema(atype):
-                pass  # preserve "any type" semantics — don't coerce to object
+            elif "type" not in atype and len(atype) == 0:
+                # Handle empty object case
+                atype["type"] = "object"
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
@@ -712,20 +689,6 @@ def convert_anyof_null_to_nullable(schema, depth=0):
             )
 
         if contains_null:
-            # Drop any-type schemas (bare {}) from anyOf before adding nullable=True.
-            # Adding nullable=True to {} produces {"nullable": True} with no type field,
-            # which Gemini rejects as an anyOf entry without a concrete type.
-            for atype in list(anyof):
-                if isinstance(atype, dict) and _is_any_type_schema(atype):
-                    anyof.remove(atype)
-
-            if len(anyof) == 0:
-                # All remaining entries were any-type schemas (e.g. anyOf: [{}, null]).
-                # This means "any nullable value" — collapse anyOf and mark parent nullable.
-                del schema["anyOf"]
-                schema["nullable"] = True
-                return
-
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
             for atype in anyof:
                 # Remove items field if type is array and items is empty
@@ -751,8 +714,7 @@ def add_object_type(schema):
     # Gemini requires all function parameters to be type OBJECT
     # Handle case where schema has no properties and no type (e.g. tools with no arguments)
     if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema and "allOf" not in schema:
-        if not _is_any_type_schema(schema):
-            schema["type"] = "object"
+        schema["type"] = "object"
 
     properties = schema.get("properties", None)
     if properties is not None:
