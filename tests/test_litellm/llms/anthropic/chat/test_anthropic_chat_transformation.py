@@ -3208,11 +3208,16 @@ def test_map_tool_helper_enforces_object_type_when_missing():
         },
     }
 
+    original_params = tool["function"]["parameters"].copy()
     result, _ = config._map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert "properties" in result["input_schema"]
     assert "query" in result["input_schema"]["properties"]
+    # Original parameters dict must not be modified in place
+    assert tool["function"]["parameters"] == original_params, (
+        "parameters dict was mutated; _map_tool_helper should not modify caller data"
+    )
 
 
 def test_map_tool_helper_enforces_object_type_when_wrong_type():
@@ -3234,9 +3239,17 @@ def test_map_tool_helper_enforces_object_type_when_wrong_type():
         },
     }
 
+    original_params = tool["function"]["parameters"].copy()
     result, _ = config._map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
+    assert result["input_schema"].get("properties") == {}, (
+        "properties should be injected as {} when schema has non-object type and no properties key"
+    )
+    # Original parameters dict must not be modified in place
+    assert tool["function"]["parameters"] == original_params, (
+        "parameters dict was mutated; _map_tool_helper should not modify caller data"
+    )
 
 
 def test_map_tool_helper_preserves_valid_object_schema():
