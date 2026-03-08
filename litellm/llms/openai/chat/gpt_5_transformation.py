@@ -59,6 +59,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return "gpt-5-codex" in model
 
     @classmethod
+    def is_model_gpt_5_1_model(cls, model: str) -> bool:
+        """Check if the model is a gpt-5.1 variant (e.g. gpt-5.1, gpt-5.1-codex)."""
+        model_name = model.split("/")[-1]
+        return model_name.startswith("gpt-5.1")
+
+    @classmethod
     def is_model_gpt_5_2_model(cls, model: str) -> bool:
         """Check if the model is a gpt-5.2 variant (including pro)."""
         model_name = model.split("/")[-1]
@@ -185,16 +191,33 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 "max_tokens"
             )
 
-        # gpt-5.4: function calls not supported when reasoning_effort != "none"
-        # Drop reasoning_effort when tools are present (small minority of volume)
+        # gpt-5.4: function calls not supported when reasoning_effort != "none" in chat completions API
+        # However, the Responses API supports both tools and reasoning together
+        # So we keep reasoning_effort if the request will be routed to Responses API
         if self.is_model_gpt_5_4_model(model):
             has_tools = bool(
                 non_default_params.get("tools") or optional_params.get("tools")
             )
             if has_tools and reasoning_effort not in (None, "none"):
-                non_default_params.pop("reasoning_effort", None)
-                optional_params.pop("reasoning_effort", None)
-                reasoning_effort = None
+                # Check if this will be routed to Responses API
+                # If so, keep reasoning_effort; otherwise drop it for chat completions API
+                model_name = model.split("/")[-1]
+                will_route_to_responses = False
+                if model_name.startswith("gpt-5."):
+                    try:
+                        version_str = model_name.replace("gpt-5.", "").split("-")[0]
+                        if "." in version_str:
+                            major_version = int(version_str.split(".")[0])
+                        else:
+                            major_version = int(version_str)
+                        will_route_to_responses = major_version >= 4
+                    except (ValueError, IndexError):
+                        pass
+                
+                if not will_route_to_responses:
+                    non_default_params.pop("reasoning_effort", None)
+                    optional_params.pop("reasoning_effort", None)
+                    reasoning_effort = None
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
         supports_none = self._supports_reasoning_effort_level(model, "none")

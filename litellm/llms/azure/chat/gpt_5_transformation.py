@@ -69,7 +69,10 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
         # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
-        is_gpt_5_1 = self.is_model_gpt_5_1_model(model)
+        model_for_check = model.replace(self.GPT5_SERIES_ROUTE, "")
+        is_gpt_5_1 = self._supports_reasoning_effort_level(
+            model_for_check, "none"
+        )
 
         if reasoning_effort_value == "none" and not is_gpt_5_1:
             if litellm.drop_params is True or (
@@ -97,7 +100,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             self,
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model=model,
+            model=model_for_check,
             drop_params=drop_params,
         )
 

@@ -927,8 +927,56 @@ def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    tools: Optional[List] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> Tuple[dict, str]:
+    """
+    Check if a chat completion request should be routed to the Responses API.
+    
+    Routes to Responses API when:
+    1. Model name starts with "responses/"
+    2. xAI provider with web_search_options
+    3. OpenAI provider with GPT-5.4+ model, tools, and reasoning_effort (not "none")
+    
+    Args:
+        model: Model name (e.g., "gpt-5.4", "responses/grok-3")
+        custom_llm_provider: Provider name (e.g., "openai", "xai", "azure")
+        web_search_options: Optional web search configuration
+        tools: Optional list of tools/functions
+        reasoning_effort: Optional reasoning effort level
+        
+    Returns:
+        Tuple of (model_info dict, updated model name with "responses/" prefix removed)
+    """
     model_info: Dict[str, Any] = {}
+    
+    def _check_gpt_54_or_above_routing() -> bool:
+        """Check if model is GPT-5.4+ and should route to responses API.
+        
+        For OpenAI GPT-5.4+ models, when both tools and reasoning are present,
+        route to Responses API which supports both features together.
+        The chat completion API would otherwise drop reasoning_effort when tools are present.
+        """
+        if (
+            custom_llm_provider == "openai"
+            and tools is not None
+            and len(tools) > 0
+            and reasoning_effort is not None
+            and reasoning_effort != "none"
+        ):
+            model_name = model.split("/")[-1]
+            if model_name.startswith("gpt-5."):
+                try:
+                    version_str = model_name.replace("gpt-5.", "").split("-")[0]
+                    if "." in version_str:
+                        major_version = int(version_str.split(".")[0])
+                    else:
+                        major_version = int(version_str)
+                    return major_version >= 4
+                except (ValueError, IndexError):
+                    pass
+        return False
+    
     try:
         model_info = cast(
             dict,
@@ -944,6 +992,10 @@ def responses_api_bridge_check(
         if web_search_options is not None and custom_llm_provider == "xai":
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
+
+        if _check_gpt_54_or_above_routing():
+            model_info["mode"] = "responses"
+            model = model.replace("responses/", "")
     except Exception as e:
         verbose_logger.debug("Error getting model info: {}".format(e))
 
@@ -953,6 +1005,9 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+        elif _check_gpt_54_or_above_routing():
+            model_info["mode"] = "responses"
+            model = model.replace("responses/", "")
     return model_info, model
 
 
@@ -1569,6 +1624,8 @@ def completion(  # type: ignore # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
+            tools=tools,
+            reasoning_effort=reasoning_effort,
         )
 
         if model_info.get("mode") == "responses":
