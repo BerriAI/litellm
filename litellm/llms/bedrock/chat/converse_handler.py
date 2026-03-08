@@ -439,14 +439,14 @@ class BedrockConverseLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            headers=extra_headers,
+            headers=headers,
         )
         data = json.dumps(_data)
         
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,
-            extra_headers=extra_headers,
+            extra_headers=headers,
             endpoint_url=proxy_endpoint_url,
             data=data,
             headers=headers,
