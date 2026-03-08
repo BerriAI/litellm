@@ -9867,6 +9867,69 @@ async def model_streaming_metrics(
 
 
 @router.get(
+    "/model/cooldowns",
+    description="View cooldown status for all deployments",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_deployment_cooldown_status():
+    """Get cooldown status for all deployments."""
+    global llm_router
+    if llm_router is None:
+        return {"cooldowns": [], "healthy": []}
+
+    all_models = llm_router.get_model_list() or []
+    model_ids = [
+        m.get("model_info", {}).get("id")
+        for m in all_models
+        if m.get("model_info", {}).get("id")
+    ]
+
+    active_cooldowns = llm_router.cooldown_cache.get_active_cooldowns(
+        model_ids=model_ids, parent_otel_span=None
+    )
+    cooldown_ids = {cd[0] for cd in active_cooldowns}
+    cooldown_map = {cd[0]: cd[1] for cd in active_cooldowns}
+
+    now = time.time()
+    cooldowns = []
+    healthy = []
+
+    for model in all_models:
+        model_id = model.get("model_info", {}).get("id")
+        if not model_id:
+            continue
+        model_name = model.get("model_name", "")
+
+        if model_id in cooldown_ids:
+            cd = cooldown_map[model_id]
+            elapsed = now - cd["timestamp"]
+            remaining = max(0, cd["cooldown_time"] - elapsed)
+            cooldowns.append(
+                {
+                    "model_id": model_id,
+                    "model_name": model_name,
+                    "status": "cooldown",
+                    "exception": cd["exception_received"],
+                    "status_code": cd["status_code"],
+                    "cooldown_time": cd["cooldown_time"],
+                    "remaining_seconds": round(remaining, 1),
+                    "timestamp": cd["timestamp"],
+                }
+            )
+        else:
+            healthy.append(
+                {
+                    "model_id": model_id,
+                    "model_name": model_name,
+                    "status": "healthy",
+                }
+            )
+
+    return {"cooldowns": cooldowns, "healthy": healthy}
+
+
+@router.get(
     "/model/metrics",
     description="View number of requests & avg latency per model on config.yaml",
     tags=["model management"],
