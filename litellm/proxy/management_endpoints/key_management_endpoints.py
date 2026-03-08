@@ -4345,8 +4345,6 @@ def _build_key_filter_conditions(
     user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
         user_condition["user_id"] = user_id
-    if team_id and isinstance(team_id, str):
-        user_condition["team_id"] = team_id
     if key_alias and isinstance(key_alias, str):
         user_condition["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
@@ -4414,8 +4412,10 @@ def _build_key_filter_conditions(
     elif len(or_conditions) == 1:
         where.update(or_conditions[0])
 
-    # Apply project_id and access_group_id as global AND filters so they
+    # Apply team_id, project_id and access_group_id as global AND filters so they
     # narrow results across all visibility conditions (own keys, team keys, etc.)
+    if team_id and isinstance(team_id, str):
+        where = {"AND": [where, {"team_id": team_id}]}
     if project_id:
         where = {"AND": [where, {"project_id": project_id}]}
     if access_group_id:

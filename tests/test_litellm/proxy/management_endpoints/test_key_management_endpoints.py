@@ -6345,6 +6345,37 @@ async def test_build_key_filter_project_id_and_access_group_id():
 
 
 @pytest.mark.asyncio
+async def test_build_key_filter_team_id_scoped():
+    """
+    When team_id is provided, it should act as a global AND filter so keys
+    from other teams are excluded — even when the user is admin of multiple teams.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="multi-team-user",
+        team_id="team-A",
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-A", "team-B"],
+        member_team_ids=["team-A", "team-B"],
+        include_created_by_keys=True,
+    )
+
+    # The team_id filter must be a direct child of the outermost AND,
+    # not buried inside an OR branch (which was the bug).
+    assert "AND" in where, f"Expected top-level AND, got: {where}"
+    outer_and = where["AND"]
+    assert {"team_id": "team-A"} in outer_and, (
+        f"Expected {{'team_id': 'team-A'}} as a direct AND condition, got: {outer_and}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_member_team_ids():
     """
     Test that get_member_team_ids returns all teams where user is a member
