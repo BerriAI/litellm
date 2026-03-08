@@ -901,6 +901,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if self.output_parse_pii is False and litellm.output_parse_pii is False:
             return response
 
+        # Prefer pii_tokens from request_data (stored by pre_call masking instance).
+        _pii_tokens = data.get("pii_tokens") or self.pii_tokens
         if isinstance(response, ModelResponse) and not isinstance(
             response.choices[0], StreamingChoices
         ):  # /chat/completions requests
@@ -909,6 +911,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 request_data=data,
                 mode="unmask",
             )
+        elif (
+            isinstance(response, dict)
+            and response.get("type") == "message"
+            and response.get("role") == "assistant"
+        ):  # Anthropic native /v1/messages response (AnthropicMessagesResponse TypedDict)
+            for block in response.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    block["text"] = self._unmask_pii_text(block.get("text", ""), _pii_tokens)
         return response
 
     @staticmethod
