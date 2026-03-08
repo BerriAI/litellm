@@ -543,7 +543,7 @@ class TestCheckAgentUrlHealth:
     """Unit tests for the _check_agent_url_health helper."""
 
     @pytest.mark.asyncio
-    async def test_should_return_unhealthy_when_no_url(self):
+    async def test_should_return_healthy_when_no_url(self):
         from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
 
         agent = AgentResponse(
@@ -553,21 +553,19 @@ class TestCheckAgentUrlHealth:
             litellm_params={},
         )
         result = await _check_agent_url_health(agent)
-        assert result["healthy"] is False
-        assert "No URL configured" in result["error"]
+        assert result["healthy"] is True
+        assert "error" not in result
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.agent_endpoints.endpoints.httpx.AsyncClient")
-    async def test_should_return_healthy_for_200(self, mock_client_cls):
+    @patch("litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client")
+    async def test_should_return_healthy_for_200(self, mock_get_client):
         from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_client
+        mock_get_client.return_value = mock_client
 
         agent = AgentResponse(
             agent_id="ok",
@@ -579,17 +577,15 @@ class TestCheckAgentUrlHealth:
         assert result["healthy"] is True
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.agent_endpoints.endpoints.httpx.AsyncClient")
-    async def test_should_return_unhealthy_for_500(self, mock_client_cls):
+    @patch("litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client")
+    async def test_should_return_unhealthy_for_500(self, mock_get_client):
         from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
 
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_client
+        mock_get_client.return_value = mock_client
 
         agent = AgentResponse(
             agent_id="err",
@@ -602,15 +598,13 @@ class TestCheckAgentUrlHealth:
         assert "HTTP 500" in result["error"]
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.agent_endpoints.endpoints.httpx.AsyncClient")
-    async def test_should_return_unhealthy_on_connection_error(self, mock_client_cls):
+    @patch("litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client")
+    async def test_should_return_unhealthy_on_connection_error(self, mock_get_client):
         from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=Exception("Connection refused"))
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_client
+        mock_get_client.return_value = mock_client
 
         agent = AgentResponse(
             agent_id="down",
@@ -623,8 +617,8 @@ class TestCheckAgentUrlHealth:
         assert "Connection refused" in result["error"]
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.agent_endpoints.endpoints.httpx.AsyncClient")
-    async def test_should_treat_404_as_healthy(self, mock_client_cls):
+    @patch("litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client")
+    async def test_should_treat_404_as_healthy(self, mock_get_client):
         """A 404 means the server is reachable, just not the specific path."""
         from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
 
@@ -632,9 +626,7 @@ class TestCheckAgentUrlHealth:
         mock_response.status_code = 404
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_client
+        mock_get_client.return_value = mock_client
 
         agent = AgentResponse(
             agent_id="notfound",
