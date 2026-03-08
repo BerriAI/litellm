@@ -617,21 +617,6 @@ async def openapi_oauth2_status(
         )
         connected = False
 
-    # Seed the cache for the not-connected case so subsequent 2-second polls skip
-    # the DB during the pre-connection waiting window.  When not-connected, we write
-    # None (the "no credential" sentinel) which _check_byok_credential also uses.
-    # For connected=True we do NOT write here: the callback's _invalidate_byok_cred_cache
-    # already cleared the entry, and polling stops immediately after we return True.
-    if not connected:
-        try:
-            from litellm.proxy._experimental.mcp_server.server import (
-                _write_byok_cred_cache,
-            )
-
-            _write_byok_cred_cache(user_id, server_id, None)
-        except Exception:
-            pass  # Best-effort; never block the response
-
     return JSONResponse(
         {"connected": connected, "server_id": server_id, "server_name": server_name}
     )
