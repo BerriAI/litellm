@@ -662,11 +662,12 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
+def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[list]:
     """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
     if not user_id_mapping:
         return None
     items = user_id_mapping if isinstance(user_id_mapping, list) else [user_id_mapping]
+    customer_headers_mappings = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -675,7 +676,11 @@ def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
         if role is None or not header_name:
             continue
         if str(role).lower() == str(LitellmUserRoles.CUSTOMER).lower():
-            return header_name
+            customer_headers_mappings.append(header_name.lower())
+
+    if customer_headers_mappings:
+        return customer_headers_mappings
+    
     return None
 
 
@@ -724,7 +729,7 @@ def get_end_user_id_from_request_body(
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
-        custom_header_name_to_check: Optional[str] = None
+        custom_header_name_to_check: Optional[Union[list, str]] = None
 
         # Prefer user mappings (new behavior)
         user_id_mapping = general_settings.get("user_header_mappings", None)
@@ -741,9 +746,9 @@ def get_end_user_id_from_request_body(
                 custom_header_name_to_check = value
 
         # If we have a header name to check, try to read it from request headers
-        if isinstance(custom_header_name_to_check, str):
+        if isinstance(custom_header_name_to_check, list):
             for header_name, header_value in request_headers.items():
-                if header_name.lower() == custom_header_name_to_check.lower():
+                if header_name.lower() in custom_header_name_to_check:
                     user_id_from_header = header_value
                     user_id_str = (
                         str(user_id_from_header)
