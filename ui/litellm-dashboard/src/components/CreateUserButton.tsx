@@ -1,15 +1,9 @@
 import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  Accordion,
-  AccordionBody,
-  AccordionHeader,
-  Button as Button2,
-  SelectItem,
-  TextInput,
-} from "@tremor/react";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { Accordion, AccordionBody, AccordionHeader, Button as Button2, SelectItem, TextInput } from "@tremor/react";
 import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -44,7 +38,6 @@ interface CreateuserProps {
   possibleUIRoles: null | Record<string, Record<string, string>>;
   onUserCreated?: (userId: string) => void;
   isEmbedded?: boolean;
-  organizationIds?: Array<{organization_id: string, organization_alias: string}> | null;
 }
 
 // Define an interface for the UI settings
@@ -56,7 +49,13 @@ interface UISettings {
 }
 
 export const CreateUserButton: React.FC<CreateuserProps> = ({
-  userID, accessToken, teams, possibleUIRoles, onUserCreated, isEmbedded = false, organizationIds }) => {
+  userID,
+  accessToken,
+  teams,
+  possibleUIRoles,
+  onUserCreated,
+  isEmbedded = false,
+}) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
@@ -66,6 +65,15 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  const { data: organizations = [] } = useOrganizations();
+
+  // Derive teams from the user's organizations, falling back to the teams prop
+  const availableTeams = useMemo(() => {
+    const orgTeams = organizations.flatMap((org) => org.teams || []);
+    if (orgTeams.length > 0) return orgTeams;
+    return teams || [];
+  }, [organizations, teams]);
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -99,7 +107,13 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string; organization_ids?: string[]; organizations?: string[] }) => {
+  const handleCreate = async (formValues: {
+    user_id: string;
+    models?: string[];
+    user_role: string;
+    organization_ids?: string[];
+    organizations?: string[];
+  }) => {
     try {
       NotificationsManager.info("Making API Call");
       if (!isEmbedded) {
@@ -166,8 +180,8 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           message="Email invitations"
           description={
             <>
-              New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.
-              {" "}
+              New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is
+              configured.{" "}
               <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
                 Learn how to set up email notifications
               </Link>
@@ -197,7 +211,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         </Form.Item>
         <Form.Item label="Team" name="team_id">
           <Select placeholder="Select Team" style={{ width: "100%" }}>
-            <TeamDropdown teams={teams} />
+            <TeamDropdown teams={availableTeams} />
           </Select>
         </Form.Item>
 
@@ -233,8 +247,8 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             message="Email invitations"
             description={
               <>
-                New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.
-                {" "}
+                New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is
+                configured.{" "}
                 <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
                   Learn how to set up email notifications
                 </Link>
@@ -264,11 +278,10 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
               {possibleUIRoles &&
                 Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
                   <SelectItem key={role} value={role} title={ui_label}>
-                    <Text>
-                      {ui_label}
-                    </Text>
+                    <Text>{ui_label}</Text>
                     <Text type="secondary">
-                      {" - "}{description}
+                      {" - "}
+                      {description}
                     </Text>
                   </SelectItem>
                 ))}
@@ -281,31 +294,22 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             name="team_id"
             help="If selected, user will be added as a 'user' role to the team."
           >
-            <TeamDropdown teams={teams} />
+            <TeamDropdown teams={availableTeams} />
           </Form.Item>
 
-          {organizationIds && (
-            <Form.Item
-              label="Organization"
-              name="organization_ids"
-              initialValue={organizationIds.map((o) => o.organization_id)}
-              rules={[{ required: true, message: "Please select at least one organization" }]}
-              help="The user will be added to the selected organization(s)."
-            >
-              <Select
-                mode="multiple"
-                placeholder="Select Organization"
-                style={{ width: "100%" }}
-                disabled={organizationIds.length === 1}
-              >
-                {organizationIds.map((org) => (
-                  <Option key={org.organization_id} value={org.organization_id}>
-                    {org.organization_alias} ({org.organization_id})
-                  </Option>
-                ))}
-              </Select>
-            </Form.Item>
-          )}
+          <Form.Item
+            label="Organization"
+            name="organization_ids"
+            help="The user will be added to the selected organization(s)."
+          >
+            <Select mode="multiple" placeholder="Select Organization" style={{ width: "100%" }}>
+              {organizations.map((org) => (
+                <Option key={org.organization_id} value={org.organization_id}>
+                  {org.organization_alias} ({org.organization_id})
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
 
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
@@ -345,7 +349,9 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             </AccordionBody>
           </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button type="primary" icon={<UserAddOutlined />} htmlType="submit">Invite User</Button>
+            <Button type="primary" icon={<UserAddOutlined />} htmlType="submit">
+              Invite User
+            </Button>
           </div>
         </Form>
       </Modal>

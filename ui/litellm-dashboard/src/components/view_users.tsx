@@ -265,7 +265,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
       );
     },
-    enabled: Boolean(accessToken && token && userRole && userID && orgAdminOrgIds !== undefined),
+    enabled: Boolean(accessToken && token && userRole && userID),
     placeholderData: (previousData) => previousData,
   });
   const userListResponse = userListQuery.data;
@@ -304,7 +304,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
             </>
           ) : userID && accessToken ? (
             <>
-              <CreateUserButton userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} organizationIds={orgAdminOrgIds ?? null} />
+              <CreateUserButton userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
 
               {isProxyAdmin && (
                 <Button
