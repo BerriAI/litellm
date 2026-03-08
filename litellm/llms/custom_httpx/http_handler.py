@@ -932,7 +932,7 @@ class AsyncHTTPHandler:
                     AsyncHTTPHandler._make_tcp_keepalive_socket_factory()
                 )
             else:
-                verbose_logger.debug(
+                verbose_logger.warning(
                     "AIOHTTP_TCP_KEEPALIVE=true but aiohttp<3.12 does not support "
                     "socket_factory on TCPConnector; TCP keepalive will not be enabled. "
                     "Upgrade to aiohttp>=3.12 to enable this feature."

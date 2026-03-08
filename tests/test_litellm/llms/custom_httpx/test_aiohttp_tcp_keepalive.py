@@ -127,9 +127,14 @@ def test_create_aiohttp_transport_uses_socket_factory_when_keepalive_enabled():
     wired into the TCPConnector. The connector is created lazily (inside a
     lambda), so we verify the factory builder was invoked rather than patching
     TCPConnector.__init__ directly.
+
+    _AIOHTTP_SUPPORTS_SOCKET_FACTORY is forced to True so the test is not
+    spuriously skipped on aiohttp 3.10/3.11 environments.
     """
     with patch(
         "litellm.llms.custom_httpx.http_handler.AIOHTTP_TCP_KEEPALIVE", True
+    ), patch(
+        "litellm.llms.custom_httpx.http_handler._AIOHTTP_SUPPORTS_SOCKET_FACTORY", True
     ), patch.object(
         AsyncHTTPHandler,
         "_make_tcp_keepalive_socket_factory",
