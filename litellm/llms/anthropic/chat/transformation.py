@@ -395,6 +395,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 },
             )
 
+            # Anthropic requires input_schema.type to be "object". Normalize
+            # schemas from external sources (MCP servers, OpenAI callers) that
+            # may omit the type field or use a non-object type.
+            if _input_schema.get("type") != "object":
+                _input_schema["type"] = "object"
+                if "properties" not in _input_schema:
+                    _input_schema["properties"] = {}
+
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
                 k: v for k, v in _input_schema.items() if k in _allowed_properties
