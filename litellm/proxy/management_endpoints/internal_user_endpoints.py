@@ -1820,6 +1820,118 @@ async def add_internal_user_to_organization(
         raise Exception(f"Failed to add user to organization: {str(e)}")
 
 
+async def _resolve_org_filter_for_user_search(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: Optional[str],
+    prisma_client: Any,
+    user_api_key_cache: Any,
+    proxy_logging_obj: Any,
+) -> Optional[List[str]]:
+    """
+    Return a list of org IDs to filter by, or ``None`` for no filter.
+
+    Reads the ``scope_user_search_to_org`` UI-setting flag and applies
+    role-based access rules when the flag is ON.
+    """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_admin,
+    )
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        get_ui_settings_cached,
+    )
+
+    ui_settings = await get_ui_settings_cached()
+    if not ui_settings.get("scope_user_search_to_org", False):
+        return None  # flag OFF — no filtering
+
+    if _user_has_admin_view(user_api_key_dict):
+        return None  # proxy admin — see everything
+
+    # Try to resolve org admin memberships
+    caller_user = None
+    if user_api_key_dict.user_id is not None:
+        try:
+            caller_user = await get_user_object(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ValueError:
+            caller_user = None
+
+    org_admin_org_ids: List[str] = []
+    if caller_user is not None:
+        org_admin_org_ids = [
+            m.organization_id
+            for m in (caller_user.organization_memberships or [])
+            if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        ]
+
+    if org_admin_org_ids:
+        return org_admin_org_ids
+
+    if team_id is not None:
+        return await _resolve_team_org_filter(
+            user_api_key_dict, team_id, prisma_client,
+            user_api_key_cache, proxy_logging_obj,
+        )
+
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
+        },
+    )
+
+
+async def _resolve_team_org_filter(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: str,
+    prisma_client: Any,
+    user_api_key_cache: Any,
+    proxy_logging_obj: Any,
+) -> List[str]:
+    """Look up the team and return its org as a filter list, or raise 403."""
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_admin,
+    )
+
+    try:
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"scope_user_search_to_org is enabled but team '{team_id}' was not found."
+            },
+        )
+
+    if not _is_user_team_admin(user_api_key_dict, team_obj):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "scope_user_search_to_org is enabled. You must be an admin of this team to search users."
+            },
+        )
+
+    if team_obj.organization_id:
+        return [team_obj.organization_id]
+
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "scope_user_search_to_org is enabled and this team is not part of an organization. Contact your proxy admin to adjust this setting."
+        },
+    )
+
+
 @router.get(
     "/user/filter/ui",
     tags=["Internal User management"],
@@ -1861,95 +1973,23 @@ async def ui_view_users(
       - Team admins for an org-bound team see users in that org.
       - Others receive a 403.
     """
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_team_admin,
-    )
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
-    )
-    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
-        get_ui_settings_cached,
     )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     try:
-        # Read the scope_user_search_to_org flag (cached)
-        ui_settings = await get_ui_settings_cached()
-        scope_flag = bool(ui_settings.get("scope_user_search_to_org", False))
-
-        org_filter_ids: Optional[List[str]] = None
-
-        if scope_flag:
-            is_proxy_admin = _user_has_admin_view(user_api_key_dict)
-            if not is_proxy_admin:
-                # Try to resolve org admin memberships
-                caller_user = None
-                if user_api_key_dict.user_id is not None:
-                    try:
-                        caller_user = await get_user_object(
-                            user_id=user_api_key_dict.user_id,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                            user_id_upsert=False,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    except ValueError:
-                        caller_user = None
-
-                org_admin_org_ids: List[str] = []
-                if caller_user is not None:
-                    org_admin_org_ids = [
-                        m.organization_id
-                        for m in (caller_user.organization_memberships or [])
-                        if m.user_role == LitellmUserRoles.ORG_ADMIN.value
-                    ]
-
-                if org_admin_org_ids:
-                    org_filter_ids = org_admin_org_ids
-                elif team_id is not None:
-                    # Look up the team via cached helper
-                    try:
-                        team_obj = await get_team_object(
-                            team_id=team_id,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    except HTTPException:
-                        raise HTTPException(
-                            status_code=403,
-                            detail={
-                                "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
-                            },
-                        )
-                    if _is_user_team_admin(user_api_key_dict, team_obj):
-                        if team_obj.organization_id:
-                            org_filter_ids = [team_obj.organization_id]
-                        else:
-                            raise HTTPException(
-                                status_code=403,
-                                detail={
-                                    "error": "scope_user_search_to_org is enabled and this team is not part of an organization. Contact your proxy admin to adjust this setting."
-                                },
-                            )
-                    else:
-                        raise HTTPException(
-                            status_code=403,
-                            detail={
-                                "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
-                            },
-                        )
-                else:
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
-                        },
-                    )
+        org_filter_ids = await _resolve_org_filter_for_user_search(
+            user_api_key_dict=user_api_key_dict,
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
         # Calculate offset for pagination
         skip = (page - 1) * page_size
