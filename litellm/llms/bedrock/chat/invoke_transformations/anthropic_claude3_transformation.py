@@ -108,6 +108,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         _anthropic_request.pop("stream", None)
         # Bedrock Invoke doesn't support output_format parameter
         _anthropic_request.pop("output_format", None)
+        # Bedrock Invoke doesn't support output_config parameter
+        # Fixes: https://github.com/BerriAI/litellm/issues/22797
+        _anthropic_request.pop("output_config", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
 

@@ -898,19 +898,24 @@ export const keyCreateForAgentCall = async (
   agentId: string,
   keyAlias: string,
   models: string[],
+  metadata?: Record<string, any>,
 ) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
+  const body: Record<string, any> = {
+    agent_id: agentId,
+    key_alias: keyAlias,
+    models: models.length > 0 ? models : [],
+  };
+  if (metadata && Object.keys(metadata).length > 0) {
+    body.metadata = metadata;
+  }
   const response = await fetch(url, {
     method: "POST",
     headers: {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      agent_id: agentId,
-      key_alias: keyAlias,
-      models: models.length > 0 ? models : [],
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -7617,9 +7622,10 @@ export const getMajorAirlines = async (accessToken: string) => {
   }
 };
 
-export const getAgentsList = async (accessToken: string) => {
+export const getAgentsList = async (accessToken: string, healthCheck: boolean = false) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
+    const params = healthCheck ? "?health_check=true" : "";
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents${params}` : `/v1/agents${params}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -7705,6 +7711,10 @@ export const patchAgentCall = async (
     agent_name?: string;
     litellm_params?: Record<string, any>;
     agent_card_params?: Record<string, any>;
+    tpm_limit?: number | null;
+    rpm_limit?: number | null;
+    session_tpm_limit?: number | null;
+    session_rpm_limit?: number | null;
   },
 ) => {
   try {

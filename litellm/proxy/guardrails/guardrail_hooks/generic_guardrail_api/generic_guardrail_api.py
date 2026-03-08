@@ -341,6 +341,30 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = tools
         return return_inputs
 
+    def _handle_guardrail_request_error(
+        self,
+        error: Exception,
+        inputs: GenericGuardrailAPIInputs,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"],
+        is_unreachable: bool = True,
+    ) -> GenericGuardrailAPIInputs:
+        if is_unreachable and self.unreachable_fallback == "fail_open":
+            http_status_code = getattr(
+                getattr(error, "response", None), "status_code", None
+            )
+            return self._fail_open_passthrough(
+                inputs=inputs,
+                input_type=input_type,
+                logging_obj=logging_obj,
+                error=error,
+                **({"http_status_code": http_status_code} if http_status_code else {}),
+            )
+        verbose_proxy_logger.error(
+            "Generic Guardrail API: failed to make request: %s", str(error)
+        )
+        raise Exception(f"Generic Guardrail API failed: {str(error)}")
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -466,58 +490,24 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
 
         except GuardrailRaisedException:
-            # Re-raise guardrail exceptions as-is
             raise
         except Timeout as e:
-            # AsyncHTTPHandler wraps httpx.TimeoutException into litellm.Timeout
-            if self.unreachable_fallback == "fail_open":
-                return self._fail_open_passthrough(
-                    inputs=inputs,
-                    input_type=input_type,
-                    logging_obj=logging_obj,
-                    error=e,
-                )
-
-            verbose_proxy_logger.error(
-                "Generic Guardrail API: failed to make request: %s", str(e)
+            return self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj
             )
-            raise Exception(f"Generic Guardrail API failed: {str(e)}")
         except httpx.HTTPStatusError as e:
-            # Common reverse-proxy/LB failures can present as HTTP errors even when the backend is unreachable.
-            status_code = getattr(getattr(e, "response", None), "status_code", None)
-            if self.unreachable_fallback == "fail_open" and status_code in (
-                502,
-                503,
-                504,
-            ):
-                return self._fail_open_passthrough(
-                    inputs=inputs,
-                    input_type=input_type,
-                    logging_obj=logging_obj,
-                    error=e,
-                    http_status_code=status_code,
-                )
-
-            verbose_proxy_logger.error(
-                "Generic Guardrail API: failed to make request: %s", str(e)
+            status_code = getattr(
+                getattr(e, "response", None), "status_code", None
             )
-            raise Exception(f"Generic Guardrail API failed: {str(e)}")
+            is_unreachable = status_code in (502, 503, 504)
+            return self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj, is_unreachable=is_unreachable
+            )
         except httpx.RequestError as e:
-            # Guardrail endpoint is unreachable (DNS/connect/timeout/etc)
-            if self.unreachable_fallback == "fail_open":
-                return self._fail_open_passthrough(
-                    inputs=inputs,
-                    input_type=input_type,
-                    logging_obj=logging_obj,
-                    error=e,
-                )
-
-            verbose_proxy_logger.error(
-                "Generic Guardrail API: failed to make request: %s", str(e)
+            return self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj
             )
-            raise Exception(f"Generic Guardrail API failed: {str(e)}")
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Generic Guardrail API: failed to make request: %s", str(e)
+            return self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj, is_unreachable=False
             )
-            raise Exception(f"Generic Guardrail API failed: {str(e)}")

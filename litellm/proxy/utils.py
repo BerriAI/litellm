@@ -325,7 +325,7 @@ class ProxyLogging:
             if email_logger_class is not None:
                 # All email logger classes now accept internal_usage_cache
                 self.email_logging_instance = email_logger_class(
-                    internal_usage_cache=self.internal_usage_cache.dual_cache,
+                    internal_usage_cache=self.internal_usage_cache.dual_cache,  # type: ignore[call-arg]
                 )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()

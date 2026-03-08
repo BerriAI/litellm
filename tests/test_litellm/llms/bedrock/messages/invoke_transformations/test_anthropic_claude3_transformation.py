@@ -275,3 +275,70 @@ def test_remove_scope_from_cache_control():
     # Verify scope is removed from messages
     assert "scope" not in request["messages"][0]["content"][0]["cache_control"]
     assert request["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+
+
+def test_bedrock_messages_strips_output_config():
+    """
+    Ensure output_config is stripped from the request before sending to
+    Bedrock Invoke, which doesn't support this Anthropic-specific parameter.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/22797
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "effort": "high",
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_config" not in result, (
+        "output_config should be stripped — Bedrock Invoke rejects it"
+    )
+    # Other params should be preserved
+    assert result.get("max_tokens") == 4096
+
+
+def test_bedrock_messages_strips_output_config_with_output_format():
+    """
+    When both output_config and output_format are present, both should be
+    stripped (output_format is converted to inline schema, output_config
+    is simply dropped).
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "low"},
+        "output_format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+            },
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_config" not in result
+    assert "output_format" not in result

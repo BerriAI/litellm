@@ -126,6 +126,18 @@ async def acreate_fine_tuning_job(
         raise e
 
 
+def _build_fine_tuning_job_data(model, training_file, hyperparameters, suffix, validation_file, integrations, seed):
+    return FineTuningJobCreate(
+        model=model,
+        training_file=training_file,
+        hyperparameters=hyperparameters,
+        suffix=suffix,
+        validation_file=validation_file,
+        integrations=integrations,
+        seed=seed,
+    )
+
+
 def _resolve_fine_tuning_timeout(
     timeout: Any,
     custom_llm_provider: str,
@@ -206,19 +218,9 @@ def create_fine_tuning_job(
                 or os.getenv("OPENAI_API_KEY")
             )
 
-            create_fine_tuning_job_data = FineTuningJobCreate(
-                model=model,
-                training_file=training_file,
-                hyperparameters=_oai_hyperparameters,
-                suffix=suffix,
-                validation_file=validation_file,
-                integrations=integrations,
-                seed=seed,
-            )
-
-            create_fine_tuning_job_data_dict = create_fine_tuning_job_data.model_dump(
-                exclude_none=True
-            )
+            create_fine_tuning_job_data_dict = _build_fine_tuning_job_data(
+                model, training_file, _oai_hyperparameters, suffix, validation_file, integrations, seed,
+            ).model_dump(exclude_none=True)
 
             response = openai_fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,
@@ -260,20 +262,10 @@ def create_fine_tuning_job(
             # Prepare Azure-specific parameters for extra_body
             extra_body = _prepare_azure_extra_body(extra_body, kwargs, azure_specific_hyperparams)
             
-            create_fine_tuning_job_data = FineTuningJobCreate(
-                model=model,
-                training_file=training_file,
-                hyperparameters=_oai_hyperparameters,
-                suffix=suffix,
-                validation_file=validation_file,
-                integrations=integrations,
-                seed=seed,
-            )
+            create_fine_tuning_job_data_dict = _build_fine_tuning_job_data(
+                model, training_file, _oai_hyperparameters, suffix, validation_file, integrations, seed,
+            ).model_dump(exclude_none=True)
 
-            create_fine_tuning_job_data_dict = create_fine_tuning_job_data.model_dump(
-                exclude_none=True
-            )
-            
             # Add extra_body if it has Azure-specific parameters
             if extra_body:
                 create_fine_tuning_job_data_dict["extra_body"] = extra_body
@@ -303,18 +295,11 @@ def create_fine_tuning_job(
             vertex_credentials = optional_params.vertex_credentials or get_secret_str(
                 "VERTEXAI_CREDENTIALS"
             )
-            create_fine_tuning_job_data = FineTuningJobCreate(
-                model=model,
-                training_file=training_file,
-                hyperparameters=_oai_hyperparameters,
-                suffix=suffix,
-                validation_file=validation_file,
-                integrations=integrations,
-                seed=seed,
-            )
             response = vertex_fine_tuning_apis_instance.create_fine_tuning_job(
                 _is_async=_is_async,
-                create_fine_tuning_job_data=create_fine_tuning_job_data,
+                create_fine_tuning_job_data=_build_fine_tuning_job_data(
+                    model, training_file, _oai_hyperparameters, suffix, validation_file, integrations, seed,
+                ),
                 vertex_credentials=vertex_credentials,
                 vertex_project=vertex_ai_project,
                 vertex_location=vertex_ai_location,
