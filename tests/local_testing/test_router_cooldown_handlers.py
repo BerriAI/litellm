@@ -36,7 +36,7 @@ from litellm.types.router import (
 @pytest.mark.asyncio
 async def test_cooldown_badrequest_error():
     """
-    Test 1. It SHOULD NOT cooldown a deployment on a BadRequestError
+    Test 1. BadRequestError SHOULD cooldown a deployment (all errors trigger cooldown).
     """
 
     router = litellm.Router(
@@ -58,9 +58,8 @@ async def test_cooldown_badrequest_error():
         allowed_fails=0,
     )
 
-    # Act & Assert
+    # Act & Assert - first call with bad param triggers cooldown
     try:
-
         response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "gm"}],
@@ -71,15 +70,13 @@ async def test_cooldown_badrequest_error():
 
     await asyncio.sleep(3)  # wait for deployment to get cooled-down
 
-    response = await router.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "gm"}],
-        mock_response="hello",
-    )
-
-    assert response is not None
-
-    print(response)
+    # Second call should fail because the deployment is cooled down
+    with pytest.raises(Exception):
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "gm"}],
+            mock_response="hello",
+        )
 
 
 @pytest.mark.asyncio

@@ -67,28 +67,9 @@ def _is_cooldown_required(
                 return False
             exception_status = int(exception_status)
 
-        if exception_status >= 400 and exception_status < 500:
-            if exception_status == 429:
-                # Cool down 429 Rate Limit Errors
-                return True
-
-            elif exception_status == 401:
-                # Cool down 401 Auth Errors
-                return True
-
-            elif exception_status == 408:
-                return True
-
-            elif exception_status == 404:
-                return True
-
-            else:
-                # Do NOT cool down all other 4XX Errors
-                return False
-
-        else:
-            # should cool down for all other errors
-            return True
+        # All errors trigger cooldown — failed deployment gets excluded
+        # from next retry so the router picks a different one
+        return True
 
     except Exception:
         # Catch all - if any exceptions default to cooling down
