@@ -20,6 +20,8 @@ vi.mock("./agents/agent_card_grid", () => ({
   ),
 }));
 
+// Note: agents.tsx no longer uses AgentCardGrid — it renders a Table directly.
+
 vi.mock("./agents/agent_info", () => ({
   default: () => <div data-testid="agent-info" />,
 }));
@@ -54,19 +56,19 @@ describe("AgentsPanel", () => {
     expect(screen.queryByText("+ Add New Agent")).not.toBeInTheDocument();
   });
 
-  it("should pass isAdmin=true to AgentCardGrid for admin role", async () => {
+  it("should show Actions column header for admin role", async () => {
     render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     await waitFor(() => {
-      const grid = screen.getByTestId("agent-card-grid");
-      expect(grid).toHaveAttribute("data-is-admin", "true");
+      expect(screen.getByRole("columnheader", { name: /actions/i })).toBeInTheDocument();
     });
   });
 
-  it("should pass isAdmin=false to AgentCardGrid for internal user role", async () => {
+  it("should not show Actions column header for internal user role", async () => {
     render(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
     await waitFor(() => {
-      const grid = screen.getByTestId("agent-card-grid");
-      expect(grid).toHaveAttribute("data-is-admin", "false");
+      expect(screen.queryByRole("columnheader", { name: /actions/i })).not.toBeInTheDocument();
+      // confirm table is rendered (not still loading)
+      expect(screen.getByRole("table")).toBeInTheDocument();
     });
   });
 
