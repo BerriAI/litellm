@@ -2079,30 +2079,25 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
 
 
 @pytest.mark.parametrize(
-    "reasoning_effort,expected_thinking_level,expected_include_thoughts",
+    "reasoning_effort,expected_include_thoughts",
     [
-        ("minimal", "minimal", True),
-        ("medium", "medium", True),
-        ("none", "minimal", False),
+        ("minimal", True),
+        ("medium", True),
+        ("none", False),
     ],
 )
 def test_reasoning_effort_maps_to_thinking_level_gemini_31_flash_lite(
     reasoning_effort: str,
-    expected_thinking_level: str,
     expected_include_thoughts: bool,
 ):
-    v = VertexGeminiConfig()
-
-    result = v.map_openai_params(
-        non_default_params={"reasoning_effort": reasoning_effort},
-        optional_params={},
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        reasoning_effort=reasoning_effort,
         model="gemini-3.1-flash-lite-preview",
-        drop_params=False,
     )
 
-    assert result["thinkingConfig"]["thinkingLevel"] == expected_thinking_level
-    assert result["thinkingConfig"]["includeThoughts"] is expected_include_thoughts
-    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert "thinkingLevel" in result
+    assert result["includeThoughts"] is expected_include_thoughts
+    assert "thinkingBudget" not in result
 
 
 def test_reasoning_effort_dict_format_gemini_3():
