@@ -105,8 +105,7 @@ async def get_agents(
     request: Request,
     health_check: bool = Query(
         False,
-        description="When true, performs a GET request to each agent's URL and only returns agents with reachable URLs.",
-    ),
+        description="When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out.",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
     """
