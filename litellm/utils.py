@@ -3864,6 +3864,7 @@ def get_optional_params(  # noqa: PLR0915
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     safety_identifier: Optional[str] = None,
+    store: Optional[bool] = None,
     **kwargs,
 ):
     passed_params = locals().copy()

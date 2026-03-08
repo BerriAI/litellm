@@ -407,6 +407,7 @@ async def acompletion(  # noqa: PLR0915
     verbosity: Optional[Literal["low", "medium", "high"]] = None,
     safety_identifier: Optional[str] = None,
     service_tier: Optional[str] = None,
+    store: Optional[bool] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -557,6 +558,7 @@ async def acompletion(  # noqa: PLR0915
         "reasoning_effort": reasoning_effort,
         "safety_identifier": safety_identifier,
         "service_tier": service_tier,
+        "store": store,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -1035,6 +1037,7 @@ def completion(  # type: ignore # noqa: PLR0915
     extra_headers: Optional[dict] = None,
     safety_identifier: Optional[str] = None,
     service_tier: Optional[str] = None,
+    store: Optional[bool] = None,
     # soon to be deprecated params by OpenAI
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
@@ -1463,6 +1466,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "web_search_options": web_search_options,
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
+            "store": store,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
         }
         optional_params = get_optional_params(
