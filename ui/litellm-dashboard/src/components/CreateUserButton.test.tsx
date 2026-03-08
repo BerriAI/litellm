@@ -10,6 +10,7 @@ vi.mock("./networking", () => ({
   userCreateCall: vi.fn(),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   invitationCreateCall: vi.fn(),
+  organizationMemberAddCall: vi.fn(),
   getProxyUISettings: vi.fn().mockResolvedValue({
     PROXY_BASE_URL: null,
     PROXY_LOGOUT_URL: null,
@@ -26,6 +27,7 @@ vi.mock("./bulk_create_users_button", () => ({
 const mockUserCreateCall = vi.mocked(networking.userCreateCall);
 const mockInvitationCreateCall = vi.mocked(networking.invitationCreateCall);
 const mockGetProxyUISettings = vi.mocked(networking.getProxyUISettings);
+const mockOrganizationMemberAddCall = vi.mocked(networking.organizationMemberAddCall);
 const mockNotificationsManager = vi.mocked(NotificationsManager);
 
 const createQueryClient = () =>
@@ -260,5 +262,74 @@ describe("CreateUserButton", { timeout: 20000 }, () => {
     await waitFor(() => {
       expect(mockNotificationsManager.success).toHaveBeenCalledWith("API user Created");
     });
+  });
+
+  it("should send organizations list in POST body when organizationIds prop is provided", async () => {
+    const user = userEvent.setup();
+    mockUserCreateCall.mockResolvedValue({ data: { user_id: "org-user" } });
+    mockInvitationCreateCall.mockResolvedValue({
+      id: "inv-org",
+      user_id: "org-user",
+      has_user_setup_sso: false,
+    } as any);
+
+    const orgIds = [{ organization_id: "org-1", organization_alias: "My Org" }];
+
+    renderWithProviders(
+      <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} organizationIds={orgIds} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /invite user/i });
+    await user.type(within(dialog).getByLabelText(/user email/i), "org@example.com");
+    await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+    await user.click(screen.getByText("User"));
+    await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+    await waitFor(() => {
+      expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
+        organizations: ["org-1"],
+      }));
+    });
+    // organization_ids should not be in the payload sent to the backend
+    expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.not.objectContaining({
+      organization_ids: expect.anything(),
+    }));
+  });
+
+  it("should not call organizationMemberAddCall after user creation", async () => {
+    const user = userEvent.setup();
+    mockUserCreateCall.mockResolvedValue({ data: { user_id: "no-member-add-user" } });
+    mockInvitationCreateCall.mockResolvedValue({
+      id: "inv-nma",
+      user_id: "no-member-add-user",
+      has_user_setup_sso: false,
+    } as any);
+
+    const orgIds = [{ organization_id: "org-1", organization_alias: "My Org" }];
+
+    renderWithProviders(
+      <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} organizationIds={orgIds} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /invite user/i });
+    await user.type(within(dialog).getByLabelText(/user email/i), "nomemberadd@example.com");
+    await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+    await user.click(screen.getByText("User"));
+    await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+    await waitFor(() => {
+      expect(mockUserCreateCall).toHaveBeenCalled();
+    });
+    expect(mockOrganizationMemberAddCall).not.toHaveBeenCalled();
   });
 });

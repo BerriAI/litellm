@@ -1228,3 +1228,67 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
         valid_token=valid_token,
         request_data={},
     )
+
+
+# ── _user_is_org_admin tests ──────────────────────────────────────────────────
+
+from datetime import datetime
+
+from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
+from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+
+
+def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
+    membership = LiteLLM_OrganizationMembershipTable(
+        user_id="org-admin-user",
+        organization_id=org_id,
+        user_role=LitellmUserRoles.ORG_ADMIN.value,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+    )
+    return LiteLLM_UserTable(
+        user_id="org-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=[membership],
+    )
+
+
+def test_user_is_org_admin_with_organizations_list():
+    """Org admin can be identified via the `organizations` list field (used by /user/new)."""
+    user_obj = _make_org_admin_user("org-1")
+    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is True
+
+
+def test_user_is_org_admin_with_singular_organization_id():
+    """Backward-compat: org admin can still be identified via singular `organization_id`."""
+    user_obj = _make_org_admin_user("org-1")
+    assert _user_is_org_admin({"organization_id": "org-1"}, user_obj) is True
+
+
+def test_user_is_org_admin_organizations_list_wrong_org():
+    """Non-member of the requested org is not considered an org admin for it."""
+    user_obj = _make_org_admin_user("org-2")
+    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+
+
+def test_user_is_org_admin_no_org_fields():
+    """Returns False when neither `organization_id` nor `organizations` is in the request."""
+    user_obj = _make_org_admin_user("org-1")
+    assert _user_is_org_admin({}, user_obj) is False
+
+
+def test_non_org_admin_with_organizations_list():
+    """A regular internal user is not an org admin even if they are a member of the org."""
+    membership = LiteLLM_OrganizationMembershipTable(
+        user_id="regular-user",
+        organization_id="org-1",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+    )
+    user_obj = LiteLLM_UserTable(
+        user_id="regular-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=[membership],
+    )
+    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False

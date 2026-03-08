@@ -39,7 +39,7 @@ interface ViewUserDashboardProps {
   userID: string | null;
   teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
-  orgAdminOrgIds?: string[] | null;
+  orgAdminOrgIds?: Array<{organization_id: string, organization_alias: string}> | null;
 }
 
 interface FilterState {
@@ -262,7 +262,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         debouncedFilters.sso_user_id || null,
         debouncedFilters.sort_by,
         debouncedFilters.sort_order,
-        orgAdminOrgIds ?? null,
+        orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
       );
     },
     enabled: Boolean(accessToken && token && userRole && userID && orgAdminOrgIds !== undefined),
