@@ -500,8 +500,9 @@ async def test_get_users_includes_timestamps(mocker):
         mock_get_user_key_counts,
     )
 
-    # Call get_users function directly
-    response = await get_users(page=1, page_size=1)
+    # Call get_users function directly with proxy admin auth
+    admin_key = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    response = await get_users(page=1, page_size=1, user_api_key_dict=admin_key)
 
     print("user /list response: ", response)
 
@@ -1423,8 +1424,10 @@ async def test_get_users_user_id_partial_match(mocker):
         mock_get_user_key_counts,
     )
 
+    admin_key = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
     captured_where_conditions.clear()
-    await get_users(user_ids="test-user", page=1, page_size=1)
+    await get_users(user_ids="test-user", page=1, page_size=1, user_api_key_dict=admin_key)
 
     assert "user_id" in captured_where_conditions
     assert "contains" in captured_where_conditions["user_id"]
@@ -1432,7 +1435,7 @@ async def test_get_users_user_id_partial_match(mocker):
     assert captured_where_conditions["user_id"]["mode"] == "insensitive"
 
     captured_where_conditions.clear()
-    await get_users(user_ids="user1,user2,user3", page=1, page_size=1)
+    await get_users(user_ids="user1,user2,user3", page=1, page_size=1, user_api_key_dict=admin_key)
 
     assert "user_id" in captured_where_conditions
     assert "in" in captured_where_conditions["user_id"]
