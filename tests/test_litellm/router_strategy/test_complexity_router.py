@@ -339,23 +339,33 @@ class TestPreRoutingHook:
 
     @pytest.mark.asyncio
     async def test_pre_routing_hook_no_messages(self, complexity_router):
-        """Test pre-routing hook returns None when no messages."""
+        """Test pre-routing hook routes to MEDIUM tier when no messages provided.
+
+        Returning None would cause the raw auto_router/complexity_router deployment
+        to be selected, resulting in LiteLLMUnknownProvider errors.
+        """
         result = await complexity_router.async_pre_routing_hook(
             model="test-model",
             request_kwargs={},
             messages=None,
         )
-        assert result is None
+        assert result is not None
+        assert result.model == "gpt-4o"  # MEDIUM tier fallback (no default_model configured)
 
     @pytest.mark.asyncio
     async def test_pre_routing_hook_empty_messages(self, complexity_router):
-        """Test pre-routing hook returns None when messages empty."""
+        """Test pre-routing hook routes to MEDIUM tier when messages list is empty.
+
+        Returning None would cause the raw auto_router/complexity_router deployment
+        to be selected, resulting in LiteLLMUnknownProvider errors.
+        """
         result = await complexity_router.async_pre_routing_hook(
             model="test-model",
             request_kwargs={},
             messages=[],
         )
-        assert result is None
+        assert result is not None
+        assert result.model == "gpt-4o"  # MEDIUM tier fallback (no default_model configured)
 
     @pytest.mark.asyncio
     async def test_pre_routing_hook_with_system_prompt(self, complexity_router):
