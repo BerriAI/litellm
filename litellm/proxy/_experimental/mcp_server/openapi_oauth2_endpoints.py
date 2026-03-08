@@ -52,6 +52,20 @@ _pending_oauth2_states: Dict[str, dict] = {}
 _STATE_TTL_SECONDS = 600  # 10 minutes
 _STATES_MAX_SIZE = 1000
 
+# Short-lived cache for negative credential status checks.
+# Keyed by (user_id, server_id); value is a monotonic timestamp of the last
+# "not connected" DB read.  Populated by openapi_oauth2_status when the DB
+# returns False, and cleared by openapi_oauth2_callback when a token is
+# successfully stored — so polling does not issue a DB query every 2 seconds
+# during the entire OAuth consent window.
+#
+# This is intentionally SEPARATE from _byok_cred_cache (server.py) to avoid
+# the race condition where a None sentinel written here could cause tool calls
+# to return 401 immediately after OAuth completes.  Tool calls only use
+# _byok_cred_cache; status polling only uses _byok_status_neg_cache.
+_byok_status_neg_cache: Dict[tuple, float] = {}
+_BYOK_STATUS_NEG_TTL = 5  # seconds — short enough that polling sees "connected" quickly
+
 router = APIRouter(tags=["mcp"])
 
 
@@ -387,7 +401,22 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
     # RFC 6749 §2.3: client credentials can be sent as POST body
     # (client_secret_post, the default) or as HTTP Basic auth
     # (client_secret_basic, required by some providers like Okta/Auth0).
-    auth_method = server.token_endpoint_auth_method
+    # Normalize both the short names ("basic", "post") and the RFC-standard names
+    # ("client_secret_basic", "client_secret_post") to the short names used internally.
+    _raw_auth_method = server.token_endpoint_auth_method
+    if _raw_auth_method in ("basic", "client_secret_basic"):
+        auth_method = "basic"
+    elif _raw_auth_method in ("post", "client_secret_post", ""):
+        auth_method = "post"
+    else:
+        verbose_proxy_logger.warning(
+            "openapi_oauth2_callback: unknown token_endpoint_auth_method=%r for server=%s; "
+            "expected 'post'/'client_secret_post' or 'basic'/'client_secret_basic'. "
+            "Defaulting to 'post' (body credentials).",
+            _raw_auth_method,
+            server_id,
+        )
+        auth_method = "post"
     token_headers: Dict[str, str] = {"Accept": "application/json"}
     if auth_method == "basic":
         basic_creds = base64.b64encode(
@@ -533,6 +562,10 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
             status_code=500,
         )
 
+    # Clear the status-endpoint negative cache so the next status poll sees
+    # "connected" immediately without waiting for the 5-second TTL to expire.
+    _byok_status_neg_cache.pop((user_id, server_id), None)
+
     # Best-effort cache flush; a failure here must NOT mask the successful write above.
     try:
         from litellm.proxy._experimental.mcp_server.server import (
@@ -577,10 +610,10 @@ async def openapi_oauth2_status(
             {"connected": False, "server_id": server_id, "server_name": server_name}
         )
 
-    # Check the shared credential cache before issuing a DB query.
-    # The cache is populated by _get_byok_credential / _check_byok_credential
-    # when a tool call fetches the real token.  We access it via the public
-    # get_cached_byok_credential() helper to avoid tight coupling to internals.
+    # 1. Check the shared credential cache (populated by tool-call paths).
+    # get_cached_byok_credential() is the public helper in server.py that reads
+    # _byok_cred_cache without exposing internals.  This returns a real token
+    # (or None) only after a tool call has already fetched the credential.
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             get_cached_byok_credential,
@@ -597,8 +630,22 @@ async def openapi_oauth2_status(
                 }
             )
     except Exception:
-        pass  # If cache import fails, fall through to DB
+        pass  # If cache import fails, fall through
 
+    # 2. Check the short-lived negative status cache.
+    # During the OAuth polling window, the UI polls every 2 seconds.  Without
+    # this cache, every poll issues a DB query.  Caching "not connected" for
+    # _BYOK_STATUS_NEG_TTL seconds reduces DB pressure significantly.
+    # The callback clears this entry on successful token storage, so the UI
+    # sees "connected" within one polling interval (2 s) of OAuth completing.
+    neg_key = (user_id, server_id)
+    neg_ts = _byok_status_neg_cache.get(neg_key)
+    if neg_ts is not None and (time.monotonic() - neg_ts < _BYOK_STATUS_NEG_TTL):
+        return JSONResponse(
+            {"connected": False, "server_id": server_id, "server_name": server_name}
+        )
+
+    # 3. Fall through to DB.
     try:
         connected = await has_user_credential(
             prisma_client=prisma_client,
@@ -613,6 +660,12 @@ async def openapi_oauth2_status(
             exc,
         )
         connected = False
+
+    if not connected:
+        _byok_status_neg_cache[neg_key] = time.monotonic()
+    else:
+        # Positive result: clear the negative cache entry if it exists.
+        _byok_status_neg_cache.pop(neg_key, None)
 
     return JSONResponse(
         {"connected": connected, "server_id": server_id, "server_name": server_name}

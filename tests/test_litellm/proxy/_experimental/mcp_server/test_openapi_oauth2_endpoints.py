@@ -148,6 +148,7 @@ async def test_callback_provider_error_in_json_body():
     mock_server.token_url = "https://provider.example/token"
     mock_server.client_id = "cid"
     mock_server.client_secret = "csecret"
+    mock_server.token_endpoint_auth_method = "post"
 
     # Simulate provider returning HTTP 200 with an error body
     mock_response = MagicMock()
@@ -260,6 +261,7 @@ async def test_callback_stores_refresh_token_as_json():
     mock_server.client_secret = "csecret"
     mock_server.server_name = "TestProvider"
     mock_server.name = "test"
+    mock_server.token_endpoint_auth_method = "post"
 
     mock_response = MagicMock()
     mock_response.headers = {"content-type": "application/json"}
@@ -337,6 +339,7 @@ async def test_callback_stores_plain_token_when_no_refresh_token():
     mock_server.client_secret = "csecret"
     mock_server.server_name = "TestProvider"
     mock_server.name = "test"
+    mock_server.token_endpoint_auth_method = "post"
 
     mock_response = MagicMock()
     mock_response.headers = {"content-type": "application/json"}
@@ -495,6 +498,7 @@ async def test_callback_url_encoded_success_response():
     mock_server.client_secret = "csecret"
     mock_server.server_name = "GitHub"
     mock_server.name = "github"
+    mock_server.token_endpoint_auth_method = "post"
 
     mock_response = MagicMock()
     # GitHub returns URL-encoded form by default when Accept header is not set
@@ -566,6 +570,7 @@ async def test_callback_url_encoded_error_response():
     mock_server.client_secret = "csecret"
     mock_server.server_name = "GitHub"
     mock_server.name = "github"
+    mock_server.token_endpoint_auth_method = "post"
 
     mock_response = MagicMock()
     mock_response.headers = {"content-type": "application/x-www-form-urlencoded"}
