@@ -6366,21 +6366,13 @@ async def test_build_key_filter_team_id_scoped():
         include_created_by_keys=True,
     )
 
-    def _collect_team_id_filters(d):
-        results = []
-        if isinstance(d, dict):
-            for k, v in d.items():
-                if k == "team_id":
-                    results.append(v)
-                else:
-                    results.extend(_collect_team_id_filters(v))
-        elif isinstance(d, list):
-            for item in d:
-                results.extend(_collect_team_id_filters(item))
-        return results
-
-    team_id_filters = _collect_team_id_filters(where)
-    assert "team-A" in team_id_filters, f"Expected global team_id='team-A' AND filter, got: {where}"
+    # The team_id filter must be a direct child of the outermost AND,
+    # not buried inside an OR branch (which was the bug).
+    assert "AND" in where, f"Expected top-level AND, got: {where}"
+    outer_and = where["AND"]
+    assert {"team_id": "team-A"} in outer_and, (
+        f"Expected {{'team_id': 'team-A'}} as a direct AND condition, got: {outer_and}"
+    )
 
 
 @pytest.mark.asyncio
