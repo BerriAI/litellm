@@ -1104,6 +1104,7 @@ export const userListCall = async (
   sso_user_id: string | null = null,
   sortBy: string | null = null,
   sortOrder: "asc" | "desc" | null = null,
+  organizationIds: string[] | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -1149,6 +1150,10 @@ export const userListCall = async (
 
     if (sortOrder) {
       queryParams.append("sort_order", sortOrder);
+    }
+
+    if (organizationIds && organizationIds.length > 0) {
+      queryParams.append("organization_id", organizationIds.join(","));
     }
 
     const queryString = queryParams.toString();

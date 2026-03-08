@@ -19,6 +19,7 @@ import {
   getProxyUISettings,
   invitationCreateCall,
   modelAvailableCall,
+  organizationMemberAddCall,
   userCreateCall,
 } from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
@@ -44,6 +45,7 @@ interface CreateuserProps {
   possibleUIRoles: null | Record<string, Record<string, string>>;
   onUserCreated?: (userId: string) => void;
   isEmbedded?: boolean;
+  organizationId?: string | null;
 }
 
 // Define an interface for the UI settings
@@ -55,7 +57,7 @@ interface UISettings {
 }
 
 export const CreateUserButton: React.FC<CreateuserProps> = ({
-  userID, accessToken, teams, possibleUIRoles, onUserCreated, isEmbedded = false }) => {
+  userID, accessToken, teams, possibleUIRoles, onUserCreated, isEmbedded = false, organizationId }) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
@@ -111,6 +113,18 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       await queryClient.invalidateQueries({ queryKey: ["userList"] });
       setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;
+
+      // Auto-add user to the org admin's organization
+      if (organizationId && user_id) {
+        try {
+          await organizationMemberAddCall(accessToken, organizationId, {
+            role: "internal_user",
+            user_id: user_id,
+          });
+        } catch (orgError) {
+          console.error("Failed to add user to organization:", orgError);
+        }
+      }
 
       if (onUserCreated && isEmbedded) {
         onUserCreated(user_id);

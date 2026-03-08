@@ -1502,6 +1502,10 @@ async def get_users(
     sort_order: str = fastapi.Query(
         default="asc", description="Sort order ('asc' or 'desc')"
     ),
+    organization_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter users by organization membership. Comma-separated for multiple orgs.",
+    ),
 ):
     """
     Get a paginated list of users with filtering and sorting options.
@@ -1574,6 +1578,14 @@ async def get_users(
         sso_id_list = [sid.strip() for sid in sso_user_ids.split(",") if sid.strip()]
         where_conditions["sso_user_id"] = {
             "in": sso_id_list,
+        }
+
+    if organization_id is not None and isinstance(organization_id, str):
+        org_id_list = [
+            oid.strip() for oid in organization_id.split(",") if oid.strip()
+        ]
+        where_conditions["organization_memberships"] = {
+            "some": {"organization_id": {"in": org_id_list}}
         }
 
     ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
