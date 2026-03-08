@@ -1211,6 +1211,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
             new_texts.append(modified_text)
         inputs["texts"] = new_texts
+        # Strip keys that process_input_messages() converted to OpenAI format.
+        # Returning them overwrites native Anthropic tools with type:"function".
+        for _k in ("tools", "structured_messages", "model", "images"):
+            inputs.pop(_k, None)
+        # Store pii_tokens in request_data — two separate instances are used
+        # (pre_call masking, post_call unmasking) so self.pii_tokens is not shared.
+        if request_data is not None and self.pii_tokens:
+            request_data["pii_tokens"] = dict(self.pii_tokens)
         return inputs
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
