@@ -18,8 +18,8 @@ const UsersPage = () => {
   // Three states:
   // - undefined: org data still loading (non-proxy-admin) — query should wait
   // - null: proxy admin or no org filtering needed — query runs unfiltered
-  // - string[]: org admin org IDs — query runs filtered
-  const orgAdminOrgIds = useMemo((): string[] | null | undefined => {
+  // - Array<{organization_id, organization_alias}>: org admin orgs — query runs filtered
+  const orgAdminOrgIds = useMemo((): Array<{organization_id: string, organization_alias: string}> | null | undefined => {
     if (!userId || !userRole) return null;
     // Proxy admins see all users — no org filtering
     if (isProxyAdminRole(userRole)) return null;
@@ -27,13 +27,13 @@ const UsersPage = () => {
     // Still loading org data — signal "not ready yet"
     if (isOrgsLoading || !organizations) return undefined;
 
-    const adminOrgIds = organizations
+    const adminOrgs = organizations
       .filter((org: Organization) =>
         org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin")
       )
-      .map((org: Organization) => org.organization_id);
+      .map((org: Organization) => ({ organization_id: org.organization_id, organization_alias: org.organization_alias }));
 
-    return adminOrgIds.length > 0 ? adminOrgIds : null;
+    return adminOrgs.length > 0 ? adminOrgs : null;
   }, [userId, organizations, userRole, isOrgsLoading]);
 
   return (
