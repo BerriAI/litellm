@@ -355,6 +355,22 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
             status_code=500,
         )
 
+    # Fail early if the DB is unavailable: avoid the outbound token exchange
+    # HTTP round-trip if we won't be able to persist the resulting credential.
+    if prisma_client is None:
+        verbose_proxy_logger.warning(
+            "openapi_oauth2_callback: prisma_client is None — credential not persisted user=%s server=%s",
+            user_id,
+            server_id,
+        )
+        return HTMLResponse(
+            content=_build_error_html(
+                "Database unavailable",
+                "Cannot persist credentials: database is not configured.",
+            ),
+            status_code=500,
+        )
+
     # Reuse the callback_url stored during /connect so the redirect_uri
     # exactly matches what was sent to the provider, regardless of how the
     # two requests are routed through reverse proxies.
@@ -371,7 +387,7 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
     # RFC 6749 §2.3: client credentials can be sent as POST body
     # (client_secret_post, the default) or as HTTP Basic auth
     # (client_secret_basic, required by some providers like Okta/Auth0).
-    auth_method = getattr(server, "token_endpoint_auth_method", "post")
+    auth_method = server.token_endpoint_auth_method
     token_headers: Dict[str, str] = {"Accept": "application/json"}
     if auth_method == "basic":
         basic_creds = base64.b64encode(
@@ -484,20 +500,6 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
                 "The provider did not return an access token. Check client credentials and scopes.",
             ),
             status_code=502,
-        )
-
-    if prisma_client is None:
-        verbose_proxy_logger.warning(
-            "openapi_oauth2_callback: prisma_client is None — credential not persisted user=%s server=%s",
-            user_id,
-            server_id,
-        )
-        return HTMLResponse(
-            content=_build_error_html(
-                "Database unavailable",
-                "Cannot persist credentials: database is not configured.",
-            ),
-            status_code=500,
         )
 
     # Persist the access token (and refresh token if the provider returned one).
