@@ -943,10 +943,10 @@ class PrometheusLogger(CustomLogger):
         else:
             _tags = []
 
-        print_verbose(
-            "inside track_prometheus_metrics, model %s, response_cost %s, tokens_used %s"
-            % (model, response_cost, tokens_used)
-        )
+        if litellm.set_verbose:
+            print_verbose(
+                f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}"
+            )
 
         enum_values = UserAPIKeyLabelValues(
             end_user=end_user_id,

@@ -56,7 +56,14 @@ except Exception:
 @functools.lru_cache(maxsize=64)
 def _parse_url(url: str) -> httpx.URL:
     """Pre-parse a URL string into an httpx.URL to avoid regex-heavy
-    parsing inside httpx._merge_url on every request (~7μs → ~0.4μs)."""
+    parsing inside httpx._merge_url on every request (~7μs → ~0.4μs).
+
+    Safe to use with ``build_request(params=...)``: httpx replaces the
+    query string entirely when ``params`` is non-None, so any query
+    params baked into the cached URL are harmless in that case.  When
+    ``params`` is None the cached URL preserves the original query
+    string, which is the correct behaviour.
+    """
     return httpx.URL(url)
 
 
