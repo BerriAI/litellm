@@ -1303,6 +1303,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onCancel={() => setIsAddMemberModalVisible(false)}
         onSubmit={handleMemberCreate}
         accessToken={accessToken}
+        teamId={teamId}
       />
 
       {/* Delete Member Confirmation Modal */}
