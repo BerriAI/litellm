@@ -1153,7 +1153,9 @@ export const userListCall = async (
     }
 
     if (organizationIds && organizationIds.length > 0) {
-      queryParams.append("organization_id", organizationIds.join(","));
+      for (const orgId of organizationIds) {
+        queryParams.append("organization_id", orgId);
+      }
     }
 
     const queryString = queryParams.toString();

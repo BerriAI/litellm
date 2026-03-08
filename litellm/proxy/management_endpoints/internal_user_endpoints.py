@@ -1502,10 +1502,11 @@ async def get_users(
     sort_order: str = fastapi.Query(
         default="asc", description="Sort order ('asc' or 'desc')"
     ),
-    organization_id: Optional[str] = fastapi.Query(
+    organization_id: Optional[List[str]] = fastapi.Query(
         default=None,
-        description="Filter users by organization membership. Comma-separated for multiple orgs.",
+        description="Filter users by organization membership. Pass multiple values for multiple orgs.",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get a paginated list of users with filtering and sorting options.
@@ -1534,13 +1535,78 @@ async def get_users(
         sort_order: Optional[str]
             Sort order ('asc' or 'desc')
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
             detail={"error": f"No db connected. prisma client={prisma_client}"},
         )
+
+    # Server-side authorization: proxy admins see all, org admins see only their org(s)
+    is_proxy_admin = _user_has_admin_view(user_api_key_dict)
+    allowed_org_ids: Optional[List[str]] = None
+    if not is_proxy_admin:
+        if user_api_key_dict.user_id is None:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins and organization admins can list users."
+                },
+            )
+        try:
+            caller_user = await get_user_object(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins and organization admins can list users."
+                },
+            )
+        if caller_user is None:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins and organization admins can list users."
+                },
+            )
+        allowed_org_ids = [
+            m.organization_id
+            for m in (caller_user.organization_memberships or [])
+            if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        ]
+        if not allowed_org_ids:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins and organization admins can list users."
+                },
+            )
+        # If client also sent organization_id, intersect with allowed orgs
+        if organization_id:
+            requested = set(organization_id)
+            allowed = set(allowed_org_ids)
+            intersection = list(requested & allowed)
+            if not intersection:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "You do not have org_admin access to the requested organization(s)."
+                    },
+                )
+            allowed_org_ids = intersection
+        # For org admins, always enforce org scoping
+        organization_id = allowed_org_ids
 
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
@@ -1580,12 +1646,9 @@ async def get_users(
             "in": sso_id_list,
         }
 
-    if organization_id is not None and isinstance(organization_id, str):
-        org_id_list = [
-            oid.strip() for oid in organization_id.split(",") if oid.strip()
-        ]
+    if organization_id:
         where_conditions["organization_memberships"] = {
-            "some": {"organization_id": {"in": org_id_list}}
+            "some": {"organization_id": {"in": organization_id}}
         }
 
     ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
