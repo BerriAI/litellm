@@ -501,7 +501,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         # Always append UUID to ensure uniqueness — prevents
                         # str.replace() collisions when multiple entities share
                         # the same type (e.g. two <PHONE_NUMBER> tokens).
-                        replacement = f"{replacement}_{str(uuid.uuid4())[:12]}"
+                        # UUID goes INSIDE angle brackets so LLMs treat the
+                        # whole thing as one opaque token and don't strip the
+                        # <TYPE> prefix as if it were an XML/HTML tag.
+                        _uuid_suffix = str(uuid.uuid4())[:12]
+                        if replacement.endswith(">"):
+                            replacement = f"{replacement[:-1]}_{_uuid_suffix}>"
+                        else:
+                            replacement = f"{replacement}_{_uuid_suffix}"
 
                         # Use analyze_results (original text positions) to look
                         # up the original value. Both _sorted_ar and _sorted_items
@@ -936,15 +943,31 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         for token, original_text in pii_tokens.items():
             if token in text:
                 text = text.replace(token, original_text)
-            else:
-                # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
-                # Only check at the very end of the text.
-                min_overlap = min(20, len(token) // 2)
-                for i in range(max(0, len(text) - len(token)), len(text)):
-                    sub = text[i:]
-                    if token.startswith(sub) and len(sub) >= min_overlap:
-                        text = text[:i] + original_text
-                        break
+                continue
+
+            # FALLBACK 1: LLM stripped angle brackets (e.g. <PERSON_abc> → PERSON_abc)
+            stripped = token.strip("<>")
+            if stripped and stripped in text:
+                text = text.replace(stripped, original_text)
+                continue
+
+            # FALLBACK 2: LLM stripped type prefix, only UUID suffix remains
+            # e.g. <COMPANY_NAME_8c971c39-ac2> → _8c971c39-ac2
+            _uuid_idx = stripped.rfind("_")
+            if _uuid_idx > 0:
+                uuid_suffix = stripped[_uuid_idx:]  # e.g. "_8c971c39-ac2"
+                if len(uuid_suffix) >= 10 and uuid_suffix in text:
+                    text = text.replace(uuid_suffix, original_text)
+                    continue
+
+            # FALLBACK 3: Handle truncated tokens (token cut off by max_tokens)
+            # Only check at the very end of the text.
+            min_overlap = min(20, len(token) // 2)
+            for i in range(max(0, len(text) - len(token)), len(text)):
+                sub = text[i:]
+                if token.startswith(sub) and len(sub) >= min_overlap:
+                    text = text[:i] + original_text
+                    break
         return text
 
     async def _process_response_for_pii(
