@@ -22,6 +22,9 @@ async def get_ui_config():
         os.getenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", "false").lower() == "true"
     )
     admin_ui_disabled = os.getenv("DISABLE_ADMIN_UI", "false").lower() == "true"
+    disable_bouncing_icon = (
+        os.getenv("LITELLM_DISABLE_BOUNCING_ICON", "false").lower() == "true"
+    )
 
     sso_configured = _has_user_setup_sso()
     return UiDiscoveryEndpoints(
@@ -30,4 +33,5 @@ async def get_ui_config():
         auto_redirect_to_sso=sso_configured and auto_redirect_ui_login_to_sso,
         admin_ui_disabled=admin_ui_disabled,
         sso_configured=sso_configured,
+        disable_bouncing_icon=disable_bouncing_icon,
     )

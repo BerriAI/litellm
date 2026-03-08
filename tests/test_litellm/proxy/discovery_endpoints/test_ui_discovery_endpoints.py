@@ -32,6 +32,7 @@ def test_ui_discovery_endpoints_with_defaults():
         assert data["auto_redirect_to_sso"] is False
         assert data["admin_ui_disabled"] is False
         assert data["sso_configured"] is False
+        assert data["disable_bouncing_icon"] is False
 
 
 def test_ui_discovery_endpoints_with_custom_server_root_path():
@@ -194,6 +195,7 @@ def test_ui_discovery_endpoints_with_admin_ui_disabled():
         assert data["auto_redirect_to_sso"] is False
         assert data["admin_ui_disabled"] is True
         assert data["sso_configured"] is False
+        assert data["disable_bouncing_icon"] is False
 
 
 def test_ui_discovery_endpoints_with_admin_ui_enabled():
@@ -215,4 +217,25 @@ def test_ui_discovery_endpoints_with_admin_ui_enabled():
         assert data["auto_redirect_to_sso"] is False
         assert data["admin_ui_disabled"] is False
         assert data["sso_configured"] is False
+        assert data["disable_bouncing_icon"] is False
 
+
+def test_ui_discovery_endpoints_with_bouncing_icon_disabled():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch.dict(
+             os.environ,
+             {"DISABLE_ADMIN_UI": "false", "LITELLM_DISABLE_BOUNCING_ICON": "true"},
+             clear=False,
+         ):
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["disable_bouncing_icon"] is True

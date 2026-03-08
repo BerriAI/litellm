@@ -10,8 +10,23 @@ vi.mock("@/components/networking", () => ({
   serverRootPath: "",
 }));
 
+let mockUseDisableBouncingIconImpl = () => false;
 vi.mock("@/app/(dashboard)/hooks/useDisableBouncingIcon", () => ({
-  useDisableBouncingIcon: () => false,
+  useDisableBouncingIcon: () => mockUseDisableBouncingIconImpl(),
+}));
+
+let mockUseUIConfigImpl = () => ({
+  data: {
+    server_root_path: "/",
+    proxy_base_url: null,
+    auto_redirect_to_sso: false,
+    admin_ui_disabled: false,
+    sso_configured: false,
+    disable_bouncing_icon: false,
+  },
+});
+vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
+  useUIConfig: () => mockUseUIConfigImpl(),
 }));
 
 vi.mock("./Navbar/BlogDropdown/BlogDropdown", () => ({
@@ -32,7 +47,13 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
   const { useState } = React;
   const localStorageUtils = await import("@/utils/localStorageUtils");
   return {
-    default: function MockUserDropdown({ onLogout }: { onLogout: () => void }) {
+    default: function MockUserDropdown({
+      onLogout,
+      disableBouncingIconByEnv,
+    }: {
+      onLogout: () => void;
+      disableBouncingIconByEnv?: boolean;
+    }) {
       const { userId, userEmail, userRole, premiumUser } = mockUserDropdownData.current();
       const [open, setOpen] = useState(false);
       return (
@@ -46,6 +67,7 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
               <span>{userRole}</span>
               <span>{userEmail}</span>
               {premiumUser && <span>Premium</span>}
+              {disableBouncingIconByEnv && <span>Bouncing Icon Disabled by Env</span>}
               <button type="button" onClick={() => onLogout()}>
                 Logout
               </button>
@@ -209,9 +231,71 @@ describe("Navbar", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
     expect(screen.getByText("v1.0.0")).toBeInTheDocument();
+    expect(screen.getByTitle("Thanks for using LiteLLM!")).toBeInTheDocument();
 
     // Reset mock
     mockUseHealthReadinessImpl = () => ({ data: null });
+  });
+
+  it("should hide bouncing icon when disable_bouncing_icon is set from ui config", () => {
+    mockUseHealthReadinessImpl = () => ({ data: { litellm_version: "1.0.0" } });
+    mockUseUIConfigImpl = () => ({
+      data: {
+        server_root_path: "/",
+        proxy_base_url: null,
+        auto_redirect_to_sso: false,
+        admin_ui_disabled: false,
+        sso_configured: false,
+        disable_bouncing_icon: true,
+      },
+    });
+
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    expect(screen.getByText("v1.0.0")).toBeInTheDocument();
+    expect(screen.queryByTitle("Thanks for using LiteLLM!")).not.toBeInTheDocument();
+
+    mockUseHealthReadinessImpl = () => ({ data: null });
+    mockUseUIConfigImpl = () => ({
+      data: {
+        server_root_path: "/",
+        proxy_base_url: null,
+        auto_redirect_to_sso: false,
+        admin_ui_disabled: false,
+        sso_configured: false,
+        disable_bouncing_icon: false,
+      },
+    });
+  });
+
+  it("should pass env disable flag to user dropdown", async () => {
+    const user = userEvent.setup();
+    mockUseUIConfigImpl = () => ({
+      data: {
+        server_root_path: "/",
+        proxy_base_url: null,
+        auto_redirect_to_sso: false,
+        admin_ui_disabled: false,
+        sso_configured: false,
+        disable_bouncing_icon: true,
+      },
+    });
+
+    renderWithProviders(<Navbar {...defaultProps} />);
+    await user.click(screen.getByText("User"));
+
+    expect(screen.getByText("Bouncing Icon Disabled by Env")).toBeInTheDocument();
+
+    mockUseUIConfigImpl = () => ({
+      data: {
+        server_root_path: "/",
+        proxy_base_url: null,
+        auto_redirect_to_sso: false,
+        admin_ui_disabled: false,
+        sso_configured: false,
+        disable_bouncing_icon: false,
+      },
+    });
   });
 
   it("should use custom logo from theme context", () => {
