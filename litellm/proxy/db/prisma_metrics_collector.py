@@ -151,8 +151,8 @@ class PrismaMetricsCollector:
             total_lock_waiting = 0
             for row in rows:
                 state = row.get("state") or "unknown"
-                self._pool_connections.labels(state=state).set(row.get("count", 0))
-                total_lock_waiting += row.get("lock_waiting", 0)
+                self._pool_connections.labels(state=state).set(row.get("count") or 0)
+                total_lock_waiting += row.get("lock_waiting") or 0
                 seen_states.add(state)
 
             # Zero out states absent from this cycle to clear stale values
