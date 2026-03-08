@@ -910,10 +910,6 @@ class BaseLLMChatTest(ABC):
             )
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
-        except litellm.BadRequestError:
-            if "http://" in image_url:
-                pytest.skip("Model does not support http:// image URLs")
-            raise
 
         assert response is not None
 
