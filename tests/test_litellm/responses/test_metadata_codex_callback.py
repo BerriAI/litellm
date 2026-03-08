@@ -12,6 +12,7 @@ verifies metadata is preserved for custom callbacks via kwargs['litellm_params']
 import asyncio
 import os
 import sys
+import threading
 from typing import Optional
 from unittest.mock import AsyncMock, patch
 
@@ -44,13 +45,16 @@ class MetadataCaptureCallback(CustomLogger):
 
     def __init__(self):
         self.captured_kwargs: Optional[dict] = None
-        self.event = asyncio.Event()
+        # Use threading.Event so set() works regardless of which event loop
+        # (or no loop) the logging worker uses — asyncio.Event is loop-bound
+        # and fails under pytest-xdist -n >1 where each test gets a fresh loop.
+        self._event = threading.Event()
 
     async def async_log_success_event(
         self, kwargs, response_obj, start_time, end_time
     ):
         self.captured_kwargs = kwargs
-        self.event.set()
+        self._event.set()
 
 
 @pytest.mark.asyncio
@@ -106,7 +110,12 @@ async def test_metadata_passed_to_custom_callback_codex_models():
             metadata=test_metadata,
         )
 
-    await asyncio.wait_for(callback.event.wait(), timeout=5.0)
+    loop = asyncio.get_event_loop()
+    received = await asyncio.wait_for(
+        loop.run_in_executor(None, lambda: callback._event.wait(timeout=5.0)),
+        timeout=6.0,
+    )
+    assert received, "Callback was not invoked within timeout"
 
     assert callback.captured_kwargs is not None, "Callback should have been invoked"
 
@@ -167,7 +176,12 @@ async def test_metadata_passed_via_litellm_metadata_responses_api():
             litellm_metadata=test_metadata,
         )
 
-    await asyncio.wait_for(callback.event.wait(), timeout=5.0)
+    loop = asyncio.get_event_loop()
+    received = await asyncio.wait_for(
+        loop.run_in_executor(None, lambda: callback._event.wait(timeout=5.0)),
+        timeout=6.0,
+    )
+    assert received, "Callback was not invoked within timeout"
 
     assert callback.captured_kwargs is not None
 
