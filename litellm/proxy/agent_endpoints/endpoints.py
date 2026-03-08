@@ -11,11 +11,11 @@ Follows the A2A Spec.
 import asyncio
 from typing import Any, Dict, List, Optional
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
@@ -27,6 +27,7 @@ from litellm.types.agents import (
     MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -68,17 +69,18 @@ async def _check_agent_url_health(
         return {"agent_id": agent.agent_id, "healthy": False, "error": "No URL configured"}
 
     try:
-        async with httpx.AsyncClient(
-            timeout=AGENT_HEALTH_CHECK_TIMEOUT_SECONDS
-        ) as client:
-            response = await client.get(url)
-            if response.status_code < 500:
-                return {"agent_id": agent.agent_id, "healthy": True}
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.AgentHealthCheck,
+            params={"timeout": AGENT_HEALTH_CHECK_TIMEOUT_SECONDS},
+        )
+        response = await client.get(url)
+        if response.status_code >= 500:
             return {
                 "agent_id": agent.agent_id,
                 "healthy": False,
                 "error": f"HTTP {response.status_code}",
             }
+        return {"agent_id": agent.agent_id, "healthy": True}
     except Exception as exc:
         return {
             "agent_id": agent.agent_id,
@@ -162,8 +164,18 @@ async def get_agents(
             )
 
         if health_check:
+            agents_with_url = [
+                agent
+                for agent in returned_agents
+                if (agent.agent_card_params or {}).get("url")
+            ]
+            agents_without_url = [
+                agent
+                for agent in returned_agents
+                if not (agent.agent_card_params or {}).get("url")
+            ]
             health_results = await asyncio.gather(
-                *[_check_agent_url_health(agent) for agent in returned_agents]
+                *[_check_agent_url_health(agent) for agent in agents_with_url]
             )
             healthy_ids = {
                 result["agent_id"]
@@ -172,9 +184,9 @@ async def get_agents(
             }
             returned_agents = [
                 agent
-                for agent in returned_agents
+                for agent in agents_with_url
                 if agent.agent_id in healthy_ids
-            ]
+            ] + agents_without_url
 
         return returned_agents
     except HTTPException:
