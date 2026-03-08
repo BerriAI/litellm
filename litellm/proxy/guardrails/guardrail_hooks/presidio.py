@@ -957,10 +957,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Helper to recursively process a ModelResponse for PII.
         Handles all choices and tool calls.
         """
-        pii_tokens = request_data.get("pii_tokens", {}) if request_data else {}
+        pii_tokens = (
+            (request_data.get("pii_tokens") if request_data else None)
+            or self.pii_tokens
+        )
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
-                "No pii_tokens found in request_data — nothing to unmask"
+                "No pii_tokens found in request_data or self.pii_tokens — nothing to unmask"
             )
         presidio_config = self.get_presidio_settings_from_request_data(
             request_data or {}
@@ -1177,9 +1180,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 full_text = "".join(text_fragments)
                 unmasked = self._unmask_pii_text(full_text, pii_tokens)
 
-                # 4. If nothing changed, yield original bytes unchanged
+                # 4. If nothing changed, yield original chunks unchanged
                 if unmasked == full_text:
-                    yield raw
+                    for c in all_chunks:
+                        yield c
                     return
 
                 # 5. Redistribute unmasked text across original text_delta events
