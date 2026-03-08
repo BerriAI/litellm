@@ -29,8 +29,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_none_values_from_message,
 )
 from litellm.llms.openai.chat.gpt_transformation import (
-    OpenAIGPTConfig,
     OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
@@ -276,6 +276,29 @@ class MistralConfig(OpenAIGPTConfig):
         else:
             return super()._transform_messages(new_messages, model, False)
 
+    @staticmethod
+    def _upgrade_http_image_urls(
+        messages: List[AllMessageValues],
+    ) -> List[AllMessageValues]:
+        """
+        Mistral rejects http:// image URLs. Upgrade them to https:// in-place.
+        """
+        for m in messages:
+            content = m.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if block.get("type") != "image_url":
+                    continue
+                image_url = block.get("image_url")
+                if isinstance(image_url, dict):
+                    url = image_url.get("url", "")
+                    if url.startswith("http://"):
+                        image_url["url"] = "https://" + url[len("http://"):]
+                elif isinstance(image_url, str) and image_url.startswith("http://"):
+                    block["image_url"] = "https://" + image_url[len("http://"):]  # type: ignore
+        return messages
+
     async def _transform_messages_async(self,
         messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
@@ -285,6 +308,7 @@ class MistralConfig(OpenAIGPTConfig):
         # Call parent async method to handle basic transformations
         # and then apply Mistral-specific handling for files
         messages = await super()._transform_messages(messages, model, True)
+        messages = self._upgrade_http_image_urls(messages)
         messages = self._handle_message_with_file(messages)
         return messages
 
@@ -297,6 +321,7 @@ class MistralConfig(OpenAIGPTConfig):
         # and then apply Mistral-specific handling for files
         # This is the sync version of the async method above
         messages = super()._transform_messages(messages, model, False)
+        messages = self._upgrade_http_image_urls(messages)
         messages = self._handle_message_with_file(messages)
         return messages
 
