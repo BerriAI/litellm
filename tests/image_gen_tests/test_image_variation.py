@@ -27,25 +27,21 @@ import tempfile
 from base_image_generation_test import BaseImageGenTest
 import logging
 from litellm._logging import verbose_logger
-import requests
 from io import BytesIO
+from PIL import Image as PILImage
 
 verbose_logger.setLevel(logging.DEBUG)
 
 
 @pytest.fixture
 def image_url():
-    # URL of the image
-    image_url = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-
-    # Fetch the image from the URL
-    response = requests.get(image_url)
-    print(response)
-    response.raise_for_status()  # Ensure the request was successful
-
-    # Load the image into a file-like object
-    image_file = BytesIO(response.content)
-    image_file.name = "litellm_logo.png"
+    # DALL-E 2 image variations require a square PNG (less than 4MB)
+    # Generate a 1024x1024 square PNG programmatically to avoid network dependency
+    # and the non-square aspect ratio of the old LiteLLM logo URL
+    img = PILImage.new("RGBA", (1024, 1024), color=(128, 128, 128, 255))
+    image_file = BytesIO()
+    img.save(image_file, format="PNG")
+    image_file.seek(0)
 
     return image_file
 
