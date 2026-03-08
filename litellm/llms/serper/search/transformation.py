@@ -70,6 +70,7 @@ class SerperSearchConfig(BaseSearchConfig):
         Get complete URL for Search endpoint.
         """
         api_base = api_base or get_secret_str("SERPER_API_BASE") or self.SERPER_API_BASE
+        api_base = api_base.rstrip("/")
         
         if not api_base.endswith("/search"):
             api_base = f"{api_base}/search"
