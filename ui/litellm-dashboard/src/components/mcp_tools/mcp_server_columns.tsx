@@ -206,7 +206,17 @@ export const mcpServerColumns = (
         return <span className="text-gray-300 text-xs">—</span>;
       }
       if (server.is_byok && server.auth_type === AUTH_TYPE.OAUTH2) {
-        if (!accessToken || !refreshServers) return null;
+        if (!accessToken || !refreshServers) {
+          return (
+            <button
+              disabled
+              className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-400 cursor-not-allowed"
+              title="Sign in to connect"
+            >
+              Connect
+            </button>
+          );
+        }
         return (
           <OAuth2ConnectButton
             server={server}

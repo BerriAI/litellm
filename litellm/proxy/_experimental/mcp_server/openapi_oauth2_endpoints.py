@@ -536,7 +536,7 @@ async def openapi_oauth2_callback(  # noqa: PLR0915
     # token for future renewal without a schema change.
     credential_to_store = (
         json.dumps({"access_token": access_token, "refresh_token": refresh_token})
-        if refresh_token
+        if refresh_token is not None
         else access_token
     )
 

@@ -1599,13 +1599,10 @@ if MCP_AVAILABLE:
         if not user_id:
             return None
 
-        cache_key = (user_id, mcp_server.server_id)
-        cached = _byok_cred_cache.get(cache_key)
-        if cached is not None:
-            credential, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                _byok_cred_cache.move_to_end(cache_key)  # promote to MRU
-                return credential
+        result = get_cached_byok_credential(user_id, mcp_server.server_id)
+        if result is not None:
+            cached_credential, _ = result
+            return cached_credential
 
         from litellm.proxy.proxy_server import prisma_client
 
@@ -1671,29 +1668,26 @@ if MCP_AVAILABLE:
             )
 
         # Check shared credential cache before hitting the DB.
-        cache_key = (user_id, mcp_server.server_id)
-        cached = _byok_cred_cache.get(cache_key)
-        if cached is not None:
-            cached_cred, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                _byok_cred_cache.move_to_end(cache_key)  # promote to MRU
-                if cached_cred is None:
-                    raise HTTPException(
-                        status_code=401,
-                        detail={
-                            "error": "byok_auth_required",
-                            "server_id": mcp_server.server_id,
-                            "server_name": mcp_server.server_name or mcp_server.name,
-                            "message": (
-                                "No stored credential found for this BYOK server. "
-                                "Complete the OAuth authorization flow to provide your API key."
-                            ),
-                        },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
-                    )
-                return
+        cache_result = get_cached_byok_credential(user_id, mcp_server.server_id)
+        if cache_result is not None:
+            cached_cred, _ = cache_result
+            if cached_cred is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "byok_auth_required",
+                        "server_id": mcp_server.server_id,
+                        "server_name": mcp_server.server_name or mcp_server.name,
+                        "message": (
+                            "No stored credential found for this BYOK server. "
+                            "Complete the OAuth authorization flow to provide your API key."
+                        ),
+                    },
+                    headers={
+                        "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                    },
+                )
+            return
 
         from litellm.proxy.proxy_server import prisma_client
 
