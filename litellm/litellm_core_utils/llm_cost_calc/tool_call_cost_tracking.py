@@ -387,11 +387,12 @@ class StandardBuiltInToolCostTracking:
                 message: Optional[Message] = getattr(choice, "message", None)
                 if message is None:
                     continue
-                if annotations := getattr(message, "annotations", None):
-                    if len(annotations) > 0:
-                        for annotation in annotations:
-                            if annotation.get("type", None) == annotation_type:
-                                return True
+                annotations = getattr(message, "annotations", None)
+                if annotations:
+                    for annotation in annotations:
+                        _type = annotation.get("type") if isinstance(annotation, dict) else getattr(annotation, "type", None)
+                        if _type == annotation_type:
+                            return True
         return False
 
     @staticmethod
