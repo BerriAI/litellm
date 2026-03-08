@@ -168,6 +168,10 @@ async def test_callback_provider_error_in_json_body():
         "litellm.proxy._experimental.mcp_server.openapi_oauth2_endpoints.get_request_base_url",
         return_value="http://localhost:4000",
     ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+        create=True,
+    ), patch(
         "httpx.AsyncClient"
     ) as mock_client_cls:
         mock_mgr.get_mcp_server_by_id.return_value = mock_server

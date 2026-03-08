@@ -197,6 +197,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
     )
+    from litellm.proxy._experimental.mcp_server.db import get_user_credential
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -1606,7 +1607,6 @@ if MCP_AVAILABLE:
                 _byok_cred_cache.move_to_end(cache_key)  # promote to MRU
                 return credential
 
-        from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
@@ -1695,7 +1695,6 @@ if MCP_AVAILABLE:
                     )
                 return
 
-        from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
