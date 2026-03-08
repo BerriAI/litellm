@@ -652,6 +652,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
+        "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
