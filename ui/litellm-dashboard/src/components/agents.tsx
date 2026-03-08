@@ -12,6 +12,7 @@ import {
   Text,
 } from "@tremor/react";
 import { Modal, Alert, Tooltip, Skeleton } from "antd";
+import { CheckCircleOutlined } from "@ant-design/icons";
 import { getAgentsList, deleteAgentCall, keyListCall } from "./networking";
 import AddAgentForm from "./agents/add_agent_form";
 import { isAdminRole } from "@/utils/roles";
@@ -38,17 +39,18 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [agentToDelete, setAgentToDelete] = useState<{ id: string; name: string } | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [healthCheckEnabled, setHealthCheckEnabled] = useState(false);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
-  const fetchAgents = async () => {
+  const fetchAgents = async (healthCheck?: boolean) => {
     if (!accessToken) {
       return;
     }
 
     setIsLoading(true);
     try {
-      const response: AgentsResponse = await getAgentsList(accessToken);
+      const response: AgentsResponse = await getAgentsList(accessToken, healthCheck ?? healthCheckEnabled);
       setAgentsList(response.agents || []);
     } catch (error) {
       console.error("Error fetching agents:", error);
@@ -100,6 +102,11 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
       setKeyInfoMap({});
     }
   }, [accessToken, agentsList.length]);
+
+  const handleHealthCheckToggle = (checked: boolean) => {
+    setHealthCheckEnabled(checked);
+    fetchAgents(checked);
+  };
 
   const handleAddAgent = () => {
     if (selectedAgentId) {
@@ -161,13 +168,25 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
           showIcon
           className="mb-3"
         />
-        {isAdmin && (
-          <div className="mt-2">
+        <div className="mt-2 flex items-center gap-4">
+          {isAdmin && (
             <Button onClick={handleAddAgent} disabled={!accessToken}>
               + Add New Agent
             </Button>
-          </div>
-        )}
+          )}
+          <Tooltip title="When enabled, only agents with reachable URLs are shown">
+            <div className="flex items-center gap-2">
+              <CheckCircleOutlined className={healthCheckEnabled ? "text-green-500" : "text-gray-400"} />
+              <span className="text-sm text-gray-600">Health Check</span>
+              <Switch
+                size="small"
+                checked={healthCheckEnabled}
+                onChange={handleHealthCheckToggle}
+                loading={isLoading && healthCheckEnabled}
+              />
+            </div>
+          </Tooltip>
+        </div>
       </div>
 
       {selectedAgentId ? (

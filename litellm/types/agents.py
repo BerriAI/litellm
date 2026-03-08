@@ -183,6 +183,8 @@ class AgentConfig(TypedDict, total=False):
     rpm_limit: Optional[int]
     session_tpm_limit: Optional[int]
     session_rpm_limit: Optional[int]
+    static_headers: Optional[Dict[str, str]]
+    extra_headers: Optional[List[str]]
 
 
 class PatchAgentRequest(TypedDict, total=False):
@@ -194,6 +196,8 @@ class PatchAgentRequest(TypedDict, total=False):
     rpm_limit: Optional[int]
     session_tpm_limit: Optional[int]
     session_rpm_limit: Optional[int]
+    static_headers: Optional[Dict[str, str]]
+    extra_headers: Optional[List[str]]
 
 
 # Request/Response models for CRUD endpoints
@@ -210,6 +214,8 @@ class AgentResponse(BaseModel):
     rpm_limit: Optional[int] = None
     session_tpm_limit: Optional[int] = None
     session_rpm_limit: Optional[int] = None
+    static_headers: Optional[Dict[str, str]] = None
+    extra_headers: Optional[List[str]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None

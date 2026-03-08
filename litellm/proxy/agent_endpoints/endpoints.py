@@ -8,22 +8,30 @@ Follows the A2A Spec.
 3. Get specific agent via GET `/v1/agents/{agent_id}`
 """
 
-from typing import Any, List, Optional
+import asyncio
+import os
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import (CommonProxyErrors, LitellmUserRoles,
-                                  UserAPIKeyAuth)
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_daily_activity import \
-    get_daily_activity
-from litellm.types.agents import (AgentConfig, AgentMakePublicResponse,
-                                  AgentResponse, MakeAgentsPublicRequest,
-                                  PatchAgentRequest)
-from litellm.types.proxy.management_endpoints.common_daily_activity import \
-    SpendAnalyticsPaginatedResponse
+from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.types.agents import (
+    AgentConfig,
+    AgentMakePublicResponse,
+    AgentResponse,
+    MakeAgentsPublicRequest,
+    PatchAgentRequest,
+)
+from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
 
 router = APIRouter()
 
@@ -45,6 +53,48 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         )
 
 
+AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = float(
+    os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0")
+)
+AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS = float(
+    os.environ.get("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", "30.0")
+)
+
+
+async def _check_agent_url_health(
+    agent: AgentResponse,
+) -> Dict[str, Any]:
+    """
+    Perform a GET request against the agent's URL and return the health result.
+
+    Returns a dict with ``agent_id``, ``healthy`` (bool), and an optional
+    ``error`` message.
+    """
+    url = (agent.agent_card_params or {}).get("url")
+    if not url:
+        return {"agent_id": agent.agent_id, "healthy": True}
+
+    try:
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.AgentHealthCheck,
+            params={"timeout": AGENT_HEALTH_CHECK_TIMEOUT_SECONDS},
+        )
+        response = await client.get(url)
+        if response.status_code >= 500:
+            return {
+                "agent_id": agent.agent_id,
+                "healthy": False,
+                "error": f"HTTP {response.status_code}",
+            }
+        return {"agent_id": agent.agent_id, "healthy": True}
+    except Exception as exc:
+        return {
+            "agent_id": agent.agent_id,
+            "healthy": False,
+            "error": str(exc),
+        }
+
+
 @router.get(
     "/v1/agents",
     tags=["[beta] A2A Agents"],
@@ -53,6 +103,9 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
 )
 async def get_agents(
     request: Request,
+    health_check: bool = Query(
+        False,
+        description="When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out.",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
     """
@@ -63,13 +116,22 @@ async def get_agents(
       -H "Authorization: Bearer your-key" \
     ```
 
+    Pass `?health_check=true` to filter out agents whose URL is unreachable:
+    ```
+    curl -X GET "http://localhost:4000/v1/agents?health_check=true" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-key" \
+    ```
+
     Returns: List[AgentResponse]
 
     """
-    from litellm.proxy.agent_endpoints.agent_registry import \
-        global_agent_registry
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import \
-        AgentRequestHandler
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
 
     try:
         returned_agents: List[AgentResponse] = []
@@ -118,6 +180,44 @@ async def get_agents(
                 litellm.public_agent_groups is not None
                 and (agent.agent_id in litellm.public_agent_groups)
             )
+
+        if health_check:
+            agents_with_url = [
+                agent
+                for agent in returned_agents
+                if (agent.agent_card_params or {}).get("url")
+            ]
+            agents_without_url = [
+                agent
+                for agent in returned_agents
+                if not (agent.agent_card_params or {}).get("url")
+            ]
+            try:
+                health_results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[_check_agent_url_health(agent) for agent in agents_with_url]
+                    ),
+                    timeout=AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                verbose_proxy_logger.warning(
+                    "Agent health check gather timed out after %s seconds",
+                    AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
+                )
+                health_results = [
+                    {"agent_id": agent.agent_id, "healthy": False, "error": "Health check timed out"}
+                    for agent in agents_with_url
+                ]
+            healthy_ids = {
+                result["agent_id"]
+                for result in health_results
+                if result["healthy"]
+            }
+            returned_agents = [
+                agent
+                for agent in agents_with_url
+                if agent.agent_id in healthy_ids
+            ] + agents_without_url
 
         return returned_agents
     except HTTPException:
@@ -188,6 +288,8 @@ async def create_agent(
         }'
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     _check_agent_management_permission(user_api_key_dict)
@@ -242,7 +344,10 @@ async def create_agent(
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
-async def get_agent_by_id(agent_id: str):
+async def get_agent_by_id(
+    agent_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Get a specific agent by ID
 
@@ -252,6 +357,8 @@ async def get_agent_by_id(agent_id: str):
         -H "Authorization: Bearer <your_api_key>"
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -339,6 +446,8 @@ async def update_agent(
         }'
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     _check_agent_management_permission(user_api_key_dict)
@@ -430,6 +539,8 @@ async def patch_agent(
         }'
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     _check_agent_management_permission(user_api_key_dict)
@@ -504,6 +615,8 @@ async def delete_agent(
     }
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     _check_agent_management_permission(user_api_key_dict)
@@ -782,6 +895,8 @@ async def get_agent_daily_activity(
     """
     Get daily activity for specific agents or all accessible agents.
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:

@@ -78,6 +78,7 @@ class SupportedDBObjectType(str, enum.Enum):
     PROMPTS = "prompts"
     MODEL_COST_MAP = "model_cost_map"
     TOOLS = "tools"
+    CONFIG_OVERRIDES = "config_overrides"
 
     def __str__(self):
         return str(self.value)
@@ -239,6 +240,7 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # list routes
     KEY_LIST = "/key/list"
+    KEY_ALIASES = "/key/aliases"
 
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
@@ -515,6 +517,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
+        KeyManagementRoutes.KEY_ALIASES.value,
     ]
 
     management_routes = [
@@ -2168,7 +2171,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     user_header_mappings: Optional[List[UserHeaderMapping]] = None
     supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
         None,
-        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools'. If not set, all objects are loaded (default behavior).",
+        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
     )
     user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
         None,

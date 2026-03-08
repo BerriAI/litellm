@@ -203,8 +203,13 @@ async def test_redaction_responses_api_stream():
     chunks = []
     async for chunk in response:
         chunks.append(chunk)
-    
-    await asyncio.sleep(1)
+
+    # Wait for async success callback to fire (streaming logs run via asyncio.create_task)
+    await asyncio.sleep(0.5)  # Let event loop schedule the create_task'd success handler
+    for _ in range(100):  # Up to 10 seconds total
+        if test_custom_logger.logged_standard_logging_payload is not None:
+            break
+        await asyncio.sleep(0.1)
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
     

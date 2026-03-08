@@ -1,7 +1,7 @@
 import React from "react";
-import { Form, Input, Switch, Collapse } from "antd";
+import { Form, Input, Switch, Collapse, Select, Space, Tooltip } from "antd";
 import { Button as AntButton } from "antd";
-import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
+import { PlusOutlined, MinusCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { AGENT_FORM_CONFIG, SKILL_FIELD_CONFIG } from "./agent_config";
 
 import CostConfigFields from "./cost_config_fields";
@@ -189,6 +189,71 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
         </Panel>
         )}
 
+        {/* Authentication Headers */}
+        {shouldShow("auth_headers") && (
+        <Panel header="Authentication Headers" key="auth_headers">
+          {/* Static Headers */}
+          <Form.Item
+            label={
+              <span>
+                Static Headers{" "}
+                <Tooltip title="Headers always sent to the backend agent, regardless of the client request. Admin-configured, static wins on conflict.">
+                  <InfoCircleOutlined style={{ color: "#8c8c8c" }} />
+                </Tooltip>
+              </span>
+            }
+          >
+            <Form.List name="static_headers">
+              {(fields, { add, remove }) => (
+                <>
+                  {fields.map(({ key, name, ...restField }) => (
+                    <Space key={key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
+                      <Form.Item
+                        {...restField}
+                        name={[name, "header"]}
+                        rules={[{ required: true, message: "Header name required" }]}
+                      >
+                        <Input placeholder="Header name (e.g. Authorization)" style={{ width: 220 }} />
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, "value"]}
+                        rules={[{ required: true, message: "Value required" }]}
+                      >
+                        <Input placeholder="Value (e.g. Bearer token123)" style={{ width: 260 }} />
+                      </Form.Item>
+                      <MinusCircleOutlined onClick={() => remove(name)} style={{ color: "#ff4d4f" }} />
+                    </Space>
+                  ))}
+                  <AntButton type="dashed" onClick={() => add()} icon={<PlusOutlined />} style={{ width: "100%" }}>
+                    Add Static Header
+                  </AntButton>
+                </>
+              )}
+            </Form.List>
+          </Form.Item>
+
+          {/* Extra Headers (dynamic forwarding) */}
+          <Form.Item
+            label={
+              <span>
+                Forward Client Headers{" "}
+                <Tooltip title="Header names to extract from the client's request and forward to the agent. Type a name and press Enter.">
+                  <InfoCircleOutlined style={{ color: "#8c8c8c" }} />
+                </Tooltip>
+              </span>
+            }
+            name="extra_headers"
+          >
+            <Select
+              mode="tags"
+              style={{ width: "100%" }}
+              placeholder="e.g. x-api-key, Authorization"
+              tokenSeparators={[","]}
+            />
+          </Form.Item>
+        </Panel>
+        )}
       </Collapse>
     </>
   );

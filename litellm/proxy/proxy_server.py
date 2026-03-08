@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import enum
+import importlib
 import inspect
 import io
 import os
@@ -350,6 +351,9 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
+from litellm.proxy.management_endpoints.config_override_endpoints import (
+    router as config_override_router,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     admin_can_invite_user,
@@ -370,6 +374,9 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
+    router as jwt_key_mapping_router,
+)
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     router as jwt_key_mapping_router,
 )
@@ -655,6 +662,9 @@ ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai
 
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
 
+chat_link = f"{server_root_path}/ui/chat"
+ui_message += f"\n\n💬 [```LiteLLM Chat UI```]({chat_link}). ChatGPT-like interface for your users to chat with AI models and MCP tools."
+
 custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
@@ -756,6 +766,35 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     import json
 
     init_verbose_loggers()
+
+    ## RUN WORKER STARTUP HOOKS (e.g., gflags initialization) ##
+    _startup_hooks_env = os.environ.get("LITELLM_WORKER_STARTUP_HOOKS", "")
+    if _startup_hooks_env:
+        for _hook_spec in _startup_hooks_env.split(","):
+            _hook_spec = _hook_spec.strip()
+            if not _hook_spec:
+                continue
+            try:
+                if ":" not in _hook_spec:
+                    raise ValueError(
+                        f"Invalid hook spec '{_hook_spec}': expected format is 'module.path:function_name'"
+                    )
+                _module_path, _func_name = _hook_spec.rsplit(":", 1)
+                _module = importlib.import_module(_module_path)
+                _hook_fn = getattr(_module, _func_name)
+                if inspect.iscoroutinefunction(_hook_fn):
+                    await _hook_fn()
+                else:
+                    _hook_fn()
+                verbose_proxy_logger.info(
+                    "Worker startup hook '%s' executed successfully", _hook_spec
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Worker startup hook '%s' failed: %s", _hook_spec, e
+                )
+                raise
+
     ## CHECK PREMIUM USER
     verbose_proxy_logger.debug(
         "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
@@ -829,6 +868,12 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         redis_usage_cache=redis_usage_cache,
     )
 
+    ## Validate use_redis_transaction_buffer requires Redis cache ##
+    ProxyStartupEvent._validate_redis_transaction_buffer_config(
+        general_settings=general_settings,
+        redis_usage_cache=redis_usage_cache,
+    )
+
     ## SEMANTIC TOOL FILTER ##
     # Read litellm_settings from config for semantic filter initialization
     try:
@@ -881,6 +926,9 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         )
 
         await ProxyStartupEvent._update_default_team_member_budget()
+
+        ## SYNC UI SETTINGS ##
+        await ProxyStartupEvent._sync_ui_settings_to_general_settings()
 
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:
@@ -2236,6 +2284,7 @@ class ProxyConfig:
     def __init__(self) -> None:
         self.config: Dict[str, Any] = {}
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
+        self._last_hashicorp_vault_config: Optional[Dict[str, Any]] = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -4436,6 +4485,11 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="semantic_filter_settings"):
             await self._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="config_overrides"):
+            await self._init_hashicorp_vault_config_override(
+                prisma_client=prisma_client
+            )
+
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
         Initialize MCP semantic filter settings from database.
@@ -4543,6 +4597,65 @@ class ProxyConfig:
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
                     str(e)
                 )
+            )
+
+    async def _init_hashicorp_vault_config_override(
+        self, prisma_client: PrismaClient
+    ):
+        """
+        Load Hashicorp Vault config override from DB.
+        Decrypts sensitive fields, sets HCP_VAULT_* env vars, and reinitializes the secret manager.
+        Called periodically via _init_non_llm_objects_in_db to sync config across pods.
+        """
+        from litellm.proxy.management_endpoints.config_override_endpoints import (
+            HASHICORP_ENV_VAR_MAPPING,
+            _clear_hashicorp_vault_state,
+            _get_current_env_values,
+            _parse_config_value,
+            _set_env_vars,
+        )
+
+        try:
+            db_record = await prisma_client.db.litellm_configoverrides.find_unique(
+                where={"config_type": "hashicorp_vault"}
+            )
+
+            if db_record is None or db_record.config_value is None:
+                if self._last_hashicorp_vault_config is not None:
+                    _clear_hashicorp_vault_state(self)
+                return
+
+            config_data = _parse_config_value(db_record.config_value)
+
+            # Skip reinit if config hasn't changed since last poll
+            if self._last_hashicorp_vault_config == config_data:
+                return
+
+            # Decrypt all fields and set env vars
+            decrypted_data = self._decrypt_db_variables(config_data)
+
+            # Snapshot current env vars so we can restore on failure
+            previous_env = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+            _set_env_vars(decrypted_data)
+
+            # Reinitialize the secret manager
+            try:
+                self.initialize_secret_manager(
+                    key_management_system="hashicorp_vault"
+                )
+            except Exception:
+                # Restore previous working env vars instead of wiping all
+                _set_env_vars(previous_env)
+                raise
+
+            self._last_hashicorp_vault_config = config_data.copy()
+            verbose_proxy_logger.debug(
+                "Hashicorp Vault config override loaded from DB"
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error loading Hashicorp Vault config override from DB: %s",
+                str(e),
             )
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
@@ -5508,6 +5621,35 @@ class ProxyStartupEvent:
             llm_router=llm_router, redis_usage_cache=redis_usage_cache
         )
 
+    @staticmethod
+    def _validate_redis_transaction_buffer_config(
+        general_settings: dict,
+        redis_usage_cache: Optional[RedisCache],
+    ):
+        """
+        Validates that when use_redis_transaction_buffer is enabled,
+        a Redis cache is properly configured in litellm_settings.
+        """
+        from litellm.secret_managers.main import str_to_bool
+
+        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
+            general_settings.get("use_redis_transaction_buffer", False)
+        )
+        if isinstance(_use_redis_transaction_buffer, str):
+            _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
+
+        if _use_redis_transaction_buffer and redis_usage_cache is None:
+            raise ValueError(
+                "`use_redis_transaction_buffer` is enabled in general_settings "
+                "but no Redis cache is configured. This will cause spend updates "
+                "to not be tracked. Add a Redis cache in litellm_settings:\n\n"
+                "litellm_settings:\n"
+                "  cache: true\n"
+                "  cache_params:\n"
+                "    type: redis\n"
+                "    url: os.environ/REDIS_URL\n"
+            )
+
     @classmethod
     async def _initialize_semantic_tool_filter(
         cls,
@@ -5634,6 +5776,41 @@ class ProxyStartupEvent:
             teams_pydantic_obj = [NewUserRequestTeam(**team) for team in _teams]
             await update_default_team_member_budget(
                 teams=teams_pydantic_obj, user_api_key_dict=UserAPIKeyAuth(token=hash_token(master_key))  # type: ignore
+            )
+
+    @classmethod
+    async def _sync_ui_settings_to_general_settings(cls):
+        """
+        Load persisted UI settings from the database and sync runtime flags
+        into general_settings so they take effect immediately after startup.
+        """
+        try:
+            import json
+
+            from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+                _RUNTIME_GENERAL_SETTINGS_FLAGS,
+            )
+
+            db_record = await prisma_client.db.litellm_uisettings.find_unique(
+                where={"id": "ui_settings"}
+            )
+            if db_record and db_record.ui_settings:
+                raw = db_record.ui_settings
+                ui_settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                flags_to_sync = {
+                    k: ui_settings[k]
+                    for k in _RUNTIME_GENERAL_SETTINGS_FLAGS
+                    if k in ui_settings
+                }
+                if flags_to_sync:
+                    general_settings.update(flags_to_sync)
+                    verbose_proxy_logger.info(
+                        "Synced UI settings to general_settings on startup: %s",
+                        list(flags_to_sync.keys()),
+                    )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "UI settings sync on startup skipped or failed: %s", e
             )
 
     @classmethod
@@ -13030,6 +13207,7 @@ app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(config_override_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
