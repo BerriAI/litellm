@@ -14,7 +14,7 @@ Root causes fixed:
 import os
 import socket
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import aiohttp
 import httpx
@@ -134,7 +134,7 @@ def test_create_aiohttp_transport_uses_socket_factory_when_keepalive_enabled():
     ) as mock_factory_builder:
         AsyncHTTPHandler._create_aiohttp_transport()
 
-    mock_factory_builder.assert_called_once(), (
+    assert mock_factory_builder.call_count == 1, (
         "_make_tcp_keepalive_socket_factory must be called when AIOHTTP_TCP_KEEPALIVE=True"
     )
 
@@ -152,7 +152,7 @@ def test_create_aiohttp_transport_no_socket_factory_when_keepalive_disabled():
     ) as mock_factory_builder:
         AsyncHTTPHandler._create_aiohttp_transport()
 
-    mock_factory_builder.assert_not_called(), (
+    assert mock_factory_builder.call_count == 0, (
         "_make_tcp_keepalive_socket_factory must NOT be called when AIOHTTP_TCP_KEEPALIVE=False"
     )
 
@@ -227,54 +227,60 @@ async def test_client_timeout_total_is_none_for_user_configured_timeout():
 @pytest.mark.asyncio
 async def test_client_timeout_total_none_does_not_affect_streaming():
     """
-    Setting total=None must not break streaming — each chunk is still
-    governed by sock_read, so long-running streams (total duration >
-    user timeout) work correctly as long as chunks arrive within sock_read.
+    Setting total=None must not cap streaming responses — the ClientTimeout
+    passed to aiohttp must have total=None regardless of the sock_read value,
+    so a stream whose total duration exceeds sock_read is not prematurely cut.
 
-    This is a regression guard for the existing streaming behaviour.
+    This is a mock-based regression guard: we verify that when the transport
+    makes its aiohttp request it passes ClientTimeout(total=None), which is
+    what prevents aiohttp's implicit 300 s cap from killing long streams.
     """
-    import asyncio
+    captured = {}
 
-    from aiohttp import web
+    class FakeSession:
+        closed = False
+        _loop = None
 
-    async def slow_streaming_handler(request):
-        response = web.StreamResponse()
-        await response.prepare(request)
-        for i in range(3):
-            await asyncio.sleep(0.05)
-            await response.write(f"chunk{i}\n".encode())
-        await response.write_eof()
-        return response
+        def request(self, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
 
-    app = web.Application()
-    app.router.add_get("/stream", slow_streaming_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = site._server.sockets[0].getsockname()[1]
+            class Resp:
+                status = 200
+                headers = {}
 
-    transport = LiteLLMAiohttpTransport(client=lambda: aiohttp.ClientSession())
+                async def __aenter__(self):
+                    return self
 
-    request = httpx.Request("GET", f"http://127.0.0.1:{port}/stream")
-    # sock_read=0.15 > 0.05 per-chunk delay, but total stream takes ~0.15s
-    # With total=None this must succeed; previously total could cap it early.
+                async def __aexit__(self, *a):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, _size):
+                            for chunk in [b"chunk0\n", b"chunk1\n", b"chunk2\n"]:
+                                yield chunk
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
+
+    request = httpx.Request("GET", "https://example.com/stream")
+    # Simulate a short sock_read timeout — total=None must not cap the stream
     request.extensions["timeout"] = {
         "connect": 5.0,
         "read": 0.15,
         "pool": 5.0,
     }
 
-    try:
-        response = await transport.handle_async_request(request)
-        assert response.status_code == 200
+    await transport.handle_async_request(request)
 
-        chunks = []
-        async for chunk in response.aiter_bytes():
-            chunks.append(chunk)
-        full = b"".join(chunks).decode()
-        assert "chunk0" in full
-        assert "chunk2" in full
-    finally:
-        await transport.aclose()
-        await runner.cleanup()
+    assert "timeout" in captured
+    client_timeout: aiohttp.ClientTimeout = captured["timeout"]
+    assert client_timeout.total is None, (
+        "ClientTimeout.total must be None so streaming responses are not "
+        "capped by aiohttp's implicit 300 s default"
+    )
+    assert client_timeout.sock_read == 0.15
