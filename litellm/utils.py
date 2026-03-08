@@ -8884,6 +8884,7 @@ class ProviderConfigManager:
         from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
         from litellm.llms.searchapi.search.transformation import SearchAPIConfig
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
+        from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
@@ -8899,6 +8900,7 @@ class ProviderConfigManager:
             SearchProviders.LINKUP: LinkupSearchConfig,
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
             SearchProviders.SEARCHAPI: SearchAPIConfig,
+            SearchProviders.SERPER: SerperSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

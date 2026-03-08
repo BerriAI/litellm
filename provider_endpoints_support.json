@@ -2061,6 +2061,13 @@
         "search": true
       }
     },
+    "serper": {
+      "display_name": "Serper (`serper`)",
+      "url": "https://docs.litellm.ai/docs/search/serper",
+      "endpoints": {
+        "search": true
+      }
+    },
     "triton": {
       "display_name": "Triton (`triton`)",
       "url": "https://docs.litellm.ai/docs/providers/triton-inference-server",
