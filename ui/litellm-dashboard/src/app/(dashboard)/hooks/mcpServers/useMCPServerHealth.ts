@@ -10,11 +10,11 @@ interface MCPServerHealth {
   status: string;
 }
 
-export const useMCPServerHealth = (serverIds?: string[]) => {
+export const useMCPServerHealth = () => {
   const { accessToken } = useAuthorized();
   return useQuery<MCPServerHealth[]>({
-    queryKey: [...mcpServerHealthKeys.lists(), { serverIds }],
-    queryFn: async () => await fetchMCPServerHealth(accessToken!, serverIds),
+    queryKey: mcpServerHealthKeys.lists(),
+    queryFn: async () => await fetchMCPServerHealth(accessToken!),
     enabled: !!accessToken,
     // Refetch health status every 30 seconds to keep it up to date
     refetchInterval: 30000,

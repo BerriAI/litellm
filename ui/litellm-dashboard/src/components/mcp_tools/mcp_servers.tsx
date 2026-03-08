@@ -27,8 +27,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
-  const serverIds = useMemo(() => mcpServers?.map((server) => server.server_id), [mcpServers]);
-  const { data: healthStatuses, isLoading: isLoadingHealth } = useMCPServerHealth(serverIds);
+  const { data: healthStatuses, isLoading: isLoadingHealth } = useMCPServerHealth();
 
   // Merge health status data into servers
   const serversWithHealth = useMemo(() => {
