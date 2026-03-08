@@ -1469,6 +1469,72 @@ def _validate_sort_params(
     return order_by
 
 
+async def _authorize_user_list_request(
+    user_api_key_dict: UserAPIKeyAuth,
+    organization_ids: Optional[str],
+    prisma_client: Any,
+    user_api_key_cache: Any,
+    proxy_logging_obj: Any,
+) -> Optional[str]:
+    """
+    Authorize the /user/list request and return the (possibly scoped) organization_ids string.
+
+    - Proxy admins: returns organization_ids unchanged (may be None).
+    - Org admins: returns comma-separated org IDs scoped to their allowed orgs.
+    - Others: raises 403.
+    """
+    if _user_has_admin_view(user_api_key_dict):
+        return organization_ids
+
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins and organization admins can list users."},
+        )
+    try:
+        caller_user = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins and organization admins can list users."},
+        )
+    if caller_user is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins and organization admins can list users."},
+        )
+
+    allowed_org_ids = [
+        m.organization_id
+        for m in (caller_user.organization_memberships or [])
+        if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+    ]
+    if not allowed_org_ids:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins and organization admins can list users."},
+        )
+
+    # If client also sent organization_ids, intersect with allowed orgs
+    if organization_ids:
+        requested = set(oid.strip() for oid in organization_ids.split(",") if oid.strip())
+        intersection = list(requested & set(allowed_org_ids))
+        if not intersection:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "You do not have org_admin access to the requested organization(s)."},
+            )
+        allowed_org_ids = intersection
+
+    return ",".join(allowed_org_ids)
+
+
 @router.get(
     "/user/list",
     tags=["Internal User management"],
@@ -1548,65 +1614,13 @@ async def get_users(
         )
 
     # Server-side authorization: proxy admins see all, org admins see only their org(s)
-    is_proxy_admin = _user_has_admin_view(user_api_key_dict)
-    allowed_org_ids: Optional[List[str]] = None
-    if not is_proxy_admin:
-        if user_api_key_dict.user_id is None:
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "Only proxy admins and organization admins can list users."
-                },
-            )
-        try:
-            caller_user = await get_user_object(
-                user_id=user_api_key_dict.user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_id_upsert=False,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except ValueError:
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "Only proxy admins and organization admins can list users."
-                },
-            )
-        if caller_user is None:
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "Only proxy admins and organization admins can list users."
-                },
-            )
-        allowed_org_ids = [
-            m.organization_id
-            for m in (caller_user.organization_memberships or [])
-            if m.user_role == LitellmUserRoles.ORG_ADMIN.value
-        ]
-        if not allowed_org_ids:
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "Only proxy admins and organization admins can list users."
-                },
-            )
-        # If client also sent organization_ids, intersect with allowed orgs
-        if organization_ids:
-            requested = set(oid.strip() for oid in organization_ids.split(",") if oid.strip())
-            allowed = set(allowed_org_ids)
-            intersection = list(requested & allowed)
-            if not intersection:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "You do not have org_admin access to the requested organization(s)."
-                    },
-                )
-            allowed_org_ids = intersection
-        # For org admins, always enforce org scoping via comma-separated string
-        organization_ids = ",".join(allowed_org_ids)
+    organization_ids = await _authorize_user_list_request(
+        user_api_key_dict=user_api_key_dict,
+        organization_ids=organization_ids,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
@@ -1910,9 +1924,6 @@ async def _resolve_org_filter_for_user_search(
     Reads the ``scope_user_search_to_org`` UI-setting flag and applies
     role-based access rules when the flag is ON.
     """
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_team_admin,
-    )
     from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
         get_ui_settings_cached,
     )
