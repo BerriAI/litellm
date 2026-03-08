@@ -11,7 +11,7 @@ import {
   Badge,
   Text,
 } from "@tremor/react";
-import { Modal, Alert, Tooltip, Skeleton } from "antd";
+import { Modal, Alert, Tooltip, Skeleton, Switch } from "antd";
 import { CheckCircleOutlined } from "@ant-design/icons";
 import { getAgentsList, deleteAgentCall, keyListCall } from "./networking";
 import AddAgentForm from "./agents/add_agent_form";

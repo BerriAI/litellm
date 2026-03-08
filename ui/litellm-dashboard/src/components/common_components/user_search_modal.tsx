@@ -35,6 +35,7 @@ interface UserSearchModalProps {
   title?: string;
   roles?: Role[];
   defaultRole?: string;
+  teamId?: string;
 }
 
 const UserSearchModal: React.FC<UserSearchModalProps> = ({
@@ -52,6 +53,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     { label: "user", value: "user", description: "User role. Can view team info, but not manage it." },
   ],
   defaultRole = "user",
+  teamId,
 }) => {
   const [form] = Form.useForm<FormValues>();
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
@@ -69,6 +71,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     try {
       const params = new URLSearchParams();
       params.append(fieldName, searchText);
+      if (teamId) {
+        params.append("team_id", teamId);
+      }
       if (accessToken == null) {
         return;
       }

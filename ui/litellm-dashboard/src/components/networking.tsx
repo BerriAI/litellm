@@ -1109,6 +1109,7 @@ export const userListCall = async (
   sso_user_id: string | null = null,
   sortBy: string | null = null,
   sortOrder: "asc" | "desc" | null = null,
+  organizationIds: string[] | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -1154,6 +1155,10 @@ export const userListCall = async (
 
     if (sortOrder) {
       queryParams.append("sort_order", sortOrder);
+    }
+
+    if (organizationIds && organizationIds.length > 0) {
+      queryParams.append("organization_ids", organizationIds.join(","));
     }
 
     const queryString = queryParams.toString();
@@ -2478,14 +2483,19 @@ export const allEndUsersCall = async (accessToken: string) => {
 
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
-
+    const base = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
+    const queryParams = new URLSearchParams();
     if (params.get("user_email")) {
-      url += `?user_email=${params.get("user_email")}`;
+      queryParams.append("user_email", params.get("user_email")!);
     }
     if (params.get("user_id")) {
-      url += `?user_id=${params.get("user_id")}`;
+      queryParams.append("user_id", params.get("user_id")!);
     }
+    if (params.get("team_id")) {
+      queryParams.append("team_id", params.get("team_id")!);
+    }
+    const qs = queryParams.toString();
+    const url = qs ? `${base}?${qs}` : base;
 
     const response = await fetch(url, {
       method: "GET",

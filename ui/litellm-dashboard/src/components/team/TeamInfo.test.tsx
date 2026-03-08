@@ -34,6 +34,7 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganization: vi.fn(),
+  useOrganizations: vi.fn().mockReturnValue({ data: [], isLoading: false }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
