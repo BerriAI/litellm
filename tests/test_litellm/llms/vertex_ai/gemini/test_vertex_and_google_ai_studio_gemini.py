@@ -2094,14 +2094,17 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_31_flash_lite(
     expected_thinking_level: str,
     expected_include_thoughts: bool,
 ):
-    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-        reasoning_effort=reasoning_effort,
+    v = VertexGeminiConfig()
+    result = v.map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort},
+        optional_params={},
         model="gemini-3.1-flash-lite-preview",
+        drop_params=False,
     )
 
-    assert result["thinkingLevel"] == expected_thinking_level
-    assert result["includeThoughts"] is expected_include_thoughts
-    assert "thinkingBudget" not in result
+    assert result["thinkingConfig"]["thinkingLevel"] == expected_thinking_level
+    assert result["thinkingConfig"]["includeThoughts"] is expected_include_thoughts
+    assert "thinkingBudget" not in result["thinkingConfig"]
 
 
 def test_reasoning_effort_dict_format_gemini_3():
