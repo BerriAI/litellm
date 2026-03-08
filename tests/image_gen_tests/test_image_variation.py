@@ -50,10 +50,6 @@ def image_url():
     return image_file
 
 
-@pytest.mark.skipif(
-    not os.environ.get("OPENAI_API_KEY"),
-    reason="OPENAI_API_KEY not set",
-)
 def test_openai_image_variation_openai_sdk(image_url):
     from openai import OpenAI
 
