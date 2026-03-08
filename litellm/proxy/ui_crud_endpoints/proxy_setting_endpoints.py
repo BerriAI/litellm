@@ -981,6 +981,7 @@ async def get_in_product_nudges():
 
 
 UI_SETTINGS_CACHE_KEY = "ui_settings:settings_dict"
+UI_SETTINGS_CACHE_TTL = 600  # 10 minutes
 
 
 async def get_ui_settings_cached() -> Dict[str, Any]:
@@ -1014,9 +1015,9 @@ async def get_ui_settings_cached() -> Dict[str, Any]:
         k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
     }
 
-    # 3. Populate cache
+    # 3. Populate cache with TTL
     await user_api_key_cache.async_set_cache(
-        key=UI_SETTINGS_CACHE_KEY, value=ui_settings
+        key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL
     )
 
     return ui_settings
@@ -1065,6 +1066,13 @@ async def get_ui_settings():
         from litellm.proxy.proxy_server import general_settings
 
         general_settings.update(_flags_to_sync)
+
+    # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    await user_api_key_cache.async_set_cache(
+        key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL
+    )
 
     # Build config-like object for schema helper
     config: Dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
@@ -1157,7 +1165,7 @@ async def update_ui_settings(
         k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
     }
     await user_api_key_cache.async_set_cache(
-        key=UI_SETTINGS_CACHE_KEY, value=sanitized
+        key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL
     )
 
     return {
