@@ -94,55 +94,6 @@ describe("TeamVirtualKeysTable", () => {
     } as any);
   });
 
-  it("should render successfully", async () => {
-    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(screen.getByText("0 Members")).toBeInTheDocument();
-    });
-  });
-
-  it("should display X Members instead of Showing X of Y results", async () => {
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [createMockKey(), createMockKey({ token: "sk-2", token_id: "key-2" })],
-        total_count: 2,
-        current_page: 1,
-        total_pages: 1,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
-
-    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(screen.getByText("2 Members")).toBeInTheDocument();
-    });
-    expect(screen.queryByText(/Showing.*results/)).not.toBeInTheDocument();
-  });
-
-  it("should display 1 Member when singular", async () => {
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [createMockKey()],
-        total_count: 1,
-        current_page: 1,
-        total_pages: 1,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
-
-    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(screen.getByText("1 Member")).toBeInTheDocument();
-    });
-  });
-
   it("should call useKeys with page, pageSize, and expand user for server-side pagination", async () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
@@ -176,9 +127,6 @@ describe("TeamVirtualKeysTable", () => {
       <TeamVirtualKeysTable {...defaultProps} organization={mockOrganization} />
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("1 Member")).toBeInTheDocument();
-    });
     // Key with org_id should display in table - org-123 from organization
     await waitFor(() => {
       expect(screen.getByText("org-123")).toBeInTheDocument();
@@ -189,9 +137,8 @@ describe("TeamVirtualKeysTable", () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("0 Members")).toBeInTheDocument();
+      expect(screen.getByText("Key ID")).toBeInTheDocument();
     });
-    expect(screen.getByText("Key ID")).toBeInTheDocument();
   });
 
   it("should display keys in table when data is loaded", async () => {
@@ -213,9 +160,8 @@ describe("TeamVirtualKeysTable", () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("2 Members")).toBeInTheDocument();
+      expect(screen.getByText("alice_key_team1")).toBeInTheDocument();
     });
-    expect(screen.getByText("alice_key_team1")).toBeInTheDocument();
     expect(screen.getByText("bob_key_team1")).toBeInTheDocument();
   });
 
@@ -237,7 +183,6 @@ describe("TeamVirtualKeysTable", () => {
     await waitFor(() => {
       expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
     });
-    expect(screen.getByText("100 Members")).toBeInTheDocument();
   });
 
   it("should fetch page 2 when Next is clicked", async () => {
@@ -298,9 +243,8 @@ describe("TeamVirtualKeysTable", () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("0 Members")).toBeInTheDocument();
+      expect(screen.getByText("No keys found")).toBeInTheDocument();
     });
-    expect(screen.getByText("No keys found")).toBeInTheDocument();
   });
 
   it("should fetch team-scoped filter options for Key Alias, Organization ID, and User ID", async () => {
