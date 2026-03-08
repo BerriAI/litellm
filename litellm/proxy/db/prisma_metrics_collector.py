@@ -77,7 +77,15 @@ class PrismaMetricsCollector:
                 "PRISMA_METRICS_COLLECTION_INTERVAL_SECONDS",
                 str(_DEFAULT_COLLECTION_INTERVAL),
             )
-            self._interval = max(float(raw), _MIN_COLLECTION_INTERVAL)
+            try:
+                self._interval = max(float(raw), _MIN_COLLECTION_INTERVAL)
+            except ValueError:
+                verbose_proxy_logger.warning(
+                    "Invalid PRISMA_METRICS_COLLECTION_INTERVAL_SECONDS=%r; using default %ss",
+                    raw,
+                    _DEFAULT_COLLECTION_INTERVAL,
+                )
+                self._interval = float(_DEFAULT_COLLECTION_INTERVAL)
 
         self._task: Optional[asyncio.Task] = None
 

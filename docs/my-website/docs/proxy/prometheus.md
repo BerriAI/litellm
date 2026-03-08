@@ -574,6 +574,10 @@ Monitor PostgreSQL connection pool utilization and Prisma query engine health. T
 
 The `state` label values come from PostgreSQL's `pg_stat_activity.state` column: `active`, `idle`, `idle in transaction`, `idle in transaction (aborted)`, `fastpath function call`, `disabled`.
 
+**Prerequisites:** Metrics collection requires both:
+- `prometheus_system` in `service_callback` (see [Monitor System Health](#monitor-system-health))
+- `PRISMA_HEALTH_WATCHDOG_ENABLED` not set to `false` (default: `true`). If disabled, a warning is logged and no DB metrics are collected.
+
 The collection interval can be configured via the `PRISMA_METRICS_COLLECTION_INTERVAL_SECONDS` environment variable (default: 30, minimum: 5).
 
 ## 🔥 LiteLLM Maintained Grafana Dashboards
