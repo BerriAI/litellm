@@ -1502,9 +1502,9 @@ async def get_users(
     sort_order: str = fastapi.Query(
         default="asc", description="Sort order ('asc' or 'desc')"
     ),
-    organization_id: Optional[List[str]] = fastapi.Query(
+    organization_ids: Optional[str] = fastapi.Query(
         default=None,
-        description="Filter users by organization membership. Pass multiple values for multiple orgs.",
+        description="Filter users by organization membership. Comma-separated list of org IDs.",
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -1592,9 +1592,9 @@ async def get_users(
                     "error": "Only proxy admins and organization admins can list users."
                 },
             )
-        # If client also sent organization_id, intersect with allowed orgs
-        if organization_id:
-            requested = set(organization_id)
+        # If client also sent organization_ids, intersect with allowed orgs
+        if organization_ids:
+            requested = set(oid.strip() for oid in organization_ids.split(",") if oid.strip())
             allowed = set(allowed_org_ids)
             intersection = list(requested & allowed)
             if not intersection:
@@ -1605,8 +1605,8 @@ async def get_users(
                     },
                 )
             allowed_org_ids = intersection
-        # For org admins, always enforce org scoping
-        organization_id = allowed_org_ids
+        # For org admins, always enforce org scoping via comma-separated string
+        organization_ids = ",".join(allowed_org_ids)
 
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
@@ -1646,10 +1646,12 @@ async def get_users(
             "in": sso_id_list,
         }
 
-    if organization_id:
-        where_conditions["organization_memberships"] = {
-            "some": {"organization_id": {"in": organization_id}}
-        }
+    if organization_ids:
+        org_id_list = [oid.strip() for oid in organization_ids.split(",") if oid.strip()]
+        if org_id_list:
+            where_conditions["organization_memberships"] = {
+                "some": {"organization_id": {"in": org_id_list}}
+            }
 
     ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
     where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
