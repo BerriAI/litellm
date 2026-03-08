@@ -13,7 +13,7 @@ def _normalize_reasoning_effort_for_chat_completion(
 ) -> Optional[str]:
     """Convert reasoning_effort to the string format expected by OpenAI chat completion API.
 
-    The chat completion API expects a simple string: 'none', 'low', 'medium', 'high', or 'xhigh'.
+    The chat completion API expects a simple string: 'none', 'minimal', 'low', 'medium', 'high', or 'xhigh'.
     Config/deployments may pass the Responses API format: {'effort': 'high', 'summary': 'detailed'}.
     """
     if value is None:
@@ -70,6 +70,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model_name = model.split("/")[-1]
         return model_name.startswith("gpt-5.4")
 
+    GPT5_SERIES_ROUTE = "gpt5_series/"
+
     @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Check if the model supports a specific reasoning_effort level.
@@ -78,6 +80,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         the shared ``_supports_factory`` helper.
         Returns False for unknown models (safe fallback).
         """
+        if model.startswith(cls.GPT5_SERIES_ROUTE):
+            model = model[len(cls.GPT5_SERIES_ROUTE) :]
         return _supports_factory(
             model=model,
             custom_llm_provider=None,
@@ -131,6 +135,41 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             if param not in non_supported_params
         ]
 
+    def _validate_reasoning_effort(
+        self,
+        reasoning_effort: Optional[str],
+        model: str,
+        non_default_params: dict,
+        optional_params: dict,
+        drop_params: bool,
+    ) -> None:
+        """Validate reasoning_effort level against model capabilities.
+
+        Raises UnsupportedParamsError for unsupported levels unless drop_params is set.
+        """
+        _EFFORT_ERRORS = {
+            "minimal": (
+                "reasoning_effort='minimal' is not supported for this model. "
+                "GPT-5 series models support 'minimal' except gpt-5-codex."
+            ),
+            "xhigh": (
+                "reasoning_effort='xhigh' is only supported for "
+                "gpt-5.1-codex-max, gpt-5.2, and gpt-5.4+ models."
+            ),
+        }
+        if reasoning_effort not in _EFFORT_ERRORS:
+            return
+        if self._supports_reasoning_effort_level(model, reasoning_effort):
+            return
+        if litellm.drop_params or drop_params:
+            non_default_params.pop("reasoning_effort", None)
+            optional_params.pop("reasoning_effort", None)
+        else:
+            raise litellm.utils.UnsupportedParamsError(
+                message=_EFFORT_ERRORS[reasoning_effort],
+                status_code=400,
+            )
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -164,17 +203,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 optional_params["reasoning_effort"] = normalized
 
         reasoning_effort = normalized or raw_reasoning_effort
-        if reasoning_effort is not None and reasoning_effort == "xhigh":
-            if not self._supports_reasoning_effort_level(model, "xhigh"):
-                if litellm.drop_params or drop_params:
-                    non_default_params.pop("reasoning_effort", None)
-                else:
-                    raise litellm.utils.UnsupportedParamsError(
-                        message=(
-                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max, gpt-5.2, and gpt-5.4+ models."
-                        ),
-                        status_code=400,
-                    )
+        self._validate_reasoning_effort(
+            reasoning_effort, model, non_default_params, optional_params, drop_params
+        )
 
         ################################################################
         # max_tokens is not supported for gpt-5 models on OpenAI API
