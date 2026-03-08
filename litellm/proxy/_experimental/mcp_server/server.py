@@ -1585,6 +1585,7 @@ if MCP_AVAILABLE:
         if cached is not None:
             credential, ts = cached
             if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
+                _byok_cred_cache.move_to_end(cache_key)  # promote to MRU
                 return credential
 
         from litellm.proxy._experimental.mcp_server.db import get_user_credential
@@ -1657,6 +1658,7 @@ if MCP_AVAILABLE:
         if cached is not None:
             cached_cred, ts = cached
             if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
+                _byok_cred_cache.move_to_end(cache_key)  # promote to MRU
                 if cached_cred is None:
                     raise HTTPException(
                         status_code=401,
