@@ -68,6 +68,11 @@ model LiteLLM_AgentsTable {
   agent_access_groups String[]       @default([])
   object_permission_id String?
   object_permission LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
+  spend      Float    @default(0.0)
+  tpm_limit  Int?
+  rpm_limit  Int?
+  session_tpm_limit Int?
+  session_rpm_limit Int?
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -1147,6 +1152,7 @@ model LiteLLM_ToolTable {
   @@index([team_id])
 }
 
+// Per-(tool, team/key) policy overrides. When present, override replaces global tool policy for that scope.
 //Unified Access Groups table for storing unified access groups
 model LiteLLM_AccessGroupTable {
   access_group_id    String   @id @default(uuid())

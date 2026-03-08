@@ -77,8 +77,8 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             api_base = AnthropicModelInfo.get_api_base()
 
         if skill_id:
-            return f"{api_base}/v1/skills/{skill_id}?beta=true"
-        return f"{api_base}/v1/{endpoint}?beta=true"
+            return f"{api_base}/v1/skills/{skill_id}"
+        return f"{api_base}/v1/{endpoint}"
 
     def transform_create_skill_request(
         self,

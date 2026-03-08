@@ -30,6 +30,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     get_daily_activity_aggregated,
 )
+from litellm.proxy.auth.auth_checks import get_user_object
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -1844,7 +1845,11 @@ async def ui_view_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [PROXY-ADMIN ONLY]Filter users based on partial match of user_id or email with pagination.
+    Filter users based on partial match of user_id or email with pagination.
+
+    - Proxy admins: receive all matching users.
+    - Organization admins: receive only users in their own organization(s).
+    - Other roles: access denied (403).
 
     Args:
         user_id (Optional[str]): Partial user ID to search for
@@ -1854,19 +1859,69 @@ async def ui_view_users(
         user_api_key_dict (UserAPIKeyAuth): User authentication information
 
     Returns:
-        List[LiteLLM_SpendLogs]: Paginated list of matching user records
+        List of matching user records (LiteLLM_UserTableFiltered), scoped by org for org admins.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     try:
+        # Restrict by caller role: proxy admin sees all; org admin sees only their org(s); others 403
+        is_proxy_admin = _user_has_admin_view(user_api_key_dict)
+        if not is_proxy_admin:
+            if user_api_key_dict.user_id is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Only proxy admins and organization admins can search users."
+                    },
+                )
+            try:
+                caller_user = await get_user_object(
+                    user_id=user_api_key_dict.user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except ValueError:
+                # get_user_object raises ValueError when user not found (user_id_upsert=False)
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Only proxy admins and organization admins can search users."
+                    },
+                )
+            if caller_user is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Only proxy admins and organization admins can search users."
+                    },
+                )
+            org_admin_org_ids = [
+                m.organization_id
+                for m in (caller_user.organization_memberships or [])
+                if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+            ]
+            if not org_admin_org_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Only proxy admins and organization admins can search users."
+                    },
+                )
+
         # Calculate offset for pagination
         skip = (page - 1) * page_size
 
         # Build where conditions based on provided parameters
-        where_conditions = {}
+        where_conditions: Dict[str, Any] = {}
 
         if user_id:
             where_conditions["user_id"] = {
@@ -1878,6 +1933,12 @@ async def ui_view_users(
             where_conditions["user_email"] = {
                 "contains": user_email,
                 "mode": "insensitive",  # Case-insensitive search
+            }
+
+        # Org admins: only users in their org(s)
+        if not is_proxy_admin:
+            where_conditions["organization_memberships"] = {
+                "some": {"organization_id": {"in": org_admin_org_ids}}
             }
 
         # Query users with pagination and filters
@@ -1895,6 +1956,8 @@ async def ui_view_users(
 
         return [LiteLLM_UserTableFiltered(**user.model_dump()) for user in users]
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error searching users: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")

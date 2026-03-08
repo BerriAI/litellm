@@ -1,22 +1,30 @@
 import asyncio
-import json
 import os
 from typing import Any, Dict, Set
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-from fastapi import APIRouter, Depends, HTTPException
-from prisma.errors import RecordNotFoundError
-from pydantic import TypeAdapter
+try:
+    from prisma.errors import RecordNotFoundError
+except ImportError:
+    RecordNotFoundError = Exception  # type: ignore
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem, LitellmUserRoles, UserAPIKeyAuth
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    KeyManagementSystem,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.config_overrides import (
     ConfigOverrideSettingsResponse,
     HashicorpVaultConfig,

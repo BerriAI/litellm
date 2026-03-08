@@ -77,8 +77,8 @@ from litellm.proxy.management_endpoints.common_utils import (
     _upsert_budget_and_membership,
     _user_has_admin_view,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import (
-    get_daily_activity_aggregated,
+from litellm.proxy.management_endpoints.tag_management_endpoints import (
+    get_daily_activity,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -708,6 +708,8 @@ async def new_team(  # noqa: PLR0915
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
+    - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
+    - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -1270,6 +1272,8 @@ async def update_team(   # noqa: PLR0915
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
+    - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
+    - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
@@ -3890,14 +3894,10 @@ async def get_team_daily_activity(
     page: int = 1,
     page_size: int = 10,
     exclude_team_ids: Optional[str] = None,
-    timezone: Optional[int] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get daily activity for specific teams or all teams.
-
-    Uses SQL GROUP BY to aggregate all matching rows without pagination,
-    ensuring accurate total spend regardless of data volume.
 
     Args:
         team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
@@ -3905,12 +3905,11 @@ async def get_team_daily_activity(
         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
         model (Optional[str]): Filter by model name.
         api_key (Optional[str]): Filter by API key.
-        page (int): Deprecated, kept for backward compatibility. All results are returned in a single page.
-        page_size (int): Deprecated, kept for backward compatibility.
+        page (int): Page number for pagination.
+        page_size (int): Number of items per page.
         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
-        timezone (Optional[int]): Timezone offset in minutes from UTC (e.g., 480 for PST).
     Returns:
-        SpendAnalyticsPaginatedResponse: Response containing daily activity data with per-team breakdown.
+        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -4014,17 +4013,17 @@ async def get_team_daily_activity(
     if final_api_key_filter is None and user_api_keys is not None:
         final_api_key_filter = user_api_keys
 
-    return await get_daily_activity_aggregated(
+    return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
         entity_id=team_ids_list,
         entity_metadata_field=team_alias_metadata,
+        exclude_entity_ids=exclude_team_ids_list,
         start_date=start_date,
         end_date=end_date,
         model=model,
         api_key=final_api_key_filter,
-        exclude_entity_ids=exclude_team_ids_list,
-        timezone_offset_minutes=timezone,
-        include_entity_breakdown=True,
+        page=page,
+        page_size=page_size,
     )
