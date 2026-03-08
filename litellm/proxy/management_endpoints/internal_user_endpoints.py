@@ -1843,6 +1843,16 @@ async def delete_user(
     )
 
     ## DELETE ASSOCIATED INVITATION LINKS
+    # Delete links where the user is the invited user, creator, or updater
+    # to avoid FK constraint violations on LiteLLM_InvitationLink.
+    # Side effect: invitations targeting non-deleted users are also removed
+    # when a deleted user is the creator or updater of those invitations.
+    verbose_proxy_logger.warning(
+        "delete_user: removing all invitation links referencing user_ids=%s "
+        "(user_id, created_by, updated_by). Pending invitations for other "
+        "users may be deleted as a side effect.",
+        data.user_ids,
+    )
     await prisma_client.db.litellm_invitationlink.delete_many(
         where={
             "OR": [
