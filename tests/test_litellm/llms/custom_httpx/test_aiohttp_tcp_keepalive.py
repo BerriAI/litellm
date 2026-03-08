@@ -165,12 +165,10 @@ def test_create_aiohttp_transport_no_socket_factory_when_keepalive_disabled():
 @pytest.mark.asyncio
 async def test_client_timeout_total_is_none_for_user_configured_timeout():
     """
-    _make_aiohttp_request must set ClientTimeout(total=None) so that
-    aiohttp's 5-minute (300s) default total cap does not silently override
-    the user's configured timeout (e.g. timeout=600 for heavy reasoning).
-
-    With total=None, only sock_read controls how long to wait for data,
-    which is set to the user's configured timeout value.
+    When an explicit read timeout is configured, ClientTimeout.total must be
+    None so aiohttp's implicit 300 s cap does not silently override the user's
+    value (e.g. timeout=600 for heavy Azure reasoning).  Only sock_read
+    controls how long to wait for data in that case.
     """
     captured = {}
 
@@ -225,15 +223,11 @@ async def test_client_timeout_total_is_none_for_user_configured_timeout():
 
 
 @pytest.mark.asyncio
-async def test_client_timeout_total_none_does_not_affect_streaming():
+async def test_client_timeout_total_none_when_read_timeout_is_set():
     """
-    Setting total=None must not cap streaming responses — the ClientTimeout
-    passed to aiohttp must have total=None regardless of the sock_read value,
-    so a stream whose total duration exceeds sock_read is not prematurely cut.
-
-    This is a mock-based regression guard: we verify that when the transport
-    makes its aiohttp request it passes ClientTimeout(total=None), which is
-    what prevents aiohttp's implicit 300 s cap from killing long streams.
+    When sock_read is set, ClientTimeout.total must be None so aiohttp's
+    implicit 300 s cap does not prematurely cut streaming responses whose
+    total duration exceeds the per-chunk sock_read budget.
     """
     captured = {}
 
@@ -280,7 +274,59 @@ async def test_client_timeout_total_none_does_not_affect_streaming():
     assert "timeout" in captured
     client_timeout: aiohttp.ClientTimeout = captured["timeout"]
     assert client_timeout.total is None, (
-        "ClientTimeout.total must be None so streaming responses are not "
-        "capped by aiohttp's implicit 300 s default"
+        "ClientTimeout.total must be None when sock_read is set so streaming "
+        "responses are not capped by aiohttp's implicit 300 s default"
     )
     assert client_timeout.sock_read == 0.15
+
+
+@pytest.mark.asyncio
+async def test_client_timeout_total_is_300_when_no_read_timeout():
+    """
+    When no explicit read timeout is provided (sock_read=None), total must
+    fall back to 300 s to preserve the backwards-compatible safety net against
+    hung servers — removing it unconditionally would be a breaking change.
+    """
+    captured = {}
+
+    class FakeSession:
+        closed = False
+        _loop = None
+
+        def request(self, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+
+            class Resp:
+                status = 200
+                headers = {}
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *a):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, _size):
+                            yield b""
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
+
+    request = httpx.Request("POST", "https://example.com/")
+    # No read timeout — simulates a caller that omits timeout entirely
+    request.extensions["timeout"] = {}
+
+    await transport.handle_async_request(request)
+
+    client_timeout: aiohttp.ClientTimeout = captured["timeout"]
+    assert client_timeout.total == 300, (
+        "ClientTimeout.total must be 300 s when no read timeout is configured "
+        "to preserve the safety net against hung servers"
+    )
+    assert client_timeout.sock_read is None

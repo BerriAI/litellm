@@ -262,7 +262,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             "allow_redirects": False,
             "auto_decompress": False,
             "timeout": ClientTimeout(
-                total=None,
+                # Only suppress aiohttp's implicit 300 s total cap when the
+                # caller has provided an explicit read timeout. Without an
+                # explicit sock_read the 300 s default acts as a safety net
+                # against hung servers and should be preserved.
+                total=None if timeout.get("read") is not None else 300,
                 sock_connect=timeout.get("connect"),
                 sock_read=timeout.get("read"),
                 connect=timeout.get("pool"),
