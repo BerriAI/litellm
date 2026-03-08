@@ -3,13 +3,38 @@
 import ViewUserDashboard from "@/components/view_users";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-import { useState } from "react";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { isProxyAdminRole } from "@/utils/roles";
+import { useState, useMemo } from "react";
+import { Organization } from "@/components/networking";
 
 const UsersPage = () => {
   const { accessToken, userRole, userId, token } = useAuthorized();
   const [keys, setKeys] = useState<null | any[]>([]);
 
   const { teams } = useTeams();
+  const { data: organizations, isLoading: isOrgsLoading } = useOrganizations();
+
+  // Three states:
+  // - undefined: org data still loading (non-proxy-admin) — query should wait
+  // - null: proxy admin or no org filtering needed — query runs unfiltered
+  // - string[]: org admin org IDs — query runs filtered
+  const orgAdminOrgIds = useMemo((): string[] | null | undefined => {
+    if (!userId || !userRole) return null;
+    // Proxy admins see all users — no org filtering
+    if (isProxyAdminRole(userRole)) return null;
+
+    // Still loading org data — signal "not ready yet"
+    if (isOrgsLoading || !organizations) return undefined;
+
+    const adminOrgIds = organizations
+      .filter((org: Organization) =>
+        org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin")
+      )
+      .map((org: Organization) => org.organization_id);
+
+    return adminOrgIds.length > 0 ? adminOrgIds : null;
+  }, [userId, organizations, userRole, isOrgsLoading]);
 
   return (
     <ViewUserDashboard
@@ -20,6 +45,7 @@ const UsersPage = () => {
       userID={userId}
       teams={teams as any}
       setKeys={setKeys}
+      orgAdminOrgIds={orgAdminOrgIds}
     />
   );
 };
