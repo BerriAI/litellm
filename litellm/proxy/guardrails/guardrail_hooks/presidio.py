@@ -10,7 +10,6 @@
 
 import asyncio
 import json
-import json as _json
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -1163,14 +1162,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     for j, line in enumerate(lines):
                         if line.startswith("data: "):
                             try:
-                                data = _json.loads(line[6:])
+                                data = json.loads(line[6:])
                                 entry["data"] = data
                                 entry["data_idx"] = j
                                 if (data.get("type") == "content_block_delta"
                                         and data.get("delta", {}).get("type") == "text_delta"):
                                     text_event_indices.append(i)
                                     text_fragments.append(data["delta"].get("text", ""))
-                            except (_json.JSONDecodeError, ValueError):
+                            except (json.JSONDecodeError, ValueError):
                                 pass
                     parsed.append(entry)
 
@@ -1196,7 +1195,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         else:
                             fragment = unmasked[pos:]
                         pe["data"]["delta"]["text"] = fragment
-                        pe["lines"][pe["data_idx"]] = "data: " + _json.dumps(
+                        pe["lines"][pe["data_idx"]] = "data: " + json.dumps(
                             pe["data"], ensure_ascii=False
                         )
 
