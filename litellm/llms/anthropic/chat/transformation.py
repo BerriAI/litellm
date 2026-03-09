@@ -1745,7 +1745,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     for content in completion_response.get("content", [])
                 )
                 if _has_server_tools:
-                    provider_specific_fields["_original_content"] = (
+                    provider_specific_fields["_original_content"] = list(
                         completion_response["content"]
                     )
 
