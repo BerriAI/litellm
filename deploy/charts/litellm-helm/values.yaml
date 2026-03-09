@@ -31,6 +31,8 @@ serviceAccount:
 # annotations for litellm deployment
 deploymentAnnotations: {}
 deploymentLabels: {}
+deploymentminReadySeconds: 0
+
 # annotations for litellm pods
 podAnnotations: {}
 podLabels: {}

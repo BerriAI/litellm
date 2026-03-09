@@ -42,6 +42,7 @@ spec:
       initContainers:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      minReadySeconds: {{ .Values.deploymentminReadySeconds | default 0 }}
       containers:
         - name: {{ include "litellm.name" . }}
           securityContext:
