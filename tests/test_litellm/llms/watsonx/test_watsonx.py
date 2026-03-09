@@ -309,6 +309,7 @@ def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.xdist_group("watsonx_heavy")
 async def test_watsonx_gpt_oss_uses_async_http_handler():
     """
     Test that verifies async HTTP client is used when fetching HuggingFace templates.

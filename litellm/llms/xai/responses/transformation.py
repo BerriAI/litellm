@@ -252,3 +252,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         
         return f"{api_base}/responses"
 
+    def supports_native_websocket(self) -> bool:
+        """XAI does not support native WebSocket for Responses API"""
+        return False
+

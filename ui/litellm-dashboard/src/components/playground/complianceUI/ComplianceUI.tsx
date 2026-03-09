@@ -8,9 +8,11 @@ import {
 } from "@/data/compliancePrompts";
 import {
   getGuardrailsList,
-  getPoliciesList,
   testPoliciesAndGuardrails,
 } from "@/components/networking";
+import PolicySelector, { getPolicyOptionEntries } from "@/components/policies/PolicySelector";
+import { Policy } from "@/components/policies/types";
+import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
 import {
   AlertTriangle,
   BarChart3,
@@ -38,6 +40,7 @@ import {
   Send,
   Shield,
   Smile,
+  Square,
   Trash2,
   TrendingDown,
   Upload,
@@ -96,11 +99,6 @@ interface QuickTestMessage {
 type ResultFilter = "all" | "matches" | "mismatches" | "pending";
 type RightPanelTab = "quick-test" | "batch-results";
 
-interface PolicyOption {
-  id: string;
-  name: string;
-}
-
 interface GuardrailOption {
   id: string;
   name: string;
@@ -110,19 +108,30 @@ interface GuardrailOption {
 interface ComplianceUIProps {
   accessToken: string | null;
   disabledPersonalKeyCreation?: boolean;
+  /** When "chat_completions", use /chat/completions with fixedModel instead of test_policies_and_guardrails. */
+  backendMode?: "policies" | "chat_completions";
+  /** Required when backendMode is "chat_completions"; model name for chat completions (e.g. selected agent). */
+  fixedModel?: string;
+  /** Used when backendMode is "chat_completions" for the request base URL. */
+  proxySettings?: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
 }
 
 export default function ComplianceUI({
   accessToken,
   disabledPersonalKeyCreation,
+  backendMode = "policies",
+  fixedModel,
+  proxySettings,
 }: ComplianceUIProps) {
   const frameworks = getFrameworks();
 
-  const [policyOptions, setPolicyOptions] = useState<PolicyOption[]>([]);
+  const [policyValueToLabel, setPolicyValueToLabel] = useState<Map<string, string>>(new Map());
   const [guardrailOptions, setGuardrailOptions] = useState<GuardrailOption[]>([]);
   const [selectedPolicies, setSelectedPolicies] = useState<string[]>([]);
   const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
-  const [showPolicyDropdown, setShowPolicyDropdown] = useState(false);
   const [showGuardrailDropdown, setShowGuardrailDropdown] = useState(false);
 
   const [selectedPromptIds, setSelectedPromptIds] = useState<Set<string>>(new Set());
@@ -148,21 +157,18 @@ export default function ComplianceUI({
   const [isRunning, setIsRunning] = useState(false);
   const [resultFilter, setResultFilter] = useState<ResultFilter>("all");
   const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
+  const batchAbortControllerRef = useRef<AbortController | null>(null);
+
+  const handlePoliciesLoaded = useCallback((policies: Policy[]) => {
+    const entries = getPolicyOptionEntries(policies);
+    setPolicyValueToLabel(new Map(entries.map((e) => [e.value, e.label])));
+  }, []);
 
   useEffect(() => {
     if (!accessToken) return;
-    const fetchOptions = async () => {
+    const fetchGuardrails = async () => {
       try {
-        const [policiesRes, guardrailsRes] = await Promise.all([
-          getPoliciesList(accessToken).catch(() => ({ policies: [] })),
-          getGuardrailsList(accessToken).catch(() => ({ guardrails: [] })),
-        ]);
-        setPolicyOptions(
-          (policiesRes.policies || []).map((p: { policy_name: string; policy_id?: string }) => ({
-            id: p.policy_id ?? p.policy_name,
-            name: p.policy_name,
-          }))
-        );
+        const guardrailsRes = await getGuardrailsList(accessToken).catch(() => ({ guardrails: [] }));
         setGuardrailOptions(
           (guardrailsRes.guardrails || []).map((g: { guardrail_name: string }) => ({
             id: g.guardrail_name,
@@ -171,11 +177,10 @@ export default function ComplianceUI({
           }))
         );
       } catch {
-        setPolicyOptions([]);
         setGuardrailOptions([]);
       }
     };
-    fetchOptions();
+    fetchGuardrails();
   }, [accessToken]);
 
   useEffect(() => {
@@ -266,12 +271,6 @@ export default function ComplianceUI({
   };
 
   const deselectAll = () => setSelectedPromptIds(new Set());
-
-  const togglePolicy = (id: string) => {
-    setSelectedPolicies((prev) =>
-      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
-    );
-  };
 
   const toggleGuardrail = (id: string) => {
     setSelectedGuardrails((prev) =>
@@ -432,6 +431,9 @@ export default function ComplianceUI({
     if (csvInputRef.current) csvInputRef.current.value = "";
   };
 
+  const requestProxyBaseUrl =
+    proxySettings?.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings?.PROXY_BASE_URL ?? undefined;
+
   const runQuickTest = useCallback(async () => {
     if (!quickTestInput.trim() || !accessToken) return;
     const text = quickTestInput.trim();
@@ -445,44 +447,82 @@ export default function ComplianceUI({
     setQuickTestInput("");
     setIsQuickTesting(true);
     try {
-      const { inputs, guardrail_errors } = await testPoliciesAndGuardrails(
-        accessToken,
-        {
-          policy_names:
-            selectedPolicies.length > 0 ? selectedPolicies : undefined,
-          guardrail_names:
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-          inputs: { texts: [text] },
-          request_data: {},
-          input_type: "request",
-        }
-      );
-      const result: "blocked" | "allowed" =
-        guardrail_errors.length > 0 ? "blocked" : "allowed";
-      const triggeredBy =
-        guardrail_errors.length > 0
-          ? guardrail_errors
-              .map((e) => `${e.guardrail_name}: ${e.message}`)
-              .join("; ")
-          : undefined;
-      const returnedText =
-        Array.isArray(inputs?.texts) && inputs.texts.length > 0
-          ? inputs.texts[0]
-          : undefined;
-      const displayText =
-        result === "blocked"
-          ? `Blocked — ${triggeredBy ?? "content filter"}`
-          : "Allowed — no policy or guardrail violations detected.";
-      const sysMsg: QuickTestMessage = {
-        id: `msg-${Date.now()}-sys`,
-        type: "system",
-        text: displayText,
-        result,
-        triggeredBy,
-        returnedText,
-        timestamp: new Date(),
-      };
-      setQuickTestMessages((prev) => [...prev, sysMsg]);
+      if (backendMode === "chat_completions" && fixedModel) {
+        let fullResponse = "";
+        await makeOpenAIChatCompletionRequest(
+          [{ role: "user", content: text }],
+          (chunk: string) => {
+            fullResponse += chunk;
+          },
+          fixedModel,
+          accessToken,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined, // vector_store_ids (param 11)
+          selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+          selectedPolicies.length > 0 ? selectedPolicies : undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          requestProxyBaseUrl,
+          undefined
+        );
+        const sysMsg: QuickTestMessage = {
+          id: `msg-${Date.now()}-sys`,
+          type: "system",
+          text: "Allowed — model response received.",
+          result: "allowed",
+          returnedText: fullResponse,
+          timestamp: new Date(),
+        };
+        setQuickTestMessages((prev) => [...prev, sysMsg]);
+      } else {
+        const { inputs, guardrail_errors = [] } = await testPoliciesAndGuardrails(
+          accessToken,
+          {
+            policy_names:
+              selectedPolicies.length > 0 ? selectedPolicies : undefined,
+            guardrail_names:
+              selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            inputs: { texts: [text] },
+            request_data: {},
+            input_type: "request",
+          }
+        );
+        const result: "blocked" | "allowed" =
+          guardrail_errors.length > 0 ? "blocked" : "allowed";
+        const triggeredBy =
+          guardrail_errors.length > 0
+            ? guardrail_errors
+                .map((e) => `${e.guardrail_name}: ${e.message}`)
+                .join("; ")
+            : undefined;
+        const returnedText =
+          Array.isArray(inputs?.texts) && inputs.texts.length > 0
+            ? inputs.texts[0]
+            : undefined;
+        const displayText =
+          result === "blocked"
+            ? `Blocked — ${triggeredBy ?? "content filter"}`
+            : "Allowed — no policy or guardrail violations detected.";
+        const sysMsg: QuickTestMessage = {
+          id: `msg-${Date.now()}-sys`,
+          type: "system",
+          text: displayText,
+          result,
+          triggeredBy,
+          returnedText,
+          timestamp: new Date(),
+        };
+        setQuickTestMessages((prev) => [...prev, sysMsg]);
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const sysMsg: QuickTestMessage = {
@@ -502,6 +542,9 @@ export default function ComplianceUI({
     quickTestInput,
     selectedPolicies,
     selectedGuardrails,
+    backendMode,
+    fixedModel,
+    requestProxyBaseUrl,
   ]);
 
   const handleQuickTestKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -513,6 +556,9 @@ export default function ComplianceUI({
 
   const runTests = useCallback(async () => {
     if (selectedPromptIds.size === 0 || !accessToken) return;
+    const controller = new AbortController();
+    batchAbortControllerRef.current = controller;
+    const signal = controller.signal;
     setIsRunning(true);
     setResultFilter("all");
     setRightTab("batch-results");
@@ -533,41 +579,62 @@ export default function ComplianceUI({
     }));
     setTestResults(pendingResults);
     try {
-      const { inputs, guardrail_errors } = await testPoliciesAndGuardrails(
+      const useAgentId = backendMode === "chat_completions" && fixedModel;
+      const response = await testPoliciesAndGuardrails(
         accessToken,
         {
           policy_names:
             selectedPolicies.length > 0 ? selectedPolicies : undefined,
           guardrail_names:
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-          inputs: { texts: allTexts },
+          inputs_list: allTexts.map((text) => ({ texts: [text] })),
           request_data: {},
           input_type: "request",
-        }
+          ...(useAgentId ? { agent_id: fixedModel } : {}),
+        },
+        signal
       );
-      const actualResult: "blocked" | "allowed" =
-        guardrail_errors.length > 0 ? "blocked" : "allowed";
-      const triggeredBy =
-        guardrail_errors.length > 0
-          ? guardrail_errors
-              .map((e) => `${e.guardrail_name}: ${e.message}`)
-              .join("; ")
-          : undefined;
-      const returnedTexts: (string | undefined)[] =
-        Array.isArray(inputs?.texts) ? inputs.texts : [];
+      const results = response.results ?? [];
       setTestResults(
-        pendingResults.map((row, index) => ({
-          ...row,
-          actualResult,
-          isMatch:
-            (row.expectedResult === "fail" && actualResult === "blocked") ||
-            (row.expectedResult === "pass" && actualResult === "allowed"),
-          triggeredBy,
-          returnedText: returnedTexts[index],
-          status: "complete" as const,
-        }))
+        pendingResults.map((row, index) => {
+          const item = results[index];
+          const guardrail_errors = item?.guardrail_errors ?? [];
+          const actualResult: "blocked" | "allowed" =
+            guardrail_errors.length > 0 ? "blocked" : "allowed";
+          const triggeredBy =
+            guardrail_errors.length > 0
+              ? guardrail_errors
+                  .map((e) => `${e.guardrail_name}: ${e.message}`)
+                  .join("; ")
+              : undefined;
+          let returnedText: string | undefined;
+          if (item?.agent_response != null) {
+            const choices = (item.agent_response as { choices?: Array<{ message?: { content?: string } }> }).choices;
+            returnedText =
+              Array.isArray(choices) && choices[0]?.message?.content != null
+                ? String(choices[0].message.content)
+                : undefined;
+          }
+          if (returnedText === undefined && Array.isArray(item?.inputs?.texts) && item.inputs.texts.length > 0) {
+            returnedText = item.inputs.texts[0] as string;
+          }
+          return {
+            ...row,
+            actualResult,
+            isMatch:
+              (row.expectedResult === "fail" && actualResult === "blocked") ||
+              (row.expectedResult === "pass" && actualResult === "allowed"),
+            triggeredBy,
+            returnedText,
+            status: "complete" as const,
+          };
+        })
       );
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        // Stopped by user; leave partial results as-is (already set in loop)
+        return;
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       setTestResults(
         pendingResults.map((row) => ({
@@ -580,6 +647,7 @@ export default function ComplianceUI({
       );
     } finally {
       setIsRunning(false);
+      batchAbortControllerRef.current = null;
     }
   }, [
     accessToken,
@@ -587,11 +655,20 @@ export default function ComplianceUI({
     selectedPolicies,
     selectedGuardrails,
     allFrameworks,
+    backendMode,
+    fixedModel,
+    requestProxyBaseUrl,
   ]);
 
   const completedResults = testResults.filter((r) => r.status === "complete");
   const matchCount = completedResults.filter((r) => r.isMatch).length;
   const mismatchCount = completedResults.filter((r) => !r.isMatch).length;
+  const falsePositiveCount = completedResults.filter(
+    (r) => r.expectedResult === "pass" && r.actualResult === "blocked"
+  ).length;
+  const falseNegativeCount = completedResults.filter(
+    (r) => r.expectedResult === "fail" && r.actualResult === "allowed"
+  ).length;
   const pendingCount = testResults.filter((r) => r.status !== "complete").length;
   const filteredResults = testResults.filter((r) => {
     if (resultFilter === "matches") return r.status === "complete" && r.isMatch;
@@ -599,6 +676,31 @@ export default function ComplianceUI({
     if (resultFilter === "pending") return r.status !== "complete";
     return true;
   });
+
+  const exportBatchResults = () => {
+    if (filteredResults.length === 0) return;
+    const rows = filteredResults.map((r) => ({
+      prompt_id: r.promptId,
+      prompt: r.prompt,
+      category: r.category,
+      expected_result: r.expectedResult,
+      actual_result: r.actualResult,
+      is_match: r.isMatch ? "yes" : "no",
+      status: r.status,
+      triggered_by: r.triggeredBy ?? "",
+      returned_text: r.returnedText ?? "",
+    }));
+    const csv = Papa.unparse(rows);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `compliance_batch_results_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  };
 
   const filteredFrameworks = allFrameworks
     .map((fw) => ({
@@ -648,76 +750,13 @@ export default function ComplianceUI({
             <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">
               Policies
             </label>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowPolicyDropdown(!showPolicyDropdown);
-                  setShowGuardrailDropdown(false);
-                }}
-                className="w-full flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2 text-sm text-left hover:border-gray-300 transition-colors"
-              >
-                <span
-                  className={
-                    selectedPolicies.length > 0 ? "text-gray-700" : "text-gray-400"
-                  }
-                >
-                  {selectedPolicies.length > 0
-                    ? `${selectedPolicies.length} selected`
-                    : "None selected"}
-                </span>
-                <ChevronDown className="w-4 h-4 text-gray-400" />
-              </button>
-              {showPolicyDropdown && (
-                <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 max-h-52 overflow-y-auto">
-                  {policyOptions.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-gray-500">
-                      No policies available. Create policies in the Policies page.
-                    </div>
-                  ) : (
-                    policyOptions.map((policy) => (
-                      <button
-                        key={policy.id}
-                        type="button"
-                        onClick={() => togglePolicy(policy.id)}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left hover:bg-gray-50"
-                      >
-                        <div
-                          className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${selectedPolicies.includes(policy.id) ? "bg-blue-500 border-blue-500" : "border-gray-300"}`}
-                        >
-                          {selectedPolicies.includes(policy.id) && (
-                            <Check className="w-3 h-3 text-white" />
-                          )}
-                        </div>
-                        <span className="text-gray-700">{policy.name}</span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-            {selectedPolicies.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {selectedPolicies.map((id) => {
-                  const p = policyOptions.find((x) => x.id === id);
-                  return (
-                    <span
-                      key={id}
-                      className="inline-flex items-center gap-1 text-[11px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-medium"
-                    >
-                      {p?.name}
-                      <button
-                        type="button"
-                        onClick={() => togglePolicy(id)}
-                        className="hover:text-blue-900"
-                        aria-label="Remove"
-                      >
-                        <X className="w-2.5 h-2.5" />
-                      </button>
-                    </span>
-                  );
-                })}
-              </div>
+            {accessToken && (
+              <PolicySelector
+                value={selectedPolicies}
+                onChange={setSelectedPolicies}
+                accessToken={accessToken}
+                onPoliciesLoaded={handlePoliciesLoaded}
+              />
             )}
           </div>
 
@@ -734,10 +773,7 @@ export default function ComplianceUI({
             <div className="relative">
               <button
                 type="button"
-                onClick={() => {
-                  setShowGuardrailDropdown(!showGuardrailDropdown);
-                  setShowPolicyDropdown(false);
-                }}
+                onClick={() => setShowGuardrailDropdown(!showGuardrailDropdown)}
                 className="w-full flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2 text-sm text-left hover:border-gray-300 transition-colors"
               >
                 <span
@@ -810,23 +846,30 @@ export default function ComplianceUI({
           </div>
 
           <div className="flex flex-col gap-1.5 pt-6 flex-shrink-0">
-            <button
-              type="button"
-              onClick={runTests}
-              disabled={selectedPromptIds.size === 0 || isRunning || disabledPersonalKeyCreation}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || isRunning || disabledPersonalKeyCreation ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
-            >
-              {isRunning ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Running...
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5" /> Simulate (
-                  {selectedPromptIds.size})
-                </>
-              )}
-            </button>
+            {isRunning ? (
+              <button
+                type="button"
+                onClick={() => batchAbortControllerRef.current?.abort()}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap bg-red-600 text-white hover:bg-red-700"
+              >
+                <Square className="w-3.5 h-3.5" /> Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={runTests}
+                disabled={selectedPromptIds.size === 0 || disabledPersonalKeyCreation}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || disabledPersonalKeyCreation ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
+              >
+                <Play className="w-3.5 h-3.5" /> Simulate (
+                {selectedPromptIds.size})
+              </button>
+            )}
+            {isRunning && (
+              <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" /> Running...
+              </span>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -1217,17 +1260,14 @@ export default function ComplianceUI({
                     <span className="text-[11px] font-medium text-gray-500">
                       Testing against:
                     </span>
-                    {selectedPolicies.map((id) => {
-                      const p = policyOptions.find((x) => x.id === id);
-                      return (
-                        <span
-                          key={id}
-                          className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-medium"
-                        >
-                          {p?.name}
-                        </span>
-                      );
-                    })}
+                    {selectedPolicies.map((id) => (
+                      <span
+                        key={id}
+                        className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-medium"
+                      >
+                        {policyValueToLabel.get(id) ?? id}
+                      </span>
+                    ))}
                     {selectedGuardrails.map((id) => {
                       const g = guardrailOptions.find((x) => x.id === id);
                       return (
@@ -1361,14 +1401,33 @@ export default function ComplianceUI({
                 <div className="flex items-center justify-between mb-2">
                   <h2 className="text-sm font-semibold text-gray-900">Results</h2>
                   {testResults.length > 0 && (
-                    <div className="flex items-center gap-2.5 text-[11px]">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={exportBatchResults}
+                        disabled={filteredResults.length === 0}
+                        className="flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      >
+                        <Download className="w-3 h-3" /> Export CSV
+                      </button>
+                      <div className="flex items-center gap-2.5 text-[11px]">
                       <span className="flex items-center gap-1 text-green-600">
                         <CheckCircle2 className="w-3 h-3" />
                         {matchCount}
                       </span>
-                      <span className="flex items-center gap-1 text-red-600">
+                      <span
+                        className="flex items-center gap-1 text-amber-600"
+                        title="Allowed content that should have been blocked"
+                      >
+                        <AlertTriangle className="w-3 h-3" />
+                        {falseNegativeCount} FN
+                      </span>
+                      <span
+                        className="flex items-center gap-1 text-red-600"
+                        title="Blocked content that should have been allowed"
+                      >
                         <X className="w-3 h-3" />
-                        {mismatchCount}
+                        {falsePositiveCount} FP
                       </span>
                       {pendingCount > 0 && (
                         <span className="flex items-center gap-1 text-gray-500">
@@ -1376,6 +1435,7 @@ export default function ComplianceUI({
                           {pendingCount}
                         </span>
                       )}
+                    </div>
                     </div>
                   )}
                 </div>
@@ -1439,11 +1499,18 @@ export default function ComplianceUI({
                             <span className="text-gray-500">correct</span>
                           </span>
                           <div className="w-px h-4 bg-gray-200" />
-                          <span>
-                            <span className="font-semibold text-red-700">
-                              {mismatchCount}
+                          <span title="Allowed content that should have been blocked">
+                            <span className="font-semibold text-amber-700">
+                              {falseNegativeCount}
                             </span>{" "}
-                            <span className="text-gray-500">gaps</span>
+                            <span className="text-gray-500">false negative</span>
+                          </span>
+                          <div className="w-px h-4 bg-gray-200" />
+                          <span title="Blocked content that should have been allowed">
+                            <span className="font-semibold text-red-700">
+                              {falsePositiveCount}
+                            </span>{" "}
+                            <span className="text-gray-500">false positive</span>
                           </span>
                         </div>
                         <div
@@ -1562,6 +1629,16 @@ export default function ComplianceUI({
                                         : "False positive — incorrectly blocked"}
                                   </span>
                                 </div>
+                                {result.returnedText != null && result.returnedText !== "" && (
+                                  <div className="mt-1.5">
+                                    <span className="text-gray-400 block mb-0.5">
+                                      LLM response:
+                                    </span>
+                                    <div className="text-gray-700 bg-gray-50 rounded px-2 py-1.5 border border-gray-100 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+                                      {result.returnedText}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>

@@ -135,17 +135,35 @@ def _safe_set_request_parsed_body(
 
 def _safe_get_request_headers(request: Optional[Request]) -> dict:
     """
-    [Non-Blocking] Safely get the request headers
+    [Non-Blocking] Safely get the request headers.
+    Caches the result on request.state to avoid re-creating dict(request.headers) per call.
+
+    Warning: Callers must NOT mutate the returned dict — it is shared across
+    all callers within the same request via the cache.
     """
+    if request is None:
+        return {}
+    state = getattr(request, "state", None)
+    cached = getattr(state, "_cached_headers", None)
+    if isinstance(cached, dict):
+        return cached
+    if cached is not None:
+        verbose_proxy_logger.debug(
+            "Unexpected cached request headers type - {}".format(type(cached))
+        )
     try:
-        if request is None:
-            return {}
-        return dict(request.headers)
+        headers = dict(request.headers)
     except Exception as e:
         verbose_proxy_logger.debug(
             "Unexpected error reading request headers - {}".format(e)
         )
-        return {}
+        headers = {}
+    try:
+        if state is not None:
+            state._cached_headers = headers
+    except Exception:
+        pass  # request.state may not be available in all contexts
+    return headers
 
 
 def check_file_size_under_limit(
@@ -502,4 +520,3 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
         verbose_proxy_logger.debug(
             f"populate_request_with_path_params: No vector_store_id present in path={path}"
         )
-

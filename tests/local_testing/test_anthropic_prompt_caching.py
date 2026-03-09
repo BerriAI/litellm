@@ -57,7 +57,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
             "type": "message",
             "role": "assistant",
             "content": [{"type": "text", "text": "Hello!"}],
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-sonnet-4-5-20250929",
             "stop_reason": "end_turn",
             "stop_sequence": None,
             "usage": {"input_tokens": 12, "output_tokens": 6},
@@ -74,7 +74,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
         # Act: Call the litellm.acompletion function
         response = await litellm.acompletion(
             api_key="mock_api_key",
-            model="anthropic/claude-3-7-sonnet-20250219",
+            model="anthropic/claude-sonnet-4-5-20250929",
             messages=[
                 {"role": "user", "content": "What's the weather like in Boston today?"}
             ],
@@ -154,7 +154,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
                 }
             ],
             "max_tokens": 64000,
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-sonnet-4-5-20250929",
         }
 
         mock_post.assert_called_once_with(
@@ -240,7 +240,7 @@ async def test_anthropic_vertex_ai_prompt_caching(anthropic_messages, sync_mode)
 async def test_anthropic_api_prompt_caching_basic():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="anthropic/claude-3-7-sonnet-20250219",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[
             # System Message
             {
@@ -308,7 +308,7 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
 
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="anthropic/claude-3-7-sonnet-20250219",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[
             # System Message
             {
@@ -460,7 +460,7 @@ async def test_anthropic_api_prompt_caching_with_content_str():
 async def test_anthropic_api_prompt_caching_no_headers():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="anthropic/claude-3-7-sonnet-20250219",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[
             # System Message
             {
@@ -520,7 +520,7 @@ async def test_anthropic_api_prompt_caching_no_headers():
 @pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_streaming():
     response = await litellm.acompletion(
-        model="anthropic/claude-3-7-sonnet-20250219",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[
             # System Message
             {
@@ -603,7 +603,7 @@ async def test_litellm_anthropic_prompt_caching_system():
             "type": "message",
             "role": "assistant",
             "content": [{"type": "text", "text": "Hello!"}],
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-sonnet-4-5-20250929",
             "stop_reason": "end_turn",
             "stop_sequence": None,
             "usage": {"input_tokens": 12, "output_tokens": 6},
@@ -620,7 +620,7 @@ async def test_litellm_anthropic_prompt_caching_system():
         # Act: Call the litellm.acompletion function
         response = await litellm.acompletion(
             api_key="mock_api_key",
-            model="anthropic/claude-3-7-sonnet-20250219",
+            model="anthropic/claude-sonnet-4-5-20250929",
             messages=[
                 {
                     "role": "system",
@@ -681,7 +681,7 @@ async def test_litellm_anthropic_prompt_caching_system():
                 }
             ],
             "max_tokens": 64000,
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-sonnet-4-5-20250929",
         }
 
         mock_post.assert_called_once_with(
