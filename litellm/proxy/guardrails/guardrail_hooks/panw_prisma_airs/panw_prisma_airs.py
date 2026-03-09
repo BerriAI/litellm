@@ -1608,25 +1608,25 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         texts: List[str],
         messages: list,
     ) -> Optional[set]:
-        """Return text indices belonging to only the latest user message.
+        """Return text indices belonging to only the latest scannable human-authored (user or developer) message.
 
         Args:
             texts: Flattened text entries from the framework.
             messages: Original request messages (request_data["messages"]),
                       NOT structured_messages (which may have injected system content).
 
-        Returns a set of scannable indices, or None on count mismatch or no user
+        Returns a set of scannable indices, or None on count mismatch or no user/developer
         message (safety fallback to existing role-filter behavior).
         """
-        last_user_msg_idx: Optional[int] = None
+        last_human_msg_idx: Optional[int] = None
         for idx in range(len(messages) - 1, -1, -1):
             msg = messages[idx]
-            if isinstance(msg, dict) and msg.get("role") == "user":
-                last_user_msg_idx = idx
+            if isinstance(msg, dict) and msg.get("role") in ("user", "developer"):
+                last_human_msg_idx = idx
                 break
 
-        if last_user_msg_idx is None:
-            return None  # No user message → fallback to existing role-filter scan
+        if last_human_msg_idx is None:
+            return None  # No user/developer message → fallback to existing role-filter scan
 
         scannable: set = set()
         text_idx = 0
@@ -1634,18 +1634,18 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if not isinstance(msg, dict):
                 continue
             content = msg.get("content")
-            is_latest_user = msg_idx == last_user_msg_idx
+            is_latest_human = msg_idx == last_human_msg_idx
 
             if content is None:
                 pass
             elif isinstance(content, str):
-                if is_latest_user:
+                if is_latest_human:
                     scannable.add(text_idx)
                 text_idx += 1
             elif isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict) and item.get("text") is not None:
-                        if is_latest_user:
+                        if is_latest_human:
                             scannable.add(text_idx)
                         text_idx += 1
 

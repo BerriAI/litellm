@@ -4394,6 +4394,59 @@ class TestPanwAirsLatestRoleMessageOnly:
             assert "user prompt" in scanned
             assert "system instruction" in scanned
 
+    @pytest.mark.asyncio
+    async def test_developer_role_after_user_is_scanned(self):
+        """A trailing developer message after a user message must be the one scanned.
+
+        Regression: _get_latest_user_text_indices only checked role=='user',
+        so a developer message after the last user message was silently skipped.
+        """
+        handler = make_handler()
+
+        messages = [
+            {"role": "user", "content": "Earlier user question"},
+            {"role": "assistant", "content": "Assistant reply"},
+            {"role": "developer", "content": "Developer instruction after user"},
+        ]
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "anthropic/claude-sonnet-4-20250514",
+            "messages": messages,
+            "proxy_server_request": {
+                "url": "http://localhost:4000/v1/messages",
+            },
+        }
+        inputs: GenericGuardrailAPIInputs = {
+            "texts": [
+                "Earlier user question",
+                "Assistant reply",
+                "Developer instruction after user",
+            ],
+            "structured_messages": [
+                {"role": "user", "content": "Earlier user question"},
+                {"role": "assistant", "content": "Assistant reply"},
+                {"role": "developer", "content": "Developer instruction after user"},
+            ],
+        }
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+            # Only the developer message (latest human-authored) should be scanned
+            assert mock_api.call_count == 1
+            assert (
+                mock_api.call_args.kwargs["content"]
+                == "Developer instruction after user"
+            )
+
 
 class TestPanwAirsMcpToolCallWithoutCallId:
     """Tests for MCP tool invocations flowing through apply_guardrail without
