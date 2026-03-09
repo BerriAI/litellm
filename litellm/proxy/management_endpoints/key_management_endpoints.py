@@ -650,6 +650,18 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         prisma_client=prisma_client,
     )
 
+    # Block custom API keys when disabled in settings
+    if data.key is not None:
+        from litellm.proxy.proxy_server import general_settings
+
+        if not general_settings.get("allow_custom_api_keys", True):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Custom API keys are disabled. Keys must be randomly generated."
+                },
+            )
+
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
         _masked = (
@@ -1168,10 +1180,9 @@ async def generate_key_fn(
 
         # Auto-populate user_id from authenticated user when not provided (non-admins only)
         if data.user_id is None and user_api_key_dict.user_id is not None:
-            if user_api_key_dict.user_role not in [
-                LitellmUserRoles.PROXY_ADMIN.value,
-                LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
-            ]:
+            if (
+                user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+            ):
                 data.user_id = user_api_key_dict.user_id
 
         # Validate budget values are not negative
@@ -1894,10 +1905,7 @@ async def update_key_fn(
             and _update_fields["user_id"] is None
             and existing_key_row.user_id is not None
             and user_api_key_dict.user_role
-            not in [
-                LitellmUserRoles.PROXY_ADMIN.value,
-                LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
-            ]
+            != LitellmUserRoles.PROXY_ADMIN.value
         ):
             raise HTTPException(
                 status_code=403,
@@ -3333,6 +3341,15 @@ async def _rotate_master_key( # noqa: PLR0915
 
 def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
+        from litellm.proxy.proxy_server import general_settings
+
+        if not general_settings.get("allow_custom_api_keys", True):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Custom API keys are disabled. Keys must be randomly generated."
+                },
+            )
         new_token = data.new_key
         if not data.new_key.startswith("sk-"):
             raise HTTPException(

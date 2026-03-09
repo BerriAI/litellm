@@ -986,6 +986,25 @@ def test_get_new_token_with_invalid_key():
     assert "New key must start with 'sk-'" in str(exc_info.value.detail)
 
 
+def test_get_new_token_rejected_when_custom_keys_disabled():
+    """Test get_new_token rejects custom keys when allow_custom_api_keys is False"""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_new_token,
+    )
+
+    data = RegenerateKeyRequest(new_key="sk-custom-regen-key")
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_custom_api_keys": False},
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            get_new_token(data)
+        assert exc_info.value.status_code == 403
+        assert "Custom API keys are disabled" in exc_info.value.detail["error"]
+
+
 @pytest.mark.asyncio
 async def test_generate_service_account_requires_team_id():
     with pytest.raises(HTTPException):
@@ -6865,3 +6884,72 @@ async def test_generate_key_validation_user_id_and_team_id(monkeypatch):
             ),
         )
     assert exc.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_custom_api_key_rejected_when_disabled():
+    """
+    When general_settings['allow_custom_api_keys'] is False,
+    _common_key_generation_helper should reject requests that specify a custom key.
+    """
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_custom_api_keys": False},
+    ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user", False
+    ):
+        mock_prisma.return_value = AsyncMock()
+
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(key="sk-custom-key-123"),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+        assert exc.value.status_code == 403
+        assert "Custom API keys are disabled" in exc.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_custom_api_key_allowed_when_enabled():
+    """
+    When general_settings['allow_custom_api_keys'] is True (default),
+    _common_key_generation_helper should allow custom keys.
+    """
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_custom_api_keys": True},
+    ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user", False
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
+    ) as mock_generate_key:
+        mock_prisma.return_value = AsyncMock()
+        mock_generate_key.return_value = {
+            "key": "sk-custom-key-123",
+            "expires": None,
+            "user_id": "test-user",
+            "team_id": None,
+        }
+
+        # Should NOT raise
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(key="sk-custom-key-123"),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="test-user",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+        mock_generate_key.assert_awaited_once()

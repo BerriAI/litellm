@@ -163,6 +163,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
+  const allowCustomApiKeys = uiSettingsData?.values?.allow_custom_api_keys !== false;
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -1537,6 +1538,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           "budget_duration",
                           "tpm_limit",
                           "rpm_limit",
+                          ...(!allowCustomApiKeys ? ["key"] : []),
                         ]}
                       />
                     </AccordionBody>
