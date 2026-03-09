@@ -2237,6 +2237,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    mcp_required_fields: Optional[List[str]] = Field(
+        None,
+        description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
