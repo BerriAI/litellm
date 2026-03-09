@@ -135,6 +135,45 @@ def test_join_paths_nested_path():
     assert result == "http://0.0.0.0:4000/v1/chat/completions"
 
 
+@pytest.mark.asyncio
+async def test_rewrite_redirect_location_with_forwarded_host():
+    """Test that redirect Location headers are rewritten using X-Forwarded-Host"""
+    from starlette.testclient import TestClient
+    from starlette.responses import RedirectResponse
+    from litellm.proxy.proxy_server import app
+
+    # Create a test client that sends X-Forwarded-Host
+    client = TestClient(app)
+    # Hit /ui which will trigger a trailing-slash redirect to /ui/
+    response = client.get(
+        "/ui",
+        headers={
+            "x-forwarded-host": "external.company.com",
+            "x-forwarded-proto": "https",
+        },
+        follow_redirects=False,
+    )
+    if response.status_code in (301, 302, 307, 308):
+        location = response.headers.get("location", "")
+        # The Location should use the forwarded host, not an internal IP
+        assert "external.company.com" in location
+        assert location.startswith("https://")
+
+
+@pytest.mark.asyncio
+async def test_rewrite_redirect_location_no_forwarded_host():
+    """Test that redirect Location headers are NOT rewritten without X-Forwarded-Host"""
+    from starlette.testclient import TestClient
+    from litellm.proxy.proxy_server import app
+
+    client = TestClient(app)
+    response = client.get("/ui", follow_redirects=False)
+    if response.status_code in (301, 302, 307, 308):
+        location = response.headers.get("location", "")
+        # Without X-Forwarded-Host, the location should use the original host
+        assert "external.company.com" not in location
+
+
 def _patch_today(monkeypatch, year, month, day):
     class PatchedDate(real_datetime.date):
         @classmethod

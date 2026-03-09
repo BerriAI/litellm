@@ -1396,6 +1396,35 @@ app.add_middleware(
 app.add_middleware(PrometheusAuthMiddleware)
 
 
+@app.middleware("http")
+async def rewrite_redirect_location(request: Request, call_next: Any) -> Response:
+    """
+    Rewrite Location headers in redirect responses to use the public
+    hostname from X-Forwarded-Host / X-Forwarded-Proto when available.
+
+    This handles cases where the reverse proxy does not preserve the
+    original Host header (e.g. Kong with preserve_host: false), which
+    causes Starlette's Router.redirect_slashes to build redirect URLs
+    using the internal pod IP instead of the public hostname.
+
+    Only activates when X-Forwarded-Host is present, so it is a no-op
+    for local development and environments without a reverse proxy.
+    """
+    response = await call_next(request)
+    if response.status_code in (301, 302, 307, 308):
+        location = response.headers.get("location", "")
+        fwd_host = request.headers.get("x-forwarded-host", "")
+        fwd_proto = request.headers.get("x-forwarded-proto", "https")
+        if fwd_host and location:
+            from urllib.parse import urlparse, urlunparse
+
+            parsed = urlparse(location)
+            if parsed.netloc:  # only rewrite absolute URLs
+                new = parsed._replace(scheme=fwd_proto, netloc=fwd_host)
+                response.headers["location"] = urlunparse(new)
+    return response
+
+
 def mount_swagger_ui():
     swagger_directory = os.path.join(current_dir, "swagger")
     swagger_path = "/" if server_root_path is None else server_root_path
