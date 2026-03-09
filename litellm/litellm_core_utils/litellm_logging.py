@@ -155,6 +155,7 @@ from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
 from ..integrations.posthog import PostHogLogger
+from ..integrations.scopeblind import ScopeBlindLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
 from ..integrations.s3_v2 import S3Logger as S3V2Logger
@@ -3528,6 +3529,8 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 )
             elif callback == "openmeter":
                 openMeterLogger = OpenMeterLogger()
+            elif callback == "scopeblind":
+                scopeBlindLogger = ScopeBlindLogger()
             elif callback == "datadog":
                 dataDogLogger = DataDogLogger()
             elif callback == "dynamodb":
@@ -3590,6 +3593,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _openmeter_logger = OpenMeterLogger()
             _in_memory_loggers.append(_openmeter_logger)
             return _openmeter_logger  # type: ignore
+        elif logging_integration == "scopeblind":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ScopeBlindLogger):
+                    return callback  # type: ignore
+
+            _scopeblind_logger = ScopeBlindLogger()
+            _in_memory_loggers.append(_scopeblind_logger)
+            return _scopeblind_logger  # type: ignore
         elif logging_integration == "posthog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PostHogLogger):
@@ -4220,6 +4231,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "openmeter":
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenMeterLogger):
+                    return callback
+        elif logging_integration == "scopeblind":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ScopeBlindLogger):
                     return callback
         elif logging_integration == "braintrust":
             from litellm.integrations.braintrust_logging import BraintrustLogger
