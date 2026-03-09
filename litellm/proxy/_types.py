@@ -1087,6 +1087,12 @@ class SpecialMCPServerName(str, enum.Enum):
     all_proxy_servers = "all-proxy-mcpservers"
 
 
+class MCPApprovalStatus(str, enum.Enum):
+    pending_review = "pending_review"
+    active = "active"
+    rejected = "rejected"
+
+
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -1117,6 +1123,10 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
+    # BYOM submission fields (set by endpoint, not by caller)
+    approval_status: Optional[str] = None
+    submitted_by: Optional[str] = None
+    submitted_at: Optional[datetime] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1239,6 +1249,15 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     has_user_credential: Optional[bool] = None
+    # BYOM submission fields
+    approval_status: Optional[str] = Field(
+        default="active",
+        description="Approval status: 'pending_review', 'active', 'rejected'",
+    )
+    submitted_by: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    review_notes: Optional[str] = None
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
@@ -1253,6 +1272,18 @@ class MCPUserCredentialRequest(LiteLLMPydanticObjectBase):
 class MCPUserCredentialResponse(LiteLLMPydanticObjectBase):
     server_id: str
     has_credential: bool
+
+
+class RejectMCPServerRequest(LiteLLMPydanticObjectBase):
+    review_notes: Optional[str] = None
+
+
+class MCPSubmissionsSummary(LiteLLMPydanticObjectBase):
+    total: int
+    pending_review: int
+    active: int
+    rejected: int
+    items: List["LiteLLM_MCPServerTable"]
 
 
 ######## Skills API Types ########

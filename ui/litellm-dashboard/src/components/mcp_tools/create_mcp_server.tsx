@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Modal, Tooltip, Form, Select, Input, Switch } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
-import { createMCPServer } from "../networking";
+import { createMCPServer, registerMCPServer } from "../networking";
 import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -373,9 +373,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
-        const response = await createMCPServer(accessToken, payload);
+        const isAdmin = isAdminRole(userRole);
+        const response = isAdmin
+          ? await createMCPServer(accessToken, payload)
+          : await registerMCPServer(accessToken, payload);
 
-        NotificationsManager.success("MCP Server created successfully");
+        NotificationsManager.success(
+          isAdmin
+            ? "MCP Server created successfully"
+            : "MCP Server submitted for admin review"
+        );
         form.resetFields();
         setCostConfig({});
         setTools([]);

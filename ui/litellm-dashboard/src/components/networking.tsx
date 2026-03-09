@@ -6497,6 +6497,100 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
   }
 };
 
+export const registerMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/register`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to register MCP server:", error);
+    throw error;
+  }
+};
+
+export const fetchMCPSubmissions = async (accessToken: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/submissions`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to fetch MCP submissions:", error);
+    throw error;
+  }
+};
+
+export const approveMCPServer = async (accessToken: string, serverId: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${encodeURIComponent(serverId)}/approve`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to approve MCP server:", error);
+    throw error;
+  }
+};
+
+export const rejectMCPServer = async (accessToken: string, serverId: string, reviewNotes?: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${encodeURIComponent(serverId)}/reject`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ review_notes: reviewNotes ?? null }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to reject MCP server:", error);
+    throw error;
+  }
+};
+
 // Search Tools API calls
 export const fetchSearchTools = async (accessToken: string) => {
   try {

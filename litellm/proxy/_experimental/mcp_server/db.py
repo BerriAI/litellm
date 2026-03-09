@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -6,6 +7,8 @@ from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
+    MCPApprovalStatus,
+    MCPSubmissionsSummary,
     NewMCPServerRequest,
     SpecialMCPServerName,
     UpdateMCPServerRequest,
@@ -102,12 +105,19 @@ def encrypt_credentials(
 
 async def get_all_mcp_servers(
     prisma_client: PrismaClient,
+    approval_status: Optional[str] = "active",
 ) -> List[LiteLLM_MCPServerTable]:
     """
-    Returns all of the mcp servers from the db
+    Returns mcp servers from the db, optionally filtered by approval_status.
+    Pass approval_status=None to return all servers regardless of approval state.
     """
     try:
-        mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+        where: Dict[str, Any] = {}
+        if approval_status is not None:
+            where["approval_status"] = approval_status
+        mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
+            where=where if where else {}
+        )
 
         return [
             LiteLLM_MCPServerTable(**mcp_server.model_dump())
@@ -450,4 +460,71 @@ async def delete_user_credential(
     """Delete the user's stored credential for a BYOK MCP server."""
     await prisma_client.db.litellm_mcpusercredentials.delete(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+
+
+async def approve_mcp_server(
+    prisma_client: PrismaClient,
+    server_id: str,
+    touched_by: str,
+) -> LiteLLM_MCPServerTable:
+    """Set approval_status=active and record reviewed_at."""
+    now = datetime.now(timezone.utc)
+    updated = await prisma_client.db.litellm_mcpservertable.update(
+        where={"server_id": server_id},
+        data={
+            "approval_status": MCPApprovalStatus.active,
+            "reviewed_at": now,
+            "updated_by": touched_by,
+        },
+    )
+    return LiteLLM_MCPServerTable(**updated.model_dump())
+
+
+async def reject_mcp_server(
+    prisma_client: PrismaClient,
+    server_id: str,
+    touched_by: str,
+    review_notes: Optional[str] = None,
+) -> LiteLLM_MCPServerTable:
+    """Set approval_status=rejected, record reviewed_at and review_notes."""
+    now = datetime.now(timezone.utc)
+    data: Dict[str, Any] = {
+        "approval_status": MCPApprovalStatus.rejected,
+        "reviewed_at": now,
+        "updated_by": touched_by,
+    }
+    if review_notes is not None:
+        data["review_notes"] = review_notes
+    updated = await prisma_client.db.litellm_mcpservertable.update(
+        where={"server_id": server_id},
+        data=data,
+    )
+    return LiteLLM_MCPServerTable(**updated.model_dump())
+
+
+async def get_mcp_submissions(
+    prisma_client: PrismaClient,
+) -> MCPSubmissionsSummary:
+    """
+    Returns all MCP servers that were submitted by non-admin users (submitted_at IS NOT NULL),
+    along with a summary count breakdown by approval_status.
+    Mirrors get_guardrail_submissions() from guardrail_endpoints.py.
+    """
+    rows = await prisma_client.db.litellm_mcpservertable.find_many(
+        where={"submitted_at": {"not": None}},
+        order={"submitted_at": "asc"},
+    )
+    items = [LiteLLM_MCPServerTable(**r.model_dump()) for r in rows]
+
+    pending = sum(1 for i in items if i.approval_status == MCPApprovalStatus.pending_review)
+    active = sum(1 for i in items if i.approval_status == MCPApprovalStatus.active)
+    rejected = sum(1 for i in items if i.approval_status == MCPApprovalStatus.rejected)
+
+    return MCPSubmissionsSummary(
+        total=len(items),
+        pending_review=pending,
+        active=active,
+        rejected=rejected,
+        items=items,
     )

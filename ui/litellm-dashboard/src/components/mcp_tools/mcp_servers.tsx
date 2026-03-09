@@ -6,7 +6,8 @@ import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
-import { deleteMCPServer } from "../networking";
+import { deleteMCPServer, registerMCPServer } from "../networking";
+import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
@@ -299,11 +300,25 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           </div>
           <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
         </div>
-        {isAdminRole(userRole) && (
-          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
-            + Add New MCP Server
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {isAdminRole(userRole) && (
+            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+              + Add New MCP Server
+            </Button>
+          )}
+          {!isAdminRole(userRole) && (
+            <Button
+              className="flex-shrink-0"
+              onClick={() => {
+                setPrefillData(null);
+                setModalVisible(true);
+              }}
+              variant="secondary"
+            >
+              + Submit MCP Server
+            </Button>
+          )}
+        </div>
       </div>
       <MCPDiscovery
         isVisible={isDiscoveryVisible}
@@ -327,6 +342,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
+            {isAdminRole(userRole) && <Tab>Submissions</Tab>}
           </div>
         </TabList>
         <TabPanels>
@@ -410,6 +426,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <TabPanel>
             <MCPNetworkSettings accessToken={accessToken} />
           </TabPanel>
+          {isAdminRole(userRole) && (
+            <TabPanel>
+              <MCPSubmissionsTab accessToken={accessToken} />
+            </TabPanel>
+          )}
         </TabPanels>
       </TabGroup>
 

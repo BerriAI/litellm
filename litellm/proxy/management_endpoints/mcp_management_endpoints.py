@@ -76,11 +76,14 @@ if MCP_AVAILABLE:
             return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
+        approve_mcp_server,
         create_mcp_server,
         delete_mcp_server,
         delete_user_credential,
         get_all_mcp_servers_for_user,
         get_mcp_server,
+        get_mcp_submissions,
+        reject_mcp_server,
         store_user_credential,
         update_mcp_server,
     )
@@ -100,9 +103,12 @@ if MCP_AVAILABLE:
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
+        MCPApprovalStatus,
+        MCPSubmissionsSummary,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
         NewMCPServerRequest,
+        RejectMCPServerRequest,
         SpecialMCPServerName,
         UpdateMCPServerRequest,
         UserAPIKeyAuth,
@@ -688,6 +694,177 @@ if MCP_AVAILABLE:
             {"server_id": server_id, "status": status}
             for server_id, status in server_status_map.items()
         ]
+
+    @router.post(
+        "/server/register",
+        description="Submit a new MCP server for admin review (non-admin users). Mirrors POST /guardrails/register.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=LiteLLM_MCPServerTable,
+        status_code=status.HTTP_201_CREATED,
+    )
+    @management_endpoint_wrapper
+    async def register_mcp_server(
+        payload: NewMCPServerRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Allow team members to submit an MCP server for admin review.
+        Creates the server with approval_status=pending_review.
+        Requires a team-scoped API key.
+        """
+        from datetime import datetime, timezone
+
+        if not user_api_key_dict.team_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "Registration requires an API key associated with a team. Use a team-scoped key."
+                },
+            )
+
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+
+        validate_and_normalize_mcp_server_payload(payload)
+
+        payload.approval_status = MCPApprovalStatus.pending_review
+        payload.submitted_by = user_api_key_dict.user_id
+        payload.submitted_at = datetime.now(timezone.utc)
+
+        try:
+            new_mcp_server = await create_mcp_server(
+                prisma_client,
+                payload,
+                touched_by=user_api_key_dict.user_id or user_api_key_dict.team_id,
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error registering mcp server: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": f"Error registering mcp server: {str(e)}"},
+            )
+        # Do NOT add to runtime registry — pending servers are not active
+        return _redact_mcp_credentials(new_mcp_server)
+
+    @router.get(
+        "/server/submissions",
+        description="Returns all MCP servers submitted by non-admin users (admin review queue). Mirrors GET /guardrails/submissions.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPSubmissionsSummary,
+    )
+    @management_endpoint_wrapper
+    async def get_mcp_server_submissions(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Admin-only endpoint to view all user-submitted MCP servers pending review.
+        """
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to view MCP server submissions."},
+            )
+
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+
+        return await get_mcp_submissions(prisma_client)
+
+    @router.put(
+        "/server/{server_id}/approve",
+        description="Approve a pending MCP server submission (admin only). Mirrors PUT /guardrails/{id}/approve.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=LiteLLM_MCPServerTable,
+    )
+    @management_endpoint_wrapper
+    async def approve_mcp_server_submission(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Admin approves a pending MCP server — sets approval_status=active and loads it into the runtime registry.
+        """
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to approve MCP server submissions."},
+            )
+
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+
+        existing = await get_mcp_server(prisma_client, server_id)
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found."},
+            )
+        if existing.approval_status != MCPApprovalStatus.pending_review:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": f"MCP server is not pending review (approval_status={existing.approval_status})."
+                },
+            )
+
+        approved = await approve_mcp_server(
+            prisma_client,
+            server_id,
+            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        )
+        await global_mcp_server_manager.add_server(approved)
+        await global_mcp_server_manager.reload_servers_from_database()
+
+        return _redact_mcp_credentials(approved)
+
+    @router.put(
+        "/server/{server_id}/reject",
+        description="Reject a pending MCP server submission (admin only). Mirrors PUT /guardrails/{id}/reject.",
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    @management_endpoint_wrapper
+    async def reject_mcp_server_submission(
+        server_id: str,
+        payload: RejectMCPServerRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Admin rejects a pending MCP server — sets approval_status=rejected with optional review_notes.
+        """
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to reject MCP server submissions."},
+            )
+
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+
+        existing = await get_mcp_server(prisma_client, server_id)
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found."},
+            )
+        if existing.approval_status != MCPApprovalStatus.pending_review:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": f"MCP server is not pending review (approval_status={existing.approval_status})."
+                },
+            )
+
+        rejected = await reject_mcp_server(
+            prisma_client,
+            server_id,
+            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+            review_notes=payload.review_notes,
+        )
+        return _redact_mcp_credentials(rejected)
 
     @router.get(
         "/server/{server_id}",
