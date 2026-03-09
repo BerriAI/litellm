@@ -218,6 +218,9 @@ class AnthropicPassthroughLoggingHandler:
             logging_obj=litellm_logging_obj,
         )
 
+        # Add complete_streaming_response to kwargs so callbacks like Langfuse can access it
+        kwargs["complete_streaming_response"] = complete_streaming_response
+
         return {
             "result": complete_streaming_response,
             "kwargs": kwargs,
