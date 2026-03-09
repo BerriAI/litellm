@@ -20,16 +20,16 @@ from packaging.version import Version
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
-from litellm.litellm_core_utils.core_helpers import (
-    safe_deep_copy,
-    reconstruct_model_name,
-    filter_exceptions_from_params,
-)
-from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
     should_use_langfuse_mock,
 )
+from litellm.litellm_core_utils.core_helpers import (
+    filter_exceptions_from_params,
+    reconstruct_model_name,
+    safe_deep_copy,
+)
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
@@ -87,7 +87,7 @@ def _extract_cache_read_input_tokens(usage_obj) -> int:
             ):
                 cache_read_input_tokens = cached_tokens
 
-    return cache_read_input_tokens
+    return cache_read_input_tokens  # type: ignore[return-value]
 
 
 class LangFuseLogger:
@@ -293,6 +293,13 @@ class LangFuseLogger:
             tools = optional_params.pop("tools", None)
             # Remove secret_fields to prevent leaking sensitive data (e.g., authorization headers)
             optional_params.pop("secret_fields", None)
+            # Remove Langfuse credential keys - these are per-key/team callback vars that should
+            # not appear in modelParameters (they would expose secret keys in traces)
+            optional_params.pop("langfuse_secret_key", None)
+            optional_params.pop("langfuse_secret", None)
+            optional_params.pop("langfuse_public_key", None)
+            optional_params.pop("langfuse_host", None)
+            optional_params.pop("litellm_logging_obj", None)
             if functions is not None:
                 prompt["functions"] = functions
             if tools is not None:

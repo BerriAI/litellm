@@ -5516,6 +5516,38 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         metadata["user_api_key_metadata"] = cleaned_user_api_key_metadata
         litellm_params["metadata"] = metadata
 
+    ## check user_api_key_auth_metadata for sensitive logging keys (same as user_api_key_metadata)
+    if "user_api_key_auth_metadata" in metadata and isinstance(
+        metadata["user_api_key_auth_metadata"], dict
+    ):
+        cleaned_auth_metadata = {}
+        for k, v in metadata["user_api_key_auth_metadata"].items():
+            if k == "logging":  # prevent logging callback credentials
+                cleaned_auth_metadata[k] = "scrubbed_by_litellm_for_sensitive_keys"
+            else:
+                cleaned_auth_metadata[k] = v
+        metadata["user_api_key_auth_metadata"] = cleaned_auth_metadata
+        litellm_params["metadata"] = metadata
+
+    ## check user_api_key_team_metadata for sensitive callback_settings (contains callback_vars with secrets)
+    if "user_api_key_team_metadata" in metadata and isinstance(
+        metadata["user_api_key_team_metadata"], dict
+    ):
+        cleaned_team_metadata = {}
+        for k, v in metadata["user_api_key_team_metadata"].items():
+            if k == "callback_settings":  # contains callback_vars with credentials
+                cleaned_team_metadata[k] = "scrubbed_by_litellm_for_sensitive_keys"
+            else:
+                cleaned_team_metadata[k] = v
+        metadata["user_api_key_team_metadata"] = cleaned_team_metadata
+        litellm_params["metadata"] = metadata
+
+    ## scrub user_api_key_auth - this is the full UserAPIKeyAuth object which contains
+    ## metadata.logging[].callback_vars with langfuse_secret_key and other credentials
+    if "user_api_key_auth" in metadata:
+        metadata["user_api_key_auth"] = "scrubbed_by_litellm_for_sensitive_keys"
+        litellm_params["metadata"] = metadata
+
     return litellm_params
 
 
