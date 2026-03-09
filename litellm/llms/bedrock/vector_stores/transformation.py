@@ -152,7 +152,6 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             if param == "max_num_results":
                 optional_params["numberOfResults"] = value
             elif param == "filters" and value is not None:
-
                 # map the openai filters to the aws kb filters format
                 # openai filters = {"key": <key>, "value": <value>, "operator": <operator>} OR {"and" | "or": [{"key": <key>, "value": <value>, "operator": <operator>}]}
                 # aws kb filters = {"operator": {"<key>": <value>}} OR {"andAll | orAll": [{"operator": {"<key>": <value>}}]}
@@ -297,6 +296,34 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         )
         return f"bedrock-kb-document-{data_source_id}"
 
+    def _get_uri_from_location(self, location: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract source URI from Bedrock KB location field.
+
+        Supports all location types from the Bedrock Retrieve API:
+        https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Retrieve.html
+        """
+        if not location:
+            return None
+        location_type = (location.get("type") or "").upper()
+        type_map = {
+            "CONFLUENCE": ("confluenceLocation", "url"),
+            "CUSTOM": ("customDocumentLocation", "id"),
+            "KENDRA": ("kendraDocumentLocation", "uri"),
+            "S3": ("s3Location", "uri"),
+            "SALESFORCE": ("salesforceLocation", "url"),
+            "SHAREPOINT": ("sharePointLocation", "url"),
+            "WEB": ("webLocation", "url"),
+            # SQL sources expose only a query string, not a stable document URI;
+            # callers receive the bedrock-kb-document-<id> fallback instead.
+        }
+        entry = type_map.get(location_type)
+        if not entry:
+            return None
+        loc_key, uri_key = entry
+        loc_data = location.get(loc_key) or {}
+        return loc_data.get(uri_key) or None
+
     def _get_attributes_from_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract all attributes from Bedrock KB metadata.
@@ -320,8 +347,20 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
 
                 # Extract metadata and use helper functions
                 metadata = item.get("metadata", {}) or {}
-                file_id = self._get_file_id_from_metadata(metadata)
-                filename = self._get_filename_from_metadata(metadata)
+                # Resolve source URI from location field if not present in metadata.
+                # Use a separate dict for file_id/filename resolution so the
+                # synthesized key does not leak into attributes.
+                source_uri = metadata.get("x-amz-bedrock-kb-source-uri")
+                if not source_uri:
+                    location = item.get("location", {}) or {}
+                    source_uri = self._get_uri_from_location(location)
+                metadata_for_id = (
+                    {**metadata, "x-amz-bedrock-kb-source-uri": source_uri}
+                    if source_uri
+                    else metadata
+                )
+                file_id = self._get_file_id_from_metadata(metadata_for_id)
+                filename = self._get_filename_from_metadata(metadata_for_id)
                 attributes = self._get_attributes_from_metadata(metadata)
 
                 results.append(
