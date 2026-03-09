@@ -1012,8 +1012,6 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 
                 if opc_request_id:
                     oci_message += f" [opc-request-id: {opc_request_id}]"
-                if opc_request_id:
-                    oci_message += f" [opc-request-id: {opc_request_id}]"
 
                 # Heuristic fallback when status is missing but throttling is obvious
                 if not oci_status and ("throttled" in error_str.lower() or "request limit" in error_str.lower()):
