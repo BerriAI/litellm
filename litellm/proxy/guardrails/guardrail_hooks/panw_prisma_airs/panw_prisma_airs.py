@@ -8,12 +8,14 @@ Provides real-time threat detection, DLP, URL filtering, content masking, and po
 import json
 import os
 import re
-from litellm._uuid import uuid
-import httpx
 from datetime import datetime
-from urllib.parse import urlparse
-from litellm.caching import DualCache
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type
+from urllib.parse import urlparse
+
+import httpx
+
+from litellm._uuid import uuid
+from litellm.caching import DualCache
 
 from fastapi import HTTPException
 
@@ -180,9 +182,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if not isinstance(messages, list) or not messages:
             return ""
 
-        # Find the last user or developer message
+        # Find the last user message
         for message in reversed(messages):
-            if message.get("role") not in ("user", "developer"):
+            if message.get("role") != "user":
                 continue
 
             content = message.get("content")
@@ -535,7 +537,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     @staticmethod
     def _apply_mcp_masking(
-        request_data: dict, original_args: Any, masked_text: str
+        request_data: dict,
+        original_args: Any,
+        masked_text: str,
+        *,
+        is_blocked: bool = True,
     ) -> None:
         """Write masked arguments back to MCP request_data fields.
 
@@ -586,19 +592,24 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if has_mcp_arguments:
             request_data["mcp_arguments"] = masked_value
 
-        verbose_proxy_logger.warning(
-            "PANW Prisma AIRS: MCP request blocked but masked instead (mask_request_content=True)"
-        )
+        if is_blocked:
+            verbose_proxy_logger.warning(
+                "PANW Prisma AIRS: MCP request blocked but masked instead (mask_request_content=True)"
+            )
+        else:
+            verbose_proxy_logger.info(
+                "PANW Prisma AIRS: MCP request allowed with PII masking applied"
+            )
 
     def _apply_masking_to_messages(
         self, messages: List[Dict[str, Any]], masked_text: str
     ) -> List[Dict[str, Any]]:
-        """Apply masked text to the last user or developer message."""
+        """Apply masked text to the last user message."""
         if not messages:
             return messages
 
         for i, message in enumerate(reversed(messages)):
-            if message.get("role") in ("user", "developer"):
+            if message.get("role") == "user":
                 new_message = message.copy()
                 content = message.get("content")
 
@@ -1400,6 +1411,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         is_response=True,
                         event_type=GuardrailEventHooks.post_call,
                     )
+                    # Control only reaches here for _is_transient errors with
+                    # fallback_on_error="allow"; _always_block and fail-closed
+                    # paths raise inside _handle_api_error_with_logging above.
                     for chunk in all_chunks:
                         yield chunk
                     return
@@ -1929,7 +1943,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     # matching _scan_tool_calls_for_guardrail behavior).
                     if masked_text:
                         self._apply_mcp_masking(
-                            request_data, mcp_arguments, masked_text
+                            request_data,
+                            mcp_arguments,
+                            masked_text,
+                            is_blocked=False,
                         )
                 elif masked_text and self.mask_request_content:
                     self._apply_mcp_masking(request_data, mcp_arguments, masked_text)

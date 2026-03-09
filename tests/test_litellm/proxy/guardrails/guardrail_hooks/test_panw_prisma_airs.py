@@ -289,10 +289,11 @@ class TestPanwAirsPromptScanning:
         text = base_handler._extract_text_from_messages(messages)
         assert text == "Latest message"
 
-        # Developer role (OpenAI o1/o3) should be extracted like user role
+        # Developer role is NOT extracted by _extract_text_from_messages (legacy path).
+        # Developer-role handling is only in _get_latest_user_text_indices (apply_guardrail path).
         messages = [{"role": "developer", "content": "Dev prompt"}]
         text = base_handler._extract_text_from_messages(messages)
-        assert text == "Dev prompt"
+        assert text == ""
 
 
 class TestPanwAirsResponseScanning:
@@ -3492,8 +3493,13 @@ class TestPanwAirsDeveloperRoleGuardrail:
             assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_developer_role_masking_applied(self):
-        """Developer-role message with mask_request_content=True gets masking applied via async_pre_call_hook."""
+    async def test_developer_role_not_scanned_in_legacy_path(self):
+        """Developer-only messages are NOT scanned by async_pre_call_hook (legacy path).
+
+        Developer-role handling is only in _get_latest_user_text_indices
+        (apply_guardrail path). The legacy path uses _extract_text_from_messages
+        which only looks at user-role messages.
+        """
         handler = make_handler(mask_request_content=True)
 
         data = {
@@ -3507,12 +3513,6 @@ class TestPanwAirsDeveloperRoleGuardrail:
         with patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
         ) as mock_api:
-            mock_api.return_value = {
-                "action": "block",
-                "category": "dlp",
-                "prompt_masked_data": {"data": "secret API key: [REDACTED]"},
-            }
-
             result = await handler.async_pre_call_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
@@ -3520,55 +3520,11 @@ class TestPanwAirsDeveloperRoleGuardrail:
                 call_type="completion",
             )
 
-            # Should not raise — masking was applied instead of blocking
+            # No user message found — API not called, content unchanged
             assert result is None
-            # Developer message should have masked content
-            assert data["messages"][0]["content"] == "secret API key: [REDACTED]"
+            mock_api.assert_not_called()
+            assert data["messages"][0]["content"] == "secret API key: sk-12345"
             assert data["messages"][0]["role"] == "developer"
-
-    @pytest.mark.asyncio
-    async def test_developer_role_masking_with_content_list(self):
-        """Developer-role with list content format gets text parts masked, non-text preserved."""
-        handler = make_handler(mask_request_content=True)
-
-        data = {
-            "messages": [
-                {
-                    "role": "developer",
-                    "content": [
-                        {"type": "text", "text": "secret password: hunter2"},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": "https://example.com/img.png"},
-                        },
-                    ],
-                },
-            ],
-            "model": "gpt-4",
-            "litellm_call_id": "test-call-id",
-        }
-
-        with patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
-            mock_api.return_value = {
-                "action": "block",
-                "category": "dlp",
-                "prompt_masked_data": {"data": "secret password: [REDACTED]"},
-            }
-
-            await handler.async_pre_call_hook(
-                data=data,
-                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
-                cache=DualCache(),
-                call_type="completion",
-            )
-
-            content = data["messages"][0]["content"]
-            # Text part should be masked
-            assert content[0] == {"type": "text", "text": "secret password: [REDACTED]"}
-            # Non-text part (image) should be preserved
-            assert content[1]["type"] == "image_url"
 
 
 class TestPanwAirsEmptyToolArgsBlock:
