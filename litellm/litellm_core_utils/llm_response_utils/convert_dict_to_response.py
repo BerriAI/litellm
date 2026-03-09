@@ -581,6 +581,13 @@ def convert_to_model_response_object(  # noqa: PLR0915
                             reasoning_content
                         )
 
+                    images_data = choice["message"].get("images", None)
+                    if isinstance(images_data, list):
+                        for i, img in enumerate(images_data):
+                            # Add missing 'index' to the dictionary if it doesn't exist
+                            if isinstance(img, dict) and "index" not in img:
+                                img["index"] = i
+
                     message = Message(
                         content=content,
                         role=choice["message"]["role"] or "assistant",
@@ -591,7 +598,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
                         annotations=choice["message"].get("annotations", None),
-                        images=choice["message"].get("images", None),
+                        images=images_data,
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:
