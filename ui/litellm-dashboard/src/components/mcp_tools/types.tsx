@@ -178,6 +178,12 @@ export interface MCPServer {
   command?: string | null;
   args?: string[] | null;
   env?: Record<string, string> | null;
+
+  /** BYOK (Bring Your Own Key) fields */
+  is_byok?: boolean | null;
+  byok_description?: string[] | null;
+  byok_api_key_help_url?: string | null;
+  has_user_credential?: boolean | null;
 }
 
 export interface MCPServerProps {

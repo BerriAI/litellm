@@ -5,6 +5,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import time
 import traceback
 import uuid
 from datetime import datetime
@@ -53,6 +54,32 @@ from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
+
+# Short-lived in-memory cache for BYOK credentials.
+# Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).
+# Storing the credential value (not just a bool) means _get_byok_credential and
+# _check_byok_credential share a single DB round-trip per TTL window.
+_byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
+_BYOK_CRED_CACHE_TTL = 60  # seconds
+_BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
+
+
+def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
+    """Remove a (user_id, server_id) entry from the BYOK credential cache.
+
+    Call this after storing or deleting a credential so subsequent calls
+    see the fresh value rather than a stale cached result.
+    """
+    _byok_cred_cache.pop((user_id, server_id), None)
+
+
+def _write_byok_cred_cache(
+    user_id: str, server_id: str, credential: Optional[str]
+) -> None:
+    """Write a credential value to the cache, evicting all entries if at capacity."""
+    if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
+        _byok_cred_cache.clear()
+    _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -117,6 +144,9 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_auth_header,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -1498,7 +1528,123 @@ if MCP_AVAILABLE:
                     )
         return name
 
-    async def execute_mcp_tool(
+    async def _get_byok_credential(
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[str]:
+        """Retrieve the stored BYOK credential for a user+server pair.
+
+        Uses the shared _byok_cred_cache to avoid a DB round-trip on every
+        tool call within the TTL window.
+        """
+        if not mcp_server.is_byok:
+            return None
+        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
+        if not user_id:
+            return None
+
+        cache_key = (user_id, mcp_server.server_id)
+        cached = _byok_cred_cache.get(cache_key)
+        if cached is not None:
+            credential, ts = cached
+            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
+                return credential
+
+        from litellm.proxy._experimental.mcp_server.db import get_user_credential
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return None
+        credential = await get_user_credential(
+            prisma_client=prisma_client,
+            user_id=user_id,
+            server_id=mcp_server.server_id,
+        )
+        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
+        return credential
+
+    async def _check_byok_credential(
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> None:
+        """
+        If the MCP server is BYOK-enabled, verify that the requesting user has a
+        stored credential.  When no credential is found, raise an HTTP 401 with a
+        WWW-Authenticate header that points the MCP client to our OAuth metadata
+        endpoint so it can drive the authorization flow.
+        """
+        if not mcp_server.is_byok:
+            return
+
+        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "byok_auth_required",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": "User identity is required for BYOK servers",
+                },
+                headers={
+                    "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                },
+            )
+
+        # Check shared credential cache before hitting the DB.
+        cache_key = (user_id, mcp_server.server_id)
+        cached = _byok_cred_cache.get(cache_key)
+        if cached is not None:
+            cached_cred, ts = cached
+            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
+                if cached_cred is None:
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error": "byok_auth_required",
+                            "server_id": mcp_server.server_id,
+                            "server_name": mcp_server.server_name or mcp_server.name,
+                            "message": (
+                                "No stored credential found for this BYOK server. "
+                                "Complete the OAuth authorization flow to provide your API key."
+                            ),
+                        },
+                        headers={
+                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                        },
+                    )
+                return
+
+        from litellm.proxy._experimental.mcp_server.db import get_user_credential
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+
+        credential = await get_user_credential(
+            prisma_client=prisma_client,
+            user_id=user_id,
+            server_id=mcp_server.server_id,
+        )
+        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
+        if credential is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "byok_auth_required",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": (
+                        "No stored credential found for this BYOK server. "
+                        "Complete the OAuth authorization flow to provide your API key."
+                    ),
+                },
+                headers={
+                    "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                },
+            )
+
+    async def execute_mcp_tool(  # noqa: PLR0915
         name: str,
         arguments: Dict[str, Any],
         allowed_mcp_servers: List[MCPServer],
@@ -1573,57 +1719,99 @@ if MCP_AVAILABLE:
                 "mcp_tool_call_metadata"
             ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
+        # Resolve the MCP server early so BYOK checks and credential injection
+        # apply to ALL dispatch paths (local tool registry AND managed MCP server).
+        if mcp_server is None:
+            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+
+        if mcp_server:
+            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                mcp_server.mcp_info or {}
+            ).get("mcp_server_cost_info")
+            if litellm_logging_obj:
+                litellm_logging_obj.model_call_details[
+                    "mcp_tool_call_metadata"
+                ] = standard_logging_mcp_tool_call
+
+            # BYOK: retrieve the stored per-user credential.  A single DB call
+            # both checks existence and fetches the value, avoiding a double query.
+            if mcp_server.is_byok and not mcp_auth_header:
+                byok_cred = await _get_byok_credential(mcp_server, user_api_key_auth)
+                if byok_cred is None:
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error": "byok_auth_required",
+                            "server_id": mcp_server.server_id,
+                            "server_name": mcp_server.server_name or mcp_server.name,
+                            "message": (
+                                "No stored credential found for this BYOK server. "
+                                "Complete the OAuth authorization flow to provide your API key."
+                            ),
+                        },
+                        headers={
+                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                        },
+                    )
+                mcp_auth_header = byok_cred
+            elif mcp_server.is_byok:
+                # External auth header supplied; still enforce user-identity check.
+                await _check_byok_credential(mcp_server, user_api_key_auth)
+
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
         #########################################################
         local_tool = global_mcp_tool_registry.get_tool(name)
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
-            local_content = await _handle_local_mcp_tool(name, arguments)
+            # For BYOK servers the credential must be injected via a ContextVar
+            # because the tool function has headers baked into its closure.
+            # Pre-format the full Authorization header value using the server's
+            # configured auth_type so the generator doesn't need to know the prefix.
+            auth_header_value: Optional[str] = None
+            if mcp_auth_header:
+                server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
+                if server_auth_type == MCPAuth.api_key:
+                    auth_header_value = f"ApiKey {mcp_auth_header}"
+                elif server_auth_type == MCPAuth.basic:
+                    auth_header_value = f"Basic {mcp_auth_header}"
+                else:
+                    auth_header_value = f"Bearer {mcp_auth_header}"
+            _auth_token = _request_auth_header.set(auth_header_value)
+            try:
+                local_content = await _handle_local_mcp_tool(name, arguments)
+            finally:
+                _request_auth_header.reset(_auth_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)
         # Primary and recommended way to use external MCP servers
         #########################################################
-        else:
-            # If we haven't already resolved the server, do it now for dispatch
-            if mcp_server is None:
-                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(
-                    name
-                )
-            if mcp_server:
-                standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
-                    mcp_server.mcp_info or {}
-                ).get("mcp_server_cost_info")
-                # Update model_call_details with the cost info
-                if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details[
-                        "mcp_tool_call_metadata"
-                    ] = standard_logging_mcp_tool_call
-                response = await _handle_managed_mcp_tool(
-                    server_name=server_name,
-                    name=original_tool_name,  # Pass the full name (potentially prefixed)
-                    arguments=arguments,
-                    user_api_key_auth=user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    litellm_logging_obj=litellm_logging_obj,
-                    host_progress_callback=host_progress_callback,
-                )
+        elif mcp_server:
+            response = await _handle_managed_mcp_tool(
+                server_name=server_name,
+                name=original_tool_name,  # Pass the full name (potentially prefixed)
+                arguments=arguments,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                litellm_logging_obj=litellm_logging_obj,
+                host_progress_callback=host_progress_callback,
+            )
 
-            # Fall back to local tool registry with original name (legacy support)
-            #########################################################
-            # Deprecated: Local MCP Server Tool
-            #########################################################
-            else:
-                local_content = await _handle_local_mcp_tool(
-                    original_tool_name, arguments
-                )
-                response = CallToolResult(
-                    content=cast(Any, local_content), isError=False
-                )
+        # Fall back to local tool registry with original name (legacy support)
+        #########################################################
+        # Deprecated: Local MCP Server Tool
+        #########################################################
+        else:
+            local_content = await _handle_local_mcp_tool(
+                original_tool_name, arguments
+            )
+            response = CallToolResult(
+                content=cast(Any, local_content), isError=False
+            )
 
         return response
 

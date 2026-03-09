@@ -98,6 +98,7 @@ export function KeyEditView({
   );
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
+  const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
   const [isKeySaving, setIsKeySaving] = useState(false);
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -264,6 +265,10 @@ export function KeyEditView({
         }
       }
       // If it's already an array (shouldn't happen, but handle it), keep as is
+
+      if (neverExpire) {
+        values.duration = null;
+      }
 
       await onSubmit(values);
     } finally {
@@ -660,6 +665,8 @@ export function KeyEditView({
           onAutoRotationChange={setAutoRotationEnabled}
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
+          neverExpire={neverExpire}
+          onNeverExpireChange={setNeverExpire}
         />
         <Form.Item name="duration" hidden initialValue="">
           <Input />

@@ -13,6 +13,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _get_salt_key,
+    decrypt_value_helper,
     encrypt_value_helper,
 )
 from litellm.proxy.utils import PrismaClient
@@ -67,6 +68,10 @@ def _prepare_mcp_server_data(
         data_dict["tool_name_to_description"] = safe_dumps(data.tool_name_to_description)
 
     # mcp_access_groups is already List[str], no serialization needed
+
+    # Force include is_byok even when False (exclude_none=True would not drop it,
+    # but be explicit to ensure a False value is always written to the DB).
+    data_dict["is_byok"] = getattr(data, "is_byok", False)
 
     return data_dict
 
@@ -375,3 +380,74 @@ async def rotate_mcp_server_credentials_master_key(
                 "updated_by": touched_by,
             },
         )
+
+
+async def store_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    credential: str,
+) -> None:
+    """Store a user credential for a BYOK MCP server."""
+    import base64
+
+    encoded = base64.urlsafe_b64encode(credential.encode()).decode()
+    await prisma_client.db.litellm_mcpusercredentials.upsert(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
+        data={
+            "create": {
+                "user_id": user_id,
+                "server_id": server_id,
+                "credential_b64": encoded,
+            },
+            "update": {"credential_b64": encoded},
+        },
+    )
+
+
+async def get_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> Optional[str]:
+    """Return credential for a user+server pair, or None."""
+    import base64
+
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if row is None:
+        return None
+    try:
+        return base64.urlsafe_b64decode(row.credential_b64).decode()
+    except Exception:
+        # Fall back to nacl decryption for credentials stored by older code
+        return decrypt_value_helper(
+            value=row.credential_b64,
+            key="byok_credential",
+            exception_type="debug",
+            return_original_value=False,
+        )
+
+
+async def has_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> bool:
+    """Return True if the user has a stored credential for this server."""
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    return row is not None
+
+
+async def delete_user_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> None:
+    """Delete the user's stored credential for a BYOK MCP server."""
+    await prisma_client.db.litellm_mcpusercredentials.delete(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )

@@ -67,6 +67,14 @@ class PassThroughStreamingHandler:
                             )
                             if modified_chunk is not None:
                                 chunk = modified_chunk
+                    elif endpoint_type == EndpointType.ANTHROPIC:
+                        modified_chunk = (
+                            ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                                chunk, model_name
+                            )
+                        )
+                        if modified_chunk is not None:
+                            chunk = modified_chunk
 
                 yield chunk
 

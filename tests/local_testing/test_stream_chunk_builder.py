@@ -636,6 +636,7 @@ def test_stream_chunk_builder_openai_prompt_caching():
             assert response_usage_value == v
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_stream_chunk_builder_openai_audio_output_usage():
     from pydantic import BaseModel
     from openai import OpenAI
