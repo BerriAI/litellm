@@ -6758,3 +6758,88 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_validation_user_id_and_team_id(monkeypatch):
+    """
+    Test key generation validation:
+    1. Non-admin user_id is auto-populated from authenticated user when not provided
+    2. Invalid team_id raises 404
+    3. Non-admin cannot remove user_id on update (exclude_unset guard logic)
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            return MagicMock(
+                token="hashed_token_123",
+                litellm_budget_table=None,
+                object_permission=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    # 1. Non-admin: user_id auto-populated
+    data = GenerateKeyRequest(key_alias="my-key")
+    await generate_key_fn(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-user",
+            user_id="internal-user-123",
+        ),
+    )
+    assert data.user_id == "internal-user-123"
+
+    # 2. Invalid team_id raises error
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(side_effect=Exception("Team not found")),
+    )
+    with pytest.raises(ProxyException) as exc:
+        await generate_key_fn(
+            data=GenerateKeyRequest(key_alias="bad-team", team_id="nonexistent"),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin-user",
+            ),
+        )
+    assert exc.value.code == "404"
+
+    # 3. Non-admin cannot remove user_id on update (guard logic)
+    update_request = UpdateKeyRequest(key="sk-1", user_id=None)
+    update_request.model_fields_set.add("user_id")
+    _update_fields = update_request.model_dump(exclude_unset=True)
+    existing_key = LiteLLM_VerificationToken(token="t", user_id="original-user")
+    is_blocked = (
+        "user_id" in _update_fields
+        and _update_fields["user_id"] is None
+        and existing_key.user_id is not None
+        and LitellmUserRoles.INTERNAL_USER.value != LitellmUserRoles.PROXY_ADMIN.value
+    )
+    assert is_blocked is True

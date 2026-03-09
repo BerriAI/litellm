@@ -1212,7 +1212,10 @@ async def generate_key_fn(
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                     check_db_only=True,
                 )
-            except Exception:
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Error getting team object in `/key/generate`: {e}"
+                )
                 raise HTTPException(
                     status_code=404,
                     detail={
