@@ -46,7 +46,7 @@ def _make_collector(prisma_client=None, collection_interval=None, registry=None)
 
     from prometheus_client import Counter, Gauge
 
-    def _patched_get_or_create_gauge(name, description, labelnames=None):
+    def _patched_get_or_create_gauge(name, description, labelnames=None, **kwargs):
         if labelnames:
             return Gauge(name, description, labelnames=labelnames, registry=registry)
         return Gauge(name, description, registry=registry)
@@ -315,6 +315,17 @@ def test_collection_interval_default():
         with patch.dict(os.environ, env_copy, clear=True):
             collector, _ = _make_collector()
             assert collector._interval == _DEFAULT_COLLECTION_INTERVAL
+
+
+def test_collection_interval_invalid_env_falls_back_to_default():
+    """Non-numeric PRISMA_METRICS_COLLECTION_INTERVAL_SECONDS should fall back to default."""
+    with patch.dict(os.environ, {"PRISMA_METRICS_COLLECTION_INTERVAL_SECONDS": "30s"}):
+        with patch(
+            "litellm.proxy.db.prisma_metrics_collector.verbose_proxy_logger"
+        ) as mock_logger:
+            collector, _ = _make_collector()
+            assert collector._interval == _DEFAULT_COLLECTION_INTERVAL
+            mock_logger.warning.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
