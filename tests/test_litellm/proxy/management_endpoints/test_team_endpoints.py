@@ -6091,3 +6091,74 @@ async def test_list_available_teams_returns_empty_list_when_none_configured():
         assert result == []
 
         litellm.default_internal_user_params = original
+
+
+@pytest.mark.asyncio
+async def test_list_team_batches_key_queries():
+    """
+    Test that list_team fetches all keys in a single batched query
+    instead of issuing one query per team (N+1).
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        LitellmUserRoles,
+        TeamListResponseObject,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+    mock_request = Mock(spec=Request)
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user",
+    )
+
+    # Two teams
+    team1 = LiteLLM_TeamTable(team_id="team-1", team_alias="Team One")
+    team2 = LiteLLM_TeamTable(team_id="team-2", team_alias="Team Two")
+
+    # Mock keys belonging to different teams
+    key1 = MagicMock()
+    key1.team_id = "team-1"
+    key2 = MagicMock()
+    key2.team_id = "team-1"
+    key3 = MagicMock()
+    key3.team_id = "team-2"
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client"
+    ) as mock_prisma_client, patch(
+        "litellm.proxy.management_endpoints.team_endpoints._authorize_and_filter_teams",
+        new_callable=AsyncMock,
+        return_value=[team1, team2],
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_all_team_memberships",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        mock_find_many = AsyncMock(return_value=[key1, key2, key3])
+        mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many
+
+        result = await list_team(
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        # Should have been called exactly once with an IN query, not once per team
+        mock_find_many.assert_called_once_with(
+            where={"team_id": {"in": ["team-1", "team-2"]}}
+        )
+
+        # Verify keys are correctly distributed
+        assert len(result) == 2
+        # Results are sorted by team_alias
+        assert result[0].team_id == "team-1"
+        assert result[0].keys == [key1, key2]
+        assert result[1].team_id == "team-2"
+        assert result[1].keys == [key3]
