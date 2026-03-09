@@ -66,12 +66,13 @@ jobs:
           git checkout -b "$BRANCH"
           git add enterprise/pyproject.toml pyproject.toml requirements.txt poetry.lock
           git commit -m "bump: litellm-enterprise ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
-          git push origin "$BRANCH"
+          git push origin "$BRANCH" --force
           gh pr create \
             --title "bump: litellm-enterprise ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}" \
             --body "Version bump for litellm-enterprise. Merge to update main." \
             --head "$BRANCH" \
-            --base main
+            --base main \
+          || echo "PR already exists"
         env:
           GH_TOKEN: ${{ github.token }}
 
