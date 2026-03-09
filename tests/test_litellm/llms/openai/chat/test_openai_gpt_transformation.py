@@ -426,3 +426,94 @@ class TestGPT5ReasoningEffortPreservation:
         assert reasoning["effort"] == "high"
         assert reasoning["summary"] == "detailed"
         assert reasoning["generate_summary"] == "concise"
+
+    def test_reasoning_effort_dict_xhigh_triggers_validation(self):
+        """xhigh-dict: effective effort is extracted for model-support validation.
+        
+        When reasoning_effort={"effort": "xhigh", "summary": "detailed"} is passed to a model
+        that doesn't support xhigh (e.g. gpt-5.1), the xhigh guard must fire.
+        """
+        import litellm
+
+        non_default_params = {"reasoning_effort": {"effort": "xhigh", "summary": "detailed"}}
+        optional_params = {}
+
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            self.config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model="gpt-5.1",
+                drop_params=False,
+            )
+
+    def test_reasoning_effort_dict_xhigh_dropped_when_requested(self):
+        """xhigh-dict with drop_params=True: reasoning_effort is dropped."""
+        non_default_params = {"reasoning_effort": {"effort": "xhigh", "summary": "detailed"}}
+        optional_params = {}
+
+        self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-5.1",
+            drop_params=True,
+        )
+
+        assert "reasoning_effort" not in non_default_params
+
+    def test_reasoning_effort_dict_none_treated_as_none_for_tools(self):
+        """none-dict: {"effort": "none", "summary": "detailed"} is treated as effort=none.
+        
+        Tool-drop guard should NOT fire; reasoning_effort should be kept.
+        """
+        tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+        non_default_params = {"reasoning_effort": {"effort": "none", "summary": "detailed"}, "tools": tools}
+        optional_params = {}
+
+        self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-5.4",
+            drop_params=False,
+        )
+
+        assert non_default_params.get("reasoning_effort") == {"effort": "none", "summary": "detailed"}
+        assert non_default_params.get("tools") == tools
+
+    def test_reasoning_effort_dict_none_treated_as_none_for_sampling(self):
+        """none-dict: {"effort": "none", "summary": "detailed"} allows logprobs/top_p.
+        
+        Sampling-param guard should NOT fire; logprobs should be kept.
+        """
+        non_default_params = {
+            "reasoning_effort": {"effort": "none", "summary": "detailed"},
+            "logprobs": True,
+        }
+        optional_params = {}
+
+        self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+        assert non_default_params.get("reasoning_effort") == {"effort": "none", "summary": "detailed"}
+        assert non_default_params.get("logprobs") is True
+
+    def test_reasoning_effort_dict_none_allows_temperature(self):
+        """none-dict: {"effort": "none", "summary": "detailed"} allows non-default temperature."""
+        non_default_params = {
+            "reasoning_effort": {"effort": "none", "summary": "detailed"},
+            "temperature": 0.5,
+        }
+        optional_params = {}
+
+        self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+        assert optional_params.get("temperature") == 0.5
+        assert non_default_params.get("reasoning_effort") == {"effort": "none", "summary": "detailed"}
