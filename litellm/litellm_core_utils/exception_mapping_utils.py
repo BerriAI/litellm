@@ -1000,6 +1000,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     getattr(original_exception, "status_code", None)
                     or oci_err.get("status")
                 )
+                try:
+                    oci_status = int(oci_status) if oci_status is not None else None
+                except (TypeError, ValueError):
+                    oci_status = None
 
                 oci_message = (
                     oci_err.get("message")
