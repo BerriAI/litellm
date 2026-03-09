@@ -11,8 +11,10 @@ from litellm import ModelResponse
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.noma import (
     NomaGuardrail,
+    NomaV2Guardrail,
     initialize_guardrail,
 )
+import litellm.proxy.guardrails.guardrail_hooks.noma.noma as noma_legacy_module
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.llms.openai import AllMessageValues
@@ -76,6 +78,13 @@ def mock_request_data():
 
 class TestNomaGuardrailConfiguration:
     """Test configuration and initialization of Noma guardrail"""
+
+    def test_legacy_guardrail_emits_deprecation_warning(self, monkeypatch):
+        monkeypatch.setattr(
+            noma_legacy_module, "_LEGACY_NOMA_DEPRECATION_WARNED", False
+        )
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            NomaGuardrail(api_key="test-api-key")
 
     def test_init_with_config(self):
         """Test initializing Noma guardrail via init_guardrails_v2"""
@@ -166,6 +175,34 @@ class TestNomaGuardrailConfiguration:
             assert result.monitor_mode is True
             assert result.block_failures is False
             mock_add.assert_called_once_with(result)
+
+    def test_initialize_guardrail_use_v2_routes_to_noma_v2(self):
+        """Test migration routing: guardrail=noma + use_v2=True initializes NomaV2Guardrail."""
+        from litellm.types.guardrails import Guardrail, LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="noma",
+            mode="pre_call",
+            use_v2=True,
+            api_key="test-key",
+            api_base="https://test.api/",
+            application_id="test-app",
+        )
+
+        guardrail = Guardrail(
+            guardrail_name="test-guardrail",
+            litellm_params=litellm_params,
+        )
+
+        with patch("litellm.logging_callback_manager.add_litellm_callback") as mock_add:
+            result = initialize_guardrail(litellm_params, guardrail)
+
+            assert isinstance(result, NomaV2Guardrail)
+            assert result.api_key == "test-key"
+            assert result.api_base == "https://test.api"
+            assert result.application_id == "test-app"
+            mock_add.assert_called_once_with(result)
+
 
 class TestNomaApplicationIdResolution:
     """Tests for determining which applicationId is sent to Noma."""

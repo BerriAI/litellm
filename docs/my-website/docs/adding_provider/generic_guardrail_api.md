@@ -244,6 +244,35 @@ litellm_settings:
           language: "en"
 ```
 
+### Static and dynamic headers
+
+You can send two kinds of headers to your guardrail endpoint:
+
+- **Static headers** (`headers`): A key/value map sent with **every** request to your guardrail. Use this for fixed values (e.g. API keys, `X-Service-Name`). Configure in `litellm_params`:
+
+  ```yaml
+  litellm_params:
+    guardrail: generic_guardrail_api
+    api_base: https://your-guardrail-api.com
+    headers:
+      X-Service-Name: "my-app"
+      X-API-Key: "secret"
+  ```
+
+- **Dynamic headers** (`extra_headers`): A list of **header names** that are forwarded from the **client request** to your guardrail. Only headers in this list (plus a small default allowlist such as `x-litellm-*`) have their values sent; others are sent as `[present]`. Use this to pass through client-provided headers (e.g. `x-request-id`, `x-correlation-id`). Configure in `litellm_params`:
+
+  ```yaml
+  litellm_params:
+    guardrail: generic_guardrail_api
+    api_base: https://your-guardrail-api.com
+    extra_headers:
+      - x-request-id
+      - x-correlation-id
+      - x-custom-auth
+  ```
+
+This mirrors the [MCP static and extra headers](/docs/mcp#forwarding-custom-headers-to-mcp-servers) behavior.
+
 ### Example: Pillar Security
 
 [Pillar Security](https://pillar.security) uses the Generic Guardrail API to provide comprehensive AI security scanning including prompt injection protection, PII/PCI detection, secret detection, and content moderation.

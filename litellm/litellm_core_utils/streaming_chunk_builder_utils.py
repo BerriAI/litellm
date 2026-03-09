@@ -41,10 +41,29 @@ class ChunkProcessor:
     def _sort_chunks(self, chunks: list) -> list:
         if not chunks:
             return []
-        if chunks[0]._hidden_params.get("created_at"):
-            return sorted(
-                chunks, key=lambda x: x._hidden_params.get("created_at", float("inf"))
-            )
+
+        first_chunk = chunks[0]
+        first_hidden_params: Dict[str, Any] = {}
+        if isinstance(first_chunk, dict):
+            candidate = first_chunk.get("_hidden_params", {})
+            if isinstance(candidate, dict):
+                first_hidden_params = candidate
+        else:
+            candidate = getattr(first_chunk, "_hidden_params", {})
+            if isinstance(candidate, dict):
+                first_hidden_params = candidate
+
+        if first_hidden_params.get("created_at"):
+            def _created_at(chunk: Any) -> Union[int, float]:
+                if isinstance(chunk, dict):
+                    params = chunk.get("_hidden_params", {})
+                else:
+                    params = getattr(chunk, "_hidden_params", {})
+                if isinstance(params, dict):
+                    return cast(Union[int, float], params.get("created_at", float("inf")))
+                return float("inf")
+
+            return sorted(chunks, key=_created_at)
         return chunks
 
     def update_model_response_with_hidden_params(
@@ -457,13 +476,15 @@ class ChunkProcessor:
             "prompt_tokens_details": prompt_tokens_details,
         }
 
-    def count_reasoning_tokens(self, response: ModelResponse) -> int:
-        reasoning_tokens = 0
+    def count_reasoning_tokens(self, response: ModelResponse) -> Optional[int]:
+        reasoning_tokens: Optional[int] = None
         for choice in response.choices:
             if (
                 hasattr(cast(Choices, choice).message, "reasoning_content")
                 and cast(Choices, choice).message.reasoning_content is not None
             ):
+                if reasoning_tokens is None:
+                    reasoning_tokens = 0
                 reasoning_tokens += token_counter(
                     text=cast(Choices, choice).message.reasoning_content,
                     count_response_tokens=True,

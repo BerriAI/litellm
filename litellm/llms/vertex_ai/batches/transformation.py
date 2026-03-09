@@ -29,7 +29,7 @@ class VertexAIBatchTransformation:
         if input_file_id is None:
             raise ValueError("input_file_id is required, but not provided")
         input_config: InputConfig = InputConfig(
-            gcsSource=GcsSource(uris=input_file_id), instancesFormat="jsonl"
+            gcsSource=GcsSource(uris=[input_file_id]), instancesFormat="jsonl"
         )
         model: str = cls._get_model_from_gcs_file(input_file_id)
         output_config: OutputConfig = OutputConfig(

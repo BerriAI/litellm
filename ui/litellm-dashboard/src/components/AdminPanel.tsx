@@ -14,19 +14,16 @@ import {
   TableHeaderCell,
   TableRow,
 } from "@tremor/react";
-import { Alert, Button as Button2, Form, Input, Modal, Tabs, Typography } from "antd";
+import { Alert, Button as Button2, Form, Input, Modal, Space, Tabs, Typography } from "antd";
 import React, { useEffect, useState } from "react";
+import NewBadge from "./common_components/NewBadge";
 import { useBaseUrl } from "./constants";
 import NotificationsManager from "./molecules/notifications_manager";
-import {
-  addAllowedIP,
-  deleteAllowedIP,
-  getAllowedIPs,
-  getSSOSettings,
-} from "./networking";
+import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "./networking";
 import SCIMConfig from "./SCIM";
 import SSOSettings from "./Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "./Settings/AdminSettings/UISettings/UISettings";
+import HashicorpVault from "./Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import SSOModals from "./SSOModals";
 import UIAccessControlForm from "./UIAccessControlForm";
 
@@ -356,8 +353,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     },
     {
       key: "ui-settings",
-      label: "UI Settings",
+      label: (
+        <Space>
+          <Text>
+            UI Settings <NewBadge />
+          </Text>
+        </Space>
+      ),
       children: <UISettings />,
+    },
+    {
+      key: "hashicorp-vault",
+      label: "Hashicorp Vault",
+      children: <HashicorpVault />,
     },
   ];
 
