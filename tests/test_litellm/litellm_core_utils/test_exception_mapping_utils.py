@@ -285,6 +285,7 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
 oci_exception_test_cases = [
     (400, "Bad request error", litellm.BadRequestError),
     (401, "Authentication failed", litellm.AuthenticationError),
+    (403, "Authorization error", litellm.PermissionDeniedError),
     (404, "Model not found", litellm.NotFoundError),
     (409, "Conflict error", litellm.exceptions.ConflictError),
     (429, "Rate limit exceeded", litellm.RateLimitError),
