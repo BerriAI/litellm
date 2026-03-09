@@ -3,7 +3,7 @@
 Implements the 3-step upload pattern used by the k8s-appliance:
 
   Step 1 — GET signed URL from Mavvrik API
-      GET {api_endpoint}/{tenant}/k8s/agent/{instance_id}/upload-url
+      GET {api_endpoint}/{tenant}/ai-account/agent/{instance_id}/upload-url
           ?name={interval}&provider=k8s&type=metrics
       Header: x-api-key: {api_key}
       Response: { "url": "https://storage.googleapis.com/..." }
@@ -23,11 +23,11 @@ The interval name (used as the GCS object name) is the ISO-8601 UTC
 timestamp for the start of the export window, matching the k8s-appliance
 convention so Mavvrik can partition objects by time.
 
-Additionally implements the registration call (mirroring k8s-appliance):
+Additionally implements the registration call:
 
-  Register — POST {api_endpoint}/{tenant}/k8s/agent/{instance_id}
+  Register — POST {api_endpoint}/{tenant}/ai-account/agent/{instance_id}
       Header: x-api-key: {api_key}
-      Body: { "instanceId": instance_id, "provider": "litellm" }
+      Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
       Response: { "id": "...", "metricsMarker": <epoch_seconds> }
 
   metricsMarker is the Unix epoch from which Mavvrik wants LiteLLM to
@@ -36,9 +36,10 @@ Additionally implements the registration call (mirroring k8s-appliance):
   If metricsMarker == 0 or is absent, defaults to the first day of
   the current month (matching k8s-appliance behaviour).
 
-Note: The endpoint path (/k8s/agent/) is a placeholder while the
-litellm-specific Mavvrik endpoint is being built. Swap UPLOAD_URL_PATH
-and AGENT_BASE_PATH when the real endpoints are ready.
+  Advance marker — PATCH {api_endpoint}/{tenant}/ai-account/agent/{instance_id}
+      Header: x-api-key: {api_key}
+      Body: { "metricsMarker": <epoch_seconds> }
+      Response: 204 No Content
 """
 
 import gzip
@@ -48,9 +49,8 @@ import httpx
 
 from litellm._logging import verbose_proxy_logger
 
-# TODO: swap these paths once Mavvrik builds the litellm-specific endpoints
-AGENT_BASE_PATH = "/{tenant}/k8s/agent/{instance_id}"
-UPLOAD_URL_PATH = "/{tenant}/k8s/agent/{instance_id}/upload-url"
+AGENT_BASE_PATH = "/{tenant}/ai-account/agent/{instance_id}"
+UPLOAD_URL_PATH = "/{tenant}/ai-account/agent/{instance_id}/upload-url"
 
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
@@ -109,20 +109,8 @@ class MavvrikStreamer:
     def register(self) -> str:
         """POST to Mavvrik agent endpoint and return the initial marker as an ISO-8601 string.
 
-        Mirrors the k8s-appliance RegisterCluster payload structure:
-          POST {api_endpoint}/{tenant}/k8s/agent/{instance_id}
-          Body: {
-            "arch": <system arch>,
-            "provider": "litellm",
-            "hostProvider": "",
-            "accountId": "",
-            "location": "",
-            "version": <litellm version>,
-            "name": <instance_id>,
-            "prometheusUrl": "",
-            "meta": null,
-            "invalidPermissions": []
-          }
+          POST {api_endpoint}/{tenant}/ai-account/agent/{instance_id}
+          Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
           Response: { "id": "...", "metricsMarker": <epoch_seconds> }
           metricsMarker == 0 → default to first day of current month
 
@@ -141,16 +129,9 @@ class MavvrikStreamer:
         url = f"{self.api_endpoint}{path}"
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
         body: dict = {
-            "arch": platform.machine(),
-            "provider": "k8s",
-            "hostProvider": "",
-            "accountId": "",
-            "location": "",
-            "version": getattr(_litellm, "__version__", "0.0.0"),
             "name": self.instance_id,
-            "prometheusUrl": f"{self.api_endpoint}/prometheus",
-            "meta": {"node": [], "pvs": []},
-            "invalidPermissions": [],
+            "version": getattr(_litellm, "__version__", "0.0.0"),
+            "arch": platform.machine(),
         }
 
         with httpx.Client(timeout=30.0) as client:
@@ -186,8 +167,7 @@ class MavvrikStreamer:
     def advance_marker(self, epoch: int) -> None:
         """PATCH the Mavvrik agent endpoint to advance the metricsMarker.
 
-        Mirrors the k8s-appliance pattern:
-          PATCH {api_endpoint}/{tenant}/k8s/agent/{instance_id}
+          PATCH {api_endpoint}/{tenant}/ai-account/agent/{instance_id}
           Body: { "metricsMarker": <epoch_seconds> }
           Response: 204 No Content
 
