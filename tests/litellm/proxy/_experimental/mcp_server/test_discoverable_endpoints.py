@@ -1131,8 +1131,7 @@ def test_get_request_base_url_comprehensive(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_mcp_oauth_ui_callback_returns_html():
+def test_mcp_oauth_ui_callback_returns_html():
     """
     The /ui/mcp/oauth/callback endpoint must return an HTML page regardless
     of whether the static files mount is available.  This is the fallback
@@ -1140,18 +1139,16 @@ async def test_mcp_oauth_ui_callback_returns_html():
     """
     try:
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            mcp_oauth_ui_callback,
+            _build_mcp_oauth_callback_html,
         )
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
-    response = await mcp_oauth_ui_callback(
+    body = _build_mcp_oauth_callback_html(
         code="test_auth_code_123",
         state="test_state_456",
     )
 
-    assert response.status_code == 200
-    body = response.body.decode()
     assert "<!DOCTYPE html>" in body
     # Payload values are embedded as JSON literals in the JS
     assert "test_auth_code_123" in body
@@ -1161,24 +1158,44 @@ async def test_mcp_oauth_ui_callback_returns_html():
     assert "litellm-mcp-oauth-return-url" in body
 
 
-@pytest.mark.asyncio
-async def test_mcp_oauth_ui_callback_handles_missing_params():
+def test_mcp_oauth_ui_callback_handles_missing_params():
     """
     The /ui/mcp/oauth/callback endpoint must handle missing code/state
     gracefully (e.g. direct navigation or error redirect from provider).
     """
     try:
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            mcp_oauth_ui_callback,
+            _build_mcp_oauth_callback_html,
         )
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
-    response = await mcp_oauth_ui_callback(code=None, state=None)
+    body = _build_mcp_oauth_callback_html(code=None, state=None)
 
-    assert response.status_code == 200
-    body = response.body.decode()
     assert "<!DOCTYPE html>" in body
     # null values should be safely embedded as JSON null
     assert "null" in body
+
+
+def test_mcp_oauth_callback_html_xss_safe():
+    """
+    OAuth code/state must be escaped for safe embedding in <script> tags.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_mcp_oauth_callback_html,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Malicious payload that could break out of script tag
+    body = _build_mcp_oauth_callback_html(
+        code='</script><img src=x onerror=alert(1)>',
+        state="normal_state",
+    )
+
+    # Payload must be escaped: < -> \u003c, > -> \u003e (safe for <script> embedding)
+    # The code value in the JSON should show \\u003c/script\\u003e, not raw </script>
+    assert '\\u003c/script\\u003e' in body
+    assert '\\u003cimg' in body
 
