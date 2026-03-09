@@ -6,8 +6,6 @@ before the request reaches strict OpenAI-compatible endpoints that reject them
 (e.g. Kimi-K2.5, gpt-oss-120b on Azure AI).
 """
 
-import pytest
-
 from litellm.responses.litellm_completion_transformation.handler import (
     _strip_empty_text_content_parts,
 )
@@ -47,7 +45,9 @@ def test_strips_empty_text_part_adjacent_to_tool_calls():
     assistant_content = result["messages"][1]["content"]
     assert isinstance(assistant_content, list)
     # The empty text part must be gone
-    text_parts = [p for p in assistant_content if isinstance(p, dict) and p.get("type") == "text"]
+    text_parts = [
+        p for p in assistant_content if isinstance(p, dict) and p.get("type") == "text"
+    ]
     assert text_parts == [], f"Expected no text parts, got: {text_parts}"
     # The non-text part must still be present
     assert len(assistant_content) == 1
@@ -128,7 +128,10 @@ def test_non_text_parts_preserved():
                 "role": "user",
                 "content": [
                     {"type": "text", "text": ""},
-                    {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/img.png"},
+                    },
                     {"type": "text", "text": "What is this?"},
                 ],
             }
