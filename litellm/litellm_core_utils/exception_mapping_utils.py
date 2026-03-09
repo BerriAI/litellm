@@ -1037,7 +1037,7 @@ if _response is None and oci_status:
     )
 
                 # Map OCI status to LiteLLM exceptions (consistent with other providers) 
-                # <source_id data="1" title="exception_mapping_utils.py" />
+                # Map OCI status to LiteLLM exceptions (consistent with other providers)
                 bad_oci_request_statuses = (400, 406, 413, 415, 422, 424)
                 if oci_status in bad_oci_request_statuses:
                     raise BadRequestError(
