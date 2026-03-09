@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
 
@@ -243,6 +243,38 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             end_time=end_time,
         )
         pass
+
+    async def async_log_audit_log_event(
+        self, audit_log: StandardAuditLogPayload
+    ) -> None:
+        """Batch audit logs and upload to S3 under audit_logs/ prefix."""
+        try:
+            from datetime import timezone
+
+            now = datetime.now(timezone.utc)
+            audit_log_id = audit_log.get("id", "unknown")
+
+            s3_path = cast(Optional[str], self.s3_path) or ""
+            s3_path = s3_path.rstrip("/") + "/" if s3_path else ""
+
+            s3_object_key = (
+                f"{s3_path}audit_logs/"
+                f"{now.strftime('%Y-%m-%d')}/"
+                f"{now.strftime('%H-%M-%S')}_{audit_log_id}.json"
+            )
+
+            element = s3BatchLoggingElement(
+                payload=dict(audit_log),
+                s3_object_key=s3_object_key,
+                s3_object_download_filename=f"audit-{audit_log_id}.json",
+            )
+
+            self.log_queue.append(element)
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.flush_queue()
+        except Exception as e:
+            verbose_logger.exception("S3 audit log error: %s", e)
 
     async def _async_log_event_base(self, kwargs, response_obj, start_time, end_time):
         try:

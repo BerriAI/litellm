@@ -2946,6 +2946,19 @@ class ProxyConfig:
                     print(  # noqa
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
+                elif key == "audit_log_callbacks":
+                    litellm.audit_log_callbacks = []
+
+                    for callback in value:
+                        if "." in callback:
+                            litellm.audit_log_callbacks.append(
+                                get_instance_fn(value=callback)
+                            )
+                        else:
+                            litellm.audit_log_callbacks.append(callback)
+                    print(  # noqa
+                        f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
+                    )  # noqa
                 elif key == "cache_params":
                     # this is set in the cache branch
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
