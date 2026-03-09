@@ -353,9 +353,6 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.compliance_endpoints import (
     router as compliance_router,
 )
-from litellm.proxy.management_endpoints.config_override_endpoints import (
-    router as config_override_router,
-)
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
 )
@@ -370,9 +367,6 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     user_update,
-)
-from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
-    router as jwt_key_mapping_router,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
