@@ -1739,7 +1739,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             # that Anthropic's signature verification depends on.  Store the
             # original content so the round-trip reconstruction can preserve
             # the exact block ordering.  (Fixes #23047)
-            if thinking_blocks and tool_calls:
+            if thinking_blocks:
                 _has_server_tools = any(
                     content.get("type") == "server_tool_use"
                     for content in completion_response.get("content", [])

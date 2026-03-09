@@ -2480,7 +2480,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             unique_tool_ids.add(_oc_id)
                         assistant_content.append(_oc_block)  # type: ignore
                     else:
-                        # thinking, redacted_thinking, *_tool_result, compaction
+                        # thinking, redacted_thinking, *_tool_result
+                        # Skip compaction — already prepended above.
+                        # Skip tool_search_tool_result — internal metadata.
+                        if _oc_type in ("compaction", "tool_search_tool_result"):
+                            continue
                         assistant_content.append(_oc_block)  # type: ignore
             else:
                 thinking_blocks = assistant_content_block.get("thinking_blocks", None)
@@ -2551,60 +2555,51 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
                     assistant_content.append(_anthropic_text_content_element)
 
-                assistant_tool_calls = assistant_content_block.get("tool_calls")
-                if (
-                    assistant_tool_calls is not None
-                ):  # support assistant tool invoke conversion
-                    # Get web_search_results and tool_results from provider_specific_fields
-                    # for server_tool_use reconstruction.
-                    # Fixes: https://github.com/BerriAI/litellm/issues/17737
-                    _provider_specific_fields_raw = assistant_content_block.get(
-                        "provider_specific_fields"
-                    )
-                    _provider_specific_fields: Dict[str, Any] = {}
-                    if isinstance(_provider_specific_fields_raw, dict):
-                        _provider_specific_fields = cast(
-                            Dict[str, Any], _provider_specific_fields_raw
-                        )
-                    _web_search_results = _provider_specific_fields.get(
-                        "web_search_results"
-                    )
-                    _tool_results = _provider_specific_fields.get("tool_results")
-                    tool_invoke_results = convert_to_anthropic_tool_invoke(
-                        assistant_tool_calls,
-                        web_search_results=_web_search_results,
-                        tool_results=_tool_results,
-                    )
-
-                    # Prevent "tool_use ids must be unique" errors by filtering duplicates
-                    # This can happen when merging history that already contains the tool calls
-                    for item in tool_invoke_results:
-                        # tool_use items are typically dicts, but handle objects just in case
-                        item_id = (
-                            item.get("id")
-                            if isinstance(item, dict)
-                            else getattr(item, "id", None)
-                        )
-
-                        if item_id:
-                            if item_id in unique_tool_ids:
-                                continue
-                            unique_tool_ids.add(item_id)
-
-                        assistant_content.append(
-                            cast(AnthropicMessagesAssistantMessageValues, item)
-                        )
-
-                assistant_function_call = assistant_content_block.get("function_call")
-
-                if assistant_function_call is not None:
-                    assistant_content.extend(
-                        convert_function_to_anthropic_tool_invoke(
-                            assistant_function_call
-                        )
-                    )
-
             msg_i += 1
+
+            # Process tool_calls outside the _original_content / else branches
+            # so they are included regardless of which path was taken.
+            # unique_tool_ids prevents duplication with tools already in content.
+            assistant_tool_calls = assistant_content_block.get("tool_calls")
+            if (
+                assistant_tool_calls is not None
+            ):  # support assistant tool invoke conversion
+                _psf_raw = assistant_content_block.get("provider_specific_fields")
+                _psf: Dict[str, Any] = {}
+                if isinstance(_psf_raw, dict):
+                    _psf = cast(Dict[str, Any], _psf_raw)
+                _web_search_results = _psf.get("web_search_results")
+                _tool_results = _psf.get("tool_results")
+                tool_invoke_results = convert_to_anthropic_tool_invoke(
+                    assistant_tool_calls,
+                    web_search_results=_web_search_results,
+                    tool_results=_tool_results,
+                )
+
+                for item in tool_invoke_results:
+                    item_id = (
+                        item.get("id")
+                        if isinstance(item, dict)
+                        else getattr(item, "id", None)
+                    )
+
+                    if item_id:
+                        if item_id in unique_tool_ids:
+                            continue
+                        unique_tool_ids.add(item_id)
+
+                    assistant_content.append(
+                        cast(AnthropicMessagesAssistantMessageValues, item)
+                    )
+
+            assistant_function_call = assistant_content_block.get("function_call")
+
+            if assistant_function_call is not None:
+                assistant_content.extend(
+                    convert_function_to_anthropic_tool_invoke(
+                        assistant_function_call
+                    )
+                )
 
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
