@@ -2761,6 +2761,20 @@ class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """
 
 
+class StandardAuditLogPayload(TypedDict):
+    """Payload for audit log events dispatched to external callbacks."""
+
+    id: str
+    updated_at: str  # ISO-8601
+    changed_by: str
+    changed_by_api_key: str
+    action: str  # "created" | "updated" | "deleted" | "blocked" | "rotated"
+    table_name: str
+    object_id: str
+    before_value: Optional[str]
+    updated_values: Optional[str]
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
