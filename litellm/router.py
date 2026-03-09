@@ -115,9 +115,6 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
-from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-    EncryptedContentAffinityCheck,
-)
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -167,11 +164,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import (
-    ModelResponseStream,
-    StandardLoggingPayload,
-    Usage,
-)
+from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -731,8 +724,18 @@ class Router:
         """
         Initializes either a RedisCache or RedisClusterCache based on the cache_config.
         """
-        if cache_config.get("startup_nodes"):
-            return RedisClusterCache(**cache_config)
+        startup_nodes = cache_config.get("startup_nodes")
+        if not startup_nodes:
+            _env_cluster_nodes = get_secret("REDIS_CLUSTER_NODES")
+            if _env_cluster_nodes is not None and isinstance(
+                _env_cluster_nodes, str
+            ):
+                startup_nodes = json.loads(_env_cluster_nodes)
+
+        if startup_nodes:
+            return RedisClusterCache(
+                **{**cache_config, "startup_nodes": startup_nodes}
+            )
         else:
             return RedisCache(**cache_config)
 
@@ -7104,6 +7107,17 @@ class Router:
             deployment = self.get_deployment_by_model_group_name(
                 model_group_name=model_id
             )
+
+        # If still not found, check for wildcard pattern matches
+        if deployment is None:
+            potential_wildcard_models = self.pattern_router.route(model_id) or []
+            if potential_wildcard_models:
+                # Use the first matching wildcard deployment
+                deployment_dict = potential_wildcard_models[0]
+                if isinstance(deployment_dict, dict):
+                    deployment = Deployment(**deployment_dict)
+                elif isinstance(deployment_dict, Deployment):
+                    deployment = deployment_dict
 
         if deployment is None:
             return None

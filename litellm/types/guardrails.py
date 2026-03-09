@@ -717,7 +717,9 @@ class BaseLitellmParams(
 
 
 class Mode(BaseModel):
-    tags: Dict[str, str] = Field(description="Tags for the guardrail mode")
+    tags: Dict[str, Union[str, List[str]]] = Field(
+        description="Tags for the guardrail mode"
+    )
     default: Optional[Union[str, List[str]]] = Field(
         default=None, description="Default mode when no tags match"
     )

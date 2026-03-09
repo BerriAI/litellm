@@ -15,6 +15,10 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
   const { accessToken } = useAuthorized();
   const [enabledPagesInternalUsers, setEnabledPagesInternalUsers] = useState<string[] | null>(null);
   const [enableProjectsUI, setEnableProjectsUI] = useState<boolean>(false);
+  const [disableAgentsForInternalUsers, setDisableAgentsForInternalUsers] = useState<boolean>(false);
+  const [allowAgentsForTeamAdmins, setAllowAgentsForTeamAdmins] = useState<boolean>(false);
+  const [disableVectorStoresForInternalUsers, setDisableVectorStoresForInternalUsers] = useState<boolean>(false);
+  const [allowVectorStoresForTeamAdmins, setAllowVectorStoresForTeamAdmins] = useState<boolean>(false);
 
   useEffect(() => {
     const fetchUISettings = async () => {
@@ -39,6 +43,22 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
         if (settings?.values?.enable_projects_ui !== undefined) {
           setEnableProjectsUI(Boolean(settings.values.enable_projects_ui));
         }
+
+        if (settings?.values?.disable_agents_for_internal_users !== undefined) {
+          setDisableAgentsForInternalUsers(Boolean(settings.values.disable_agents_for_internal_users));
+        }
+
+        if (settings?.values?.allow_agents_for_team_admins !== undefined) {
+          setAllowAgentsForTeamAdmins(Boolean(settings.values.allow_agents_for_team_admins));
+        }
+
+        if (settings?.values?.disable_vector_stores_for_internal_users !== undefined) {
+          setDisableVectorStoresForInternalUsers(Boolean(settings.values.disable_vector_stores_for_internal_users));
+        }
+
+        if (settings?.values?.allow_vector_stores_for_team_admins !== undefined) {
+          setAllowVectorStoresForTeamAdmins(Boolean(settings.values.allow_vector_stores_for_team_admins));
+        }
       } catch (error) {
         console.error("[SidebarProvider] Failed to fetch UI settings:", error);
       }
@@ -54,6 +74,10 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
       collapsed={sidebarCollapsed}
       enabledPagesInternalUsers={enabledPagesInternalUsers}
       enableProjectsUI={enableProjectsUI}
+      disableAgentsForInternalUsers={disableAgentsForInternalUsers}
+      allowAgentsForTeamAdmins={allowAgentsForTeamAdmins}
+      disableVectorStoresForInternalUsers={disableVectorStoresForInternalUsers}
+      allowVectorStoresForTeamAdmins={allowVectorStoresForTeamAdmins}
     />
   );
 };

@@ -154,6 +154,7 @@ const sidebars = {
           items: [
             "tutorials/claude_responses_api",
             "tutorials/claude_code_max_subscription",
+            "tutorials/claude_code_byok",
             "tutorials/claude_code_customer_tracking",
             "tutorials/claude_code_prompt_cache_routing",
             "tutorials/claude_code_websearch",
@@ -310,6 +311,7 @@ const sidebars = {
             "proxy/master_key_rotations",
             "proxy/model_management",
             "proxy/prod",
+            "proxy/worker_startup_hooks",
             "proxy/release_cycle",
           ],
         },
@@ -538,8 +540,10 @@ const sidebars = {
           items: [
             "a2a",
             "a2a_invoking_agents",
+            "a2a_agent_headers",
             "a2a_cost_tracking",
-            "a2a_agent_permissions"
+            "a2a_agent_permissions",
+            "a2a_iteration_budgets"
           ],
         },
         "assistants",
@@ -608,6 +612,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_openapi",
             "mcp_oauth",
             "mcp_public_internet",
             "mcp_semantic_filter",
@@ -623,6 +628,7 @@ const sidebars = {
           items: [
             "anthropic_unified/index",
             "anthropic_unified/structured_output",
+            "anthropic_unified/messages_to_responses_mapping",
           ]
         },
         "anthropic_count_tokens",
@@ -678,6 +684,7 @@ const sidebars = {
             "search/firecrawl",
             "search/searxng",
             "search/linkup",
+            "search/serper",
           ]
         },
         "skills",
@@ -794,6 +801,7 @@ const sidebars = {
             "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
             "providers/bedrock_vector_store",
+            "providers/bedrock_mantle",
           ]
         },
         "providers/litellm_proxy",

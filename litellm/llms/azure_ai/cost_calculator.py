@@ -61,7 +61,10 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
 
 
 def cost_per_token(
-    model: str, usage: Usage, response_time_ms: Optional[float] = 0.0
+    model: str, 
+    usage: Usage, 
+    response_time_ms: Optional[float] = 0.0,
+    request_model: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculate the cost per token for Azure AI models.
@@ -71,9 +74,10 @@ def cost_per_token(
     - Plus the cost of the actual model used (handled by generic_cost_per_token)
     
     Args:
-        model: str, the model name without provider prefix
+        model: str, the model name without provider prefix (from response)
         usage: LiteLLM Usage block
         response_time_ms: Optional response time in milliseconds
+        request_model: Optional[str], the original request model name (to detect router usage)
     
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -84,7 +88,13 @@ def cost_per_token(
     """
     prompt_cost = 0.0
     completion_cost = 0.0
-    
+
+    # Determine if this was a model router request
+    # Check both the response model and the request model
+    is_router_request = _is_azure_model_router(model) or (
+        request_model is not None and _is_azure_model_router(request_model)
+    )
+
     # Calculate base cost using generic cost calculator
     # This may raise an exception if the model is not in the cost map
     try:
@@ -103,19 +113,21 @@ def cost_per_token(
         verbose_logger.debug(
             f"Azure AI Model Router: model '{model}' not in cost map, calculating routing flat cost only. Error: {e}"
         )
-    
+
     # Add flat cost for Azure Model Router
     # The flat cost is defined in model_prices_and_context_window.json for azure_ai/model_router
-    if _is_azure_model_router(model):
-        router_flat_cost = calculate_azure_model_router_flat_cost(model, usage.prompt_tokens)
-        
+    if is_router_request:
+        # Use the request model for flat cost calculation if available, otherwise use response model
+        router_model_for_calc = request_model if request_model else model
+        router_flat_cost = calculate_azure_model_router_flat_cost(router_model_for_calc, usage.prompt_tokens)
+
         if router_flat_cost > 0:
             verbose_logger.debug(
                 f"Azure AI Model Router flat cost: ${router_flat_cost:.6f} "
                 f"({usage.prompt_tokens} tokens × ${router_flat_cost / usage.prompt_tokens:.9f}/token)"
             )
-            
+
             # Add flat cost to prompt cost
             prompt_cost += router_flat_cost
-    
+
     return prompt_cost, completion_cost

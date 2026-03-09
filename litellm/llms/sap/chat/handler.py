@@ -181,7 +181,7 @@ class AsyncSAPStreamIterator:
 
     def __init__(
         self,
-        response:AsyncIterator,
+        response: AsyncIterator,
         event_prefix: str = "data: ",
         final_msg: str = "[DONE]",
     ):

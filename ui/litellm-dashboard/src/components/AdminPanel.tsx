@@ -23,6 +23,7 @@ import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "./
 import SCIMConfig from "./SCIM";
 import SSOSettings from "./Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "./Settings/AdminSettings/UISettings/UISettings";
+import HashicorpVault from "./Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import SSOModals from "./SSOModals";
 import UIAccessControlForm from "./UIAccessControlForm";
 
@@ -360,6 +361,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         </Space>
       ),
       children: <UISettings />,
+    },
+    {
+      key: "hashicorp-vault",
+      label: "Hashicorp Vault",
+      children: <HashicorpVault />,
     },
   ];
 

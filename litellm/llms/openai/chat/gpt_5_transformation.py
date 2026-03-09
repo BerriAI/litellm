@@ -1,10 +1,28 @@
 """Support for OpenAI gpt-5 model family."""
 
-from typing import Optional
+from typing import Optional, Union
 
 import litellm
+from litellm.utils import _supports_factory
 
 from .gpt_transformation import OpenAIGPTConfig
+
+
+def _normalize_reasoning_effort_for_chat_completion(
+    value: Union[str, dict, None],
+) -> Optional[str]:
+    """Convert reasoning_effort to the string format expected by OpenAI chat completion API.
+
+    The chat completion API expects a simple string: 'none', 'low', 'medium', 'high', or 'xhigh'.
+    Config/deployments may pass the Responses API format: {'effort': 'high', 'summary': 'detailed'}.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and "effort" in value:
+        return value["effort"]
+    return None
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
@@ -41,40 +59,30 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return "gpt-5-codex" in model
 
     @classmethod
-    def is_model_gpt_5_1_codex_max_model(cls, model: str) -> bool:
-        """Check if the model is the gpt-5.1-codex-max variant."""
-        model_name = model.split("/")[-1]  # handle provider prefixes
-        return model_name == "gpt-5.1-codex-max"
-    
-    @classmethod
-    def is_model_gpt_5_1_model(cls, model: str) -> bool:
-        """Check if the model is a gpt-5.1 or gpt-5.2 chat variant.
-        
-        gpt-5.1/5.2 support temperature when reasoning_effort="none",
-        unlike base gpt-5 which only supports temperature=1. Excludes
-        pro variants which keep stricter knobs and gpt-5.2-chat variants
-        which only support temperature=1.
-        """
-        model_name = model.split("/")[-1]
-        is_gpt_5_1 = model_name.startswith("gpt-5.1")
-        is_gpt_5_2 = (
-            model_name.startswith("gpt-5.2")
-            and "pro" not in model_name
-            and not model_name.startswith("gpt-5.2-chat")
-        )
-        return is_gpt_5_1 or is_gpt_5_2
-
-    @classmethod
-    def is_model_gpt_5_2_pro_model(cls, model: str) -> bool:
-        """Check if the model is the gpt-5.2-pro snapshot/alias."""
-        model_name = model.split("/")[-1]
-        return model_name.startswith("gpt-5.2-pro")
-
-    @classmethod
     def is_model_gpt_5_2_model(cls, model: str) -> bool:
         """Check if the model is a gpt-5.2 variant (including pro)."""
         model_name = model.split("/")[-1]
-        return model_name.startswith("gpt-5.2")
+        return model_name.startswith("gpt-5.2") or model_name.startswith("gpt-5.4")
+
+    @classmethod
+    def is_model_gpt_5_4_model(cls, model: str) -> bool:
+        """Check if the model is a gpt-5.4 variant (including pro)."""
+        model_name = model.split("/")[-1]
+        return model_name.startswith("gpt-5.4")
+
+    @classmethod
+    def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
+        """Check if the model supports a specific reasoning_effort level.
+
+        Looks up ``supports_{level}_reasoning_effort`` in the model map via
+        the shared ``_supports_factory`` helper.
+        Returns False for unknown models (safe fallback).
+        """
+        return _supports_factory(
+            model=model,
+            custom_llm_provider=None,
+            key=f"supports_{level}_reasoning_effort",
+        )
 
     def get_supported_openai_params(self, model: str) -> list:
         if self.is_model_gpt_5_search_model(model):
@@ -114,7 +122,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         ]
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort="none"
-        if not self.is_model_gpt_5_1_model(model):
+        if not self._supports_reasoning_effort_level(model, "none"):
             non_supported_params.extend(["logprobs", "top_p", "top_logprobs"])
 
         return [
@@ -142,21 +150,28 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 drop_params=drop_params,
             )
 
-        reasoning_effort = (
+        # Normalize reasoning_effort: chat completion API expects a string, not a dict
+        # (e.g. {'effort': 'high', 'summary': 'detailed'} -> 'high')
+        raw_reasoning_effort = (
             non_default_params.get("reasoning_effort")
             or optional_params.get("reasoning_effort")
         )
+        normalized = _normalize_reasoning_effort_for_chat_completion(raw_reasoning_effort)
+        if raw_reasoning_effort is not None and normalized is not None:
+            if "reasoning_effort" in non_default_params:
+                non_default_params["reasoning_effort"] = normalized
+            if "reasoning_effort" in optional_params:
+                optional_params["reasoning_effort"] = normalized
+
+        reasoning_effort = normalized or raw_reasoning_effort
         if reasoning_effort is not None and reasoning_effort == "xhigh":
-            if not (
-                self.is_model_gpt_5_1_codex_max_model(model)
-                or self.is_model_gpt_5_2_model(model)
-            ):
+            if not self._supports_reasoning_effort_level(model, "xhigh"):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max and gpt-5.2 models."
+                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max, gpt-5.2, and gpt-5.4+ models."
                         ),
                         status_code=400,
                     )
@@ -170,8 +185,20 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 "max_tokens"
             )
 
+        # gpt-5.4: function calls not supported when reasoning_effort != "none"
+        # Drop reasoning_effort when tools are present (small minority of volume)
+        if self.is_model_gpt_5_4_model(model):
+            has_tools = bool(
+                non_default_params.get("tools") or optional_params.get("tools")
+            )
+            if has_tools and reasoning_effort not in (None, "none"):
+                non_default_params.pop("reasoning_effort", None)
+                optional_params.pop("reasoning_effort", None)
+                reasoning_effort = None
+
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
-        if self.is_model_gpt_5_1_model(model):
+        supports_none = self._supports_reasoning_effort_level(model, "none")
+        if supports_none:
             sampling_params = ["logprobs", "top_logprobs", "top_p"]
             has_sampling = any(p in non_default_params for p in sampling_params)
             if has_sampling and reasoning_effort not in (None, "none"):
@@ -181,7 +208,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "gpt-5.1/5.2 only support logprobs, top_p, top_logprobs when "
+                            "gpt-5.1/5.2/5.4 only support logprobs, top_p, top_logprobs when "
                             "reasoning_effort='none'. Current reasoning_effort='{}'. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ).format(reasoning_effort),
@@ -191,10 +218,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         if "temperature" in non_default_params:
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
-                is_gpt_5_1 = self.is_model_gpt_5_1_model(model)
-                
-                # gpt-5.1 supports any temperature when reasoning_effort="none" (or not specified, as it defaults to "none")
-                if is_gpt_5_1 and (reasoning_effort == "none" or reasoning_effort is None):
+                # models supporting reasoning_effort="none" also support flexible temperature
+                if supports_none and (reasoning_effort == "none" or reasoning_effort is None):
                     optional_params["temperature"] = temperature_value
                 elif temperature_value == 1:
                     optional_params["temperature"] = temperature_value
