@@ -27507,7 +27507,6 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
-
     "openrouter/qwen/qwen3.5-flash-02-23": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
@@ -27528,7 +27527,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
-        },
+    },
     "openrouter/qwen/qwen3.5-plus-02-15": {
         "input_cost_per_token": 4e-07,
         "input_cost_per_token_above_256k_tokens": 5e-07,
