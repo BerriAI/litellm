@@ -31,6 +31,14 @@ serviceAccount:
 # annotations for litellm deployment
 deploymentAnnotations: {}
 deploymentLabels: {}
+
+# Deployment update strategy
+# deploymentStrategy: {}
+#   type: RollingUpdate
+#   rollingUpdate:
+#     maxUnavailable: 25%
+#     maxSurge: 25%
+
 # annotations for litellm pods
 podAnnotations: {}
 podLabels: {}
