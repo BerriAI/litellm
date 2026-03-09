@@ -285,7 +285,18 @@ class LangFuseLogger:
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
             metadata = self.add_metadata_from_header(litellm_params, metadata)
-            optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
+            # Prefer model_parameters from standard_logging_object — it is pre-filtered
+            # through ModelParamHelper.get_standard_logging_model_parameters() which
+            # whitelists only real OpenAI API params. This structurally prevents callback
+            # credentials (langfuse_secret_key, api keys, etc.) from ever reaching
+            # modelParameters, regardless of what per-key callback_vars are set.
+            _standard_logging_object = kwargs.get("standard_logging_object")
+            if _standard_logging_object is not None:
+                optional_params = dict(
+                    _standard_logging_object.get("model_parameters") or {}
+                )
+            else:
+                optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
 
@@ -293,8 +304,8 @@ class LangFuseLogger:
             tools = optional_params.pop("tools", None)
             # Remove secret_fields to prevent leaking sensitive data (e.g., authorization headers)
             optional_params.pop("secret_fields", None)
-            # Remove Langfuse credential keys - these are per-key/team callback vars that should
-            # not appear in modelParameters (they would expose secret keys in traces)
+            # Belt-and-suspenders: also pop any credential keys that may be present
+            # in the fallback path (direct litellm usage without standard_logging_object)
             optional_params.pop("langfuse_secret_key", None)
             optional_params.pop("langfuse_secret", None)
             optional_params.pop("langfuse_public_key", None)
@@ -598,6 +609,15 @@ class LangFuseLogger:
                         "endpoint",
                         "caching_groups",
                         "previous_models",
+                        # user_api_key_auth is the full UserAPIKeyAuth object — it contains
+                        # metadata.logging[].callback_vars with per-key secrets such as
+                        # langfuse_secret_key, api keys, etc. Never log this object.
+                        "user_api_key_auth",
+                        # user_api_key_auth_metadata carries the raw virtual-key metadata
+                        # dict including the `logging` key with callback_vars/credentials.
+                        # The per-key identity fields (alias, team, spend, etc.) are already
+                        # captured in the dedicated user_api_key_* generation fields.
+                        "user_api_key_auth_metadata",
                     ]:
                         continue
                     else:

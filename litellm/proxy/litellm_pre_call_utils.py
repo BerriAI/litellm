@@ -667,9 +667,28 @@ class LiteLLMProxyRequestSetup:
                 if user_api_key_dict.budget_reset_at
                 else None
             ),
-            user_api_key_auth_metadata=user_api_key_dict.metadata,
+            user_api_key_auth_metadata=LiteLLMProxyRequestSetup._safe_key_metadata(
+                user_api_key_dict.metadata
+            ),
         )
         return user_api_key_logged_metadata
+
+    @staticmethod
+    def _safe_key_metadata(metadata: Optional[dict]) -> Optional[dict]:
+        """
+        Returns a copy of the virtual-key metadata with sensitive callback config stripped.
+
+        The `logging` key contains per-key callback_vars (langfuse_secret_key, api keys,
+        etc.) that must never be propagated into observability payloads. Similarly,
+        `callback_settings` holds team-level callback secrets. Strip both before the dict
+        is stored in StandardLoggingUserAPIKeyMetadata and propagated to every logger.
+        """
+        if not metadata:
+            return metadata
+        safe = dict(metadata)
+        safe.pop("logging", None)
+        safe.pop("callback_settings", None)
+        return safe
 
     @staticmethod
     def add_user_api_key_auth_to_request_metadata(
