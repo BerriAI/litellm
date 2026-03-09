@@ -73,3 +73,44 @@ export const getAvailablePages = (): PageMetadata[] => {
 
   return pages;
 };
+
+/** Page id to display label map for access-denied messages */
+const pageLabels: Record<string, string> = {
+  "api-keys": "Virtual Keys",
+  "llm-playground": "Playground",
+  models: "Models + Endpoints",
+  agents: "Agents",
+  "mcp-servers": "MCP Servers",
+  guardrails: "Guardrails",
+  policies: "Policies",
+  "search-tools": "Search Tools",
+  "tool-policies": "Tool Policies",
+  "vector-stores": "Vector Stores",
+  new_usage: "Usage",
+  logs: "Logs",
+  "guardrails-monitor": "Guardrails Monitor",
+  users: "Internal Users",
+  teams: "Teams",
+  organizations: "Organizations",
+  projects: "Projects",
+  "access-groups": "Access Groups",
+  budgets: "Budgets",
+  api_ref: "API Reference",
+  "model-hub-table": "AI Hub",
+  caching: "Caching",
+  prompts: "Prompts",
+  "transform-request": "API Playground",
+  "tag-management": "Tag Management",
+  "claude-code-plugins": "Claude Code Plugins",
+  usage: "Old Usage",
+  "router-settings": "Router Settings",
+  "logging-and-alerts": "Logging & Alerts",
+  "admin-panel": "Admin Settings",
+  "cost-tracking": "Cost Tracking",
+  "ui-theme": "UI Theme",
+  "pass-through-settings": "Pass-through Settings",
+};
+
+export function getPageDisplayName(pageId: string): string {
+  return pageLabels[pageId] || pageId;
+}

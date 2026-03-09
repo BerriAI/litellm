@@ -1,6 +1,3 @@
-import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
   AppstoreOutlined,
@@ -31,9 +28,10 @@ import {
 import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { all_admin_roles, internalUserRoles, isAdminRole, isUserTeamAdminForAnyTeam, rolesWithWriteAccess } from "../utils/roles";
 import NewBadge from "./common_components/NewBadge";
-import type { Organization } from "./networking";
+import type { Organization, Team } from "./networking";
 import UsageIndicator from "./UsageIndicator";
 const { Sider } = Layout;
 
@@ -42,6 +40,11 @@ interface SidebarProps {
   setPage: (page: string) => void;
   defaultSelectedKey: string;
   collapsed?: boolean;
+  userRole?: string;
+  userId?: string | null;
+  accessToken?: string | null;
+  teams?: Team[] | null;
+  organizations?: Organization[] | null;
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
@@ -360,21 +363,42 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI, disableAgentsForInternalUsers, allowAgentsForTeamAdmins, disableVectorStoresForInternalUsers, allowVectorStoresForTeamAdmins }) => {
-  const { userId, accessToken, userRole } = useAuthorized();
-  const { data: organizations } = useOrganizations();
-  const { data: teams } = useTeams();
+const Sidebar: React.FC<SidebarProps> = ({
+  setPage,
+  defaultSelectedKey,
+  collapsed = false,
+  userRole,
+  userId,
+  accessToken,
+  teams,
+  organizations,
+  enabledPagesInternalUsers,
+  enableProjectsUI,
+  disableAgentsForInternalUsers,
+  allowAgentsForTeamAdmins,
+  disableVectorStoresForInternalUsers,
+  allowVectorStoresForTeamAdmins,
+}) => {
+  const auth = useAuthorized();
+  const resolvedUserRole = userRole ?? auth.userRole;
+  const resolvedUserId = userId ?? auth.userId;
+  const resolvedAccessToken = accessToken ?? auth.accessToken;
+  const resolvedTeams = teams ?? null;
+  const resolvedOrganizations = organizations ?? null;
 
   // Check if user is an org_admin
   const isOrgAdmin = useMemo(() => {
-    if (!userId || !organizations) return false;
-    return organizations.some((org: Organization) =>
-      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
+    if (!resolvedUserId || !resolvedOrganizations) return false;
+    return resolvedOrganizations.some((org: Organization) =>
+      org.members?.some((member) => member.user_id === resolvedUserId && member.user_role === "org_admin"),
     );
-  }, [userId, organizations]);
+  }, [resolvedUserId, resolvedOrganizations]);
 
   // Check if user is a team admin for any team
-  const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
+  const isTeamAdmin = useMemo(
+    () => isUserTeamAdminForAnyTeam(resolvedTeams ?? null, resolvedUserId ?? ""),
+    [resolvedTeams, resolvedUserId]
+  );
 
   // Navigate to page helper
   const navigateToPage = (page: string) => {
@@ -426,12 +450,12 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
   // Filter items based on user role and enabled pages for internal users
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
-    const isAdmin = isAdminRole(userRole);
+    const isAdmin = isAdminRole(resolvedUserRole || "");
 
     // Debug logging
     if (enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
       console.log("[LeftNav] Filtering with enabled pages:", {
-        userRole,
+        userRole: resolvedUserRole,
         isAdmin,
         enabledPagesInternalUsers,
       });
@@ -445,7 +469,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
       .filter((item) => {
         // Special handling for organizations menu item - allow org_admins
         if (item.key === "organizations") {
-          const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
+          const hasRoleAccess = !item.roles || item.roles.includes(resolvedUserRole || "") || isOrgAdmin;
           if (!hasRoleAccess) return false;
 
           // Check enabled pages for internal users (non-admins)
@@ -466,7 +490,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         if (!isAdmin && item.key === "vector-stores" && disableVectorStoresForInternalUsers && !(allowVectorStoresForTeamAdmins && isTeamAdmin)) return false;
 
         // Existing role check
-        if (item.roles && !item.roles.includes(userRole)) return false;
+        if (item.roles && !item.roles.includes(resolvedUserRole || "")) return false;
 
         // Check enabled pages for internal users (non-admins)
         if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
@@ -496,7 +520,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
     menuGroups.forEach((group) => {
       // Check if group has role restriction
-      if (group.roles && !group.roles.includes(userRole)) {
+      if (group.roles && !group.roles.includes(resolvedUserRole || "")) {
         return;
       }
 
@@ -615,7 +639,9 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
             items={buildMenuItems()}
           />
         </ConfigProvider>
-        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
+        {isAdminRole(resolvedUserRole || "") && !collapsed && (
+          <UsageIndicator accessToken={resolvedAccessToken} width={220} />
+        )}
       </Sider>
     </Layout>
   );

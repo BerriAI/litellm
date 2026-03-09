@@ -1,7 +1,7 @@
 "use client";
 
 import Sidebar from "@/components/leftnav";
-import { getUISettings } from "@/components/networking";
+import { getUISettings, Organization, Team } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useEffect, useState } from "react";
 
@@ -9,9 +9,21 @@ interface SidebarProviderProps {
   setPage: (page: string) => void;
   defaultSelectedKey: string;
   sidebarCollapsed: boolean;
+  userRole: string;
+  userId: string | null;
+  teams: Team[] | null;
+  organizations: Organization[] | null;
 }
 
-const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: SidebarProviderProps) => {
+const SidebarProvider = ({
+  setPage,
+  defaultSelectedKey,
+  sidebarCollapsed,
+  userRole,
+  userId,
+  teams,
+  organizations,
+}: SidebarProviderProps) => {
   const { accessToken } = useAuthorized();
   const [enabledPagesInternalUsers, setEnabledPagesInternalUsers] = useState<string[] | null>(null);
   const [enableProjectsUI, setEnableProjectsUI] = useState<boolean>(false);
@@ -72,6 +84,11 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
       setPage={setPage}
       defaultSelectedKey={defaultSelectedKey}
       collapsed={sidebarCollapsed}
+      userRole={userRole}
+      userId={userId}
+      accessToken={accessToken}
+      teams={teams}
+      organizations={organizations}
       enabledPagesInternalUsers={enabledPagesInternalUsers}
       enableProjectsUI={enableProjectsUI}
       disableAgentsForInternalUsers={disableAgentsForInternalUsers}

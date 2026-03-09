@@ -9,6 +9,7 @@ vi.mock("../utils/roles", () => {
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
     isAdminRole: (role: string) => role === "admin",
+    isUserTeamAdminForAnyTeam: () => false,
   };
 });
 
@@ -16,7 +17,7 @@ const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
   const mockUseAuthorized = vi.fn(() => ({
     userId: "test-user-id",
     accessToken: "test-access-token",
-    userRole: "admin",
+    userRole: "Admin",
     token: "test-token",
     userEmail: "test@example.com",
     premiumUser: false,
@@ -55,10 +56,38 @@ describe("Sidebar (leftnav)", () => {
     setPage: vi.fn(),
     defaultSelectedKey: "api-keys",
     collapsed: false,
+    userRole: "admin",
+    userId: "test-user-id",
+    accessToken: "test-access-token",
+    teams: [],
+    organizations: [],
   };
 
   it("renders all top-level (non-nested) tabs for admin", () => {
-    renderWithProviders(<Sidebar {...defaultProps} />);
+    renderWithProviders(
+      <Sidebar
+        {...defaultProps}
+        userRole="viewer"
+        userId="org-admin-user-id"
+        organizations={[
+          {
+            organization_id: "org-1",
+            organization_name: "Test Organization",
+            spend: 0,
+            max_budget: null,
+            models: [],
+            tpm_limit: null,
+            rpm_limit: null,
+            members: [
+              {
+                user_id: "org-admin-user-id",
+                user_role: "org_admin",
+              },
+            ],
+          },
+        ] as any}
+      />
+    );
 
     const topLevelLabels = [
       "Virtual Keys",

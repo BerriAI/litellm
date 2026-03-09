@@ -11,6 +11,7 @@ import CacheDashboard from "@/components/cache_dashboard";
 import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
+import PageAccessGuard from "@/components/common_components/PageAccessGuard";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
 import GuardrailsMonitorView from "@/components/GuardrailsMonitor/GuardrailsMonitorView";
@@ -20,7 +21,7 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import { MCPServers } from "@/components/mcp_tools";
 import ModelHubTable from "@/components/AIHub/ModelHubTable";
 import Navbar from "@/components/navbar";
-import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName, getInProductNudgesCall } from "@/components/networking";
+import { getUiConfig, getUISettings, Organization, proxyBaseUrl, setGlobalLitellmHeaderName, getInProductNudgesCall } from "@/components/networking";
 import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldTeams from "@/components/OldTeams";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
@@ -138,6 +139,25 @@ function CreateKeyPageContent() {
   const toggleDarkMode = () => {
     setIsDarkMode(!isDarkMode);
   };
+
+  // Page access settings (for blocking hidden pages when proxy admin restricts visibility)
+  const [pageAccessSettings, setPageAccessSettings] = useState<{
+    enabledPagesInternalUsers: string[] | null;
+    enableProjectsUI: boolean;
+    disableAgentsForInternalUsers: boolean;
+    allowAgentsForTeamAdmins: boolean;
+    disableVectorStoresForInternalUsers: boolean;
+    allowVectorStoresForTeamAdmins: boolean;
+    isLoading: boolean;
+  }>({
+    enabledPagesInternalUsers: null,
+    enableProjectsUI: false,
+    disableAgentsForInternalUsers: false,
+    allowAgentsForTeamAdmins: false,
+    disableVectorStoresForInternalUsers: false,
+    allowVectorStoresForTeamAdmins: false,
+    isLoading: true,
+  });
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -282,6 +302,28 @@ function CreateKeyPageContent() {
     }
   }, [accessToken, userID, userRole]);
 
+  useEffect(() => {
+    if (!accessToken) {
+      // Keep page access guard in loading state until access token is available.
+      // This prevents restricted pages (e.g. teams) from mounting briefly and
+      // firing page-level fetches before UI settings are loaded.
+      return;
+    }
+    getUISettings(accessToken)
+      .then((data) => {
+        setPageAccessSettings({
+          enabledPagesInternalUsers: data?.values?.enabled_ui_pages_internal_users ?? null,
+          enableProjectsUI: Boolean(data?.values?.enable_projects_ui),
+          disableAgentsForInternalUsers: Boolean(data?.values?.disable_agents_for_internal_users),
+          allowAgentsForTeamAdmins: Boolean(data?.values?.allow_agents_for_team_admins),
+          disableVectorStoresForInternalUsers: Boolean(data?.values?.disable_vector_stores_for_internal_users),
+          allowVectorStoresForTeamAdmins: Boolean(data?.values?.allow_vector_stores_for_team_admins),
+          isLoading: false,
+        });
+      })
+      .catch(() => setPageAccessSettings((s) => ({ ...s, isLoading: false })));
+  }, [accessToken]);
+
   // Fetch in-product nudges configuration from backend
   useEffect(() => {
     if (accessToken && token) {
@@ -391,25 +433,42 @@ function CreateKeyPageContent() {
               />
             ) : (
               <div className="flex flex-col min-h-screen">
-                <Navbar
-                  userID={userID}
-                  userRole={userRole}
-                  premiumUser={premiumUser}
-                  userEmail={userEmail}
-                  setProxySettings={setProxySettings}
-                  proxySettings={proxySettings}
-                  accessToken={accessToken}
-                  isPublicPage={false}
-                  sidebarCollapsed={sidebarCollapsed}
-                  onToggleSidebar={toggleSidebar}
-                  isDarkMode={isDarkMode}
-                  toggleDarkMode={toggleDarkMode}
-                />
-                <div className="flex flex-1">
-                  <div className="mt-2">
-                    <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
-                  </div>
+                  <Navbar
+                    userID={userID}
+                    userRole={userRole}
+                    premiumUser={premiumUser}
+                    userEmail={userEmail}
+                    setProxySettings={setProxySettings}
+                    proxySettings={proxySettings}
+                    accessToken={accessToken}
+                    isPublicPage={false}
+                    sidebarCollapsed={sidebarCollapsed}
+                    onToggleSidebar={toggleSidebar}
+                    isDarkMode={isDarkMode}
+                    toggleDarkMode={toggleDarkMode}
+                  />
+                  <div className="flex flex-1">
+                    <div className="mt-2">
+                      <SidebarProvider
+                        setPage={updatePage}
+                        defaultSelectedKey={page}
+                        sidebarCollapsed={sidebarCollapsed}
+                        userRole={userRole}
+                        userId={userID}
+                        teams={teams}
+                        organizations={organizations}
+                      />
+                    </div>
 
+                    <PageAccessGuard
+                      page={page}
+                      userRole={userRole}
+                      teams={teams}
+                      organizations={organizations}
+                      userId={userID}
+                      pageAccessSettings={pageAccessSettings}
+                      onNavigateToDefault={() => updatePage("api-keys")}
+                    >
                   {page == "api-keys" ? (
                     <UserDashboard
                       userID={userID}
@@ -567,6 +626,7 @@ function CreateKeyPageContent() {
                       premiumUser={premiumUser}
                     />
                   )}
+                    </PageAccessGuard>
                 </div>
 
                 {/* Survey Components */}

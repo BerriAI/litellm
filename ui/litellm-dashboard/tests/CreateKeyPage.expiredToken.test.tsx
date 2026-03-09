@@ -71,6 +71,8 @@ vi.mock("@/components/networking", () => {
   return {
     // Called on mount; we don't care about its contents, only that it resolves
     getUiConfig: vi.fn().mockResolvedValue({}),
+    getUISettings: vi.fn().mockResolvedValue({ values: {} }),
+    getInProductNudgesCall: vi.fn().mockResolvedValue({ is_claude_code_enabled: false }),
     // Used to build the redirect URL
     proxyBaseUrl: "https://example.com",
     // Called when decoding a valid token
@@ -104,7 +106,7 @@ vi.mock("@/components/model_hub_table", () => ({ default: stub("model-hub-table"
 vi.mock("@/components/new_usage", () => ({ default: stub("new-usage") }));
 vi.mock("@/components/api_ref", () => ({ default: stub("api-ref") }));
 vi.mock("@/components/chat_ui/ChatUI", () => ({ default: stub("chat-ui") }));
-vi.mock("@/components/leftnav", () => ({ default: stub("sidebar") }));
+vi.mock("@/components/leftnav", () => ({ default: stub("sidebar"), menuGroups: [] }));
 vi.mock("@/components/usage", () => ({ default: stub("usage") }));
 vi.mock("@/components/cache_dashboard", () => ({ default: stub("cache-dashboard") }));
 vi.mock("@/components/guardrails", () => ({ default: stub("guardrails") }));
