@@ -340,6 +340,19 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         3. {"result": "plain text"} or {"response": "plain text"} - simple string
         4. Fallback: raw JSON as content string
         """
+        # Guard: if json.loads() returned a non-dict (e.g. array or primitive),
+        # skip strategy matching and fall back to raw JSON string
+        if not isinstance(response_json, dict):
+            verbose_logger.warning(
+                "AgentCore: JSON response is not a dict. "
+                "Returning raw JSON as content."
+            )
+            return AgentCoreParsedResponse(
+                content=json.dumps(response_json),
+                usage=None,
+                final_message=None,
+            )
+
         # Strategy 1: {"result": {"content": [{"text": "..."}]}} - standard AgentCore format
         if "result" in response_json and isinstance(response_json["result"], dict):
             result = response_json["result"]

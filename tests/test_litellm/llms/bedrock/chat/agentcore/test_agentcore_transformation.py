@@ -140,6 +140,14 @@ class TestAgentCoreJsonResponseParsing:
         assert parsed["usage"] is None
         assert parsed["final_message"] is None
 
+    def test_parse_json_non_dict_response(self, config):
+        """Guard: non-dict JSON (e.g. array) falls back to raw JSON string."""
+        response_json = [{"text": "array response"}]
+        parsed = config._parse_json_response(response_json)
+        assert parsed["content"] == json.dumps(response_json)
+        assert parsed["usage"] is None
+        assert parsed["final_message"] is None
+
     def test_parse_json_empty_content_in_result(self, config):
         """Standard format with empty content list - preserves existing behavior."""
         response_json = {
