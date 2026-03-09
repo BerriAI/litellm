@@ -404,6 +404,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           aggregatedMetadata.total_successful_requests += pageData.metadata.total_successful_requests || 0;
           aggregatedMetadata.total_failed_requests += pageData.metadata.total_failed_requests || 0;
           aggregatedMetadata.total_tokens += pageData.metadata.total_tokens || 0;
+          aggregatedMetadata.total_prompt_tokens += pageData.metadata.total_prompt_tokens || 0;
+          aggregatedMetadata.total_completion_tokens += pageData.metadata.total_completion_tokens || 0;
+          aggregatedMetadata.total_cache_read_input_tokens += pageData.metadata.total_cache_read_input_tokens || 0;
+          aggregatedMetadata.total_cache_creation_input_tokens += pageData.metadata.total_cache_creation_input_tokens || 0;
         }
       }
 
@@ -640,6 +644,38 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                 (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1),
                                 4,
                               )}
+                            </Text>
+                          </Card>
+                        </Grid>
+                      </Card>
+                    </Col>
+
+                    <Col numColSpan={2}>
+                      <Card>
+                        <Title>Token Breakdown</Title>
+                        <Grid numItems={4} className="gap-4 mt-4">
+                          <Card>
+                            <Title>Input Tokens</Title>
+                            <Text className="text-2xl font-bold mt-2 text-blue-600">
+                              {userSpendData.metadata?.total_prompt_tokens?.toLocaleString() || 0}
+                            </Text>
+                          </Card>
+                          <Card>
+                            <Title>Output Tokens</Title>
+                            <Text className="text-2xl font-bold mt-2 text-cyan-600">
+                              {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
+                            </Text>
+                          </Card>
+                          <Card>
+                            <Title>Cache Read Tokens</Title>
+                            <Text className="text-2xl font-bold mt-2 text-green-600">
+                              {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
+                            </Text>
+                          </Card>
+                          <Card>
+                            <Title>Cache Write Tokens</Title>
+                            <Text className="text-2xl font-bold mt-2 text-purple-600">
+                              {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
                             </Text>
                           </Card>
                         </Grid>
