@@ -991,9 +991,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 # Try to parse an OCI-style JSON error body
                 oci_err = None
                 try:
-                    oci_err = json.loads(error_str)
+                    parsed = json.loads(error_str)
+                    oci_err = parsed if isinstance(parsed, dict) else {}
                 except Exception:
-                    # If not pure JSON, try looser extraction
                     oci_err = {}
                 # Extract fields commonly present in OCI error payloads
                 oci_status = (
