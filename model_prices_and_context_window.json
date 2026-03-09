@@ -26305,20 +26305,21 @@
         "input_cost_per_image": 0.0004,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "openrouter",
-        "max_tokens": 200000,
+        "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.25e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "max_output_tokens": 4096
+        "max_output_tokens": 4096,
+        "max_input_tokens": 200000
     },
     "openrouter/anthropic/claude-3.5-sonnet": {
         "input_cost_per_token": 6e-06,
         "litellm_provider": "openrouter",
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 3e-05,
         "supports_assistant_prefill": true,
@@ -26334,7 +26335,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "supports_assistant_prefill": true,
@@ -26353,7 +26354,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 200000,
         "max_output_tokens": 32000,
-        "max_tokens": 200000,
+        "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
         "supports_assistant_prefill": true,
@@ -26374,7 +26375,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 200000,
         "max_output_tokens": 32000,
-        "max_tokens": 200000,
+        "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
         "supports_assistant_prefill": true,
@@ -26396,9 +26397,9 @@
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "supports_assistant_prefill": true,
@@ -26420,7 +26421,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "max_tokens": 1000000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
@@ -26441,7 +26442,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
         "supports_assistant_prefill": true,
@@ -26460,7 +26461,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "max_tokens": 1000000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
         "supports_assistant_prefill": true,
@@ -26484,7 +26485,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
-        "max_tokens": 1000000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "supports_assistant_prefill": true,
@@ -26503,7 +26504,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
         "supports_assistant_prefill": true,
@@ -26518,9 +26519,9 @@
     "openrouter/bytedance/ui-tars-1.5-7b": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 128000,
         "max_output_tokens": 2048,
-        "max_tokens": 128000,
+        "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
         "source": "https://openrouter.ai/api/v1/models/bytedance/ui-tars-1.5-7b",
@@ -26530,7 +26531,7 @@
     "openrouter/deepseek/deepseek-chat": {
         "input_cost_per_token": 3.2e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 65536,
+        "max_input_tokens": 163840,
         "max_output_tokens": 163840,
         "max_tokens": 163840,
         "mode": "chat",
@@ -26541,7 +26542,7 @@
     "openrouter/deepseek/deepseek-chat-v3-0324": {
         "input_cost_per_token": 2e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 65536,
+        "max_input_tokens": 163840,
         "max_output_tokens": 163840,
         "max_tokens": 163840,
         "mode": "chat",
@@ -26553,9 +26554,9 @@
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_cache_hit": 2e-08,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 32768,
         "max_output_tokens": 7168,
-        "max_tokens": 32768,
+        "max_tokens": 7168,
         "mode": "chat",
         "output_cost_per_token": 7.5e-07,
         "supports_assistant_prefill": true,
@@ -26570,7 +26571,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 163840,
         "max_output_tokens": 65536,
-        "max_tokens": 163840,
+        "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "supports_assistant_prefill": true,
@@ -26585,7 +26586,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 163840,
         "max_output_tokens": 65536,
-        "max_tokens": 163840,
+        "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 4.1e-07,
         "supports_assistant_prefill": true,
@@ -26598,9 +26599,9 @@
         "input_cost_per_token": 7e-07,
         "input_cost_per_token_cache_hit": 1.4e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 65336,
+        "max_input_tokens": 64000,
         "max_output_tokens": 16000,
-        "max_tokens": 64000,
+        "max_tokens": 16000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
         "supports_assistant_prefill": true,
@@ -26613,9 +26614,9 @@
         "input_cost_per_token": 4.5e-07,
         "input_cost_per_token_cache_hit": 1.4e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 65336,
+        "max_input_tokens": 163840,
         "max_output_tokens": 65536,
-        "max_tokens": 163840,
+        "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 2.15e-06,
         "supports_assistant_prefill": true,
@@ -26635,7 +26636,7 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_pdf_size_mb": 30,
-        "max_tokens": 1048576,
+        "max_tokens": 8192,
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "mode": "chat",
@@ -26659,7 +26660,7 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 65535,
         "max_pdf_size_mb": 30,
-        "max_tokens": 1048576,
+        "max_tokens": 65535,
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "mode": "chat",
@@ -26683,7 +26684,7 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_pdf_size_mb": 30,
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "mode": "chat",
@@ -26711,7 +26712,7 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_pdf_size_mb": 30,
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "mode": "chat",
@@ -26756,7 +26757,7 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_pdf_size_mb": 30,
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "mode": "chat",
@@ -26803,7 +26804,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
@@ -26835,30 +26836,33 @@
         "mode": "chat",
         "output_cost_per_token": 6e-08,
         "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "max_output_tokens": 4096,
+        "max_input_tokens": 4096
     },
     "openrouter/mancer/weaver": {
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "openrouter",
-        "max_tokens": 8000,
+        "max_tokens": 2000,
         "mode": "chat",
         "output_cost_per_token": 1e-06,
         "supports_tool_choice": true,
-        "max_output_tokens": 2000
+        "max_output_tokens": 2000,
+        "max_input_tokens": 8000
     },
     "openrouter/meta-llama/llama-3-70b-instruct": {
         "input_cost_per_token": 5.1e-07,
         "litellm_provider": "openrouter",
-        "max_tokens": 8192,
+        "max_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 7.4e-07,
         "supports_tool_choice": true,
-        "max_output_tokens": 8000
+        "max_output_tokens": 8000,
+        "max_input_tokens": 8192
     },
     "openrouter/minimax/minimax-m2": {
         "input_cost_per_token": 2.55e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 204800,
+        "max_input_tokens": 196608,
         "max_output_tokens": 196608,
         "max_tokens": 196608,
         "mode": "chat",
@@ -26952,7 +26956,8 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "max_input_tokens": 128000
     },
     "openrouter/mistralai/mistral-small-3.1-24b-instruct": {
         "input_cost_per_token": 3.5e-07,
@@ -26961,7 +26966,8 @@
         "mode": "chat",
         "output_cost_per_token": 5.6e-07,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "openrouter/mistralai/mistral-small-3.2-24b-instruct": {
         "input_cost_per_token": 6e-08,
@@ -26971,7 +26977,8 @@
         "output_cost_per_token": 1.8e-07,
         "supports_tool_choice": true,
         "max_output_tokens": 131072,
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "openrouter/mistralai/mixtral-8x22b-instruct": {
         "input_cost_per_token": 2e-06,
@@ -26979,7 +26986,8 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "max_input_tokens": 65536
     },
     "openrouter/moonshotai/kimi-k2.5": {
         "cache_read_input_token_cost": 1e-07,
@@ -26987,7 +26995,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
         "max_output_tokens": 65535,
-        "max_tokens": 262144,
+        "max_tokens": 65535,
         "mode": "chat",
         "output_cost_per_token": 2.2e-06,
         "source": "https://openrouter.ai/moonshotai/kimi-k2.5",
@@ -26999,29 +27007,32 @@
     "openrouter/openai/gpt-3.5-turbo": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
-        "max_tokens": 16385,
+        "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
         "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "max_output_tokens": 4096,
+        "max_input_tokens": 16385
     },
     "openrouter/openai/gpt-3.5-turbo-16k": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openrouter",
-        "max_tokens": 16385,
+        "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
         "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "max_output_tokens": 4096,
+        "max_input_tokens": 16385
     },
     "openrouter/openai/gpt-4": {
         "input_cost_per_token": 3e-05,
         "litellm_provider": "openrouter",
-        "max_tokens": 8191,
+        "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6e-05,
         "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "max_output_tokens": 4096,
+        "max_input_tokens": 8191
     },
     "openrouter/openai/gpt-4.1": {
         "cache_read_input_token_cost": 5e-07,
@@ -27029,7 +27040,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
-        "max_tokens": 1047576,
+        "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 8e-06,
         "supports_function_calling": true,
@@ -27046,7 +27057,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
-        "max_tokens": 1047576,
+        "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 1.6e-06,
         "supports_function_calling": true,
@@ -27063,7 +27074,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
-        "max_tokens": 1047576,
+        "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "supports_function_calling": true,
@@ -27079,7 +27090,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
@@ -27092,7 +27103,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "supports_function_calling": true,
@@ -27106,7 +27117,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supported_modalities": [
@@ -27124,9 +27135,9 @@
         "cache_read_input_token_cost": 1.25e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supported_modalities": [
@@ -27144,9 +27155,9 @@
         "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1.4e-05,
         "supported_modalities": [
@@ -27164,9 +27175,9 @@
         "cache_read_input_token_cost": 1.25e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supported_modalities": [
@@ -27184,9 +27195,9 @@
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
         "supported_modalities": [
@@ -27204,9 +27215,9 @@
         "cache_read_input_token_cost": 5e-09,
         "input_cost_per_token": 5e-08,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "supported_modalities": [
@@ -27226,7 +27237,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "source": "https://openrouter.ai/openai/gpt-5.1-codex-max",
@@ -27248,9 +27259,9 @@
         "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1.4e-05,
         "supports_function_calling": true,
@@ -27266,7 +27277,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 1.4e-05,
         "supports_function_calling": true,
@@ -27278,9 +27289,9 @@
         "input_cost_per_image": 0,
         "input_cost_per_token": 2.1e-05,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 0.000168,
         "supports_function_calling": true,
@@ -27325,7 +27336,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 200000,
         "max_output_tokens": 100000,
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "mode": "chat",
         "output_cost_per_token": 6e-05,
         "supports_function_calling": true,
@@ -27339,9 +27350,9 @@
     "openrouter/openai/o3-mini": {
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 200000,
         "max_output_tokens": 100000,
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "supports_function_calling": true,
@@ -27353,9 +27364,9 @@
     "openrouter/openai/o3-mini-high": {
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 200000,
         "max_output_tokens": 100000,
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "supports_function_calling": true,
@@ -27367,9 +27378,9 @@
     "openrouter/qwen/qwen-2.5-coder-32b-instruct": {
         "input_cost_per_token": 2.0000000000000002e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 33792,
+        "max_input_tokens": 32768,
         "max_output_tokens": 8192,
-        "max_tokens": 32768,
+        "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 2.0000000000000002e-07,
         "supports_tool_choice": true
@@ -27377,9 +27388,9 @@
     "openrouter/qwen/qwen-vl-plus": {
         "input_cost_per_token": 1.365e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 8192,
+        "max_input_tokens": 131072,
         "max_output_tokens": 8192,
-        "max_tokens": 131072,
+        "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4.095e-07,
         "supports_tool_choice": true,
@@ -27388,7 +27399,7 @@
     "openrouter/qwen/qwen3-coder": {
         "input_cost_per_token": 2.2e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 262100,
+        "max_input_tokens": 262144,
         "max_output_tokens": 262100,
         "max_tokens": 262144,
         "mode": "chat",
@@ -27400,9 +27411,9 @@
     "openrouter/qwen/qwen3-coder-plus": {
         "input_cost_per_token": 6.5e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 997952,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 65536,
-        "max_tokens": 1000000,
+        "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 3.25e-06,
         "source": "https://openrouter.ai/qwen/qwen3-coder-plus",
@@ -27449,11 +27460,12 @@
     "openrouter/undi95/remm-slerp-l2-13b": {
         "input_cost_per_token": 4.5e-07,
         "litellm_provider": "openrouter",
-        "max_tokens": 6144,
+        "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6.5e-07,
         "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "max_output_tokens": 4096,
+        "max_input_tokens": 6144
     },
     "openrouter/x-ai/grok-4": {
         "input_cost_per_token": 3e-06,
@@ -27473,7 +27485,7 @@
     "openrouter/z-ai/glm-4.6": {
         "input_cost_per_token": 3.9e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 202800,
+        "max_input_tokens": 204800,
         "max_output_tokens": 204800,
         "max_tokens": 204800,
         "mode": "chat",
@@ -27487,9 +27499,9 @@
     "openrouter/z-ai/glm-4.6:exacto": {
         "input_cost_per_token": 4.4e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 202800,
+        "max_input_tokens": 204800,
         "max_output_tokens": 131072,
-        "max_tokens": 204800,
+        "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.76e-06,
         "source": "https://openrouter.ai/z-ai/glm-4.6:exacto",
@@ -27506,7 +27518,7 @@
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
         "max_output_tokens": 65536,
-        "max_tokens": 262144,
+        "max_tokens": 65536,
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -27537,7 +27549,7 @@
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 0.0,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 202752,
         "max_output_tokens": 32000,
         "max_tokens": 202752,
         "mode": "chat",
@@ -27566,7 +27578,7 @@
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 0.0,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 204000,
+        "max_input_tokens": 196608,
         "max_output_tokens": 64000,
         "max_tokens": 196608,
         "mode": "chat",
@@ -39623,7 +39635,8 @@
         "output_cost_per_token": 1.8e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 163840
     },
     "nvidia_nim/ibm/granite-guardian-3.0-8b": {
         "litellm_provider": "nvidia_nim",
@@ -39651,12 +39664,13 @@
         "output_cost_per_token": 5e-07
     },
     "openrouter/qwen/qwen-plus": {
-        "max_tokens": 1000000,
+        "max_tokens": 32768,
         "input_cost_per_token": 4e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 1000000
     },
     "nvidia_nim/nvidia/nvidia-nemotron-nano-9b-v2": {
         "litellm_provider": "nvidia_nim",
@@ -39698,13 +39712,14 @@
         "cache_read_input_token_cost": 1.25e-07
     },
     "openrouter/google/gemma-3-4b-it:free": {
-        "max_tokens": 32768,
+        "max_tokens": 8192,
         "input_cost_per_token": 0.0,
         "max_output_tokens": 8192,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 32768
     },
     "nvidia_nim/nvidia/riva-translate-4b-instruct-v1.1": {
         "litellm_provider": "nvidia_nim",
@@ -39740,13 +39755,14 @@
         "input_cost_per_token": 0.0
     },
     "openrouter/openai/o3-pro": {
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "input_cost_per_token": 2e-05,
         "max_output_tokens": 100000,
         "output_cost_per_token": 8e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "vercel_ai_gateway/zai/glm-4.6v": {
         "litellm_provider": "vercel_ai_gateway",
@@ -39796,23 +39812,26 @@
         "output_cost_per_token": 8e-08,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "openrouter/mistralai/mistral-large-2411": {
         "max_tokens": 131072,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 6e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/qwen/qwen3.5-plus-02-15": {
-        "max_tokens": 1000000,
+        "max_tokens": 65536,
         "input_cost_per_token": 2.6e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 1.56e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 1000000
     },
     "vercel_ai_gateway/klingai/kling-v3.0-t2v": {
         "litellm_provider": "vercel_ai_gateway",
@@ -39827,13 +39846,14 @@
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen3.5-27b": {
-        "max_tokens": 262144,
+        "max_tokens": 65536,
         "input_cost_per_token": 1.95e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 1.56e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 262144
     },
     "vercel_ai_gateway/alibaba/qwen3-embedding-4b": {
         "litellm_provider": "vercel_ai_gateway",
@@ -39843,12 +39863,13 @@
         "input_cost_per_token": 2e-08
     },
     "openrouter/inception/mercury-2": {
-        "max_tokens": 128000,
+        "max_tokens": 50000,
         "input_cost_per_token": 2.5e-07,
         "max_output_tokens": 50000,
         "output_cost_per_token": 7.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "nvidia_nim/google/codegemma-7b": {
         "litellm_provider": "nvidia_nim",
@@ -39864,52 +39885,60 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "max_input_tokens": 16384,
+        "max_tokens": 16384
     },
     "openrouter/liquid/lfm-2-24b-a2b": {
         "max_tokens": 32768,
         "input_cost_per_token": 3e-08,
         "output_cost_per_token": 1.2e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/allenai/olmo-2-0325-32b-instruct": {
         "max_tokens": 128000,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/bytedance-seed/seed-1.6-flash": {
-        "max_tokens": 262144,
+        "max_tokens": 32768,
         "input_cost_per_token": 7.5e-08,
         "max_output_tokens": 32768,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 262144
     },
     "openrouter/deepseek/deepseek-v3.1-terminus:exacto": {
         "max_tokens": 163840,
         "input_cost_per_token": 2.1e-07,
         "output_cost_per_token": 7.9e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 163840
     },
     "openrouter/nousresearch/hermes-4-405b": {
         "max_tokens": 131072,
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/nvidia/llama-3.1-nemotron-70b-instruct": {
-        "max_tokens": 131072,
+        "max_tokens": 16384,
         "input_cost_per_token": 1.2e-06,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/minimax/minimax-m2.1-lightning": {
         "litellm_provider": "vercel_ai_gateway",
@@ -39927,7 +39956,8 @@
         "input_cost_per_token": 2e-08,
         "output_cost_per_token": 4e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/qwen/qwen3-next-80b-a3b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -39938,12 +39968,13 @@
         "supports_tool_choice": true
     },
     "openrouter/baidu/ernie-4.5-21b-a3b-thinking": {
-        "max_tokens": 131072,
+        "max_tokens": 65536,
         "input_cost_per_token": 7e-08,
         "max_output_tokens": 65536,
         "output_cost_per_token": 2.8e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/xai/grok-imagine-image-pro": {
         "litellm_provider": "vercel_ai_gateway",
@@ -39951,13 +39982,14 @@
         "input_cost_per_image": 0.07
     },
     "openrouter/bytedance-seed/seed-1.6": {
-        "max_tokens": 262144,
+        "max_tokens": 32768,
         "input_cost_per_token": 2.5e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 262144
     },
     "nvidia_nim/deepseek-ai/deepseek-v3.1": {
         "litellm_provider": "nvidia_nim",
@@ -39979,7 +40011,8 @@
         "max_output_tokens": 163840,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 163840
     },
     "openrouter/allenai/molmo-2-8b": {
         "max_tokens": 36864,
@@ -39988,24 +40021,27 @@
         "output_cost_per_token": 2e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 36864
     },
     "openrouter/openai/gpt-5-pro": {
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "input_cost_per_token": 1.5e-05,
         "max_output_tokens": 128000,
         "output_cost_per_token": 0.00012,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 400000
     },
     "openrouter/anthracite-org/magnum-v4-72b": {
-        "max_tokens": 16384,
+        "max_tokens": 2048,
         "input_cost_per_token": 3e-06,
         "max_output_tokens": 2048,
         "output_cost_per_token": 5e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 16384
     },
     "openrouter/thedrummer/skyfall-36b-v2": {
         "max_tokens": 32768,
@@ -40013,7 +40049,8 @@
         "max_output_tokens": 32768,
         "output_cost_per_token": 8e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/google/shieldgemma-9b": {
         "litellm_provider": "nvidia_nim",
@@ -40024,12 +40061,13 @@
         "supports_tool_choice": true
     },
     "openrouter/neversleep/noromaid-20b": {
-        "max_tokens": 4096,
+        "max_tokens": 2048,
         "input_cost_per_token": 1e-06,
         "max_output_tokens": 2048,
         "output_cost_per_token": 1.75e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 4096
     },
     "openrouter/perplexity/sonar": {
         "max_tokens": 127072,
@@ -40037,14 +40075,16 @@
         "output_cost_per_token": 1e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 127072
     },
     "openrouter/nvidia/nemotron-nano-9b-v2": {
         "max_tokens": 131072,
         "input_cost_per_token": 4e-08,
         "output_cost_per_token": 1.6e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/voyage/voyage-finance-2": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40088,7 +40128,8 @@
         "max_output_tokens": 131072,
         "output_cost_per_token": 1.1e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/qwen/qwen2.5-coder-7b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -40113,16 +40154,18 @@
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "openrouter/x-ai/grok-4-fast": {
-        "max_tokens": 2000000,
+        "max_tokens": 30000,
         "input_cost_per_token": 2e-07,
         "max_output_tokens": 30000,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 2000000
     },
     "vercel_ai_gateway/openai/gpt-oss-20b": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40140,13 +40183,14 @@
         "output_cost_per_token": 0.0
     },
     "openrouter/meta-llama/llama-3.2-11b-vision-instruct": {
-        "max_tokens": 131072,
+        "max_tokens": 16384,
         "input_cost_per_token": 4.9e-08,
         "max_output_tokens": 16384,
         "output_cost_per_token": 4.9e-08,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "nvidia_nim/mistralai/mistral-small-24b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -40157,22 +40201,24 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-4o-mini-2024-07-18": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 1.5e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "openrouter/openai/gpt-4o-2024-08-06": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "openrouter/qwen/qwq-32b": {
         "max_tokens": 32768,
@@ -40180,14 +40226,16 @@
         "max_output_tokens": 32768,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/moonshotai/kimi-k2-0905": {
         "max_tokens": 131072,
         "input_cost_per_token": 4e-07,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/nvidia/gliner-pii": {
         "litellm_provider": "nvidia_nim",
@@ -40215,13 +40263,14 @@
         "cache_creation_input_token_cost": 5e-07
     },
     "openrouter/anthropic/claude-3.5-haiku": {
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "input_cost_per_token": 8e-07,
         "max_output_tokens": 8192,
         "output_cost_per_token": 4e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "nvidia_nim/mistralai/mixtral-8x22b-v0.1": {
         "litellm_provider": "nvidia_nim",
@@ -40232,13 +40281,14 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-5.1-codex-mini": {
-        "max_tokens": 400000,
+        "max_tokens": 100000,
         "input_cost_per_token": 2.5e-07,
         "max_output_tokens": 100000,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 400000
     },
     "openrouter/google/gemini-3.1-flash-image-preview": {
         "max_tokens": 65536,
@@ -40247,7 +40297,8 @@
         "output_cost_per_token": 3e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 65536
     },
     "vercel_ai_gateway/deepseek/deepseek-v3.2-thinking": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40264,14 +40315,16 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/z-ai/glm-4-32b": {
         "max_tokens": 128000,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/meituan/longcat-flash-chat": {
         "max_tokens": 131072,
@@ -40279,16 +40332,18 @@
         "max_output_tokens": 131072,
         "output_cost_per_token": 8e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/qwen/qwen3-vl-30b-a3b-instruct": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 1.3e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 5.2e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/moonshotai/kimi-k2-thinking-turbo": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40345,15 +40400,17 @@
         "max_output_tokens": 163840,
         "output_cost_per_token": 8.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 163840
     },
     "openrouter/google/gemma-3n-e4b-it:free": {
-        "max_tokens": 8192,
+        "max_tokens": 2048,
         "input_cost_per_token": 0.0,
         "max_output_tokens": 2048,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8192
     },
     "vercel_ai_gateway/google/veo-3.1-generate-001": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40378,13 +40435,14 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemma-3-12b-it:free": {
-        "max_tokens": 32768,
+        "max_tokens": 8192,
         "input_cost_per_token": 0.0,
         "max_output_tokens": 8192,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 32768
     },
     "vercel_ai_gateway/voyage/voyage-4-lite": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40443,27 +40501,30 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-3.5-turbo-instruct": {
-        "max_tokens": 4095,
+        "max_tokens": 4096,
         "input_cost_per_token": 1.5e-06,
         "max_output_tokens": 4096,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 4095
     },
     "openrouter/mistralai/codestral-2508": {
         "max_tokens": 256000,
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 9e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "openrouter/z-ai/glm-4.5-air:free": {
-        "max_tokens": 131072,
+        "max_tokens": 96000,
         "input_cost_per_token": 0.0,
         "max_output_tokens": 96000,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/mediatek/breeze-7b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -40485,7 +40546,7 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemini-3.1-flash-lite-preview": {
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "input_cost_per_token": 2.5e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 1.5e-06,
@@ -40493,21 +40554,24 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_vision": true,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 1048576
     },
     "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": {
         "max_tokens": 262144,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "openrouter/x-ai/grok-3-mini-beta": {
         "max_tokens": 131072,
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/alibaba/qwen3-max": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40519,19 +40583,21 @@
         "output_cost_per_token": 3.38e-06
     },
     "openrouter/nex-agi/deepseek-v3.1-nex-n1": {
-        "max_tokens": 131072,
+        "max_tokens": 163840,
         "input_cost_per_token": 2.7e-07,
         "max_output_tokens": 163840,
         "output_cost_per_token": 1e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/mistralai/mistral-7b-instruct-v0.1": {
         "max_tokens": 2824,
         "input_cost_per_token": 1.1e-07,
         "output_cost_per_token": 1.9e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 2824
     },
     "nvidia_nim/rakuten/rakutenai-7b-chat": {
         "litellm_provider": "nvidia_nim",
@@ -40546,7 +40612,8 @@
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/google/gemini-3-pro-image": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40563,15 +40630,17 @@
         "max_output_tokens": 256000,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "openrouter/arcee-ai/maestro-reasoning": {
-        "max_tokens": 131072,
+        "max_tokens": 32000,
         "input_cost_per_token": 9e-07,
         "max_output_tokens": 32000,
         "output_cost_per_token": 3.3e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/google/gemini-2.5-flash-preview-09-2025": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40588,7 +40657,8 @@
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/xai/grok-imagine-image": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40621,7 +40691,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/alibaba/qwen3-coder-plus": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40639,7 +40710,8 @@
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "nvidia_nim/mistralai/mistral-large-2-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -40658,13 +40730,14 @@
         "mode": "video_generation"
     },
     "openrouter/qwen/qwen3-vl-8b-thinking": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 1.17e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 1.365e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/zai/glm-4.7": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40696,7 +40769,8 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "nvidia_nim/google/gemma-2-9b-it": {
         "litellm_provider": "nvidia_nim",
@@ -40719,23 +40793,26 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "openrouter/liquid/lfm2-8b-a1b": {
         "max_tokens": 32768,
         "input_cost_per_token": 1e-08,
         "output_cost_per_token": 2e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/qwen/qwen3.5-397b-a17b": {
-        "max_tokens": 262144,
+        "max_tokens": 65536,
         "input_cost_per_token": 3.9e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 2.34e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 262144
     },
     "vercel_ai_gateway/xai/grok-4-fast-non-reasoning": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40803,7 +40880,7 @@
         "mode": "video_generation"
     },
     "openrouter/google/gemini-2.0-flash-lite-001": {
-        "max_tokens": 1048576,
+        "max_tokens": 8192,
         "input_cost_per_token": 7.5e-08,
         "max_output_tokens": 8192,
         "output_cost_per_token": 3e-07,
@@ -40811,16 +40888,18 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_vision": true,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 1048576
     },
     "openrouter/openai/gpt-5.3-codex": {
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "input_cost_per_token": 1.75e-06,
         "max_output_tokens": 128000,
         "output_cost_per_token": 1.4e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 400000
     },
     "vercel_ai_gateway/nvidia/nemotron-nano-12b-v2-vl": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40872,12 +40951,13 @@
         "cache_read_input_token_cost": 1.3e-07
     },
     "openrouter/qwen/qwen3-coder-flash": {
-        "max_tokens": 1000000,
+        "max_tokens": 65536,
         "input_cost_per_token": 1.95e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 9.75e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 1000000
     },
     "openrouter/alibaba/tongyi-deepresearch-30b-a3b": {
         "max_tokens": 131072,
@@ -40885,7 +40965,8 @@
         "max_output_tokens": 131072,
         "output_cost_per_token": 4.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/zyphra/zamba2-7b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -40896,13 +40977,14 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/o3-deep-research": {
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "input_cost_per_token": 1e-05,
         "max_output_tokens": 100000,
         "output_cost_per_token": 4e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "vercel_ai_gateway/nvidia/nemotron-3-nano-30b-a3b": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40921,13 +41003,14 @@
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen3-vl-30b-a3b-thinking": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 0.0,
         "max_output_tokens": 32768,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/openai/gpt-5-nano": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40960,16 +41043,18 @@
         "input_cost_per_token": 4e-08,
         "output_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/openai/o1-pro": {
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "input_cost_per_token": 0.00015,
         "max_output_tokens": 100000,
         "output_cost_per_token": 0.0006,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "vercel_ai_gateway/moonshotai/kimi-k2-thinking": {
         "litellm_provider": "vercel_ai_gateway",
@@ -40987,15 +41072,17 @@
         "output_cost_per_token": 8e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 32768
     },
     "openrouter/ai21/jamba-large-1.7": {
-        "max_tokens": 256000,
+        "max_tokens": 4096,
         "input_cost_per_token": 2e-06,
         "max_output_tokens": 4096,
         "output_cost_per_token": 8e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "vercel_ai_gateway/minimax/minimax-m2": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41008,34 +41095,37 @@
         "cache_creation_input_token_cost": 3.75e-07
     },
     "openrouter/meta-llama/llama-3-8b-instruct": {
-        "max_tokens": 8192,
+        "max_tokens": 16384,
         "input_cost_per_token": 3e-08,
         "max_output_tokens": 16384,
         "output_cost_per_token": 4e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8192
     },
     "openrouter/openai/gpt-4o-2024-11-20": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/alibaba/wan-v2.6-i2v-flash": {
         "litellm_provider": "vercel_ai_gateway",
         "mode": "video_generation"
     },
     "openrouter/openai/gpt-5.1-chat": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 1.25e-06,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/openai/gpt-5.1-codex": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41077,7 +41167,8 @@
         "max_output_tokens": 131072,
         "output_cost_per_token": 5.7e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/openai/gpt-image-1-mini": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41099,7 +41190,8 @@
         "input_cost_per_token": 5.1e-08,
         "output_cost_per_token": 3.4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 80000
     },
     "nvidia_nim/microsoft/phi-3-medium-4k-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -41121,13 +41213,14 @@
         "output_cost_per_token": 2.5e-06
     },
     "openrouter/amazon/nova-lite-v1": {
-        "max_tokens": 300000,
+        "max_tokens": 5120,
         "input_cost_per_token": 6e-08,
         "max_output_tokens": 5120,
         "output_cost_per_token": 2.4e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 300000
     },
     "openrouter/eleutherai/llemma_7b": {
         "max_tokens": 4096,
@@ -41135,15 +41228,17 @@
         "max_output_tokens": 4096,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 4096
     },
     "openrouter/writer/palmyra-x5": {
-        "max_tokens": 1040000,
+        "max_tokens": 8192,
         "input_cost_per_token": 6e-07,
         "max_output_tokens": 8192,
         "output_cost_per_token": 6e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 1040000
     },
     "openrouter/google/gemma-3-12b-it": {
         "max_tokens": 131072,
@@ -41151,7 +41246,8 @@
         "output_cost_per_token": 1.3e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/klingai/kling-v2.5-turbo-t2v": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41163,23 +41259,25 @@
         "output_cost_per_token": 8.8e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 262144
     },
     "vercel_ai_gateway/google/veo-3.1-fast-generate-001": {
         "litellm_provider": "vercel_ai_gateway",
         "mode": "video_generation"
     },
     "openrouter/openai/gpt-4o:extended": {
-        "max_tokens": 128000,
+        "max_tokens": 64000,
         "input_cost_per_token": 6e-06,
         "max_output_tokens": 64000,
         "output_cost_per_token": 1.8e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "openrouter/google/gemini-2.5-pro-preview": {
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "input_cost_per_token": 1.25e-06,
         "max_output_tokens": 65536,
         "output_cost_per_token": 1e-05,
@@ -41187,16 +41285,18 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_vision": true,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 1048576
     },
     "openrouter/google/gemma-3-27b-it": {
-        "max_tokens": 128000,
+        "max_tokens": 65536,
         "input_cost_per_token": 3e-08,
         "max_output_tokens": 65536,
         "output_cost_per_token": 1.1e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/minimax/minimax-m2.5": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41214,15 +41314,17 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/inflection/inflection-3-productivity": {
-        "max_tokens": 8000,
+        "max_tokens": 1024,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 1024,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8000
     },
     "nvidia_nim/nvidia/nemotron-parse": {
         "litellm_provider": "nvidia_nim",
@@ -41258,13 +41360,14 @@
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen3-vl-8b-instruct": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 8e-08,
         "max_output_tokens": 32768,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "openrouter/thedrummer/cydonia-24b-v4.1": {
         "max_tokens": 131072,
@@ -41272,16 +41375,18 @@
         "max_output_tokens": 131072,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/meta-llama/llama-4-maverick": {
-        "max_tokens": 1048576,
+        "max_tokens": 16384,
         "input_cost_per_token": 1.5e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 1048576
     },
     "nvidia_nim/nvidia/nv-embedcode-7b-v1": {
         "litellm_provider": "nvidia_nim",
@@ -41293,7 +41398,8 @@
         "input_cost_per_token": 4e-08,
         "output_cost_per_token": 5e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8192
     },
     "vercel_ai_gateway/bytedance/seedance-v1.0-lite-t2v": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41315,7 +41421,8 @@
         "max_output_tokens": 131072,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/voyage/voyage-code-3": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41339,29 +41446,32 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemma-3-27b-it:free": {
-        "max_tokens": 131072,
+        "max_tokens": 8192,
         "input_cost_per_token": 0.0,
         "max_output_tokens": 8192,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "openrouter/moonshotai/kimi-k2": {
         "max_tokens": 131000,
         "input_cost_per_token": 5.5e-07,
         "output_cost_per_token": 2.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131000
     },
     "openrouter/openai/o4-mini-deep-research": {
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "input_cost_per_token": 2e-06,
         "max_output_tokens": 100000,
         "output_cost_per_token": 8e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "nvidia_nim/nvidia/nemoretriever-parse": {
         "litellm_provider": "nvidia_nim",
@@ -41374,7 +41484,8 @@
         "max_output_tokens": 40960,
         "output_cost_per_token": 2.8e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 40960
     },
     "nvidia_nim/google/gemma-3-4b-it": {
         "litellm_provider": "nvidia_nim",
@@ -41385,12 +41496,13 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-4-turbo-preview": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "input_cost_per_token": 1e-05,
         "max_output_tokens": 4096,
         "output_cost_per_token": 3e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/deepseek/deepseek-v3.2": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41409,15 +41521,17 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "openrouter/qwen/qwen3-coder-30b-a3b-instruct": {
-        "max_tokens": 160000,
+        "max_tokens": 32768,
         "input_cost_per_token": 7e-08,
         "max_output_tokens": 32768,
         "output_cost_per_token": 2.7e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 160000
     },
     "vercel_ai_gateway/bfl/flux-kontext-max": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41443,12 +41557,13 @@
         "supports_tool_choice": true
     },
     "openrouter/microsoft/wizardlm-2-8x22b": {
-        "max_tokens": 65535,
+        "max_tokens": 8000,
         "input_cost_per_token": 6.2e-07,
         "max_output_tokens": 8000,
         "output_cost_per_token": 6.2e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 65535
     },
     "nvidia_nim/mistralai/mamba-codestral-7b-v0.1": {
         "litellm_provider": "nvidia_nim",
@@ -41466,13 +41581,14 @@
         "supports_vision": true
     },
     "openrouter/perplexity/sonar-pro-search": {
-        "max_tokens": 200000,
+        "max_tokens": 8000,
         "input_cost_per_token": 3e-06,
         "max_output_tokens": 8000,
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "nvidia_nim/nvidia/llama-3.1-nemoguard-8b-content-safety": {
         "litellm_provider": "nvidia_nim",
@@ -41483,13 +41599,14 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-4o-mini": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 1.5e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/bytedance/seedance-v1.0-pro": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41504,21 +41621,23 @@
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen3-max": {
-        "max_tokens": 262144,
+        "max_tokens": 32768,
         "input_cost_per_token": 1.2e-06,
         "max_output_tokens": 32768,
         "output_cost_per_token": 6e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "openrouter/amazon/nova-pro-v1": {
-        "max_tokens": 300000,
+        "max_tokens": 5120,
         "input_cost_per_token": 8e-07,
         "max_output_tokens": 5120,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 300000
     },
     "vercel_ai_gateway/openai/o3-deep-research": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41535,16 +41654,18 @@
         "input_cost_per_token": 1.3e-07,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/bytedance-seed/seed-2.0-mini": {
-        "max_tokens": 262144,
+        "max_tokens": 131072,
         "input_cost_per_token": 1e-07,
         "max_output_tokens": 131072,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 262144
     },
     "nvidia_nim/bytedance/seed-oss-36b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -41555,7 +41676,7 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemini-2.5-flash-lite-preview-09-2025": {
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "input_cost_per_token": 1e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 4e-07,
@@ -41563,7 +41684,8 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_vision": true,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 1048576
     },
     "vercel_ai_gateway/xiaomi/mimo-v2-flash": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41588,15 +41710,17 @@
         "input_cost_per_token": 2.1e-07,
         "output_cost_per_token": 7.9e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 163840
     },
     "openrouter/z-ai/glm-4.5": {
-        "max_tokens": 131072,
+        "max_tokens": 98304,
         "input_cost_per_token": 6e-07,
         "max_output_tokens": 98304,
         "output_cost_per_token": 2.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/nvidia/usdcode-llama-3.1-70b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -41678,7 +41802,8 @@
         "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 32000
     },
     "vercel_ai_gateway/alibaba/qwen3-coder-30b-a3b": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41703,7 +41828,8 @@
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/openai/gpt-5-codex": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41721,12 +41847,13 @@
         "input_cost_per_image": 0.25
     },
     "openrouter/baidu/ernie-4.5-21b-a3b": {
-        "max_tokens": 120000,
+        "max_tokens": 8000,
         "input_cost_per_token": 7e-08,
         "max_output_tokens": 8000,
         "output_cost_per_token": 2.8e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 120000
     },
     "openrouter/qwen/qwen3-14b": {
         "max_tokens": 40960,
@@ -41734,7 +41861,8 @@
         "max_output_tokens": 40960,
         "output_cost_per_token": 2.4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 40960
     },
     "nvidia_nim/google/gemma-2-2b-it": {
         "litellm_provider": "nvidia_nim",
@@ -41750,7 +41878,8 @@
         "max_output_tokens": 16384,
         "output_cost_per_token": 5e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 16384
     },
     "nvidia_nim/microsoft/kosmos-2": {
         "litellm_provider": "nvidia_nim",
@@ -41760,12 +41889,13 @@
         "supports_vision": true
     },
     "openrouter/meta-llama/llama-3.3-70b-instruct": {
-        "max_tokens": 131072,
+        "max_tokens": 16384,
         "input_cost_per_token": 1e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 3.2e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/mistralai/mistral-7b-instruct-v0.3": {
         "litellm_provider": "nvidia_nim",
@@ -41807,13 +41937,14 @@
         "input_cost_per_token": 6e-08
     },
     "openrouter/openai/o3": {
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "input_cost_per_token": 2e-06,
         "max_output_tokens": 100000,
         "output_cost_per_token": 8e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "vercel_ai_gateway/mistral/devstral-small-2": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41838,7 +41969,8 @@
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 3e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 16000
     },
     "nvidia_nim/stockmark/stockmark-2-100b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -41849,7 +41981,7 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemini-2.5-pro-preview-05-06": {
-        "max_tokens": 1048576,
+        "max_tokens": 65535,
         "input_cost_per_token": 1.25e-06,
         "max_output_tokens": 65535,
         "output_cost_per_token": 1e-05,
@@ -41857,7 +41989,8 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_vision": true,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 1048576
     },
     "vercel_ai_gateway/bfl/flux-pro-1.1-ultra": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41884,20 +42017,22 @@
         "cache_read_input_token_cost": 1.25e-07
     },
     "openrouter/openai/gpt-4-0314": {
-        "max_tokens": 8191,
+        "max_tokens": 4096,
         "input_cost_per_token": 3e-05,
         "max_output_tokens": 4096,
         "output_cost_per_token": 6e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8191
     },
     "openrouter/aion-labs/aion-1.0": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 4e-06,
         "max_output_tokens": 32768,
         "output_cost_per_token": 8e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/mistral/mistral-nemo": {
         "litellm_provider": "vercel_ai_gateway",
@@ -41908,12 +42043,13 @@
         "output_cost_per_token": 4e-08
     },
     "openrouter/google/gemma-2-27b-it": {
-        "max_tokens": 8192,
+        "max_tokens": 2048,
         "input_cost_per_token": 6.5e-07,
         "max_output_tokens": 2048,
         "output_cost_per_token": 6.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8192
     },
     "nvidia_nim/openai/gpt-oss-20b": {
         "litellm_provider": "nvidia_nim",
@@ -41948,7 +42084,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/meta/llama3-8b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -41959,19 +42096,21 @@
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen3-coder-next": {
-        "max_tokens": 262144,
+        "max_tokens": 65536,
         "input_cost_per_token": 1.2e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 7.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "openrouter/raifle/sorcererlm-8x22b": {
         "max_tokens": 16000,
         "input_cost_per_token": 4.5e-06,
         "output_cost_per_token": 4.5e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 16000
     },
     "nvidia_nim/microsoft/phi-4-mini-flash-reasoning": {
         "litellm_provider": "nvidia_nim",
@@ -41983,12 +42122,13 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemma-3n-e2b-it:free": {
-        "max_tokens": 8192,
+        "max_tokens": 2048,
         "input_cost_per_token": 0.0,
         "max_output_tokens": 2048,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8192
     },
     "nvidia_nim/meta/llama-4-maverick-17b-128e-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -42007,29 +42147,32 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-4o-search-preview": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/openai/gpt-audio-mini": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 6e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 2.4e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 128000
     },
     "openrouter/aion-labs/aion-2.0": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 8e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 1.6e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/mistral/devstral-2": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42045,19 +42188,21 @@
         "input_cost_per_token": 1.2e-07
     },
     "openrouter/qwen/qwen-2.5-72b-instruct": {
-        "max_tokens": 32768,
+        "max_tokens": 16384,
         "input_cost_per_token": 1.2e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 3.9e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/mistralai/devstral-medium": {
         "max_tokens": 131072,
         "input_cost_per_token": 4e-07,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/openai/gpt-image-1": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42075,13 +42220,14 @@
         "supports_tool_choice": true
     },
     "openrouter/arcee-ai/spotlight": {
-        "max_tokens": 131072,
+        "max_tokens": 65537,
         "input_cost_per_token": 1.8e-07,
         "max_output_tokens": 65537,
         "output_cost_per_token": 1.8e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/kwaipilot/kat-coder-pro-v1": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42094,12 +42240,13 @@
         "cache_read_input_token_cost": 6e-08
     },
     "openrouter/cohere/command-a": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 8192,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "vercel_ai_gateway/openai/gpt-5.2-chat": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42140,12 +42287,13 @@
         "mode": "video_generation"
     },
     "openrouter/qwen/qwen-plus-2025-07-28:thinking": {
-        "max_tokens": 1000000,
+        "max_tokens": 32768,
         "input_cost_per_token": 2.6e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 7.8e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 1000000
     },
     "vercel_ai_gateway/voyage/voyage-code-2": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42157,14 +42305,16 @@
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 8e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/nvidia/nemotron-3-nano-30b-a3b": {
         "max_tokens": 262144,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "vercel_ai_gateway/google/imagen-4.0-generate-001": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42189,7 +42339,8 @@
         "input_cost_per_image": 3e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 32768
     },
     "nvidia_nim/nvidia/nemotron-content-safety-reasoning-4b": {
         "litellm_provider": "nvidia_nim",
@@ -42226,20 +42377,22 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-5.4-pro": {
-        "max_tokens": 1050000,
+        "max_tokens": 128000,
         "input_cost_per_token": 3e-05,
         "max_output_tokens": 128000,
         "output_cost_per_token": 0.00018,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 1050000
     },
     "openrouter/deepcogito/cogito-v2.1-671b": {
         "max_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1.25e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/deepseek/deepseek-v3.1-terminus": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42251,20 +42404,22 @@
         "output_cost_per_token": 1e-06
     },
     "openrouter/openai/o4-mini": {
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "input_cost_per_token": 1.1e-06,
         "max_output_tokens": 100000,
         "output_cost_per_token": 4.4e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "openrouter/qwen/qwen2.5-coder-7b-instruct": {
         "max_tokens": 32768,
         "input_cost_per_token": 3e-08,
         "output_cost_per_token": 9e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/minimax/minimax-01": {
         "max_tokens": 1000192,
@@ -42273,7 +42428,8 @@
         "output_cost_per_token": 1.1e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 1000192
     },
     "vercel_ai_gateway/bytedance/seedance-v1.5-pro": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42297,29 +42453,32 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemini-3-pro-image-preview": {
-        "max_tokens": 65536,
+        "max_tokens": 32768,
         "input_cost_per_token": 2e-06,
         "max_output_tokens": 32768,
         "output_cost_per_token": 1.2e-05,
         "input_cost_per_image": 2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 65536
     },
     "openrouter/allenai/olmo-3.1-32b-instruct": {
         "max_tokens": 65536,
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 65536
     },
     "openrouter/nousresearch/hermes-3-llama-3.1-405b": {
-        "max_tokens": 131072,
+        "max_tokens": 16384,
         "input_cost_per_token": 1e-06,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1": {
         "litellm_provider": "nvidia_nim",
@@ -42350,7 +42509,8 @@
         "max_output_tokens": 131072,
         "output_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/nvidia/riva-translate-4b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -42375,16 +42535,18 @@
         "input_cost_per_token": 4e-07,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/openai/gpt-5-image-mini": {
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 128000,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 400000
     },
     "nvidia_nim/nvidia/llama-nemotron-embed-vl-1b-v2": {
         "litellm_provider": "nvidia_nim",
@@ -42397,7 +42559,8 @@
         "output_cost_per_token": 8e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "openrouter/deepseek/deepseek-r1-distill-qwen-32b": {
         "max_tokens": 32768,
@@ -42405,7 +42568,8 @@
         "max_output_tokens": 32768,
         "output_cost_per_token": 2.9e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/mistralai/magistral-small-2506": {
         "litellm_provider": "nvidia_nim",
@@ -42421,7 +42585,8 @@
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/alibaba/qwen3-max-preview": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42456,7 +42621,9 @@
         "litellm_provider": "nvidia_nim",
         "mode": "chat",
         "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "max_input_tokens": 32768,
+        "max_tokens": 32768
     },
     "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5": {
         "litellm_provider": "nvidia_nim",
@@ -42472,14 +42639,16 @@
         "output_cost_per_token": 6e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": {
         "max_tokens": 32768,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/ibm/granite-3.3-8b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -42506,22 +42675,25 @@
         "max_output_tokens": 65536,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 65536
     },
     "openrouter/qwen/qwen3-next-80b-a3b-instruct": {
         "max_tokens": 262144,
         "input_cost_per_token": 9e-08,
         "output_cost_per_token": 1.1e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "openrouter/minimax/minimax-m2-her": {
-        "max_tokens": 65536,
+        "max_tokens": 2048,
         "input_cost_per_token": 3e-07,
         "max_output_tokens": 2048,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 65536
     },
     "openrouter/allenai/olmo-3.1-32b-think": {
         "max_tokens": 65536,
@@ -42529,24 +42701,27 @@
         "max_output_tokens": 65536,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 65536
     },
     "openrouter/inception/mercury": {
-        "max_tokens": 128000,
+        "max_tokens": 32000,
         "input_cost_per_token": 2.5e-07,
         "max_output_tokens": 32000,
         "output_cost_per_token": 7.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/openai/gpt-4-turbo": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "input_cost_per_token": 1e-05,
         "max_output_tokens": 4096,
         "output_cost_per_token": 3e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/alibaba/wan-v2.5-t2v-preview": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42565,12 +42740,13 @@
         "mode": "video_generation"
     },
     "openrouter/cohere/command-r-08-2024": {
-        "max_tokens": 128000,
+        "max_tokens": 4000,
         "input_cost_per_token": 1.5e-07,
         "max_output_tokens": 4000,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/recraft/recraft-v4": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42602,14 +42778,17 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "max_input_tokens": 16384,
+        "max_tokens": 16384
     },
     "openrouter/mistralai/mistral-large-2407": {
         "max_tokens": 131072,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 6e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/nvidia/nvclip": {
         "litellm_provider": "nvidia_nim",
@@ -42635,13 +42814,14 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-5.4": {
-        "max_tokens": 1050000,
+        "max_tokens": 128000,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 128000,
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 1050000
     },
     "openrouter/qwen/qwen3-32b": {
         "max_tokens": 40960,
@@ -42649,7 +42829,8 @@
         "max_output_tokens": 40960,
         "output_cost_per_token": 2.4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 40960
     },
     "nvidia_nim/writer/palmyra-med-70b": {
         "litellm_provider": "nvidia_nim",
@@ -42671,37 +42852,42 @@
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/liquid/lfm-2.5-1.2b-thinking:free": {
         "max_tokens": 32768,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/qwen/qwen-turbo": {
-        "max_tokens": 131072,
+        "max_tokens": 8192,
         "input_cost_per_token": 3.25e-08,
         "max_output_tokens": 8192,
         "output_cost_per_token": 1.3e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/inflection/inflection-3-pi": {
-        "max_tokens": 8000,
+        "max_tokens": 1024,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 1024,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8000
     },
     "openrouter/meta-llama/llama-3.2-3b-instruct:free": {
         "max_tokens": 131072,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/nvidia/nemotron-nano-12b-v2-vl": {
         "litellm_provider": "nvidia_nim",
@@ -42747,15 +42933,17 @@
         "max_output_tokens": 65536,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 65536
     },
     "openrouter/inception/mercury-coder": {
-        "max_tokens": 128000,
+        "max_tokens": 32000,
         "input_cost_per_token": 2.5e-07,
         "max_output_tokens": 32000,
         "output_cost_per_token": 7.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/thedrummer/rocinante-12b": {
         "max_tokens": 32768,
@@ -42763,7 +42951,8 @@
         "max_output_tokens": 32768,
         "output_cost_per_token": 4.3e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/mistralai/mistral-large-3-675b-instruct-2512": {
         "litellm_provider": "nvidia_nim",
@@ -42789,7 +42978,8 @@
         "max_output_tokens": 65536,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 65536
     },
     "openrouter/meta-llama/llama-3.1-405b": {
         "max_tokens": 32768,
@@ -42797,7 +42987,8 @@
         "max_output_tokens": 32768,
         "output_cost_per_token": 4e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "vercel_ai_gateway/minimax/minimax-m2.5-highspeed": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42817,12 +43008,13 @@
         "supports_tool_choice": true
     },
     "openrouter/cohere/command-r7b-12-2024": {
-        "max_tokens": 128000,
+        "max_tokens": 4000,
         "input_cost_per_token": 3.75e-08,
         "max_output_tokens": 4000,
         "output_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "nvidia_nim/deepseek-ai/deepseek-r1-distill-qwen-32b": {
         "litellm_provider": "nvidia_nim",
@@ -42834,12 +43026,13 @@
         "supports_tool_choice": true
     },
     "openrouter/relace/relace-apply-3": {
-        "max_tokens": 256000,
+        "max_tokens": 128000,
         "input_cost_per_token": 8.5e-07,
         "max_output_tokens": 128000,
         "output_cost_per_token": 1.25e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "vercel_ai_gateway/alibaba/qwen3-next-80b-a3b-instruct": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42885,19 +43078,21 @@
         "supports_reasoning": true
     },
     "openrouter/alpindale/goliath-120b": {
-        "max_tokens": 6144,
+        "max_tokens": 1024,
         "input_cost_per_token": 3.75e-06,
         "max_output_tokens": 1024,
         "output_cost_per_token": 7.5e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 6144
     },
     "openrouter/arcee-ai/trinity-large-preview:free": {
         "max_tokens": 131000,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131000
     },
     "openrouter/qwen/qwen-2.5-vl-7b-instruct": {
         "max_tokens": 32768,
@@ -42905,7 +43100,8 @@
         "output_cost_per_token": 2.0000000000000002e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 32768
     },
     "vercel_ai_gateway/bfl/flux-pro-1.1": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42923,7 +43119,7 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemini-3.1-pro-preview-customtools": {
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "input_cost_per_token": 2e-06,
         "max_output_tokens": 65536,
         "output_cost_per_token": 1.2e-05,
@@ -42931,7 +43127,8 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_vision": true,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 1048576
     },
     "vercel_ai_gateway/voyage/voyage-law-2": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42951,16 +43148,18 @@
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/x-ai/grok-4.1-fast": {
-        "max_tokens": 2000000,
+        "max_tokens": 30000,
         "input_cost_per_token": 2e-07,
         "max_output_tokens": 30000,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 2000000
     },
     "vercel_ai_gateway/xai/grok-imagine-video": {
         "litellm_provider": "vercel_ai_gateway",
@@ -42993,13 +43192,14 @@
         "output_cost_per_token": 1.5e-06
     },
     "openrouter/qwen/qwen3.5-flash-02-23": {
-        "max_tokens": 1000000,
+        "max_tokens": 65536,
         "input_cost_per_token": 1e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 1000000
     },
     "nvidia_nim/google/gemma-3n-e4b-it": {
         "litellm_provider": "nvidia_nim",
@@ -43015,7 +43215,8 @@
         "max_output_tokens": 4096,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 4096
     },
     "nvidia_nim/nv-mistralai/mistral-nemo-12b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43026,28 +43227,31 @@
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen3-max-thinking": {
-        "max_tokens": 262144,
+        "max_tokens": 32768,
         "input_cost_per_token": 7.8e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 3.9e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "openrouter/qwen/qwen-plus-2025-07-28": {
-        "max_tokens": 1000000,
+        "max_tokens": 32768,
         "input_cost_per_token": 2.6e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 7.8e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 1000000
     },
     "openrouter/amazon/nova-micro-v1": {
-        "max_tokens": 128000,
+        "max_tokens": 5120,
         "input_cost_per_token": 3.5e-08,
         "max_output_tokens": 5120,
         "output_cost_per_token": 1.4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "nvidia_nim/nvidia/llama-3.1-nemoguard-8b-topic-control": {
         "litellm_provider": "nvidia_nim",
@@ -43066,12 +43270,13 @@
         "supports_tool_choice": true
     },
     "openrouter/sao10k/l3.3-euryale-70b": {
-        "max_tokens": 131072,
+        "max_tokens": 16384,
         "input_cost_per_token": 6.5e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 7.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/nvidia/llama-3.1-nemotron-51b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43092,12 +43297,13 @@
         "cache_read_input_token_cost": 1.8e-07
     },
     "openrouter/mistralai/mistral-small-24b-instruct-2501": {
-        "max_tokens": 32768,
+        "max_tokens": 16384,
         "input_cost_per_token": 5e-08,
         "max_output_tokens": 16384,
         "output_cost_per_token": 8e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/nvidia/llama-3.1-nemotron-nano-8b-v1": {
         "litellm_provider": "nvidia_nim",
@@ -43113,12 +43319,13 @@
         "input_cost_per_image": 0.022
     },
     "openrouter/qwen/qwen-max": {
-        "max_tokens": 32768,
+        "max_tokens": 8192,
         "input_cost_per_token": 1.04e-06,
         "max_output_tokens": 8192,
         "output_cost_per_token": 4.16e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/nvidia/nv-embed-v1": {
         "litellm_provider": "nvidia_nim",
@@ -43126,12 +43333,13 @@
         "input_cost_per_token": 0.0
     },
     "openrouter/kwaipilot/kat-coder-pro": {
-        "max_tokens": 256000,
+        "max_tokens": 128000,
         "input_cost_per_token": 2.07e-07,
         "max_output_tokens": 128000,
         "output_cost_per_token": 8.28e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "vercel_ai_gateway/zai/glm-4.5v": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43150,21 +43358,23 @@
         "supports_vision": true
     },
     "openrouter/deepseek/deepseek-r1-distill-llama-70b": {
-        "max_tokens": 131072,
+        "max_tokens": 16384,
         "input_cost_per_token": 7e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 8e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/qwen/qwen3.5-35b-a3b": {
-        "max_tokens": 262144,
+        "max_tokens": 65536,
         "input_cost_per_token": 1.625e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 1.3e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 262144
     },
     "nvidia_nim/microsoft/phi-4-mini-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43175,12 +43385,13 @@
         "supports_tool_choice": true
     },
     "openrouter/relace/relace-search": {
-        "max_tokens": 256000,
+        "max_tokens": 128000,
         "input_cost_per_token": 1e-06,
         "max_output_tokens": 128000,
         "output_cost_per_token": 3e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "nvidia_nim/meta/llama-3.1-8b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43203,13 +43414,14 @@
         "input_cost_per_image": 0.06
     },
     "openrouter/amazon/nova-premier-v1": {
-        "max_tokens": 1000000,
+        "max_tokens": 32000,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 32000,
         "output_cost_per_token": 1.25e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 1000000
     },
     "nvidia_nim/marin/marin-8b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43220,12 +43432,13 @@
         "supports_tool_choice": true
     },
     "openrouter/morph/morph-v3-large": {
-        "max_tokens": 262144,
+        "max_tokens": 131072,
         "input_cost_per_token": 9e-07,
         "max_output_tokens": 131072,
         "output_cost_per_token": 1.9e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "nvidia_nim/qwen/qwq-32b": {
         "litellm_provider": "nvidia_nim",
@@ -43278,7 +43491,8 @@
         "max_output_tokens": 8192,
         "output_cost_per_token": 1.48e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8192
     },
     "nvidia_nim/mistralai/mistral-medium-3-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43289,43 +43503,48 @@
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen-vl-max": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 8e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "openrouter/arcee-ai/virtuoso-large": {
-        "max_tokens": 131072,
+        "max_tokens": 64000,
         "input_cost_per_token": 7.5e-07,
         "max_output_tokens": 64000,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/ibm-granite/granite-4.0-h-micro": {
         "max_tokens": 131000,
         "input_cost_per_token": 1.7e-08,
         "output_cost_per_token": 1.1e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131000
     },
     "openrouter/baidu/ernie-4.5-300b-a47b": {
-        "max_tokens": 123000,
+        "max_tokens": 12000,
         "input_cost_per_token": 2.8e-07,
         "max_output_tokens": 12000,
         "output_cost_per_token": 1.1e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 123000
     },
     "openrouter/moonshotai/kimi-k2-thinking": {
         "max_tokens": 131072,
         "input_cost_per_token": 4.7e-07,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/microsoft/phi-4-multimodal-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43341,7 +43560,8 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8192
     },
     "openrouter/qwen/qwen3-30b-a3b-instruct-2507": {
         "max_tokens": 262144,
@@ -43349,7 +43569,8 @@
         "max_output_tokens": 262144,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "vercel_ai_gateway/klingai/kling-v2.6-i2v": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43368,7 +43589,8 @@
         "input_cost_per_token": 2e-08,
         "output_cost_per_token": 6e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/speakleash/bielik-11b-v2.3-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43379,13 +43601,14 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-4o-audio-preview": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 128000
     },
     "nvidia_nim/mistralai/mixtral-8x7b-instruct-v0.1": {
         "litellm_provider": "nvidia_nim",
@@ -43401,16 +43624,18 @@
         "max_output_tokens": 128000,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/openai/gpt-5.3-chat": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 1.75e-06,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1.4e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/alibaba/qwen3-vl-thinking": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43439,27 +43664,30 @@
         "cache_read_input_token_cost": 2e-08
     },
     "openrouter/neversleep/llama-3.1-lumimaid-8b": {
-        "max_tokens": 32768,
+        "max_tokens": 4096,
         "input_cost_per_token": 9e-08,
         "max_output_tokens": 4096,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/moonshotai/kimi-k2-0905:exacto": {
         "max_tokens": 262144,
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 2.5e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "openrouter/morph/morph-v3-fast": {
-        "max_tokens": 81920,
+        "max_tokens": 38000,
         "input_cost_per_token": 8e-07,
         "max_output_tokens": 38000,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 81920
     },
     "nvidia_nim/bigcode/starcoder2-7b": {
         "litellm_provider": "nvidia_nim",
@@ -43475,7 +43703,8 @@
         "max_output_tokens": 32768,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "vercel_ai_gateway/amazon/nova-2-lite": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43486,13 +43715,14 @@
         "output_cost_per_token": 2.5e-06
     },
     "openrouter/z-ai/glm-4.5v": {
-        "max_tokens": 65536,
+        "max_tokens": 16384,
         "input_cost_per_token": 6e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1.8e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 65536
     },
     "openrouter/nousresearch/hermes-2-pro-llama-3-8b": {
         "max_tokens": 8192,
@@ -43500,20 +43730,24 @@
         "max_output_tokens": 8192,
         "output_cost_per_token": 1.4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8192
     },
     "openrouter/qwen/qwen3-4b:free": {
         "max_tokens": 40960,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 40960
     },
     "nvidia_nim/writer/palmyra-fin-70b-32k": {
         "litellm_provider": "nvidia_nim",
         "mode": "chat",
         "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "max_input_tokens": 32768,
+        "max_tokens": 32768
     },
     "vercel_ai_gateway/google/gemini-2.5-flash-image": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43524,13 +43758,14 @@
         "output_cost_per_token": 2.5e-06
     },
     "openrouter/amazon/nova-2-lite-v1": {
-        "max_tokens": 1000000,
+        "max_tokens": 65535,
         "input_cost_per_token": 3e-07,
         "max_output_tokens": 65535,
         "output_cost_per_token": 2.5e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 1000000
     },
     "vercel_ai_gateway/xai/grok-4.1-fast-non-reasoning": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43543,21 +43778,23 @@
         "cache_read_input_token_cost": 5e-08
     },
     "openrouter/openai/gpt-3.5-turbo-0613": {
-        "max_tokens": 4095,
+        "max_tokens": 4096,
         "input_cost_per_token": 1e-06,
         "max_output_tokens": 4096,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 4095
     },
     "openrouter/openai/o4-mini-high": {
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "input_cost_per_token": 1.1e-06,
         "max_output_tokens": 100000,
         "output_cost_per_token": 4.4e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "nvidia_nim/meta/llama-3.1-405b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43568,20 +43805,22 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-5.1-codex": {
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "max_output_tokens": 128000,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 400000
     },
     "openrouter/nvidia/llama-3.3-nemotron-super-49b-v1.5": {
         "max_tokens": 131072,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/qwen/qwen2.5-vl-32b-instruct": {
         "max_tokens": 128000,
@@ -43589,7 +43828,8 @@
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/alibaba/wan-v2.6-i2v": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43600,7 +43840,8 @@
         "input_cost_per_token": 2.7e-08,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 60000
     },
     "vercel_ai_gateway/openai/gpt-5.1-codex-mini": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43613,7 +43854,7 @@
         "cache_read_input_token_cost": 2.5e-08
     },
     "openrouter/google/gemini-2.5-flash-lite": {
-        "max_tokens": 1048576,
+        "max_tokens": 65535,
         "input_cost_per_token": 1e-07,
         "max_output_tokens": 65535,
         "output_cost_per_token": 4e-07,
@@ -43621,7 +43862,8 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_vision": true,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 1048576
     },
     "nvidia_nim/nvidia/llama-3.2-nv-embedqa-1b-v1": {
         "litellm_provider": "nvidia_nim",
@@ -43629,12 +43871,13 @@
         "input_cost_per_token": 0.0
     },
     "openrouter/z-ai/glm-4.5-air": {
-        "max_tokens": 131072,
+        "max_tokens": 98304,
         "input_cost_per_token": 1.3e-07,
         "max_output_tokens": 98304,
         "output_cost_per_token": 8.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/sao10k/l3.1-euryale-70b": {
         "max_tokens": 32768,
@@ -43642,23 +43885,26 @@
         "max_output_tokens": 32768,
         "output_cost_per_token": 7.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/liquid/lfm-2.2-6b": {
         "max_tokens": 32768,
         "input_cost_per_token": 1e-08,
         "output_cost_per_token": 2e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/qwen/qwen3.5-122b-a10b": {
-        "max_tokens": 262144,
+        "max_tokens": 65536,
         "input_cost_per_token": 2.6e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 2.08e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 262144
     },
     "openrouter/z-ai/glm-4.6v": {
         "max_tokens": 131072,
@@ -43667,7 +43913,8 @@
         "output_cost_per_token": 9e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "nvidia_nim/minimaxai/minimax-m2.5": {
         "litellm_provider": "nvidia_nim",
@@ -43676,13 +43923,14 @@
         "output_cost_per_token": 0.0
     },
     "openrouter/qwen/qwen3-vl-235b-a22b-thinking": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 0.0,
         "max_output_tokens": 32768,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "nvidia_nim/z-ai/glm4.7": {
         "litellm_provider": "nvidia_nim",
@@ -43705,13 +43953,14 @@
         "output_cost_per_token": 0.0
     },
     "openrouter/baidu/ernie-4.5-vl-424b-a47b": {
-        "max_tokens": 123000,
+        "max_tokens": 16000,
         "input_cost_per_token": 4.2e-07,
         "max_output_tokens": 16000,
         "output_cost_per_token": 1.25e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 123000
     },
     "nvidia_nim/meta/llama-3.2-90b-vision-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43723,13 +43972,14 @@
         "supports_tool_choice": true
     },
     "openrouter/baidu/ernie-4.5-vl-28b-a3b": {
-        "max_tokens": 30000,
+        "max_tokens": 8000,
         "input_cost_per_token": 1.4e-07,
         "max_output_tokens": 8000,
         "output_cost_per_token": 5.6e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 30000
     },
     "nvidia_nim/google/codegemma-1.1-7b": {
         "litellm_provider": "nvidia_nim",
@@ -43748,13 +43998,14 @@
         "output_cost_per_token": 1.5e-06
     },
     "openrouter/anthropic/claude-3.7-sonnet:thinking": {
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "input_cost_per_token": 3e-06,
         "max_output_tokens": 64000,
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "vercel_ai_gateway/openai/gpt-5.4-pro": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43766,13 +44017,14 @@
         "output_cost_per_token": 0.00018
     },
     "openrouter/openai/gpt-audio": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 16384,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "max_input_tokens": 128000
     },
     "openrouter/microsoft/phi-4": {
         "max_tokens": 16384,
@@ -43780,7 +44032,8 @@
         "max_output_tokens": 16384,
         "output_cost_per_token": 1.4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 16384
     },
     "nvidia_nim/nvidia/nemotron-4-mini-hindi-4b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43816,14 +44069,16 @@
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 8e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/mistralai/mistral-saba": {
         "max_tokens": 32768,
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/qwen/qwen3-coder-480b-a35b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43861,12 +44116,13 @@
         "cache_read_input_token_cost": 1.3e-07
     },
     "openrouter/x-ai/grok-code-fast-1": {
-        "max_tokens": 256000,
+        "max_tokens": 10000,
         "input_cost_per_token": 2e-07,
         "max_output_tokens": 10000,
         "output_cost_per_token": 1.5e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "vercel_ai_gateway/google/gemini-3.1-pro-preview": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43883,7 +44139,8 @@
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "nvidia_nim/ibm/granite-34b-code-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43902,29 +44159,32 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-5.1": {
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "max_output_tokens": 128000,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 400000
     },
     "openrouter/openai/gpt-4o-mini-search-preview": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "input_cost_per_token": 1.5e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/cohere/command-r-plus-08-2024": {
-        "max_tokens": 128000,
+        "max_tokens": 4000,
         "input_cost_per_token": 2.5e-06,
         "max_output_tokens": 4000,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "nvidia_nim/nvidia/llama3-chatqa-1.5-70b": {
         "litellm_provider": "nvidia_nim",
@@ -43939,7 +44199,8 @@
         "input_cost_per_token": 5.1e-08,
         "output_cost_per_token": 3.4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/nousresearch/hermes-3-llama-3.1-70b": {
         "max_tokens": 65536,
@@ -43947,7 +44208,8 @@
         "max_output_tokens": 65536,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 65536
     },
     "vercel_ai_gateway/openai/gpt-5.1-thinking": {
         "litellm_provider": "vercel_ai_gateway",
@@ -43973,7 +44235,8 @@
         "max_output_tokens": 262000,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262000
     },
     "nvidia_nim/tiiuae/falcon3-7b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -43990,19 +44253,21 @@
         "output_cost_per_token": 0.0
     },
     "openrouter/qwen/qwen3-235b-a22b": {
-        "max_tokens": 131072,
+        "max_tokens": 8192,
         "input_cost_per_token": 4.55e-07,
         "max_output_tokens": 8192,
         "output_cost_per_token": 1.82e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/openai/gpt-oss-120b:exacto": {
         "max_tokens": 131072,
         "input_cost_per_token": 3.9e-08,
         "output_cost_per_token": 1.9e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/openai/gpt-5.3-chat": {
         "litellm_provider": "vercel_ai_gateway",
@@ -44015,12 +44280,13 @@
         "cache_read_input_token_cost": 1.75e-07
     },
     "openrouter/openai/gpt-4-1106-preview": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "input_cost_per_token": 1e-05,
         "max_output_tokens": 4096,
         "output_cost_per_token": 3e-05,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "vercel_ai_gateway/deepseek/deepseek-v3.1": {
         "litellm_provider": "vercel_ai_gateway",
@@ -44062,20 +44328,22 @@
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen3-coder:exacto": {
-        "max_tokens": 262144,
+        "max_tokens": 65536,
         "input_cost_per_token": 2.2e-07,
         "max_output_tokens": 65536,
         "output_cost_per_token": 1.8e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 262144
     },
     "openrouter/openai/gpt-oss-safeguard-20b": {
-        "max_tokens": 131072,
+        "max_tokens": 65536,
         "input_cost_per_token": 7.5e-08,
         "max_output_tokens": 65536,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "vercel_ai_gateway/mistral/ministral-14b": {
         "litellm_provider": "vercel_ai_gateway",
@@ -44114,7 +44382,8 @@
         "input_cost_per_token": 3e-08,
         "output_cost_per_token": 9e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 8192
     },
     "nvidia_nim/nvidia/llama3-chatqa-1.5-8b": {
         "litellm_provider": "nvidia_nim",
@@ -44167,16 +44436,18 @@
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 128000
     },
     "openrouter/openai/gpt-5-image": {
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "input_cost_per_token": 1e-05,
         "max_output_tokens": 128000,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 400000
     },
     "openrouter/aion-labs/aion-rp-llama-3.1-8b": {
         "max_tokens": 32768,
@@ -44184,15 +44455,17 @@
         "max_output_tokens": 32768,
         "output_cost_per_token": 1.6e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/mistralai/mistral-nemo": {
-        "max_tokens": 131072,
+        "max_tokens": 16384,
         "input_cost_per_token": 2e-08,
         "max_output_tokens": 16384,
         "output_cost_per_token": 4e-08,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/rakuten/rakutenai-7b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -44227,21 +44500,23 @@
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen3-8b": {
-        "max_tokens": 40960,
+        "max_tokens": 8192,
         "input_cost_per_token": 5e-08,
         "max_output_tokens": 8192,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 40960
     },
     "openrouter/meta-llama/llama-4-scout": {
-        "max_tokens": 327680,
+        "max_tokens": 16384,
         "input_cost_per_token": 8e-08,
         "max_output_tokens": 16384,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 327680
     },
     "vercel_ai_gateway/alibaba/qwen3-embedding-8b": {
         "litellm_provider": "vercel_ai_gateway",
@@ -44256,31 +44531,35 @@
         "max_output_tokens": 256000,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 256000
     },
     "openrouter/meta-llama/llama-3.1-405b-instruct": {
         "max_tokens": 131000,
         "input_cost_per_token": 4e-06,
         "output_cost_per_token": 4e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131000
     },
     "openrouter/mistralai/mixtral-8x7b-instruct": {
-        "max_tokens": 32768,
+        "max_tokens": 16384,
         "input_cost_per_token": 5.4e-07,
         "max_output_tokens": 16384,
         "output_cost_per_token": 5.4e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 32768
     },
     "openrouter/perplexity/sonar-pro": {
-        "max_tokens": 200000,
+        "max_tokens": 8000,
         "input_cost_per_token": 3e-06,
         "max_output_tokens": 8000,
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 200000
     },
     "openrouter/openai/gpt-oss-120b:free": {
         "max_tokens": 131072,
@@ -44288,39 +44567,44 @@
         "max_output_tokens": 131072,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/qwen/qwen3-vl-32b-instruct": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 1.04e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 4.16e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 131072
     },
     "openrouter/minimax/minimax-m1": {
-        "max_tokens": 1000000,
+        "max_tokens": 40000,
         "input_cost_per_token": 4e-07,
         "max_output_tokens": 40000,
         "output_cost_per_token": 2.2e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 1000000
     },
     "openrouter/aion-labs/aion-1.0-mini": {
-        "max_tokens": 131072,
+        "max_tokens": 32768,
         "input_cost_per_token": 7e-07,
         "max_output_tokens": 32768,
         "output_cost_per_token": 1.4e-06,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "openrouter/mistralai/devstral-small": {
         "max_tokens": 131072,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
-        "mode": "chat"
+        "mode": "chat",
+        "max_input_tokens": 131072
     },
     "nvidia_nim/microsoft/phi-3-small-8k-instruct": {
         "litellm_provider": "nvidia_nim",
