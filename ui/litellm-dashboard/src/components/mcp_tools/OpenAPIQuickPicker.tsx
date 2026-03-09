@@ -2,6 +2,11 @@ import React, { useEffect, useState } from "react";
 import { Spin } from "antd";
 import { fetchOpenAPIRegistry } from "../networking";
 
+export interface OpenAPIKeyTool {
+  name: string;
+  description: string;
+}
+
 export interface OpenAPIRegistryEntry {
   name: string;
   title: string;
@@ -14,6 +19,7 @@ export interface OpenAPIRegistryEntry {
     pkce: boolean;
     docs_url: string;
   };
+  key_tools?: OpenAPIKeyTool[];
 }
 
 interface OpenAPIQuickPickerProps {

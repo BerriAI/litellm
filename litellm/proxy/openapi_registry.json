@@ -11,7 +11,17 @@
         "token_url": "https://github.com/login/oauth/access_token",
         "pkce": false,
         "docs_url": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app"
-      }
+      },
+      "key_tools": [
+        { "name": "list_repos", "description": "List repositories for a user or organization" },
+        { "name": "get_file_contents", "description": "Read a file or directory from a repository" },
+        { "name": "list_issues", "description": "List issues in a repository with filters" },
+        { "name": "create_issue", "description": "Open a new issue in a repository" },
+        { "name": "list_pull_requests", "description": "List open and merged pull requests" },
+        { "name": "create_pull_request", "description": "Open a pull request between branches" },
+        { "name": "search_code", "description": "Search code across all GitHub repositories" },
+        { "name": "list_commits", "description": "List commits with authors and messages" }
+      ]
     },
     {
       "name": "atlassian",
@@ -24,7 +34,17 @@
         "token_url": "https://auth.atlassian.com/oauth/token",
         "pkce": true,
         "docs_url": "https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/"
-      }
+      },
+      "key_tools": [
+        { "name": "search_issues", "description": "Search Jira issues using JQL queries" },
+        { "name": "get_issue", "description": "Get full details of a Jira issue by key" },
+        { "name": "create_issue", "description": "Create a new Jira issue or bug report" },
+        { "name": "update_issue", "description": "Update issue fields like status, assignee, priority" },
+        { "name": "add_comment", "description": "Add a comment to an issue" },
+        { "name": "transition_issue", "description": "Move an issue through the workflow (e.g. In Progress → Done)" },
+        { "name": "list_projects", "description": "List all Jira projects in the workspace" },
+        { "name": "get_project", "description": "Get project details, board, and sprint info" }
+      ]
     },
     {
       "name": "figma",
@@ -37,7 +57,17 @@
         "token_url": "https://www.figma.com/api/oauth/token",
         "pkce": false,
         "docs_url": "https://www.figma.com/developers/api#oauth2"
-      }
+      },
+      "key_tools": [
+        { "name": "get_file", "description": "Get the full node tree and structure of a Figma file" },
+        { "name": "get_file_nodes", "description": "Get specific nodes by ID from a Figma file" },
+        { "name": "get_image", "description": "Export nodes as PNG, SVG, or PDF" },
+        { "name": "get_comments", "description": "List all comments on a Figma file" },
+        { "name": "post_comment", "description": "Add a comment to a file or specific node" },
+        { "name": "get_team_projects", "description": "List all projects belonging to a team" },
+        { "name": "get_project_files", "description": "List all Figma files in a project" },
+        { "name": "get_file_versions", "description": "Get the version history of a file" }
+      ]
     },
     {
       "name": "google",
@@ -50,7 +80,17 @@
         "token_url": "https://oauth2.googleapis.com/token",
         "pkce": true,
         "docs_url": "https://developers.google.com/identity/protocols/oauth2/web-server"
-      }
+      },
+      "key_tools": [
+        { "name": "list_messages", "description": "List Gmail messages and threads with search filters" },
+        { "name": "send_message", "description": "Send an email via Gmail" },
+        { "name": "list_events", "description": "List Google Calendar events in a date range" },
+        { "name": "create_event", "description": "Create a Calendar event with attendees and video link" },
+        { "name": "list_files", "description": "List files and folders in Google Drive" },
+        { "name": "get_file", "description": "Get Drive file metadata and download content" },
+        { "name": "search_files", "description": "Search Drive files by name, type, or content" },
+        { "name": "create_spreadsheet", "description": "Create a new Google Sheets spreadsheet" }
+      ]
     },
     {
       "name": "stripe",
@@ -63,7 +103,17 @@
         "token_url": "https://connect.stripe.com/oauth/token",
         "pkce": false,
         "docs_url": "https://stripe.com/docs/connect/oauth-reference"
-      }
+      },
+      "key_tools": [
+        { "name": "list_customers", "description": "List and search Stripe customers" },
+        { "name": "create_customer", "description": "Create a new Stripe customer record" },
+        { "name": "create_payment_intent", "description": "Create a payment intent for a charge" },
+        { "name": "list_subscriptions", "description": "List active and cancelled subscriptions" },
+        { "name": "create_subscription", "description": "Subscribe a customer to a price plan" },
+        { "name": "list_invoices", "description": "List invoices for a customer or subscription" },
+        { "name": "create_refund", "description": "Refund a charge fully or partially" },
+        { "name": "list_products", "description": "List products and their pricing plans" }
+      ]
     },
     {
       "name": "hubspot",
@@ -76,7 +126,17 @@
         "token_url": "https://api.hubspot.com/oauth/v1/token",
         "pkce": false,
         "docs_url": "https://developers.hubspot.com/docs/api/oauth-quickstart-guide"
-      }
+      },
+      "key_tools": [
+        { "name": "search_contacts", "description": "Search CRM contacts by email, name, or custom properties" },
+        { "name": "create_contact", "description": "Create a new CRM contact with properties" },
+        { "name": "update_contact", "description": "Update contact properties like lifecycle stage or owner" },
+        { "name": "create_deal", "description": "Create a new sales deal linked to a contact or company" },
+        { "name": "list_deals", "description": "List deals with stage and pipeline filters" },
+        { "name": "create_note", "description": "Log a note or activity against a contact or deal" },
+        { "name": "get_pipeline", "description": "Get deal pipeline stages and probabilities" },
+        { "name": "associate_objects", "description": "Link CRM objects (e.g. contact → deal → company)" }
+      ]
     },
     {
       "name": "notion",
@@ -89,7 +149,17 @@
         "token_url": "https://api.notion.com/v1/oauth/token",
         "pkce": false,
         "docs_url": "https://developers.notion.com/docs/authorization"
-      }
+      },
+      "key_tools": [
+        { "name": "search", "description": "Search pages and databases across the workspace" },
+        { "name": "get_page", "description": "Get a page and its properties" },
+        { "name": "create_page", "description": "Create a new page inside a database or as a subpage" },
+        { "name": "update_page", "description": "Update page properties (title, status, dates, etc.)" },
+        { "name": "query_database", "description": "Query a database with filters and sorts" },
+        { "name": "create_database_item", "description": "Add a new row/item to a Notion database" },
+        { "name": "append_block_children", "description": "Append content blocks (text, bullets, code) to a page" },
+        { "name": "get_database", "description": "Get a database schema including all property types" }
+      ]
     },
     {
       "name": "slack",
@@ -102,7 +172,17 @@
         "token_url": "https://slack.com/api/oauth.v2.access",
         "pkce": false,
         "docs_url": "https://api.slack.com/authentication/oauth-v2"
-      }
+      },
+      "key_tools": [
+        { "name": "chat_post_message", "description": "Send a message to a channel or DM" },
+        { "name": "conversations_history", "description": "Get message history from a channel" },
+        { "name": "conversations_list", "description": "List all public and private channels" },
+        { "name": "conversations_replies", "description": "Get replies in a message thread" },
+        { "name": "users_list", "description": "List all members of the Slack workspace" },
+        { "name": "search_messages", "description": "Full-text search across all messages" },
+        { "name": "files_upload", "description": "Upload a file and share it in a channel" },
+        { "name": "reactions_add", "description": "Add an emoji reaction to a message" }
+      ]
     },
     {
       "name": "shopify",
@@ -115,7 +195,17 @@
         "token_url": "https://{shop}.myshopify.com/admin/oauth/access_token",
         "pkce": false,
         "docs_url": "https://shopify.dev/docs/apps/auth/get-access-tokens/authorization-code-grant"
-      }
+      },
+      "key_tools": [
+        { "name": "list_products", "description": "List products with variants, pricing, and inventory" },
+        { "name": "get_product", "description": "Get full product details including all variants" },
+        { "name": "list_orders", "description": "List orders with status, customer, and line item filters" },
+        { "name": "get_order", "description": "Get full order details including shipping and payment" },
+        { "name": "list_customers", "description": "List customers with order history and tags" },
+        { "name": "update_order", "description": "Update order notes, tags, or shipping address" },
+        { "name": "create_fulfillment", "description": "Fulfill an order with tracking info" },
+        { "name": "list_inventory_levels", "description": "Get stock levels across locations" }
+      ]
     },
     {
       "name": "snowflake",
@@ -128,7 +218,17 @@
         "token_url": "https://<account>.snowflakecomputing.com/oauth/token-request",
         "pkce": false,
         "docs_url": "https://docs.snowflake.com/en/user-guide/oauth-custom"
-      }
+      },
+      "key_tools": [
+        { "name": "execute_statement", "description": "Execute a SQL statement and get results" },
+        { "name": "fetch_results", "description": "Fetch paginated results from a running query" },
+        { "name": "cancel_statement", "description": "Cancel a running query by statement handle" },
+        { "name": "list_databases", "description": "List all accessible databases in the account" },
+        { "name": "list_schemas", "description": "List all schemas within a database" },
+        { "name": "list_tables", "description": "List tables and views in a schema" },
+        { "name": "describe_table", "description": "Get column definitions and data types for a table" },
+        { "name": "list_warehouses", "description": "List virtual warehouses and their current status" }
+      ]
     }
   ]
 }
