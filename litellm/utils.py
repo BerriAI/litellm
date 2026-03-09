@@ -3797,6 +3797,9 @@ def pre_process_optional_params(
             and custom_llm_provider != "xai"
             and custom_llm_provider != "ai21_chat"
             and custom_llm_provider != "volcengine"
+            and custom_llm_provider != "volcengine_plan"
+            and custom_llm_provider != "byteplus"
+            and custom_llm_provider != "byteplus_plan"
             and custom_llm_provider != "deepseek"
             and custom_llm_provider != "codestral"
             and custom_llm_provider != "mistral"
@@ -4437,6 +4440,39 @@ def get_optional_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "volcengine":
         optional_params = litellm.VolcEngineConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+    elif custom_llm_provider == "volcengine_plan":
+        optional_params = litellm.VolcEnginePlanChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+    elif custom_llm_provider == "byteplus":
+        optional_params = litellm.BytePlusChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+    elif custom_llm_provider == "byteplus_plan":
+        optional_params = litellm.BytePlusPlanChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -6284,11 +6320,16 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("AI21_API_KEY")
-        elif custom_llm_provider == "volcengine":
-            if "VOLCENGINE_API_KEY" in os.environ:
+        elif custom_llm_provider == "volcengine" or custom_llm_provider == "volcengine_plan":
+            if "VOLCENGINE_API_KEY" in os.environ or "ARK_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("VOLCENGINE_API_KEY")
+        elif custom_llm_provider == "byteplus" or custom_llm_provider == "byteplus_plan":
+            if "BYTEPLUS_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BYTEPLUS_API_KEY")
         elif (
             custom_llm_provider == "codestral"
             or custom_llm_provider == "text-completion-codestral"

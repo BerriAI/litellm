@@ -262,6 +262,9 @@ LLM_CONFIG_NAMES = (
     "ZAIChatConfig",
     "AIMLChatConfig",
     "VolcEngineChatConfig",
+    "VolcEnginePlanChatConfig",
+    "BytePlusChatConfig",
+    "BytePlusPlanChatConfig",
     "CodestralTextCompletionConfig",
     "AzureOpenAIAssistantsAPIConfig",
     "HerokuChatConfig",
@@ -1009,6 +1012,18 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "VolcEngineChatConfig": (
         ".llms.volcengine.chat.transformation",
         "VolcEngineChatConfig",
+    ),
+    "VolcEnginePlanChatConfig": (
+        ".llms.volcengine_plan.chat.transformation",
+        "VolcEnginePlanChatConfig",
+    ),
+    "BytePlusChatConfig": (
+        ".llms.byteplus.chat.transformation",
+        "BytePlusChatConfig",
+    ),
+    "BytePlusPlanChatConfig": (
+        ".llms.byteplus_plan.chat.transformation",
+        "BytePlusPlanChatConfig",
     ),
     "CodestralTextCompletionConfig": (
         ".llms.codestral.completion.transformation",
