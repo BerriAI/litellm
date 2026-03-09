@@ -283,8 +283,35 @@ class TestAgentCoreStreamingJsonFallback:
         mock_response.read.return_value = b"not valid json {{"
 
         with patch.object(client, "post", return_value=mock_response):
-            with pytest.raises(Exception, match="Failed to parse JSON response body"):
+            with pytest.raises(Exception, match="Failed to read/parse JSON response body"):
                 litellm.completion(
+                    model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
+                    messages=[{"role": "user", "content": "test"}],
+                    stream=True,
+                    client=client,
+                )
+
+    async def test_async_streaming_malformed_json_raises_error(self):
+        """
+        Async mirror: malformed JSON body raises a structured error, not a
+        raw JSONDecodeError.
+        """
+        from unittest.mock import AsyncMock
+
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        client = AsyncHTTPHandler()
+
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.aread = AsyncMock(return_value=b"not valid json {{")
+
+        with patch.object(
+            client, "post", new_callable=AsyncMock, return_value=mock_response
+        ):
+            with pytest.raises(Exception, match="Failed to read/parse JSON response body"):
+                await litellm.acompletion(
                     model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                     messages=[{"role": "user", "content": "test"}],
                     stream=True,

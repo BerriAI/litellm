@@ -642,10 +642,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             try:
                 body = response.read()
                 response_json = json.loads(body)
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,
-                    message=f"AgentCore: Failed to parse JSON response body: {e}",
+                    message=f"AgentCore: Failed to read/parse JSON response body: {e}",
                 )
             parsed = self._parse_json_response(response_json)
 
@@ -856,10 +856,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             try:
                 body = await response.aread()
                 response_json = json.loads(body)
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,
-                    message=f"AgentCore: Failed to parse JSON response body: {e}",
+                    message=f"AgentCore: Failed to read/parse JSON response body: {e}",
                 )
             parsed = self._parse_json_response(response_json)
 
