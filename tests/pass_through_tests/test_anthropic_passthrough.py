@@ -395,7 +395,7 @@ async def test_anthropic_messages_openai_model_streaming_cost_injection():
 
     payload = {
         "model": "openai/gpt-4o",
-        "max_tokens": 10,
+        "max_tokens": 20,
         "stream": True,
         "messages": [{"role": "user", "content": "Say 'Hi'"}],
     }
