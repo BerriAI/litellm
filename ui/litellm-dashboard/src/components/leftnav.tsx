@@ -103,7 +103,11 @@ const menuGroups: MenuGroup[] = [
       {
         key: "mcp-servers",
         page: "mcp-servers",
-        label: "MCP Servers",
+        label: (
+          <span className="flex items-center gap-2">
+            Team MCPs <NewBadge />
+          </span>
+        ),
         icon: <ToolOutlined />,
       },
       {
