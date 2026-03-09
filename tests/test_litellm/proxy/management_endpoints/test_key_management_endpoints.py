@@ -6831,15 +6831,37 @@ async def test_generate_key_validation_user_id_and_team_id(monkeypatch):
         )
     assert exc.value.code == "404"
 
-    # 3. Non-admin cannot remove user_id on update (guard logic)
-    update_request = UpdateKeyRequest(key="sk-1", user_id=None)
-    update_request.model_fields_set.add("user_id")
-    _update_fields = update_request.model_dump(exclude_unset=True)
-    existing_key = LiteLLM_VerificationToken(token="t", user_id="original-user")
-    is_blocked = (
-        "user_id" in _update_fields
-        and _update_fields["user_id"] is None
-        and existing_key.user_id is not None
-        and LitellmUserRoles.INTERNAL_USER.value != LitellmUserRoles.PROXY_ADMIN.value
+    # 3. Non-admin cannot remove user_id on update (calls update_key_fn)
+    from starlette.requests import Request as StarletteRequest
+    from starlette.datastructures import Headers
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
     )
-    assert is_blocked is True
+
+    # Mock prisma_client.get_data to return an existing key with user_id set
+    mock_prisma_client.get_data = AsyncMock(
+        return_value=LiteLLM_VerificationToken(
+            token="hashed_sk1", user_id="original-user"
+        )
+    )
+
+    # Build a minimal ASGI request
+    scope = {"type": "http", "method": "POST", "headers": [], "query_string": b""}
+    mock_request = StarletteRequest(scope)
+
+    # UpdateKeyRequest with explicit user_id=None
+    update_data = UpdateKeyRequest(key="sk-1", user_id=None)
+    update_data.model_fields_set.add("user_id")
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=update_data,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-user",
+                user_id="original-user",
+            ),
+        )
+    assert exc.value.code == "403"

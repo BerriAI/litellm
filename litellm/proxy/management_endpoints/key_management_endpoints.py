@@ -1168,11 +1168,10 @@ async def generate_key_fn(
 
         # Auto-populate user_id from authenticated user when not provided (non-admins only)
         if data.user_id is None and user_api_key_dict.user_id is not None:
-            if (
-                user_api_key_dict.user_role is None
-                or user_api_key_dict.user_role
-                != LitellmUserRoles.PROXY_ADMIN.value
-            ):
+            if user_api_key_dict.user_role not in [
+                LitellmUserRoles.PROXY_ADMIN.value,
+                LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            ]:
                 data.user_id = user_api_key_dict.user_id
 
         # Validate budget values are not negative
@@ -1894,7 +1893,11 @@ async def update_key_fn(
             "user_id" in _update_fields
             and _update_fields["user_id"] is None
             and existing_key_row.user_id is not None
-            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+            and user_api_key_dict.user_role
+            not in [
+                LitellmUserRoles.PROXY_ADMIN.value,
+                LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            ]
         ):
             raise HTTPException(
                 status_code=403,
