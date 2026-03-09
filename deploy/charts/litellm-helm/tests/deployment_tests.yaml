@@ -306,3 +306,21 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].resources
           value: {}
+  - it: should work with deployment strategy
+    template: deployment.yaml
+    set:
+      deploymentStrategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: 1
+          maxSurge: 1
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
