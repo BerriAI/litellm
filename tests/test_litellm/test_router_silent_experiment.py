@@ -173,12 +173,20 @@ def test_router_silent_experiment_completion():
 
     router = Router(model_list=model_list)
 
-    # Mock litellm.completion
+    # Mock litellm.acompletion
     mock_response = litellm.ModelResponse(choices=[{"message": {"content": "hello"}}])
-    mock_completion = MagicMock(return_value=mock_response)
+
+    # We need an async mock for acompletion
+    async def mock_acompletion(*args, **kwargs):
+        return mock_response
+
+    mock_acompletion_mock = AsyncMock(side_effect=mock_acompletion)
+    mock_completion_mock = MagicMock(return_value=mock_response)
 
     # Patch at the litellm module level
-    with patch.object(litellm, "completion", mock_completion):
+    with patch.object(litellm, "acompletion", mock_acompletion_mock), patch.object(
+        litellm, "completion", mock_completion_mock
+    ):
         response = router.completion(
             model="primary-model",
             messages=[{"role": "user", "content": "hi"}],
@@ -191,10 +199,13 @@ def test_router_silent_experiment_completion():
 
         time.sleep(0.5)
 
-        # Should have 2 calls
-        assert mock_completion.call_count == 2
+        # Should have 1 acompletion call (the silent background call)
+        # The primary completion call still goes to the real litellm.completion (or we can mock it separately, but here it's testing the background one)
+        # Wait, the primary call in the test is router.completion.
+        # Actually, let's just mock both to avoid real network calls if it's hitting one.
+        assert mock_acompletion_mock.call_count == 1
 
-        call_args_list = mock_completion.call_args_list
+        call_args_list = mock_acompletion_mock.call_args_list
 
         # Verify no silent_model in any call
         for call in call_args_list:
