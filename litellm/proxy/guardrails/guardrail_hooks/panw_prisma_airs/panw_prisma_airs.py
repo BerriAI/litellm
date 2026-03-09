@@ -1883,7 +1883,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 "metadata": {
                     "ecosystem": "mcp",
                     "method": "tools/call",
-                    "server_name": self._get_mcp_server_name(request_data, mcp_tool_name),
+                    "server_name": self._get_mcp_server_name(
+                        request_data, mcp_tool_name
+                    ),
                     "tool_invoked": mcp_tool_name,
                 },
             }

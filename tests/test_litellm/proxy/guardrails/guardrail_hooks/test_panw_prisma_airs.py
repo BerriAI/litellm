@@ -2579,9 +2579,7 @@ class TestPanwAirsMcpToolEventScan:
 
         with patch.object(
             PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -2690,9 +2688,7 @@ class TestPanwAirsMcpToolEventScan:
 
         with patch.object(
             PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -2704,7 +2700,10 @@ class TestPanwAirsMcpToolEventScan:
             call_kwargs = mock_api.call_args.kwargs
             te = call_kwargs["tool_event"]
             assert_canonical_tool_event(
-                te, ecosystem="mcp", server_name="test_server", tool_invoked="list_tools"
+                te,
+                ecosystem="mcp",
+                server_name="test_server",
+                tool_invoked="list_tools",
             )
             assert "input" not in te
 
@@ -2721,9 +2720,7 @@ class TestPanwAirsMcpToolEventScan:
 
         with patch.object(
             PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -2803,9 +2800,7 @@ class TestPanwAirsRestMcpFallback:
 
         with patch.object(
             PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -2869,9 +2864,7 @@ class TestPanwAirsRestMcpFallback:
 
         with patch.object(
             PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -2923,9 +2916,7 @@ class TestPanwAirsDuplicateScanRegression:
 
         with patch.object(
             PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -3863,9 +3854,7 @@ class TestPanwAirsMcpRestToolInvoked:
 
         with patch.object(
             PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
