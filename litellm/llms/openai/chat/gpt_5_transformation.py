@@ -157,17 +157,34 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             )
 
         # Normalize reasoning_effort: chat completion API expects a string, not a dict
-        # (e.g. {'effort': 'high', 'summary': 'detailed'} -> 'high')
+        # (e.g. {'effort': 'high'} -> 'high')
+        # BUT: preserve dict format if it has additional fields like 'summary' for Responses API
         raw_reasoning_effort = (
             non_default_params.get("reasoning_effort")
             or optional_params.get("reasoning_effort")
         )
-        normalized = _normalize_reasoning_effort_for_chat_completion(raw_reasoning_effort)
-        if raw_reasoning_effort is not None and normalized is not None:
-            if "reasoning_effort" in non_default_params:
-                non_default_params["reasoning_effort"] = normalized
-            if "reasoning_effort" in optional_params:
-                optional_params["reasoning_effort"] = normalized
+        
+        # Only normalize if it's a simple dict with just 'effort' key
+        # Preserve dict format if it has additional fields (e.g., 'summary') for Responses API
+        should_normalize = False
+        if isinstance(raw_reasoning_effort, dict):
+            # Only normalize if dict has only 'effort' key (or is empty)
+            if set(raw_reasoning_effort.keys()) == {"effort"} or len(raw_reasoning_effort) == 0:
+                should_normalize = True
+        elif isinstance(raw_reasoning_effort, str):
+            # String format is already normalized
+            should_normalize = False
+        
+        if should_normalize:
+            normalized = _normalize_reasoning_effort_for_chat_completion(raw_reasoning_effort)
+            if raw_reasoning_effort is not None and normalized is not None:
+                if "reasoning_effort" in non_default_params:
+                    non_default_params["reasoning_effort"] = normalized
+                if "reasoning_effort" in optional_params:
+                    optional_params["reasoning_effort"] = normalized
+        else:
+            # Keep the original format (string or dict with additional fields)
+            normalized = raw_reasoning_effort
 
         reasoning_effort = normalized or raw_reasoning_effort
         if reasoning_effort is not None and reasoning_effort == "xhigh":

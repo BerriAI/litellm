@@ -1318,3 +1318,488 @@ def test_transform_response_preserves_annotations():
     assert result.usage.total_tokens == 30
 
     print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
+
+
+def test_multi_tool_call_stream_no_premature_finish():
+    """
+    Regression test for multi-tool-call streaming bug.
+
+    When a response contains multiple tool calls, the stream used to be prematurely
+    terminated after the first output_item.done event because that handler emitted
+    finish_reason="tool_calls". This caused ~58% of streaming requests with multiple
+    tool calls to fail.
+
+    The fix: output_item.done for function_call emits delta=Delta() and finish_reason=None.
+    Only response.completed emits the terminal finish_reason.
+
+    Synthetic event sequence:
+      response.created
+      response.output_item.added   (function_call: read_file,  call_id: call_1)
+      response.function_call_arguments.delta  (read_file args)
+      response.output_item.done    (function_call: read_file)   <- must NOT end stream
+      response.output_item.added   (function_call: list_dir,   call_id: call_2)
+      response.function_call_arguments.delta  (list_dir args)
+      response.output_item.done    (function_call: list_dir)    <- must NOT end stream
+      response.completed           (response with 2 function_call outputs)  <- terminal
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    chunks = [
+        # 0: response created
+        {"type": "response.created", "response": {"id": "resp_001", "status": "in_progress"}},
+        # 1: first tool call added
+        {
+            "type": "response.output_item.added",
+            "item": {"type": "function_call", "name": "read_file", "call_id": "call_1"},
+        },
+        # 2: first tool call arguments delta
+        {"type": "response.function_call_arguments.delta", "delta": '{"path":"/etc/hostname"}'},
+        # 3: first tool call done  ← must NOT emit finish_reason
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "read_file",
+                "call_id": "call_1",
+                "arguments": '{"path":"/etc/hostname"}',
+            },
+        },
+        # 4: second tool call added
+        {
+            "type": "response.output_item.added",
+            "item": {"type": "function_call", "name": "list_dir", "call_id": "call_2"},
+        },
+        # 5: second tool call arguments delta
+        {"type": "response.function_call_arguments.delta", "delta": '{"path":"/tmp"}'},
+        # 6: second tool call done  ← must NOT emit finish_reason
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "list_dir",
+                "call_id": "call_2",
+                "arguments": '{"path":"/tmp"}',
+            },
+        },
+        # 7: response completed with both tool calls in output  ← ONLY terminal chunk
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_001",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "read_file",
+                        "call_id": "call_1",
+                        "arguments": '{"path":"/etc/hostname"}',
+                    },
+                    {
+                        "type": "function_call",
+                        "name": "list_dir",
+                        "call_id": "call_2",
+                        "arguments": '{"path":"/tmp"}',
+                    },
+                ],
+            },
+        },
+    ]
+
+    results = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    # 1. output_item.done events (indices 3 and 6) must NOT emit finish_reason
+    for done_idx, label in [(3, "read_file done"), (6, "list_dir done")]:
+        r = results[done_idx]
+        assert r is not None, f"{label}: chunk_parser must return a result"
+        assert len(r.choices) > 0, f"{label}: result must have choices"
+        assert r.choices[0].finish_reason is None, (
+            f"{label}: output_item.done must not emit finish_reason (stream would terminate prematurely)"
+        )
+        assert not r.choices[0].delta.tool_calls, (
+            f"{label}: output_item.done must not include a duplicate tool_calls delta"
+        )
+
+    # 2. output_item.added events (indices 1 and 4) should carry name + call_id
+    for added_idx, expected_name, expected_call_id in [
+        (1, "read_file", "call_1"),
+        (4, "list_dir", "call_2"),
+    ]:
+        r = results[added_idx]
+        if r is not None and r.choices and r.choices[0].delta.tool_calls:
+            tc = r.choices[0].delta.tool_calls[0]
+            assert tc.function.name == expected_name, (
+                f"output_item.added for {expected_name}: tool_call name mismatch"
+            )
+            assert tc.id == expected_call_id, (
+                f"output_item.added for {expected_name}: call_id mismatch"
+            )
+
+    # 3. argument delta events (indices 2 and 5) should carry arguments
+    for delta_idx, expected_args, label in [
+        (2, '{"path":"/etc/hostname"}', "read_file args"),
+        (5, '{"path":"/tmp"}', "list_dir args"),
+    ]:
+        r = results[delta_idx]
+        if r is not None and r.choices and r.choices[0].delta.tool_calls:
+            tc = r.choices[0].delta.tool_calls[0]
+            assert tc.function.arguments == expected_args, (
+                f"{label}: argument delta mismatch"
+            )
+
+    # 4. Only response.completed (index 7) emits the terminal finish_reason
+    completed_result = results[7]
+    assert completed_result is not None, "response.completed must return a result"
+    assert len(completed_result.choices) > 0, "response.completed must have choices"
+    assert completed_result.choices[0].finish_reason == "tool_calls", (
+        "response.completed with function_call outputs must emit finish_reason='tool_calls'"
+    )
+
+    # 5. No chunk before the last one should have finish_reason set
+    for idx, r in enumerate(results[:-1]):
+        if r is not None and r.choices:
+            assert r.choices[0].finish_reason is None, (
+                f"Chunk at index {idx} (type={chunks[idx]['type']!r}) must not emit finish_reason "
+                f"— only response.completed should terminate the stream"
+            )
+
+    print("✓ Multi-tool-call stream completes without premature finish_reason termination")
+
+
+# =============================================================================
+# Tests for issue #21331: Parallel tool call indices in streaming
+# =============================================================================
+
+
+def test_streaming_parallel_tool_calls_have_distinct_indices():
+    """
+    Test that parallel tool calls get distinct indices matching output_index
+    from the Responses API streaming chunks.
+
+    Regression test for issue #21331 where all tool calls were emitted with
+    index=0, making it impossible to distinguish parallel calls.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    # Simulate two parallel tool calls with output_index 0 and 1
+    chunks = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_abc",
+                "name": "get_weather",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "item_id": "fc_001",
+            "delta": '{"city": "SF"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_abc",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_002",
+                "call_id": "call_def",
+                "name": "get_weather",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "item_id": "fc_002",
+            "delta": '{"city": "NY"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_002",
+                "call_id": "call_def",
+                "name": "get_weather",
+                "arguments": '{"city": "NY"}',
+            },
+        },
+    ]
+
+    for chunk in chunks:
+        result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            chunk
+        )
+        expected_index = chunk["output_index"]
+        for choice in result.choices:
+            if choice.delta.tool_calls:
+                for tc in choice.delta.tool_calls:
+                    assert tc.index == expected_index, (
+                        f"Event {chunk['type']}: expected tool_call.index={expected_index}, "
+                        f"got {tc.index}"
+                    )
+
+
+# =============================================================================
+# Comprehensive integration test: parallel tool calls with split argument deltas
+# =============================================================================
+
+
+def test_parallel_tool_calls_comprehensive_streaming_integration():
+    """
+    Comprehensive integration test for parallel tool calls via Responses API streaming.
+
+    Regression test combining all fix invariants in a single end-to-end scenario
+    with split argument deltas — the exact event sequence that was broken before
+    the fix to output_item.done.
+
+    Synthesized SSE event sequence:
+      response.created
+      response.output_item.added   {output_index:0, type:function_call, call_id:call_1, name:read_file}
+      response.function_call_arguments.delta  {output_index:0, delta:'{"path"'}
+      response.function_call_arguments.delta  {output_index:0, delta:'":"/etc/foo"}'}
+      response.output_item.done    {output_index:0, item:{type:function_call, call_id:call_1}}
+      response.output_item.added   {output_index:1, type:function_call, call_id:call_2, name:list_dir}
+      response.function_call_arguments.delta  {output_index:1, delta:'{"path"'}
+      response.function_call_arguments.delta  {output_index:1, delta:'":"/tmp"}'}
+      response.output_item.done    {output_index:1, item:{type:function_call, call_id:call_2}}
+      response.completed           {response:{status:completed, output:[call_1, call_2]}}
+
+    Asserts:
+    1. No output_item.done chunk emits finish_reason (no premature stream termination)
+    2. Each call_id appears exactly once in assembled tool_call IDs (no duplicates)
+    3. Final assembled arguments are correct — split deltas concatenate to valid JSON
+    4. Exactly one finish event, at the final response.completed chunk
+    5. Two parallel tool calls have distinct indices (output_index 0 and 1)
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chunks = [
+        # 0: response.created
+        {"type": "response.created", "response": {"id": "resp_001", "status": "in_progress"}},
+        # 1: call_1 (read_file) added — output_index=0
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "function_call", "name": "read_file", "call_id": "call_1"},
+        },
+        # 2: call_1 argument delta part 1 — split across two deltas
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": '{"path":',
+        },
+        # 3: call_1 argument delta part 2
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": '"/etc/foo"}',
+        },
+        # 4: call_1 done — must NOT emit finish_reason or duplicate tool_call chunk
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "name": "read_file",
+                "call_id": "call_1",
+                "arguments": '{"path":"/etc/foo"}',  # full JSON, assembled from the two deltas
+            },
+        },
+        # 5: call_2 (list_dir) added — output_index=1
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {"type": "function_call", "name": "list_dir", "call_id": "call_2"},
+        },
+        # 6: call_2 argument delta part 1
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "delta": '{"path":',
+        },
+        # 7: call_2 argument delta part 2
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "delta": '"/tmp"}',
+        },
+        # 8: call_2 done — must NOT emit finish_reason or duplicate tool_call chunk
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "name": "list_dir",
+                "call_id": "call_2",
+                "arguments": '{"path":"/tmp"}',
+            },
+        },
+        # 9: response.completed — the ONLY terminal chunk
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_001",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "read_file",
+                        "call_id": "call_1",
+                        "arguments": '{"path":"/etc/foo"}',
+                    },
+                    {
+                        "type": "function_call",
+                        "name": "list_dir",
+                        "call_id": "call_2",
+                        "arguments": '{"path":"/tmp"}',
+                    },
+                ],
+            },
+        },
+    ]
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    results = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    # 1. output_item.done events (indices 4 and 8) must NOT emit finish_reason
+    for done_idx, label in [(4, "read_file done"), (8, "list_dir done")]:
+        r = results[done_idx]
+        assert r is not None, f"{label}: chunk_parser must return a result"
+        assert len(r.choices) > 0, f"{label}: result must have choices"
+        assert r.choices[0].finish_reason is None, (
+            f"{label}: output_item.done must not emit finish_reason "
+            f"(would prematurely terminate stream before subsequent tool calls arrive)"
+        )
+        assert not r.choices[0].delta.tool_calls, (
+            f"{label}: output_item.done must not emit a duplicate tool_calls delta"
+        )
+
+    # 2. Each call_id appears exactly once in assembled tool_call IDs
+    # Only output_item.added emits id-bearing tool_call chunks; output_item.done emits Delta()
+    all_tool_call_ids = [
+        tc.id
+        for r in results
+        if r is not None and r.choices and r.choices[0].delta.tool_calls
+        for tc in r.choices[0].delta.tool_calls
+        if tc.id
+    ]
+    assert all_tool_call_ids.count("call_1") == 1, (
+        f"call_1 must appear exactly once in assembled tool_call IDs, "
+        f"got {all_tool_call_ids.count('call_1')} (duplicates indicate output_item.done still emits tool_call)"
+    )
+    assert all_tool_call_ids.count("call_2") == 1, (
+        f"call_2 must appear exactly once in assembled tool_call IDs, "
+        f"got {all_tool_call_ids.count('call_2')} (duplicates indicate output_item.done still emits tool_call)"
+    )
+
+    # 3. Final assembled arguments are correct when split deltas are concatenated
+    # output_item.added emits arguments="" (empty); the two deltas provide the content
+    assembled_args: dict = {}
+    for r in results:
+        if r is None or not r.choices:
+            continue
+        tool_calls = r.choices[0].delta.tool_calls
+        if not tool_calls:
+            continue
+        for tc in tool_calls:
+            if tc.function and tc.function.arguments:
+                idx = tc.index
+                assembled_args[idx] = assembled_args.get(idx, "") + tc.function.arguments
+
+    # delta 1 = '{"path":' + delta 2 = '"/etc/foo"}' → '{"path":"/etc/foo"}'
+    assert assembled_args.get(0) == '{"path":"/etc/foo"}', (
+        f"Assembled args for index 0 (read_file): "
+        f"expected '{{\"path\":\"/etc/foo\"}}', got '{assembled_args.get(0)}'"
+    )
+    # delta 1 = '{"path":' + delta 2 = '"/tmp"}' → '{"path":"/tmp"}'
+    assert assembled_args.get(1) == '{"path":"/tmp"}', (
+        f"Assembled args for index 1 (list_dir): "
+        f"expected '{{\"path\":\"/tmp\"}}', got '{assembled_args.get(1)}'"
+    )
+
+    # 4. Stream terminates with exactly one finish event, at the final response.completed chunk
+    finish_events = [
+        (i, r.choices[0].finish_reason)
+        for i, r in enumerate(results)
+        if r is not None and r.choices and r.choices[0].finish_reason
+    ]
+    assert len(finish_events) == 1, (
+        f"Expected exactly 1 finish event, got {len(finish_events)}: {finish_events}"
+    )
+    assert finish_events[0][0] == len(chunks) - 1, (
+        f"Finish event must be at the last chunk (index {len(chunks) - 1}), "
+        f"but was at index {finish_events[0][0]}"
+    )
+    assert finish_events[0][1] == "tool_calls", (
+        f"Terminal finish_reason must be 'tool_calls', got '{finish_events[0][1]}'"
+    )
+
+    # 5. Parallel tool calls have distinct indices matching output_index (0 and 1)
+    # Collect indices from output_item.added chunks only (they carry the call id)
+    added_tool_call_indices = [
+        tc.index
+        for r in results
+        if r is not None and r.choices and r.choices[0].delta.tool_calls
+        for tc in r.choices[0].delta.tool_calls
+        if tc.id  # output_item.added chunks carry the id; argument deltas do not
+    ]
+    assert set(added_tool_call_indices) == {0, 1}, (
+        f"Parallel tool calls must have distinct indices {{0, 1}}, got: {set(added_tool_call_indices)}"
+    )
+
+    print("✓ Parallel tool calls with split argument deltas stream correctly end-to-end")
+
+
+def test_map_optional_params_preserves_reasoning_summary():
+    """Test that reasoning_effort dict with summary field is preserved.
+    
+    Regression test for: User reported that summary field was being dropped
+    when routing to Responses API. The dict format should be fully preserved.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    optional_params = {
+        "stream": False,
+        "tools": [{"type": "function", "function": {"name": "test_tool"}}],
+        "tool_choice": "auto",
+        "reasoning_effort": {"effort": "high", "summary": "detailed"},
+    }
+
+    responses_api_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        optional_params, responses_api_request
+    )
+
+    # Verify reasoning_effort dict with summary was fully preserved
+    assert "reasoning" in responses_api_request
+    assert responses_api_request["reasoning"] == {"effort": "high", "summary": "detailed"}
+    assert responses_api_request["reasoning"]["effort"] == "high"
+    assert responses_api_request["reasoning"]["summary"] == "detailed"
