@@ -1384,17 +1384,6 @@ try:
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
-    # Register the MCP OAuth callback route BEFORE mounting the /ui StaticFiles
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _build_mcp_oauth_callback_html,
-    )
-
-    @app.get("/ui/mcp/oauth/callback", include_in_schema=False)
-    async def _mcp_oauth_ui_callback(
-        code: Optional[str] = None, state: Optional[str] = None
-    ) -> HTMLResponse:
-        return HTMLResponse(content=_build_mcp_oauth_callback_html(code, state))
-
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
     def _restructure_ui_html_files(ui_root: str) -> None:
@@ -1455,6 +1444,23 @@ try:
 
 except Exception:
     pass
+
+# Register the MCP OAuth callback route unconditionally (outside UI setup try block)
+# This ensures it works even when static files are unavailable (pip install, read-only fs)
+try:
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_mcp_oauth_callback_html,
+    )
+
+    @app.get("/ui/mcp/oauth/callback", include_in_schema=False)
+    async def _mcp_oauth_ui_callback(
+        code: Optional[str] = None, state: Optional[str] = None
+    ) -> HTMLResponse:
+        return HTMLResponse(content=_build_mcp_oauth_callback_html(code, state))
+except ImportError:
+    # MCP endpoints not available in this installation
+    pass
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # ui_path = os.path.join(current_dir, "_experimental", "out")
 # # Mount this test directory instead
