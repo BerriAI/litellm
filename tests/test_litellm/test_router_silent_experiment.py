@@ -173,12 +173,15 @@ def test_router_silent_experiment_completion():
 
     router = Router(model_list=model_list)
 
-    # Mock litellm.completion
+    # Mock litellm.completion for primary call and litellm.acompletion for shadow call
     mock_response = litellm.ModelResponse(choices=[{"message": {"content": "hello"}}])
     mock_completion = MagicMock(return_value=mock_response)
+    mock_acompletion = AsyncMock(return_value=mock_response)
 
     # Patch at the litellm module level
-    with patch.object(litellm, "completion", mock_completion):
+    with patch.object(litellm, "completion", mock_completion), patch.object(
+        litellm, "acompletion", mock_acompletion
+    ):
         response = router.completion(
             model="primary-model",
             messages=[{"role": "user", "content": "hi"}],
@@ -191,24 +194,124 @@ def test_router_silent_experiment_completion():
 
         time.sleep(0.5)
 
-        # Should have 2 calls
-        assert mock_completion.call_count == 2
+        # Should have 1 call to completion (primary) and 1 call to acompletion (shadow)
+        assert mock_completion.call_count == 1
+        assert mock_acompletion.call_count == 1
 
-        call_args_list = mock_completion.call_args_list
+        primary_args, primary_kwargs = mock_completion.call_args
+        silent_args, silent_kwargs = mock_acompletion.call_args
 
         # Verify no silent_model in any call
-        for call in call_args_list:
-            args, kwargs = call
-            assert "silent_model" not in kwargs
+        assert "silent_model" not in primary_kwargs
+        assert "silent_model" not in silent_kwargs
 
-        # Find the silent call
+        assert silent_kwargs.get("metadata", {}).get("is_silent_experiment") is True
+        assert silent_kwargs["model"] == "openai/gpt-4"
+        assert silent_kwargs.get("stream") is False
+
+        assert (
+            primary_kwargs.get("metadata", {}).get("is_silent_experiment") is not True
+        )
+        assert primary_kwargs["model"] == "openai/gpt-3.5-turbo"
+
+
+def test_silent_experiment_forces_stream_false():
+    """Verify that _get_silent_experiment_kwargs() sets stream=False even if stream=True in kwargs."""
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    kwargs = {"stream": True, "metadata": {}}
+    result = router._get_silent_experiment_kwargs(**kwargs)
+    assert result["stream"] is False
+
+
+def test_silent_experiment_sets_zero_retries():
+    """Verify num_retries=0 in silent kwargs."""
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    kwargs = {"num_retries": 3, "metadata": {}}
+    result = router._get_silent_experiment_kwargs(**kwargs)
+    assert result["num_retries"] == 0
+
+
+@pytest.mark.asyncio
+async def test_silent_experiment_streaming_primary_triggers_shadow():
+    """
+    Mock a streaming primary request and verify the silent model call is made with stream=False
+    and both primary + silent calls complete.
+    """
+    model_list = [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {
+                "model": "openai/gpt-3.5-turbo",
+                "api_key": "fake-key",
+                "silent_model": "silent-model",
+            },
+        },
+        {
+            "model_name": "silent-model",
+            "litellm_params": {
+                "model": "openai/gpt-4",
+                "api_key": "fake-key",
+            },
+        },
+    ]
+
+    router = Router(model_list=model_list)
+
+    mock_response = litellm.ModelResponse(choices=[{"message": {"content": "hello"}}])
+    mock_acompletion = AsyncMock(return_value=mock_response)
+
+    with patch.object(litellm, "acompletion", mock_acompletion):
+        await router.acompletion(
+            model="primary-model",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+
+        await asyncio.sleep(0.1)
+
+        assert mock_acompletion.call_count == 2
+        calls = mock_acompletion.call_args_list
+
         silent_call = next(
             (
                 c
-                for c in call_args_list
+                for c in calls
                 if c[1].get("metadata", {}).get("is_silent_experiment") is True
             ),
             None,
         )
         assert silent_call is not None
-        assert silent_call[1]["model"] == "openai/gpt-4"
+        assert silent_call[1].get("stream") is False
+
+
+def test_silent_experiment_sync_uses_async_path():
+    """Verify the sync _silent_experiment_completion calls acompletion (not completion)."""
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    messages = [{"role": "user", "content": "hi"}]
+
+    with patch.object(
+        router, "acompletion", new_callable=AsyncMock, return_value=None
+    ) as mock_acompletion:
+        router._silent_experiment_completion(
+            silent_model="gpt-3.5-turbo",
+            messages=messages,
+        )
+        mock_acompletion.assert_called_once()
