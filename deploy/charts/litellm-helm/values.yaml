@@ -33,7 +33,7 @@ deploymentAnnotations: {}
 deploymentLabels: {}
 
 # Deployment update strategy
-# deploymentStrategy: {}
+# deploymentStrategy:
 #   type: RollingUpdate
 #   rollingUpdate:
 #     maxUnavailable: 25%
