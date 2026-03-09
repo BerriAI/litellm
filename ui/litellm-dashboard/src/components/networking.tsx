@@ -78,7 +78,12 @@ import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 
 const isLocal = process.env.NODE_ENV === "development";
-const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+// In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
+// to the backend — use relative URLs (null) so rewrites can intercept them.
+const defaultProxyBaseUrl =
+  isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+    ? "http://localhost:4000"
+    : null;
 const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
@@ -98,7 +103,10 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
    * Special function for updating the proxy base url. Should only be called by getUiConfig.
    */
   const browserLocation = getWindowLocation();
-  const resolvedDefaultProxyBaseUrl = isLocal ? "http://localhost:4000" : browserLocation?.origin ?? null;
+  const resolvedDefaultProxyBaseUrl =
+    isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+      ? "http://localhost:4000"
+      : browserLocation?.origin ?? null;
   let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
   console.log("proxyBaseUrl:", proxyBaseUrl);
   console.log("serverRootPath:", serverRootPath);
@@ -6241,6 +6249,27 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
     console.error("Failed to update internal user settings:", error);
     throw error;
   }
+};
+
+export const fetchOpenAPIRegistry = async (accessToken: string) => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/openapi-registry`
+    : `/v1/mcp/openapi-registry`;
+
+  const response = await fetch(url, {
+    method: HTTP_REQUEST.GET,
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(deriveErrorMessage(errorData));
+  }
+
+  return await response.json();
 };
 
 export const fetchDiscoverableMCPServers = async (accessToken: string) => {

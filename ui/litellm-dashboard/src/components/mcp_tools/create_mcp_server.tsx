@@ -10,6 +10,7 @@ import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
+import OpenAPIFormSection from "./OpenAPIFormSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -603,25 +604,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {/* OpenAPI Spec URL - only show for OpenAPI transport */}
+            {/* OpenAPI: logo picker + spec URL input */}
             {transportType === TRANSPORT.OPENAPI && (
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    OpenAPI Spec URL
-                    <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                    </Tooltip>
-                  </span>
+              <OpenAPIFormSection
+                form={form}
+                accessToken={accessToken}
+                onValuesChange={(updates) =>
+                  setFormValues((prev) => ({ ...prev, ...updates }))
                 }
-                name="spec_path"
-                rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
-              >
-                <Input
-                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
+              />
             )}
 
             {/* BYOK toggle - only for OpenAPI */}

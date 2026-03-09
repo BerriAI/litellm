@@ -1,0 +1,134 @@
+{
+  "apis": [
+    {
+      "name": "github",
+      "title": "GitHub",
+      "description": "Repos, issues, PRs, and workflow automation via the GitHub REST API",
+      "icon_url": "https://cdn.simpleicons.org/github",
+      "spec_url": "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json",
+      "oauth": {
+        "authorization_url": "https://github.com/login/oauth/authorize",
+        "token_url": "https://github.com/login/oauth/access_token",
+        "pkce": false,
+        "docs_url": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app"
+      }
+    },
+    {
+      "name": "atlassian",
+      "title": "Atlassian",
+      "description": "Jira issues, Confluence pages, and project management",
+      "icon_url": "https://cdn.simpleicons.org/atlassian",
+      "spec_url": "https://dac-static.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+      "oauth": {
+        "authorization_url": "https://auth.atlassian.com/authorize",
+        "token_url": "https://auth.atlassian.com/oauth/token",
+        "pkce": true,
+        "docs_url": "https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/"
+      }
+    },
+    {
+      "name": "figma",
+      "title": "Figma",
+      "description": "Design files, components, prototypes, and comments",
+      "icon_url": "https://cdn.simpleicons.org/figma",
+      "spec_url": "https://raw.githubusercontent.com/figma/rest-api-spec/main/openapi/openapi.yaml",
+      "oauth": {
+        "authorization_url": "https://www.figma.com/oauth",
+        "token_url": "https://www.figma.com/api/oauth/token",
+        "pkce": false,
+        "docs_url": "https://www.figma.com/developers/api#oauth2"
+      }
+    },
+    {
+      "name": "google",
+      "title": "Google APIs",
+      "description": "Gmail, Calendar, Drive, and other Google services",
+      "icon_url": "https://cdn.simpleicons.org/google",
+      "spec_url": "https://www.googleapis.com/discovery/v1/apis",
+      "oauth": {
+        "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "pkce": true,
+        "docs_url": "https://developers.google.com/identity/protocols/oauth2/web-server"
+      }
+    },
+    {
+      "name": "stripe",
+      "title": "Stripe",
+      "description": "Payments, customers, subscriptions, and billing",
+      "icon_url": "https://cdn.simpleicons.org/stripe",
+      "spec_url": "https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json",
+      "oauth": {
+        "authorization_url": "https://connect.stripe.com/oauth/authorize",
+        "token_url": "https://connect.stripe.com/oauth/token",
+        "pkce": false,
+        "docs_url": "https://stripe.com/docs/connect/oauth-reference"
+      }
+    },
+    {
+      "name": "hubspot",
+      "title": "HubSpot",
+      "description": "CRM contacts, deals, companies, and marketing automation",
+      "icon_url": "https://cdn.simpleicons.org/hubspot",
+      "spec_url": "https://raw.githubusercontent.com/HubSpot/HubSpot-public-api-spec-collection/main/PublicApiSpecs/CRM/Contacts/Rollouts/424/v3/contacts.json",
+      "oauth": {
+        "authorization_url": "https://app.hubspot.com/oauth/authorize",
+        "token_url": "https://api.hubspot.com/oauth/v1/token",
+        "pkce": false,
+        "docs_url": "https://developers.hubspot.com/docs/api/oauth-quickstart-guide"
+      }
+    },
+    {
+      "name": "notion",
+      "title": "Notion",
+      "description": "Pages, databases, and workspace content in Notion",
+      "icon_url": "https://cdn.simpleicons.org/notion",
+      "spec_url": "https://raw.githubusercontent.com/TakashiSasaki/notion-openapi/main/Page/notion_api_page_management_v1.yaml",
+      "oauth": {
+        "authorization_url": "https://api.notion.com/v1/oauth/authorize",
+        "token_url": "https://api.notion.com/v1/oauth/token",
+        "pkce": false,
+        "docs_url": "https://developers.notion.com/docs/authorization"
+      }
+    },
+    {
+      "name": "slack",
+      "title": "Slack",
+      "description": "Channels, messages, users, and workspace management",
+      "icon_url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/slack.svg",
+      "spec_url": "https://raw.githubusercontent.com/slackapi/slack-api-specs/master/web-api/slack_web_openapi_v2.json",
+      "oauth": {
+        "authorization_url": "https://slack.com/oauth/v2/authorize",
+        "token_url": "https://slack.com/api/oauth.v2.access",
+        "pkce": false,
+        "docs_url": "https://api.slack.com/authentication/oauth-v2"
+      }
+    },
+    {
+      "name": "shopify",
+      "title": "Shopify",
+      "description": "Products, orders, customers, and store management",
+      "icon_url": "https://cdn.simpleicons.org/shopify",
+      "spec_url": "https://raw.githubusercontent.com/allengrant/shopify_openapi/master/shopify_openapi.json",
+      "oauth": {
+        "authorization_url": "https://{shop}.myshopify.com/admin/oauth/authorize",
+        "token_url": "https://{shop}.myshopify.com/admin/oauth/access_token",
+        "pkce": false,
+        "docs_url": "https://shopify.dev/docs/apps/auth/get-access-tokens/authorization-code-grant"
+      }
+    },
+    {
+      "name": "snowflake",
+      "title": "Snowflake",
+      "description": "Data warehouse queries, database operations, and analytics via the Snowflake SQL API",
+      "icon_url": "https://cdn.simpleicons.org/snowflake",
+      "spec_url": "https://raw.githubusercontent.com/snowflakedb/snowflake-rest-api-specs/refs/heads/main/specifications/sqlapi.yaml",
+      "oauth": {
+        "authorization_url": "https://<account>.snowflakecomputing.com/oauth/authorize",
+        "token_url": "https://<account>.snowflakecomputing.com/oauth/token-request",
+        "pkce": false,
+        "docs_url": "https://docs.snowflake.com/en/user-guide/oauth-custom"
+      }
+    }
+  ]
+}
