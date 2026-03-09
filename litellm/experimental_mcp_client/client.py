@@ -59,6 +59,8 @@ class MCPSigV4Auth(httpx.Auth):
     for every outgoing request, enabling per-request signature computation.
     """
 
+    requires_request_body = True
+
     def __init__(
         self,
         aws_access_key_id: Optional[str] = None,
@@ -106,16 +108,13 @@ class MCPSigV4Auth(httpx.Auth):
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
 
-        # Build AWSRequest from the httpx Request
+        # Build AWSRequest from the httpx Request.
+        # Pass all request headers so the canonical SigV4 signature covers them.
         aws_request = AWSRequest(
             method=request.method,
             url=str(request.url),
             data=request.content,
-            headers={
-                "Content-Type": request.headers.get(
-                    "Content-Type", "application/json"
-                ),
-            },
+            headers=dict(request.headers),
         )
 
         # Sign the request — SigV4Auth.add_auth() adds Authorization,

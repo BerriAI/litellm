@@ -86,8 +86,8 @@ curl http://localhost:4000/mcp-rest/tools/call \
 | `url` | Yes | AgentCore MCP server URL (with URL-encoded ARN) |
 | `transport` | Yes | Must be `"http"` |
 | `auth_type` | Yes | Must be `"aws_sigv4"` |
-| `aws_access_key_id` | Yes | AWS access key. Supports `os.environ/VAR_NAME` |
-| `aws_secret_access_key` | Yes | AWS secret key. Supports `os.environ/VAR_NAME` |
+| `aws_access_key_id` | No | AWS access key. Supports `os.environ/VAR_NAME`. Falls back to boto3 credential chain if omitted |
+| `aws_secret_access_key` | No | AWS secret key. Supports `os.environ/VAR_NAME`. Falls back to boto3 credential chain if omitted |
 | `aws_region_name` | Yes | AWS region (e.g., `us-east-1`) |
 | `aws_service_name` | No | AWS service name for signing. Defaults to `bedrock-agentcore` |
 | `aws_session_token` | No | AWS session token for temporary credentials. Supports `os.environ/VAR_NAME` |

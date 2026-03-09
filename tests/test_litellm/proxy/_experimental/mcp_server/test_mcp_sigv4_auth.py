@@ -33,6 +33,10 @@ class TestMCPSigV4Auth:
         assert auth.region_name == "us-east-1"
         assert auth.service_name == "bedrock-agentcore"
 
+    def test_requires_request_body_flag(self):
+        """MCPSigV4Auth sets requires_request_body so httpx buffers the body before signing."""
+        assert MCPSigV4Auth.requires_request_body is True
+
     def test_init_defaults(self):
         """MCPSigV4Auth uses correct defaults for region and service."""
         auth = MCPSigV4Auth(
