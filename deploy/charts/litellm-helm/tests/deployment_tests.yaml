@@ -314,9 +314,8 @@ tests:
       - equal:
           path: spec.minReadySeconds
           value: 5
-  - it: should have minReadySeconds default to 0
+  - it: should have minReadySeconds absent when deploymentMinReadySeconds is not set
     template: deployment.yaml
     asserts:
-      - equal:
+      - notExists:
           path: spec.minReadySeconds
-          value: 0

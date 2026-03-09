@@ -16,7 +16,9 @@ spec:
   selector:
     matchLabels:
       {{- include "litellm.selectorLabels" . | nindent 6 }}
-  minReadySeconds: {{ .Values.deploymentMinReadySeconds | default 0 }}
+  {{- if .Values.deploymentMinReadySeconds }}
+  minReadySeconds: {{ .Values.deploymentMinReadySeconds }}
+  {{- end }}
   template:
     metadata:
       annotations:
