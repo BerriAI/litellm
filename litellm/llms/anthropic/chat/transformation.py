@@ -1734,6 +1734,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if compaction_blocks is not None:
                 provider_specific_fields["compaction_blocks"] = compaction_blocks
 
+            # When the response has both thinking blocks and server tool use
+            # (e.g. web search), the content blocks are interleaved in an order
+            # that Anthropic's signature verification depends on.  Store the
+            # original content so the round-trip reconstruction can preserve
+            # the exact block ordering.  (Fixes #23047)
+            if thinking_blocks and tool_calls:
+                _has_server_tools = any(
+                    content.get("type") == "server_tool_use"
+                    for content in completion_response.get("content", [])
+                )
+                if _has_server_tools:
+                    provider_specific_fields["_original_content"] = (
+                        completion_response["content"]
+                    )
+
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,

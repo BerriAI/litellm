@@ -2444,124 +2444,165 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
                     assistant_content.extend(_compaction_blocks)  # type: ignore
 
-            thinking_blocks = assistant_content_block.get("thinking_blocks", None)
-            if (
-                thinking_blocks is not None
-            ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
-                assistant_content.extend(thinking_blocks)
-            if "content" in assistant_content_block and isinstance(
-                assistant_content_block["content"], list
-            ):
-                for m in assistant_content_block["content"]:
-                    # handle thinking blocks
-                    thinking_block = cast(str, m.get("thinking", ""))
-                    text_block = cast(str, m.get("text", ""))
-                    if (
-                        m.get("type", "") == "thinking" and len(thinking_block) > 0
-                    ):  # don't pass empty text blocks. anthropic api raises errors.
-                        anthropic_message: Union[
-                            ChatCompletionThinkingBlock,
-                            AnthropicMessagesTextParam,
-                        ] = cast(ChatCompletionThinkingBlock, m)
-                        assistant_content.append(anthropic_message)
-                    # handle text
-                    elif (
-                        m.get("type", "") == "text" and len(text_block) > 0
-                    ):  # don't pass empty text blocks. anthropic api raises errors.
-                        anthropic_message = AnthropicMessagesTextParam(
-                            type="text", text=text_block
+            # Check for preserved original content block ordering.
+            # When responses have interleaved thinking and server tool use
+            # blocks (e.g. web search), the original interleaving must be
+            # preserved on round-trip or Anthropic's thinking block signature
+            # verification fails.
+            # See: https://github.com/BerriAI/litellm/issues/23047
+            _original_content = None
+            if isinstance(_provider_specific_fields_raw, dict):
+                _original_content = _provider_specific_fields_raw.get(
+                    "_original_content"
+                )
+
+            if _original_content is not None and isinstance(_original_content, list):
+                for _oc_block in _original_content:
+                    _oc_type = _oc_block.get("type", "")
+                    if _oc_type == "text":
+                        _oc_text = _oc_block.get("text", "")
+                        if _oc_text:  # skip empty text blocks
+                            _oc_msg = AnthropicMessagesTextParam(
+                                type="text", text=_oc_text
+                            )
+                            _oc_cached = add_cache_control_to_content(
+                                anthropic_content_element=_oc_msg,
+                                original_content_element=dict(_oc_block),
+                            )
+                            assistant_content.append(
+                                cast(AnthropicMessagesTextParam, _oc_cached)
+                            )
+                    elif _oc_type in ("tool_use", "server_tool_use"):
+                        _oc_id = _oc_block.get("id")
+                        if _oc_id:
+                            if _oc_id in unique_tool_ids:
+                                continue
+                            unique_tool_ids.add(_oc_id)
+                        assistant_content.append(_oc_block)  # type: ignore
+                    else:
+                        # thinking, redacted_thinking, *_tool_result, compaction
+                        assistant_content.append(_oc_block)  # type: ignore
+            else:
+                thinking_blocks = assistant_content_block.get("thinking_blocks", None)
+                if (
+                    thinking_blocks is not None
+                ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
+                    assistant_content.extend(thinking_blocks)
+                if "content" in assistant_content_block and isinstance(
+                    assistant_content_block["content"], list
+                ):
+                    for m in assistant_content_block["content"]:
+                        # handle thinking blocks
+                        thinking_block = cast(str, m.get("thinking", ""))
+                        text_block = cast(str, m.get("text", ""))
+                        if (
+                            m.get("type", "") == "thinking" and len(thinking_block) > 0
+                        ):  # don't pass empty text blocks. anthropic api raises errors.
+                            anthropic_message: Union[
+                                ChatCompletionThinkingBlock,
+                                AnthropicMessagesTextParam,
+                            ] = cast(ChatCompletionThinkingBlock, m)
+                            assistant_content.append(anthropic_message)
+                        # handle text
+                        elif (
+                            m.get("type", "") == "text" and len(text_block) > 0
+                        ):  # don't pass empty text blocks. anthropic api raises errors.
+                            anthropic_message = AnthropicMessagesTextParam(
+                                type="text", text=text_block
+                            )
+                            _cached_message = add_cache_control_to_content(
+                                anthropic_content_element=anthropic_message,
+                                original_content_element=dict(m),
+                            )
+
+                            assistant_content.append(
+                                cast(AnthropicMessagesTextParam, _cached_message)
+                            )
+                        # handle server_tool_use blocks (tool search, web search, etc.)
+                        # Pass through as-is since these are Anthropic-native content types
+                        elif m.get("type", "") == "server_tool_use":
+                            assistant_content.append(m)  # type: ignore
+                        # handle all *_tool_result blocks (tool_search_tool_result,
+                        # web_search_tool_result, bash_code_execution_tool_result, etc.)
+                        # Pass through as-is since these are Anthropic-native content types
+                        elif m.get("type", "").endswith("_tool_result"):
+                            assistant_content.append(m)  # type: ignore
+                elif (
+                    "content" in assistant_content_block
+                    and isinstance(assistant_content_block["content"], str)
+                    and assistant_content_block[
+                        "content"
+                    ]  # don't pass empty text blocks. anthropic api raises errors.
+                ):
+                    _anthropic_text_content_element = AnthropicMessagesTextParam(
+                        type="text",
+                        text=assistant_content_block["content"],
+                    )
+
+                    _content_element = add_cache_control_to_content(
+                        anthropic_content_element=_anthropic_text_content_element,
+                        original_content_element=dict(assistant_content_block),
+                    )
+
+                    if "cache_control" in _content_element:
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
                         )
-                        _cached_message = add_cache_control_to_content(
-                            anthropic_content_element=anthropic_message,
-                            original_content_element=dict(m),
+
+                    assistant_content.append(_anthropic_text_content_element)
+
+                assistant_tool_calls = assistant_content_block.get("tool_calls")
+                if (
+                    assistant_tool_calls is not None
+                ):  # support assistant tool invoke conversion
+                    # Get web_search_results and tool_results from provider_specific_fields
+                    # for server_tool_use reconstruction.
+                    # Fixes: https://github.com/BerriAI/litellm/issues/17737
+                    _provider_specific_fields_raw = assistant_content_block.get(
+                        "provider_specific_fields"
+                    )
+                    _provider_specific_fields: Dict[str, Any] = {}
+                    if isinstance(_provider_specific_fields_raw, dict):
+                        _provider_specific_fields = cast(
+                            Dict[str, Any], _provider_specific_fields_raw
                         )
+                    _web_search_results = _provider_specific_fields.get(
+                        "web_search_results"
+                    )
+                    _tool_results = _provider_specific_fields.get("tool_results")
+                    tool_invoke_results = convert_to_anthropic_tool_invoke(
+                        assistant_tool_calls,
+                        web_search_results=_web_search_results,
+                        tool_results=_tool_results,
+                    )
+
+                    # Prevent "tool_use ids must be unique" errors by filtering duplicates
+                    # This can happen when merging history that already contains the tool calls
+                    for item in tool_invoke_results:
+                        # tool_use items are typically dicts, but handle objects just in case
+                        item_id = (
+                            item.get("id")
+                            if isinstance(item, dict)
+                            else getattr(item, "id", None)
+                        )
+
+                        if item_id:
+                            if item_id in unique_tool_ids:
+                                continue
+                            unique_tool_ids.add(item_id)
 
                         assistant_content.append(
-                            cast(AnthropicMessagesTextParam, _cached_message)
+                            cast(AnthropicMessagesAssistantMessageValues, item)
                         )
-                    # handle server_tool_use blocks (tool search, web search, etc.)
-                    # Pass through as-is since these are Anthropic-native content types
-                    elif m.get("type", "") == "server_tool_use":
-                        assistant_content.append(m)  # type: ignore
-                    # handle all *_tool_result blocks (tool_search_tool_result,
-                    # web_search_tool_result, bash_code_execution_tool_result, etc.)
-                    # Pass through as-is since these are Anthropic-native content types
-                    elif m.get("type", "").endswith("_tool_result"):
-                        assistant_content.append(m)  # type: ignore
-            elif (
-                "content" in assistant_content_block
-                and isinstance(assistant_content_block["content"], str)
-                and assistant_content_block[
-                    "content"
-                ]  # don't pass empty text blocks. anthropic api raises errors.
-            ):
-                _anthropic_text_content_element = AnthropicMessagesTextParam(
-                    type="text",
-                    text=assistant_content_block["content"],
-                )
 
-                _content_element = add_cache_control_to_content(
-                    anthropic_content_element=_anthropic_text_content_element,
-                    original_content_element=dict(assistant_content_block),
-                )
+                assistant_function_call = assistant_content_block.get("function_call")
 
-                if "cache_control" in _content_element:
-                    _anthropic_text_content_element["cache_control"] = _content_element[
-                        "cache_control"
-                    ]
-
-                assistant_content.append(_anthropic_text_content_element)
-
-            assistant_tool_calls = assistant_content_block.get("tool_calls")
-            if (
-                assistant_tool_calls is not None
-            ):  # support assistant tool invoke conversion
-                # Get web_search_results and tool_results from provider_specific_fields
-                # for server_tool_use reconstruction.
-                # Fixes: https://github.com/BerriAI/litellm/issues/17737
-                _provider_specific_fields_raw = assistant_content_block.get(
-                    "provider_specific_fields"
-                )
-                _provider_specific_fields: Dict[str, Any] = {}
-                if isinstance(_provider_specific_fields_raw, dict):
-                    _provider_specific_fields = cast(
-                        Dict[str, Any], _provider_specific_fields_raw
+                if assistant_function_call is not None:
+                    assistant_content.extend(
+                        convert_function_to_anthropic_tool_invoke(
+                            assistant_function_call
+                        )
                     )
-                _web_search_results = _provider_specific_fields.get(
-                    "web_search_results"
-                )
-                _tool_results = _provider_specific_fields.get("tool_results")
-                tool_invoke_results = convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,
-                    web_search_results=_web_search_results,
-                    tool_results=_tool_results,
-                )
-
-                # Prevent "tool_use ids must be unique" errors by filtering duplicates
-                # This can happen when merging history that already contains the tool calls
-                for item in tool_invoke_results:
-                    # tool_use items are typically dicts, but handle objects just in case
-                    item_id = (
-                        item.get("id")
-                        if isinstance(item, dict)
-                        else getattr(item, "id", None)
-                    )
-
-                    if item_id:
-                        if item_id in unique_tool_ids:
-                            continue
-                        unique_tool_ids.add(item_id)
-
-                    assistant_content.append(
-                        cast(AnthropicMessagesAssistantMessageValues, item)
-                    )
-
-            assistant_function_call = assistant_content_block.get("function_call")
-
-            if assistant_function_call is not None:
-                assistant_content.extend(
-                    convert_function_to_anthropic_tool_invoke(assistant_function_call)
-                )
 
             msg_i += 1
 
