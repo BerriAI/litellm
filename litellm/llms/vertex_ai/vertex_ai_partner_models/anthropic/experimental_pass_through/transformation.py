@@ -126,6 +126,38 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
         return api_base  # no transformation is needed - handled in validate_environment
 
+    def _remove_scope_from_cache_control(
+        self, anthropic_messages_request: Dict
+    ) -> None:
+        """
+        Remove `scope` field from cache_control for Vertex AI.
+
+        Vertex AI's Anthropic endpoint does not support the `scope` field
+        (e.g., "global" for cross-request caching). Only `type` and `ttl` are supported.
+
+        Processes both `system` and `messages` content blocks.
+        """
+        def _sanitize(cache_control: Any) -> None:
+            if isinstance(cache_control, dict):
+                cache_control.pop("scope", None)
+
+        def _process_content_list(content: list) -> None:
+            for item in content:
+                if isinstance(item, dict) and "cache_control" in item:
+                    _sanitize(item["cache_control"])
+
+        if "system" in anthropic_messages_request:
+            system = anthropic_messages_request["system"]
+            if isinstance(system, list):
+                _process_content_list(system)
+
+        if "messages" in anthropic_messages_request:
+            for message in anthropic_messages_request["messages"]:
+                if isinstance(message, dict) and "content" in message:
+                    content = message["content"]
+                    if isinstance(content, list):
+                        _process_content_list(content)
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -141,6 +173,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        self._remove_scope_from_cache_control(anthropic_messages_request)
 
         anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
 
