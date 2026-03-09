@@ -217,6 +217,7 @@ mcp_servers:
   | `bearer_token` | `Authorization: Bearer <auth_value>` |
   | `basic` | `Authorization: Basic <auth_value>` |
   | `authorization` | `Authorization: <auth_value>` |
+  | `aws_sigv4` | Per-request AWS SigV4 signature ([details](./mcp_aws_sigv4.md)) |
 
 - **Extra Headers**: Optional list of additional header names that should be forwarded from client to the MCP server
 - **Static Headers**: Optional map of header key/value pairs to include every request to the MCP server.
@@ -256,6 +257,16 @@ mcp_servers:
     url: "https://my-mcp-server.com/mcp"
     auth_type: "authorization"
     auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
+
+  # AWS SigV4 for Bedrock AgentCore MCP servers
+  agentcore_mcp:
+    url: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/<url-encoded-ARN>/invocations"
+    transport: "http"
+    auth_type: "aws_sigv4"
+    aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+    aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    aws_region_name: us-east-1
+    aws_service_name: bedrock-agentcore
 
   # Example with extra headers forwarding
   github_mcp:
