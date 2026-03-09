@@ -1019,21 +1019,22 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 # Build a canonical message
                 exception_mapping_worked = True
                 exception_provider = "OciException"
-                _response = getattr(original_exception, "response", None)
-                if _response is None and oci_status:
-                    # Create a Response so the raised error carries the correct status
-                    _response = httpx.Response(
-                        status_code=oci_status,
-                        request=httpx.Request(
-                            method="POST", 
-                            url="https://inference.generativeai.oci.oraclecloud.com"
-                        ),
-                        content=str(error_str).encode("utf-8"),
-                    )
+# Heuristic fallback when status is missing but throttling is obvious
+if not oci_status and ("throttled" in error_str.lower() or "request limit" in error_str.lower()):
+    oci_status = 429
 
-                # Heuristic fallback when status is missing but throttling is obvious
-                if not oci_status and ("throttled" in error_str.lower() or "request limit" in error_str.lower()):
-                    oci_status = 429
+exception_mapping_worked = True
+exception_provider = "OciException"
+_response = getattr(original_exception, "response", None)
+if _response is None and oci_status:
+    _response = httpx.Response(
+        status_code=oci_status,
+        request=httpx.Request(
+            method="POST",
+            url="https://inference.generativeai.oci.oraclecloud.com",
+        ),
+        content=str(error_str).encode("utf-8"),
+    )
 
                 # Map OCI status to LiteLLM exceptions (consistent with other providers) 
                 # <source_id data="1" title="exception_mapping_utils.py" />
