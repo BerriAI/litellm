@@ -639,25 +639,48 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 "AgentCore streaming: received JSON response instead of SSE, "
                 "converting to single-chunk stream"
             )
-            body = response.read()
-            response_json = json.loads(body)
+            try:
+                body = response.read()
+                response_json = json.loads(body)
+            except json.JSONDecodeError as e:
+                raise BedrockError(
+                    status_code=response.status_code,
+                    message=f"AgentCore: Failed to parse JSON response body: {e}",
+                )
             parsed = self._parse_json_response(response_json)
 
             def _json_as_sync_stream():
-                chunk = ModelResponseStream(
+                # Content chunk
+                content_chunk = ModelResponseStream(
                     id=f"chatcmpl-{uuid.uuid4()}",
                     created=0,
                     model=model,
                     object="chat.completion.chunk",
                 )
-                chunk.choices = [
+                content_chunk.choices = [
                     StreamingChoices(
-                        finish_reason="stop",
+                        finish_reason=None,
                         index=0,
                         delta=Delta(content=parsed["content"], role="assistant"),
                     )
                 ]
-                yield chunk
+                yield content_chunk
+
+                # Stop sentinel chunk (matches SSE path convention)
+                stop_chunk = ModelResponseStream(
+                    id=f"chatcmpl-{uuid.uuid4()}",
+                    created=0,
+                    model=model,
+                    object="chat.completion.chunk",
+                )
+                stop_chunk.choices = [
+                    StreamingChoices(
+                        finish_reason="stop",
+                        index=0,
+                        delta=Delta(),
+                    )
+                ]
+                yield stop_chunk
 
             return CustomStreamWrapper(
                 completion_stream=_json_as_sync_stream(),
@@ -830,25 +853,48 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 "AgentCore streaming: received JSON response instead of SSE, "
                 "converting to single-chunk stream"
             )
-            body = await response.aread()
-            response_json = json.loads(body)
+            try:
+                body = await response.aread()
+                response_json = json.loads(body)
+            except json.JSONDecodeError as e:
+                raise BedrockError(
+                    status_code=response.status_code,
+                    message=f"AgentCore: Failed to parse JSON response body: {e}",
+                )
             parsed = self._parse_json_response(response_json)
 
             async def _json_as_async_stream() -> AsyncGenerator[ModelResponseStream, None]:
-                chunk = ModelResponseStream(
+                # Content chunk
+                content_chunk = ModelResponseStream(
                     id=f"chatcmpl-{uuid.uuid4()}",
                     created=0,
                     model=model,
                     object="chat.completion.chunk",
                 )
-                chunk.choices = [
+                content_chunk.choices = [
                     StreamingChoices(
-                        finish_reason="stop",
+                        finish_reason=None,
                         index=0,
                         delta=Delta(content=parsed["content"], role="assistant"),
                     )
                 ]
-                yield chunk
+                yield content_chunk
+
+                # Stop sentinel chunk (matches SSE path convention)
+                stop_chunk = ModelResponseStream(
+                    id=f"chatcmpl-{uuid.uuid4()}",
+                    created=0,
+                    model=model,
+                    object="chat.completion.chunk",
+                )
+                stop_chunk.choices = [
+                    StreamingChoices(
+                        finish_reason="stop",
+                        index=0,
+                        delta=Delta(),
+                    )
+                ]
+                yield stop_chunk
 
             return CustomStreamWrapper(
                 completion_stream=_json_as_async_stream(),

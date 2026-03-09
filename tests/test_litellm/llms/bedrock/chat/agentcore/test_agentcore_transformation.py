@@ -266,3 +266,27 @@ class TestAgentCoreStreamingJsonFallback:
                     content += chunk.choices[0].delta.content
 
         assert content == "Strands async response"
+
+    def test_sync_streaming_malformed_json_raises_error(self):
+        """
+        When stream=True and Content-Type is application/json but the body
+        is malformed JSON, an error is raised with a descriptive message
+        (not a raw JSONDecodeError).
+        """
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        client = HTTPHandler()
+
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.read.return_value = b"not valid json {{"
+
+        with patch.object(client, "post", return_value=mock_response):
+            with pytest.raises(Exception, match="Failed to parse JSON response body"):
+                litellm.completion(
+                    model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
+                    messages=[{"role": "user", "content": "test"}],
+                    stream=True,
+                    client=client,
+                )
