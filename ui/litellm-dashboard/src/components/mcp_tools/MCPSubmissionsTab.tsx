@@ -7,15 +7,19 @@ import {
   XIcon,
   AlertCircleIcon,
   ServerIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  SettingsIcon,
 } from "lucide-react";
 import {
   fetchMCPSubmissions,
   approveMCPServer,
   rejectMCPServer,
   getGeneralSettingsCall,
+  updateConfigFieldSetting,
 } from "@/components/networking";
 import { MCPServer, MCPSubmissionsSummary } from "./types";
-import { MCP_REQUIRED_FIELD_DEFS } from "./MCPStandardsSettings";
+import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 
 type MCPStatus = "active" | "pending_review" | "rejected";
@@ -133,6 +137,128 @@ function ConfirmDialog({ action, serverName, onConfirm, onCancel }: ConfirmDialo
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+type SubmissionRulesPanelProps = {
+  requiredFields: string[];
+  onChange: (fields: string[]) => void;
+  onSave: () => Promise<void>;
+  isSaving: boolean;
+};
+
+function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: SubmissionRulesPanelProps) {
+  const [expanded, setExpanded] = useState(false);
+  const activeLabels = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key));
+
+  const toggle = (key: string) => {
+    onChange(requiredFields.includes(key) ? requiredFields.filter((k) => k !== key) : [...requiredFields, key]);
+  };
+
+  return (
+    <div className="mb-5 border border-gray-200 rounded-lg bg-white overflow-hidden">
+      {/* Header — always visible */}
+      <div
+        className="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <div className="flex items-center gap-2">
+          <SettingsIcon className="h-4 w-4 text-gray-400" />
+          <span className="text-sm font-semibold text-gray-800">Submission Rules</span>
+          {activeLabels.length > 0 ? (
+            <span className="text-xs text-gray-500">
+              ({activeLabels.length} required field{activeLabels.length !== 1 ? "s" : ""})
+            </span>
+          ) : (
+            <span className="text-xs text-gray-400 italic">no rules set</span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {/* Active rule chips — collapsed view */}
+          {!expanded && activeLabels.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 max-w-md">
+              {activeLabels.map((f) => (
+                <span
+                  key={f.key}
+                  className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full"
+                >
+                  <CheckIcon className="h-3 w-3" />
+                  {f.label}
+                </span>
+              ))}
+            </div>
+          )}
+          {expanded ? (
+            <ChevronUpIcon className="h-4 w-4 text-gray-400" />
+          ) : (
+            <ChevronDownIcon className="h-4 w-4 text-gray-400" />
+          )}
+        </div>
+      </div>
+
+      {/* Expanded editor */}
+      {expanded && (
+        <div className="border-t border-gray-100 px-4 pt-4 pb-4">
+          <p className="text-xs text-gray-500 mb-4">
+            Select which fields must be filled in before a submission is considered compliant.
+            LiteLLM will show ✓ / ✗ for each rule on every submission card below.
+          </p>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+            {FIELD_GROUPS.map((group) => (
+              <div key={group.label}>
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                  {group.label}
+                </div>
+                <div className="space-y-2">
+                  {group.fields.map((field) => {
+                    const active = requiredFields.includes(field.key);
+                    return (
+                      <label
+                        key={field.key}
+                        className="flex items-start gap-2.5 cursor-pointer group"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          onChange={() => toggle(field.key)}
+                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                        <div>
+                          <div className="text-sm font-medium text-gray-800 group-hover:text-blue-700 transition-colors">
+                            {field.label}
+                          </div>
+                          <div className="text-xs text-gray-400">{field.description}</div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-5 flex items-center gap-3">
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={async () => {
+                await onSave();
+                setExpanded(false);
+              }}
+              className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-md transition-colors"
+            >
+              {isSaving ? "Saving…" : "Save Rules"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="px-4 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -273,6 +399,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [requiredFields, setRequiredFields] = useState<string[]>([]);
+  const [isSavingRules, setIsSavingRules] = useState(false);
 
   const fetchData = useCallback(async () => {
     if (!accessToken) {
@@ -289,7 +416,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
       setSummary(res);
       if (settings?.data && Array.isArray(settings.data)) {
         const row = settings.data.find(
-          (r: { field_name: string; field_value: unknown }) => r.field_name === "mcp_required_fields",
+          (r: { field_name: string; field_value: unknown }) => r.field_name === SETTINGS_KEY,
         );
         if (row && Array.isArray(row.field_value)) {
           setRequiredFields(row.field_value as string[]);
@@ -305,6 +432,19 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const handleSaveRules = async () => {
+    if (!accessToken) return;
+    setIsSavingRules(true);
+    try {
+      await updateConfigFieldSetting(accessToken, SETTINGS_KEY, requiredFields);
+      NotificationsManager.success("Submission rules saved");
+    } catch {
+      NotificationsManager.fromBackend("Failed to save submission rules");
+    } finally {
+      setIsSavingRules(false);
+    }
+  };
 
   const filtered = summary.items.filter((s) => {
     if (statusFilter !== "all" && s.approval_status !== statusFilter) return false;
@@ -343,6 +483,14 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
 
   return (
     <div className="p-6">
+      {/* Submission Rules panel */}
+      <SubmissionRulesPanel
+        requiredFields={requiredFields}
+        onChange={setRequiredFields}
+        onSave={handleSaveRules}
+        isSaving={isSavingRules}
+      />
+
       <div className="grid grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Submitted" value={summary.total} color="text-gray-900" />
         <StatCard label="Pending Review" value={summary.pending_review} color="text-yellow-600" />
