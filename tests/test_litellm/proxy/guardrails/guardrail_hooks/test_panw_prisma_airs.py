@@ -1800,20 +1800,27 @@ class TestPanwAirsApplyGuardrail:
             assert exc_info.value.status_code == 500
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_missing_call_id_strict(self, handler):
-        """Test that missing litellm_call_id raises HTTPException(500)."""
+    async def test_apply_guardrail_missing_call_id_synthesizes_fallback(self, handler):
+        """Missing litellm_call_id is synthesized (not a hard fail)."""
         inputs: GenericGuardrailAPIInputs = {"texts": ["Test content"]}
         request_data = {"model": "gpt-4"}  # No litellm_call_id
 
-        with pytest.raises(HTTPException) as exc_info:
-            await handler.apply_guardrail(
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            result = await handler.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 500
-        assert "missing request identifier" in str(exc_info.value.detail)
+            assert result["texts"] == ["Test content"]
+            # UUID was synthesized and injected
+            assert "litellm_call_id" in request_data
+            assert len(request_data["litellm_call_id"]) == 36  # UUID4 format
+            assert mock_api.call_count == 1
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_synthesizes_call_id_for_direct_endpoint(
@@ -1870,6 +1877,34 @@ class TestPanwAirsApplyGuardrail:
             # Verify _call_panw_api was called with logging_obj's call_id
             call_kwargs = mock_api.call_args.kwargs
             assert call_kwargs["call_id"] == "logging-call-id"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_response_side_missing_call_id(self, handler):
+        """Response-side with no litellm_call_id synthesizes a UUID fallback."""
+        response = ModelResponse(
+            id="chatcmpl-test",
+            choices=[Choices(index=0, message=Message(content="Safe response"))],
+            model="gpt-4",
+        )
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Safe response"]}
+        request_data: dict = {"response": response}  # No litellm_call_id
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            result = await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+                logging_obj=None,
+            )
+
+            assert result["texts"] == ["Safe response"]
+            # UUID was synthesized
+            assert "litellm_call_id" in request_data
+            assert len(request_data["litellm_call_id"]) == 36
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_request_vs_response(self, handler):
@@ -2202,6 +2237,25 @@ class TestPanwAirsStreamingBytesScan:
                 error_data = json.loads(chunks_received[0].removeprefix("data: "))
                 assert error_data["error"]["code"] == 400
                 assert "guardrail_violation" in error_data["error"]["type"]
+
+
+class TestPanwAirsExtractTextNonDictJson:
+    """Test _extract_text_from_sse_bytes with non-dict JSON values."""
+
+    def test_non_dict_json_lines_skipped(self):
+        """Non-dict JSON (null, arrays, ints) should be silently skipped."""
+        sse_bytes = [
+            # Non-dict JSON values that should be skipped
+            b"data: null\n",
+            b"data: [1,2,3]\n",
+            b"data: 42\n",
+            # Valid content_block_delta that should be extracted
+            b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n',
+        ]
+        raw = b"\n".join(sse_bytes)
+
+        result = PanwPrismaAirsHandler._extract_text_from_sse_bytes([raw])
+        assert result == "Hello"
 
 
 class TestPanwAirsStreamingPydanticEventsScan:
@@ -4529,8 +4583,8 @@ class TestPanwAirsMcpToolCallWithoutCallId:
             assert sent_payload["contents"] == [{"tool_event": mcp_tool_event}]
 
     @pytest.mark.asyncio
-    async def test_non_mcp_request_without_call_id_still_raises_500(self, handler):
-        """Regression: non-MCP requests without call_id still raise 500 in apply_guardrail."""
+    async def test_non_mcp_request_without_call_id_synthesizes_uuid(self, handler):
+        """Non-MCP requests without call_id now synthesize a UUID fallback."""
         inputs: GenericGuardrailAPIInputs = {"texts": ["hello"]}
         request_data = {
             "model": "gpt-4",
@@ -4538,16 +4592,22 @@ class TestPanwAirsMcpToolCallWithoutCallId:
             "litellm_call_id": None,  # explicitly missing
         }
 
-        with pytest.raises(HTTPException) as exc_info:
-            await handler.apply_guardrail(
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            result = await handler.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
                 input_type="request",
                 logging_obj=None,
             )
 
-        assert exc_info.value.status_code == 500
-        assert "missing request identifier" in str(exc_info.value.detail)
+            assert result["texts"] == ["hello"]
+            # UUID was synthesized and injected
+            assert request_data["litellm_call_id"] is not None
+            assert len(request_data["litellm_call_id"]) == 36
 
     @pytest.mark.asyncio
     async def test_mcp_rest_name_fallback_synthesizes_tr_id(self, handler):

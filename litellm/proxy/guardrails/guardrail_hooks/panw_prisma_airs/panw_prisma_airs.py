@@ -169,8 +169,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def should_run_guardrail(self, data: Any, event_type: GuardrailEventHooks) -> bool:
         if super().should_run_guardrail(data, event_type):
             return True
-        # MCP event → base-call compat: allows guardrails configured with
-        # mode: pre_call / during_call to also run on MCP hooks.
         compat = self._MCP_COMPAT_MAP.get(event_type)
         if compat is not None:
             if super().should_run_guardrail(data, compat):
@@ -504,7 +502,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             return global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.get(
                 mcp_tool_name, "unknown"
             )
+        except ImportError:
+            return "unknown"
         except Exception:
+            verbose_proxy_logger.debug(
+                "PANW Prisma AIRS: unexpected error resolving MCP server name",
+                exc_info=True,
+            )
             return "unknown"
 
     def _get_masked_text(
@@ -816,6 +820,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             try:
                 data = json.loads(line[6:])
             except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(data, dict):
                 continue
             if data.get("type") == "content_block_delta":
                 delta = data.get("delta", {})
@@ -1746,16 +1752,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     call_id,
                 )
             else:
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": {
-                            "message": "Security scan failed - missing request identifier",
-                            "type": "guardrail_config_error",
-                            "code": "panw_prisma_airs_missing_call_id",
-                            "guardrail": self.guardrail_name,
-                        }
-                    },
+                call_id = str(uuid.uuid4())
+                request_data["litellm_call_id"] = call_id
+                verbose_proxy_logger.warning(
+                    "PANW Prisma AIRS: litellm_call_id missing, synthesized %s "
+                    "(input_type=%s)",
+                    call_id,
+                    input_type,
                 )
 
         # Enrich request_data with model if missing (post-call metadata loss)
