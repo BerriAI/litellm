@@ -6,7 +6,10 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.llms.bedrock.common_utils import (
+    get_anthropic_beta_from_headers,
+    remove_custom_field_from_tools,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -105,8 +108,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         _anthropic_request.pop("stream", None)
         # Bedrock Invoke doesn't support output_format parameter
         _anthropic_request.pop("output_format", None)
+        # Bedrock Invoke doesn't support output_config parameter
+        # Fixes: https://github.com/BerriAI/litellm/issues/22797
+        _anthropic_request.pop("output_config", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
+
+        # Remove `custom` field from tools (Bedrock doesn't support it)
+        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
+        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # Ref: https://github.com/BerriAI/litellm/issues/22847
+        remove_custom_field_from_tools(_anthropic_request)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)

@@ -24,9 +24,9 @@ model_list:
       model: "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
       aws_region_name: "us-east-1"
 
-  - model_name: bedrock-nova-premier
+  - model_name: bedrock-nova-pro
     litellm_params:
-      model: "bedrock/us.amazon.nova-premier-v1:0"
+      model: "bedrock/us.amazon.nova-pro-v1:0"
       aws_region_name: "us-east-1"
 
   # Converse API models

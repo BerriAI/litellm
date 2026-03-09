@@ -78,6 +78,7 @@ class SupportedDBObjectType(str, enum.Enum):
     PROMPTS = "prompts"
     MODEL_COST_MAP = "model_cost_map"
     TOOLS = "tools"
+    CONFIG_OVERRIDES = "config_overrides"
 
     def __str__(self):
         return str(self.value)
@@ -201,6 +202,7 @@ class Litellm_EntityType(enum.Enum):
     ORGANIZATION = "organization"
     PROJECT = "project"
     TAG = "tag"
+    AGENT = "agent"
 
     # global proxy level entity
     PROXY = "proxy"
@@ -238,6 +240,7 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # list routes
     KEY_LIST = "/key/list"
+    KEY_ALIASES = "/key/aliases"
 
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
@@ -514,6 +517,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
+        KeyManagementRoutes.KEY_ALIASES.value,
     ]
 
     management_routes = [
@@ -649,6 +653,8 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
+        "/user/available_roles",  # read-only role metadata; any authenticated user may read
+        "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -1108,6 +1114,9 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1164,6 +1173,9 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1223,10 +1235,24 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
+    has_user_credential: Optional[bool] = None
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
     mcp_server_ids: List[str]
+
+
+class MCPUserCredentialRequest(LiteLLMPydanticObjectBase):
+    credential: str
+    save: bool = True
+
+
+class MCPUserCredentialResponse(LiteLLMPydanticObjectBase):
+    server_id: str
+    has_credential: bool
 
 
 ######## Skills API Types ########
@@ -2147,7 +2173,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     user_header_mappings: Optional[List[UserHeaderMapping]] = None
     supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
         None,
-        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools'. If not set, all objects are loaded (default behavior).",
+        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
     )
     user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
         None,
@@ -4205,6 +4231,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_member_list_transactions: Optional[Dict[str, float]]
     org_list_transactions: Optional[Dict[str, float]]
     tag_list_transactions: Optional[Dict[str, float]]
+    agent_list_transactions: Optional[Dict[str, float]]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

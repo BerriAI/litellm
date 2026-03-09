@@ -16,6 +16,7 @@ import { DiscoverableMCPServer, MCPServer, MCPServerProps, Team } from "./types"
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
+import { ByokCredentialModal } from "./ByokCredentialModal";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -47,17 +48,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     });
   }, [mcpServers, healthStatuses]);
 
-  // Log allowed_tools from fetched servers
-  React.useEffect(() => {
-    if (mcpServers) {
-      console.log("MCP Servers fetched:", mcpServers);
-      mcpServers.forEach((server) => {
-        console.log(`Server: ${server.server_name || server.server_id}`);
-        console.log(`  allowed_tools:`, server.allowed_tools);
-      });
-    }
-  }, [mcpServers]);
-
   // state
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -70,6 +60,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
+  const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
 
   useEffect(() => {
@@ -170,6 +161,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         },
         handleDelete,
         isLoadingHealth,
+        (server: MCPServer) => setByokModalServer(server),
       ),
     [userRole, isLoadingHealth],
   );
@@ -254,34 +246,28 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         confirmLoading={isDeletingServer}
       >
         <div className="space-y-4">
-          <AntdText>Are you sure you want to delete this MCP Server? This action cannot be undone.</AntdText>
+          <AntdText className="text-gray-600">This action is permanent and cannot be undone. All associated configurations will be removed.</AntdText>
 
           {serverToDelete && (
-            <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
-              <AntdTitle level={5} className="mb-3 text-gray-900">
-                Server Information
-              </AntdTitle>
-              <Descriptions column={1} size="small">
+            <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <Descriptions column={1} size="small" colon={false}>
                 {serverToDelete.server_name && (
-                  <Descriptions.Item label={<span className="font-semibold text-gray-700">Server Name</span>}>
-                    <AntdText className="text-sm">{serverToDelete.server_name}</AntdText>
+                  <Descriptions.Item label={<span className="text-gray-500 text-sm">Name</span>}>
+                    <AntdText strong className="text-sm">{serverToDelete.server_name}</AntdText>
                   </Descriptions.Item>
                 )}
-                {serverToDelete.alias && (
-                  <Descriptions.Item label={<span className="font-semibold text-gray-700">Alias</span>}>
-                    <AntdText className="text-sm">{serverToDelete.alias}</AntdText>
-                  </Descriptions.Item>
-                )}
-                <Descriptions.Item label={<span className="font-semibold text-gray-700">Server ID</span>}>
-                  <AntdText code className="text-sm">
+                <Descriptions.Item label={<span className="text-gray-500 text-sm">ID</span>}>
+                  <AntdText code className="text-xs">
                     {serverToDelete.server_id}
                   </AntdText>
                 </Descriptions.Item>
-                <Descriptions.Item label={<span className="font-semibold text-gray-700">URL</span>}>
-                  <AntdText code className="text-sm">
-                    {serverToDelete.url}
-                  </AntdText>
-                </Descriptions.Item>
+                {serverToDelete.url && (
+                  <Descriptions.Item label={<span className="text-gray-500 text-sm">URL</span>}>
+                    <AntdText code className="text-xs break-all">
+                      {serverToDelete.url}
+                    </AntdText>
+                  </Descriptions.Item>
+                )}
               </Descriptions>
             </div>
           )}
@@ -301,13 +287,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           setDiscoveryVisible(true);
         }}
       />
-      <Title>MCP Servers</Title>
-      <Text className="text-tremor-content mt-2">Configure and manage your MCP servers</Text>
-      {isAdminRole(userRole) && (
-        <Button className="mt-4 mb-4" onClick={() => setDiscoveryVisible(true)}>
-          + Add New MCP Server
-        </Button>
-      )}
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <Title>MCP Servers</Title>
+            {filteredServers.length > 0 && (
+              <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                {filteredServers.length}
+              </span>
+            )}
+          </div>
+          <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
+        </div>
+        {isAdminRole(userRole) && (
+          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+            + Add New MCP Server
+          </Button>
+        )}
+      </div>
       <MCPDiscovery
         isVisible={isDiscoveryVisible}
         onClose={() => setDiscoveryVisible(false)}
@@ -350,50 +347,38 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               <div className="w-full h-full">
                 <div className="w-full">
                   <div className="flex flex-col space-y-4">
-                    <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
-                      <div className="flex items-center gap-4">
-                        <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
-                        <Select value={selectedTeam} onChange={handleTeamChange} style={{ width: 300 }}>
+                    <div className="flex items-center gap-6 bg-white rounded-lg px-4 py-3 border border-gray-200">
+                      <div className="flex items-center gap-2">
+                        <Text className="text-sm font-medium text-gray-600 whitespace-nowrap">Team</Text>
+                        <Select value={selectedTeam} onChange={handleTeamChange} style={{ width: 220 }} size="middle">
                           <Option value="all">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                              <span className="font-medium">{isInternalUser ? "All Available Servers" : "All Servers"}</span>
-                            </div>
+                            <span className="font-medium">{isInternalUser ? "All Available Servers" : "All Servers"}</span>
                           </Option>
                           <Option value="personal">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                              <span className="font-medium">Personal</span>
-                            </div>
+                            <span className="font-medium">Personal</span>
                           </Option>
                           {uniqueTeams.map((team) => (
                             <Option key={team.team_id} value={team.team_id}>
-                              <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                                <span className="font-medium">{team.team_alias || team.team_id}</span>
-                              </div>
+                              <span className="font-medium">{team.team_alias || team.team_id}</span>
                             </Option>
                           ))}
                         </Select>
-                        <Text className="text-lg font-semibold text-gray-900 ml-6">
-                          Access Group:
+                      </div>
+                      <div className="h-6 w-px bg-gray-200"></div>
+                      <div className="flex items-center gap-2">
+                        <Text className="text-sm font-medium text-gray-600 whitespace-nowrap">
+                          Access Group
                           <Tooltip title="An MCP Access Group is a set of users or teams that have permission to access specific MCP servers. Use access groups to control and organize who can connect to which servers.">
-                            <QuestionCircleOutlined style={{ marginLeft: 4, color: "#888" }} />
+                            <QuestionCircleOutlined style={{ marginLeft: 4, color: "#9ca3af" }} />
                           </Tooltip>
                         </Text>
-                        <Select value={selectedMcpAccessGroup} onChange={handleMcpAccessGroupChange} style={{ width: 300 }}>
+                        <Select value={selectedMcpAccessGroup} onChange={handleMcpAccessGroupChange} style={{ width: 220 }} size="middle">
                           <Option value="all">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                              <span className="font-medium">All Access Groups</span>
-                            </div>
+                            <span className="font-medium">All Access Groups</span>
                           </Option>
                           {uniqueMcpAccessGroups.map((group) => (
                             <Option key={group} value={group}>
-                              <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                                <span className="font-medium">{group}</span>
-                              </div>
+                              <span className="font-medium">{group}</span>
                             </Option>
                           ))}
                         </Select>
@@ -408,8 +393,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     renderSubComponent={() => <div></div>}
                     getRowCanExpand={() => false}
                     isLoading={isLoadingServers}
-                    noDataMessage="No MCP servers configured"
-                    loadingMessage="🚅 Loading MCP servers..."
+                    noDataMessage="No MCP servers configured. Click '+ Add New MCP Server' to get started."
+                    loadingMessage="Loading MCP servers..."
                     enableSorting={true}
                   />
                 </div>
@@ -427,6 +412,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      {byokModalServer && (
+        <ByokCredentialModal
+          server={byokModalServer}
+          open={!!byokModalServer}
+          onClose={() => setByokModalServer(null)}
+          onSuccess={(_serverId) => {
+            refetch();
+            setByokModalServer(null);
+          }}
+          accessToken={accessToken || ""}
+        />
+      )}
     </div>
   );
 };

@@ -78,8 +78,6 @@ class CheckBatchCost:
                 "status": {"not_in": ["failed", "expired", "cancelled"]}
             }
         )
-        completed_jobs = []
-
         for job in jobs:
             # get the model from the job
             unified_object_id = job.unified_object_id
@@ -237,10 +235,16 @@ class CheckBatchCost:
                 )
 
                 # mark the job as complete
-                completed_jobs.append(job)
-
-            if len(completed_jobs) > 0:
-                await self.prisma_client.db.litellm_managedobjecttable.update_many(
-                    where={"id": {"in": [job.id for job in completed_jobs]}},
-                    data={"batch_processed": True, "status": "complete"},
-                )
+                try:
+                    await self.prisma_client.db.litellm_managedobjecttable.update(
+                        where={"id": job.id},
+                        data={
+                            "batch_processed": True,
+                            "status": "complete",
+                            "file_object": response.model_dump_json(),
+                        },
+                    )
+                except Exception as db_err:
+                    verbose_proxy_logger.error(
+                        f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
+                    )

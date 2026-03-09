@@ -305,6 +305,9 @@ return_response_headers: bool = (
     False  # get response headers from LLM Api providers - example x-remaining-requests,
 )
 enable_json_schema_validation: bool = False
+enable_key_alias_format_validation: bool = (
+    False  # opt-in validation of key_alias format on /key/generate and /key/update
+)
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
@@ -593,6 +596,7 @@ minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+bedrock_mantle_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -855,6 +859,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "bedrock_mantle":
+            bedrock_mantle_models.add(key)
 
 
 add_known_models()
@@ -962,6 +968,7 @@ model_list = list(
     | ovhcloud_models
     | lemonade_models
     | docker_model_runner_models
+    | bedrock_mantle_models
     | set(clarifai_models)
 )
 
@@ -1065,6 +1072,7 @@ models_by_provider: dict = {
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
+    "bedrock_mantle": bedrock_mantle_models
 }
 
 # mapping for those models which have larger equivalents
@@ -1426,6 +1434,7 @@ if TYPE_CHECKING:
     from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as TopazImageVariationConfig
     from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig as OpenAITextCompletionConfig
     from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
+    from .llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig as BedrockMantleChatConfig
     from .llms.a2a.chat.transformation import A2AConfig as A2AConfig
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
