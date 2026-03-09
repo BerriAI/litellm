@@ -507,6 +507,11 @@ def _build_mcp_oauth_callback_html(code: Optional[str], state: Optional[str]) ->
                     window.localStorage.getItem(RETURN_URL_KEY);
       }} catch (e) {{}}
 
+      // Validate returnUrl: reject absolute URLs (open redirect protection)
+      if (returnUrl && (returnUrl.startsWith('//') || /^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(returnUrl))) {{
+        returnUrl = null;
+      }}
+
       if (!returnUrl) {{
         var path = window.location.pathname || "";
         var uiIndex = path.indexOf("/ui");
