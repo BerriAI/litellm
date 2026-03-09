@@ -25,7 +25,9 @@ export enum EndpointType {
   EMBEDDINGS = "embeddings",
   SPEECH = "speech",
   TRANSCRIPTION = "transcription",
-  // add additional endpoint types if required
+  A2A_AGENTS = "a2a_agents",
+  MCP = "mcp",
+  REALTIME = "realtime",
 }
 
 // Create a mapping between the model mode and the corresponding endpoint type

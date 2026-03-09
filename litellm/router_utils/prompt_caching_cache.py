@@ -76,6 +76,22 @@ class PromptCachingCache:
         
         for msg_idx, message in enumerate(messages):
             content = message.get("content")
+            
+            # Check for cache_control at message level (when content is a string)
+            # This handles the case where cache_control is a sibling of string content:
+            # {"role": "user", "content": "...", "cache_control": {"type": "ephemeral"}}
+            message_level_cache_control = message.get("cache_control")
+            if (
+                message_level_cache_control is not None
+                and isinstance(message_level_cache_control, dict)
+                and message_level_cache_control.get("type") == "ephemeral"
+            ):
+                last_cacheable_message_idx = msg_idx
+                # Set to None to indicate the entire message content is cacheable
+                # (not a specific content block index within a list)
+                last_cacheable_content_idx = None
+            
+            # Also check for cache_control within content blocks (when content is a list)
             if not isinstance(content, list):
                 continue
             

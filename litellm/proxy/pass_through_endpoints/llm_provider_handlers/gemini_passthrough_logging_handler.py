@@ -7,6 +7,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as GeminiModelResponseIterator,
 )
@@ -39,6 +40,43 @@ class GeminiPassthroughLoggingHandler:
         request_body: dict,
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
+        if "predictLongRunning" in url_route:
+            model = GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
+            
+            gemini_video_config = GeminiVideoConfig()
+            litellm_video_response = gemini_video_config.transform_video_create_response(
+                model=model,
+                raw_response=httpx_response,
+                logging_obj=logging_obj,
+                custom_llm_provider="gemini",
+                request_data=request_body,
+            )
+            logging_obj.model = model
+            logging_obj.model_call_details["model"] = model
+            logging_obj.model_call_details["custom_llm_provider"] = "gemini"
+            logging_obj.custom_llm_provider = "gemini"
+            
+            response_cost = litellm.completion_cost(
+                completion_response=litellm_video_response,
+                model=model,
+                custom_llm_provider="gemini",
+                call_type="create_video",
+            )
+            
+            # Set response_cost in _hidden_params to prevent recalculation
+            if not hasattr(litellm_video_response, "_hidden_params"):
+                litellm_video_response._hidden_params = {}
+            litellm_video_response._hidden_params["response_cost"] = response_cost
+            
+            kwargs["response_cost"] = response_cost
+            kwargs["model"] = model
+            kwargs["custom_llm_provider"] = "gemini"
+            logging_obj.model_call_details["response_cost"] = response_cost
+            return {
+                "result": litellm_video_response,
+                "kwargs": kwargs,
+            }
+        
         if "generateContent" in url_route:
             model = GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
 

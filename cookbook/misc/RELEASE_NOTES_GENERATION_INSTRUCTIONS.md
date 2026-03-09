@@ -404,6 +404,93 @@ This release has a known issue...
   - **New Providers** - Provider name, supported endpoints, description
   - **New LLM API Endpoints** (optional) - Endpoint, method, description, documentation link
 - Only include major new provider integrations, not minor provider updates
+- **IMPORTANT**: When adding new providers, also update `provider_endpoints_support.json` in the repository root (see Section 13)
+
+### 12. Section Header Counts
+
+**Always include counts in section headers for:**
+- **New Providers** - Add count in parentheses: `### New Providers (X new providers)`
+- **New LLM API Endpoints** - Add count in parentheses: `### New LLM API Endpoints (X new endpoints)`
+- **New Model Support** - Add count in parentheses: `#### New Model Support (X new models)`
+
+**Format:**
+```markdown
+### New Providers (4 new providers)
+
+| Provider | Supported LiteLLM Endpoints | Description |
+| -------- | --------------------------- | ----------- |
+...
+
+### New LLM API Endpoints (2 new endpoints)
+
+| Endpoint | Method | Description | Documentation |
+| -------- | ------ | ----------- | ------------- |
+...
+
+#### New Model Support (32 new models)
+
+| Provider | Model | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
+| -------- | ----- | -------------- | ------------------- | -------------------- | -------- |
+...
+```
+
+**Counting Rules:**
+- Count each row in the table (excluding the header row)
+- For models, count each model entry in the pricing table
+- For providers, count each new provider added
+- For endpoints, count each new API endpoint added
+
+### 13. Update provider_endpoints_support.json
+
+**When adding new providers or endpoints, you MUST also update `provider_endpoints_support.json` in the repository root.**
+
+This file tracks which endpoints are supported by each LiteLLM provider and is used to generate documentation.
+
+**Required Steps:**
+1. For each new provider added to the release notes, add a corresponding entry to `provider_endpoints_support.json`
+2. For each new endpoint type added, update the schema comment and add the endpoint to relevant providers
+
+**Provider Entry Format:**
+```json
+"provider_slug": {
+  "display_name": "Provider Name (`provider_slug`)",
+  "url": "https://docs.litellm.ai/docs/providers/provider_slug",
+  "endpoints": {
+    "chat_completions": true,
+    "messages": true,
+    "responses": true,
+    "embeddings": false,
+    "image_generations": false,
+    "audio_transcriptions": false,
+    "audio_speech": false,
+    "moderations": false,
+    "batches": false,
+    "rerank": false,
+    "a2a": true
+  }
+}
+```
+
+**Available Endpoint Types:**
+- `chat_completions` - `/chat/completions` endpoint
+- `messages` - `/messages` endpoint (Anthropic format)
+- `responses` - `/responses` endpoint (OpenAI/Anthropic unified)
+- `embeddings` - `/embeddings` endpoint
+- `image_generations` - `/image/generations` endpoint
+- `audio_transcriptions` - `/audio/transcriptions` endpoint
+- `audio_speech` - `/audio/speech` endpoint
+- `moderations` - `/moderations` endpoint
+- `batches` - `/batches` endpoint
+- `rerank` - `/rerank` endpoint
+- `ocr` - `/ocr` endpoint
+- `search` - `/search` endpoint
+- `vector_stores` - `/vector_stores` endpoint
+- `a2a` - `/a2a/{agent}/message/send` endpoint (A2A Protocol)
+
+**Checklist:**
+- [ ] All new providers from release notes are added to `provider_endpoints_support.json`
+- [ ] Endpoint support flags accurately reflect provider capabilities
+- [ ] Documentation URL points to correct provider docs page
 
 ## Example Command Workflow
 

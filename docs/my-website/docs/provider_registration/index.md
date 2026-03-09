@@ -2,6 +2,12 @@
 title: "Integrate as a Model Provider"
 ---
 
+## Quick Start for OpenAI-Compatible Providers
+
+If your API is OpenAI-compatible, you can add support by editing a single JSON file. See [Adding OpenAI-Compatible Providers](/docs/contributing/adding_openai_compatible_providers) for the simple approach.
+
+---
+
 This guide focuses on how to setup the classes and configuration necessary to act as a chat provider.
 
 Please see this guide first and look at the existing code in the codebase to understand how to act as a different provider, e.g. handling embeddings or image-generation.

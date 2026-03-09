@@ -2,12 +2,19 @@
 This module is used to generate MCP tools from OpenAPI specs.
 """
 
+import asyncio
+import contextvars
 import json
-from typing import Any, Dict, Optional
-
-import httpx
+import os
+from pathlib import PurePosixPath
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -16,14 +23,72 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 BASE_URL = ""
 HEADERS: Dict[str, str] = {}
 
+# Per-request auth header override for BYOK servers.
+# Set this ContextVar before calling a local tool handler to inject the user's
+# stored credential into the HTTP request made by the tool function closure.
+_request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_request_auth_header", default=None
+)
+
+
+def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
+    """Ensure path params cannot introduce directory traversal."""
+    if param_value is None:
+        return ""
+
+    value_str = str(param_value)
+    if value_str == "":
+        return ""
+
+    normalized_value = value_str.replace("\\", "/")
+    if "/" in normalized_value:
+        raise ValueError(
+            f"Path parameter '{param_name}' must not contain path separators"
+        )
+
+    if any(part in {".", ".."} for part in PurePosixPath(normalized_value).parts):
+        raise ValueError(
+            f"Path parameter '{param_name}' cannot include '.' or '..' segments"
+        )
+
+    return quote(value_str, safe="")
+
 
 def load_openapi_spec(filepath: str) -> Dict[str, Any]:
-    """Load OpenAPI specification from JSON file."""
-    with open(filepath, "r") as f:
+    """
+    Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
+    """
+    try:
+        # If we're already inside an event loop, prefer the async function.
+        asyncio.get_running_loop()
+        raise RuntimeError(
+            "load_openapi_spec() was called from within a running event loop. "
+            "Use 'await load_openapi_spec_async(...)' instead."
+        )
+    except RuntimeError as e:
+        # "no running event loop" is fine; other RuntimeErrors we re-raise
+        if "no running event loop" not in str(e).lower():
+            raise
+    return asyncio.run(load_openapi_spec_async(filepath))
+
+async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
+    if filepath.startswith("http://") or filepath.startswith("https://"):
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        # NOTE: do not close shared client if get_async_httpx_client returns a shared singleton.
+        # If it returns a new client each time, consider wrapping it in an async context manager.
+        r = await client.get(filepath)
+        r.raise_for_status()
+        return r.json()
+
+    # fallback: local file
+    # Local filesystem path
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
+    with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def get_base_url(spec: Dict[str, Any]) -> str:
+def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
@@ -33,7 +98,77 @@ def get_base_url(spec: Dict[str, Any]) -> str:
         scheme = spec.get("schemes", ["https"])[0]
         base_path = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
+    
+    # Fallback: derive base URL from spec_path if it's a URL
+    if spec_path and (spec_path.startswith("http://") or spec_path.startswith("https://")):
+        for suffix in ["/openapi.json", "/openapi.yaml", "/swagger.json", "/swagger.yaml"]:
+            if spec_path.endswith(suffix):
+                base_url = spec_path[:-len(suffix)]
+                verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+                return base_url
+        
+        if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
+            base_url = "/".join(spec_path.split("/")[:-1])
+            verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+            return base_url
+    
     return ""
+
+
+def _resolve_ref(
+    param: Dict[str, Any], component_params: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Resolve a single parameter, following a $ref if present.
+
+    Returns the resolved param dict, or None if the $ref target is absent from
+    components (so callers can skip/filter it rather than propagating a stub
+    with name=None that would corrupt deduplication).
+    """
+    ref = param.get("$ref", "")
+    if not ref.startswith("#/components/parameters/"):
+        return param
+    return component_params.get(ref.split("/")[-1])
+
+
+def _resolve_param_list(
+    raw: List[Dict[str, Any]], component_params: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Resolve $refs in a parameter list, dropping any unresolvable entries."""
+    result = []
+    for p in raw:
+        resolved = _resolve_ref(p, component_params)
+        if resolved is not None and resolved.get("name"):
+            result.append(resolved)
+    return result
+
+
+def resolve_operation_params(
+    operation: Dict[str, Any],
+    path_item: Dict[str, Any],
+    components: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return a copy of *operation* with fully-resolved, merged parameters.
+
+    Handles two common patterns in real-world OpenAPI specs:
+
+    1. **$ref parameters** — ``{"$ref": "#/components/parameters/per-page"}``
+       instead of inline objects.  Each ref is resolved against
+       ``components["parameters"]``; unresolvable refs are silently dropped so
+       they cannot corrupt the deduplication set with ``(None, None)`` keys.
+
+    2. **Path-level parameters** — params defined on the path item that apply
+       to every HTTP method on that path (e.g. ``owner``, ``repo``).  They are
+       merged with the operation-level params; operation-level wins when the
+       same ``name`` + ``in`` combination appears in both.
+    """
+    component_params = components.get("parameters", {})
+    path_level = _resolve_param_list(path_item.get("parameters", []), component_params)
+    op_level = _resolve_param_list(operation.get("parameters", []), component_params)
+    op_keys = {(p["name"], p.get("in")) for p in op_level}
+    merged = [p for p in path_level if (p["name"], p.get("in")) not in op_keys] + op_level
+    result = dict(operation)
+    result["parameters"] = merged
+    return result
 
 
 def extract_parameters(operation: Dict[str, Any]) -> tuple:
@@ -45,6 +180,8 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
     # OpenAPI 3.x and 2.x parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             if param.get("in") == "path":
                 path_params.append(param_name)
@@ -68,6 +205,8 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     # Process parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             param_schema = param.get("schema", {})
             param_type = param_schema.get("type", "string")
@@ -112,90 +251,116 @@ def create_tool_function(
 ):
     """Create a tool function for an OpenAPI operation.
 
+    This function creates an async tool function that can be called with
+    keyword arguments. Parameter names from the OpenAPI spec are accessed
+    directly via **kwargs, avoiding syntax errors from invalid Python identifiers.
+
     Args:
         path: API endpoint path
         method: HTTP method (get, post, put, delete, patch)
         operation: OpenAPI operation object
         base_url: Base URL for the API
         headers: Optional headers to include in requests (e.g., authentication)
+
+    Returns:
+        An async function that accepts **kwargs and makes the HTTP request
     """
     if headers is None:
         headers = {}
 
     path_params, query_params, body_params = extract_parameters(operation)
-    all_params = path_params + query_params + body_params
+    original_method = method.lower()
 
-    # Build function signature dynamically
-    if all_params:
-        params_str = ", ".join(f"{p}: str = ''" for p in all_params)
-    else:
-        params_str = ""
+    async def tool_function(**kwargs: Any) -> str:
+        """
+        Dynamically generated tool function.
 
-    # Create the function code as a string
-    func_code = f'''
-async def tool_function({params_str}) -> str:
-    """Dynamically generated tool function."""
-    url = base_url + path
-    
-    # Replace path parameters
-    path_param_names = {path_params}
-    for param_name in path_param_names:
-        param_value = locals().get(param_name, "")
-        if param_value:
-            url = url.replace("{{" + param_name + "}}", str(param_value))
-    
-    # Build query params
-    query_param_names = {query_params}
-    params = {{}}
-    for param_name in query_param_names:
-        param_value = locals().get(param_name, "")
-        if param_value:
-            params[param_name] = param_value
-    
-    # Build request body
-    body_param_names = {body_params}
-    json_body = None
-    if body_param_names:
-        body_value = locals().get("body", {{}})
-        if isinstance(body_value, dict):
-            json_body = body_value
-        elif body_value:
-            # If it's a string, try to parse as JSON
-            import json as json_module
-            try:
-                json_body = json_module.loads(body_value) if isinstance(body_value, str) else {{"data": body_value}}
-            except:
-                json_body = {{"data": body_value}}
-    
-    # Make HTTP request
-    async with httpx.AsyncClient() as client:
-        if "{method.lower()}" == "get":
-            response = await client.get(url, params=params, headers=headers)
-        elif "{method.lower()}" == "post":
-            response = await client.post(url, params=params, json=json_body, headers=headers)
-        elif "{method.lower()}" == "put":
-            response = await client.put(url, params=params, json=json_body, headers=headers)
-        elif "{method.lower()}" == "delete":
-            response = await client.delete(url, params=params, headers=headers)
-        elif "{method.lower()}" == "patch":
-            response = await client.patch(url, params=params, json=json_body, headers=headers)
+        Accepts keyword arguments where keys are the original OpenAPI parameter names.
+        The function safely handles parameter names that aren't valid Python identifiers
+        by using **kwargs instead of named parameters.
+        """
+        # Allow per-request auth override (e.g. BYOK credential set via ContextVar).
+        # The ContextVar holds the full Authorization header value, including the
+        # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
+        # server.py based on the server's configured auth_type.
+        effective_headers = dict(headers)
+        override_auth = _request_auth_header.get()
+        if override_auth:
+            effective_headers["Authorization"] = override_auth
+
+        # Build URL from base_url and path
+        url = base_url + path
+
+        # Replace path parameters using original names from OpenAPI spec
+        # Apply path traversal validation and URL encoding
+        for param_name in path_params:
+            param_value = kwargs.get(param_name, "")
+            if param_value:
+                try:
+                    # Sanitize and encode path parameter to prevent traversal attacks
+                    safe_value = _sanitize_path_parameter_value(param_value, param_name)
+                except ValueError as exc:
+                    return "Invalid path parameter: " + str(exc)
+                # Replace {param_name} or {{param_name}} in URL
+                url = url.replace("{" + param_name + "}", safe_value)
+                url = url.replace("{{" + param_name + "}}", safe_value)
+
+        # Build query params using original parameter names
+        params: Dict[str, Any] = {}
+        for param_name in query_params:
+            param_value = kwargs.get(param_name, "")
+            if param_value:
+                # Use original parameter name in query string (as expected by API)
+                params[param_name] = param_value
+
+        # Build request body
+        json_body: Optional[Dict[str, Any]] = None
+        if body_params:
+            # Try "body" first (most common), then check all body param names
+            body_value = kwargs.get("body", {})
+            if not body_value:
+                for param_name in body_params:
+                    body_value = kwargs.get(param_name, {})
+                    if body_value:
+                        break
+
+            if isinstance(body_value, dict):
+                json_body = body_value
+            elif body_value:
+                # If it's a string, try to parse as JSON
+                try:
+                    json_body = (
+                        json.loads(body_value)
+                        if isinstance(body_value, str)
+                        else {"data": body_value}
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    json_body = {"data": body_value}
+
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+
+        if original_method == "get":
+            response = await client.get(url, params=params, headers=effective_headers)
+        elif original_method == "post":
+            response = await client.post(
+                url, params=params, json=json_body, headers=effective_headers
+            )
+        elif original_method == "put":
+            response = await client.put(
+                url, params=params, json=json_body, headers=effective_headers
+            )
+        elif original_method == "delete":
+            response = await client.delete(url, params=params, headers=effective_headers)
+        elif original_method == "patch":
+            response = await client.patch(
+                url, params=params, json=json_body, headers=effective_headers
+            )
         else:
-            return "Unsupported HTTP method: {method}"
-        
+            return f"Unsupported HTTP method: {original_method}"
+
         return response.text
-'''
 
-    # Execute the function code to create the actual function
-    local_vars = {
-        "httpx": httpx,
-        "headers": headers,
-        "base_url": base_url,
-        "path": path,
-        "method": method,
-    }
-    exec(func_code, local_vars)
-
-    return local_vars["tool_function"]
+    return tool_function
 
 
 def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):

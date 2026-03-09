@@ -4,6 +4,7 @@ Unit tests for OpenAI Text Completion Guardrail Translation Handler
 
 import os
 import sys
+from typing import List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,8 +22,11 @@ from litellm.types.utils import CallTypes, TextChoices, TextCompletionResponse
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
-    async def apply_guardrail(self, text: str, language=None, entities=None) -> str:
-        return f"{text} [GUARDRAILED]"
+    async def apply_guardrail(
+        self, inputs: dict, request_data: dict, input_type: str, **kwargs
+    ) -> dict:
+        texts = inputs.get("texts", [])
+        return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
 
 class TestHandlerDiscovery:
@@ -243,19 +247,23 @@ class TestPIIMaskingScenario:
             """Mock PII masking guardrail"""
 
             async def apply_guardrail(
-                self, text: str, language=None, entities=None
-            ) -> str:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 # Simple mock: replace email-like patterns
                 import re
 
-                masked = re.sub(
-                    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-                    "[EMAIL_REDACTED]",
-                    text,
-                )
-                # Replace names (simple mock)
-                masked = masked.replace("John Doe", "[NAME_REDACTED]")
-                return masked
+                texts = inputs.get("texts", [])
+                masked_texts = []
+                for text in texts:
+                    masked = re.sub(
+                        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+                        "[EMAIL_REDACTED]",
+                        text,
+                    )
+                    # Replace names (simple mock)
+                    masked = masked.replace("John Doe", "[NAME_REDACTED]")
+                    masked_texts.append(masked)
+                return {"texts": masked_texts}
 
         handler = OpenAITextCompletionHandler()
         guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")
@@ -303,15 +311,20 @@ class TestPIIMaskingScenario:
             """Mock PII masking guardrail"""
 
             async def apply_guardrail(
-                self, text: str, language=None, entities=None
-            ) -> str:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 import re
 
-                return re.sub(
-                    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-                    "[EMAIL_REDACTED]",
-                    text,
-                )
+                texts = inputs.get("texts", [])
+                masked_texts = []
+                for text in texts:
+                    masked = re.sub(
+                        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+                        "[EMAIL_REDACTED]",
+                        text,
+                    )
+                    masked_texts.append(masked)
+                return {"texts": masked_texts}
 
         handler = OpenAITextCompletionHandler()
         guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")

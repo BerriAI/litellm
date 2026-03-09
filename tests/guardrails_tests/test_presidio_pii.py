@@ -76,16 +76,20 @@ async def test_presidio_apply_guardrail():
         presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE")
     )
 
-
+    test_text = "My credit card number is 4111-1111-1111-1111 and my email is test@example.com"
     response = await presidio_guardrail.apply_guardrail(
-        text="My credit card number is 4111-1111-1111-1111 and my email is test@example.com",
-        language="en",
+        inputs={"texts": [test_text]},
+        request_data={},
+        input_type="request",
     )
     print("response from apply guardrail for presidio: ", response)
 
-    # assert tthe default config masks the credit card and email
-    assert "4111-1111-1111-1111" not in response
-    assert "test@example.com" not in response
+    # Extract the modified text from the response
+    modified_text = response["texts"][0] if response.get("texts") else ""
+
+    # assert the default config masks the credit card and email
+    assert "4111-1111-1111-1111" not in modified_text
+    assert "test@example.com" not in modified_text
 
 @pytest.mark.asyncio
 async def test_presidio_with_blocked_entities():
@@ -282,8 +286,6 @@ async def test_output_parsing():
         }
     ]
 
-    pii_masking.pii_tokens = {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
-
     response = mock_completion(
         model="gpt-3.5-turbo",
         messages=filtered_message,
@@ -292,7 +294,8 @@ async def test_output_parsing():
     new_response = await pii_masking.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
+            "messages": [{"role": "system", "content": "You are an helpfull assistant"}],
+            "pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"},
         },
         response=response,
     )

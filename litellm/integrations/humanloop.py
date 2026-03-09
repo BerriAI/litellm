@@ -14,6 +14,7 @@ from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 from .custom_logger import CustomLogger
@@ -156,8 +157,11 @@ class HumanloopLogger(CustomLogger):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[
         str,
         List[AllMessageValues],
@@ -178,6 +182,7 @@ class HumanloopLogger(CustomLogger):
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=dynamic_callback_params,
+                prompt_spec=prompt_spec,
             )
 
         prompt_template = prompt_manager._get_prompt_from_id(

@@ -4,6 +4,8 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports all anthropic models.
 
+- `claude-opus-4-6` (`claude-opus-4-6-20260205`)
+- `claude-sonnet-4-6`
 - `claude-sonnet-4-5-20250929`
 - `claude-opus-4-5-20251101`
 - `claude-opus-4-1-20250805`
@@ -50,7 +52,7 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 **Notes:**
 - Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
 - `response_format` is fully supported for Claude Sonnet 4.5 and Opus 4.1 models (see [Structured Outputs](#structured-outputs) section)
-- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
+- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude 4.6 and Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
 
 :::
 
@@ -200,6 +202,30 @@ Without `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX`:
 
 With `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true`:
 - Base URL `https://my-proxy.com/custom/path` → `https://my-proxy.com/custom/path` (unchanged)
+
+### Azure AI Foundry (Alternative Method)
+
+:::tip Recommended Method
+For full Azure support including Azure AD authentication, use the dedicated [Azure Anthropic provider](./azure/azure_anthropic) with `azure_ai/` prefix.
+:::
+
+As an alternative, you can use the `anthropic/` provider directly with your Azure endpoint since Azure exposes Claude using Anthropic's native API.
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-5",
+    api_base="https://<your-resource>.services.ai.azure.com/anthropic",
+    api_key="<your-azure-api-key>",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response)
+```
+
+:::info
+**Finding your Azure endpoint:** Go to Azure AI Foundry → Your deployment → Overview. Your base URL will be `https://<resource-name>.services.ai.azure.com/anthropic`
+:::
 
 ## Usage
 
@@ -391,7 +417,10 @@ print(response)
 
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
+| claude-opus-4-6  | `completion('claude-opus-4-6-20260205', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-sonnet-4-5  | `completion('claude-sonnet-4-5-20250929', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-opus-4-5  | `completion('claude-opus-4-5-20251101', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-opus-4-1  | `completion('claude-opus-4-1-20250805', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-opus-4  | `completion('claude-opus-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-sonnet-4  | `completion('claude-sonnet-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3.7  | `completion('claude-3-7-sonnet-20250219', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
@@ -420,7 +449,7 @@ Here's what a sample Raw Request from LiteLLM for Anthropic Context Caching look
 POST Request Sent from LiteLLM:
 curl -X POST \
 https://api.anthropic.com/v1/messages \
--H 'accept: application/json' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -H 'x-api-key: sk-...' -H 'anthropic-beta: prompt-caching-2024-07-31' \
+-H 'accept: application/json' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -H 'x-api-key: sk-...' \
 -d '{'model': 'claude-3-5-sonnet-20240620', [
     {
       "role": "user",
@@ -448,6 +477,8 @@ https://api.anthropic.com/v1/messages \
   "max_tokens": 10
 }'
 ```
+
+**Note:** Anthropic no longer requires the `anthropic-beta: prompt-caching-2024-07-31` header. Prompt caching now works automatically when you use `cache_control` in your messages.
 ::: 
 
 ### Caching - Large Context Caching 
@@ -1447,6 +1478,20 @@ LiteLLM translates OpenAI's `reasoning_effort` to Anthropic's `thinking` paramet
 | "medium"         | "budget_tokens": 2048 |
 | "high"           | "budget_tokens": 4096 |
 
+:::note
+For Claude Opus 4.6, all `reasoning_effort` values (`low`, `medium`, `high`) are mapped to `thinking: {type: "adaptive"}`. To use explicit thinking budgets, pass the native `thinking` parameter directly:
+
+```python
+from litellm import completion
+
+resp = completion(
+    model="anthropic/claude-opus-4-6",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    thinking={"type": "enabled", "budget_tokens": 1024},
+)
+```
+:::
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -1588,8 +1633,65 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+#### Adaptive Thinking (Claude Opus 4.6)
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
+```python
+response = litellm.completion(
+  model="anthropic/claude-opus-4-6",
+  messages=[{"role": "user", "content": "What is the optimal strategy for solving this problem?"}],
+  thinking={"type": "adaptive"},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "anthropic/claude-opus-4-6",
+    "messages": [{"role": "user", "content": "What is the optimal strategy for solving this problem?"}],
+    "thinking": {"type": "adaptive"}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+#### Enabled Thinking with Budget
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = litellm.completion(
+  model="anthropic/claude-opus-4-6",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 5000},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "anthropic/claude-opus-4-6",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 5000}
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 ## **Passing Extra Headers to Anthropic API**
 
@@ -1666,9 +1768,9 @@ Assistant:
 ```
 
 
-## Usage - PDF 
+## Usage - PDF
 
-Pass base64 encoded PDF files to Anthropic models using the `image_url` field.
+Pass base64 encoded PDF files to Anthropic models using the `file` content type with a `file_data` field.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1912,3 +2014,87 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+
+## Usage - Agent Skills
+
+LiteLLM supports using Agent Skills with the API
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = completion(
+    model="claude-sonnet-4-5-20250929",
+    messages=messages,
+    tools= [
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        }
+    ],
+    container= {
+        "skills": [
+            {
+                "type": "anthropic",
+                "skill_id": "pptx",
+                "version": "latest"
+            }
+        ]
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-sonnet-4-5-20250929
+        litellm_params:
+        model: anthropic/claude-sonnet-4-5-20250929
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://localhost:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <YOUR-LITELLM-KEY>' \
+--data '{
+    "model": "claude-sonnet-4-5-20250929",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hi"
+        }
+    ],
+    "tools": [
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        }
+    ],
+    "container": {
+        "skills": [
+            {
+                "type": "anthropic",
+                "skill_id": "pptx",
+                "version": "latest"
+            }
+        ]
+    }
+}'
+```
+
+</TabItem>
+</Tabs>
+
+The container and its "id" will be present in "provider_specific_fields" in streaming/non-streaming response

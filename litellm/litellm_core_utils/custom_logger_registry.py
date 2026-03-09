@@ -20,8 +20,10 @@ from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
 from litellm.integrations.dotprompt import DotpromptManager
+from litellm.integrations.focus.focus_logger import FocusLogger
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
@@ -32,6 +34,7 @@ from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
 from litellm.integrations.langsmith import LangsmithLogger
+from litellm.integrations.litellm_agent import LiteLLMAgentModelResolver
 from litellm.integrations.literal_ai import LiteralAILogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.openmeter import OpenMeterLogger
@@ -60,9 +63,11 @@ class CustomLoggerRegistry:
         "galileo": GalileoObserve,
         "langsmith": LangsmithLogger,
         "literalai": LiteralAILogger,
+        "litellm_agent": LiteLLMAgentModelResolver,
         "prometheus": PrometheusLogger,
         "datadog": DataDogLogger,
         "datadog_llm_observability": DataDogLLMObsLogger,
+        "datadog_metrics": DatadogMetricsLogger,
         "gcs_bucket": GCSBucketLogger,
         "opik": OpikLogger,
         "argilla": ArgillaLogger,
@@ -75,6 +80,8 @@ class CustomLoggerRegistry:
         "langfuse_otel": OpenTelemetry,
         "arize_phoenix": OpenTelemetry,
         "langtrace": OpenTelemetry,
+        "weave_otel": OpenTelemetry,
+        "levo": OpenTelemetry,
         "mlflow": MlflowLogger,
         "langfuse": LangfusePromptManagement,
         "otel": OpenTelemetry,
@@ -91,6 +98,7 @@ class CustomLoggerRegistry:
         "bitbucket": BitBucketPromptManager,
         "gitlab": GitLabPromptManager,
         "cloudzero": CloudZeroLogger,
+        "focus": FocusLogger,
         "posthog": PostHogLogger,
     }
 
@@ -100,6 +108,9 @@ class CustomLoggerRegistry:
         )
         from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
             ResendEmailLogger,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+            SendGridEmailLogger,
         )
         from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
             SMTPEmailLogger,
@@ -113,6 +124,7 @@ class CustomLoggerRegistry:
             "pagerduty": PagerDutyAlerting,
             "generic_api": GenericAPILogger,
             "resend_email": ResendEmailLogger,
+            "sendgrid_email": SendGridEmailLogger,
             "smtp_email": SMTPEmailLogger,
         }
         CALLBACK_CLASS_STR_TO_CLASS_TYPE.update(enterprise_loggers)

@@ -17,6 +17,7 @@ from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
+    get_vertex_base_url,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
@@ -118,6 +119,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Map input_reference to image (will be processed in transform_video_create_request)
         if "input_reference" in video_create_optional_params:
             mapped_params["image"] = video_create_optional_params["input_reference"]
+        elif "image" in video_create_optional_params:
+            mapped_params["image"] = video_create_optional_params["image"]
+
+        # Pass through a provider-specific parameters block if provided directly
+        if "parameters" in video_create_optional_params:
+            mapped_params["parameters"] = video_create_optional_params["parameters"]
 
         # Map size to aspectRatio
         if "size" in video_create_optional_params:
@@ -223,7 +230,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if api_base:
             base_url = api_base.rstrip("/")
         else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            base_url = get_vertex_base_url(vertex_location)
 
         url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}"
 
@@ -262,23 +269,49 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         instance_dict: Dict[str, Any] = {"prompt": prompt}
         params_copy = video_create_optional_request_params.copy()
 
-
         # Check if user wants to provide full instance dict
         if "instances" in params_copy and isinstance(params_copy["instances"], dict):
             # Replace/merge with user-provided instance
             instance_dict.update(params_copy["instances"])
             params_copy.pop("instances")
         elif "image" in params_copy and params_copy["image"] is not None:
-            image_data = _convert_image_to_vertex_format(params_copy["image"])
+            image = params_copy["image"]
+            if isinstance(image, dict):
+                # Already in Vertex format e.g. {"gcsUri": "gs://..."} or
+                # {"bytesBase64Encoded": "...", "mimeType": "..."}
+                image_data = image
+            elif isinstance(image, str) and image.startswith("gs://"):
+                # Bare GCS URI — Vertex AI accepts gcsUri natively, no download needed
+                image_data = {"gcsUri": image}
+            elif isinstance(image, str):
+                raise ValueError(
+                    f"Unsupported image value '{image}'. "
+                    "Provide a GCS URI (gs://...), a dict with 'gcsUri' or "
+                    "'bytesBase64Encoded'/'mimeType', or a binary file-like object."
+                )
+            else:
+                # File-like object — encode to base64
+                image_data = _convert_image_to_vertex_format(image)
             instance_dict["image"] = image_data
             params_copy.pop("image")
+
+        # Extract a nested "parameters" block that map_openai_params may have placed
+        # inside params_copy (e.g. from provider-specific pass-through).  Merging it
+        # flat prevents the double-nesting bug:
+        #   {"parameters": {"parameters": {...}}}  ← wrong
+        #   {"parameters": {...}}                  ← correct
+        nested_params = params_copy.pop("parameters", None)
+        vertex_params: Dict[str, Any] = {}
+        if isinstance(nested_params, dict):
+            vertex_params.update(nested_params)
+        vertex_params.update(params_copy)
 
         # Build request data directly (TypedDict doesn't have model_dump)
         request_data: Dict[str, Any] = {"instances": [instance_dict]}
 
         # Only add parameters if there are any
-        if params_copy:
-            request_data["parameters"] = params_copy
+        if vertex_params:
+            request_data["parameters"] = vertex_params
 
         # Append :predictLongRunning endpoint to api_base
         url = f"{api_base}:predictLongRunning"
@@ -454,6 +487,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        variant: Optional[str] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request for Veo API.

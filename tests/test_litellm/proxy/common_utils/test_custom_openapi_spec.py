@@ -90,6 +90,35 @@ class TestCustomOpenAPISpec:
             )
             assert result == base_openapi_schema 
 
+def test_defs_rewritten_in_add_schema_to_components():
+    """
+    Test that defs are rewritten to components/schemas in add_schema_to_components.
+    """
+
+    openapi_schema = {}
+    schema_name = "SchemaName"
+    schema_def = {
+        "type": "object",
+        "properties": {
+            "messages": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/UserMessage"},
+                        {"$ref": "#/$defs/AssistantMessage"}
+                    ]
+                }
+            }
+        },
+        "$defs": {
+            "UserMessage": {"type": "object"},
+            "AssistantMessage": {"type": "object"}
+        }
+    }
+    CustomOpenAPISpec.add_schema_to_components(openapi_schema=openapi_schema, schema_name=schema_name, schema_def=schema_def)
+    assert "$defs" not in openapi_schema
+    assert openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"]["items"]["anyOf"][0]["$ref"] == "#/components/schemas/UserMessage"
+    assert openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"]["items"]["anyOf"][1]["$ref"] == "#/components/schemas/AssistantMessage"
 
 def test_move_defs_to_components():
     """

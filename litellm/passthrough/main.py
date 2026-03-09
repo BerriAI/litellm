@@ -216,6 +216,11 @@ def llm_passthrough_route(
     )
 
     litellm_params_dict = get_litellm_params(**kwargs)
+    
+    # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
+    if "model_id" in kwargs:
+        litellm_params_dict["model_id"] = kwargs["model_id"]
+    
     litellm_logging_obj.update_environment_variables(
         model=model,
         litellm_params=litellm_params_dict,
@@ -284,10 +289,10 @@ def llm_passthrough_route(
     request = client.client.build_request(
         method=method,
         url=updated_url,
-        content=signed_json_body,
-        data=data if signed_json_body is None else None,
+        content=signed_json_body if signed_json_body is not None else content,
+        data=data if (signed_json_body is None and content is None) else None,
         files=files,
-        json=json if signed_json_body is None else None,
+        json=json if (signed_json_body is None and content is None) else None,
         params=params,
         headers=headers,
         cookies=cookies,
@@ -405,8 +410,9 @@ async def _async_streaming(
     litellm_logging_obj: "LiteLLMLoggingObj",
     provider_config: "BasePassthroughConfig",
 ):
+    iter_response = await response
     try:
-        iter_response = await response
+        iter_response.raise_for_status()
         raw_bytes: List[bytes] = []
 
         async for chunk in iter_response.aiter_bytes():  # type: ignore
@@ -420,5 +426,9 @@ async def _async_streaming(
                 provider_config=provider_config,
             )
         )
-    except Exception as e:
-        raise e
+    except Exception:
+        try:
+            await iter_response.aclose()
+        except Exception:
+            pass
+        raise

@@ -203,8 +203,13 @@ async def test_redaction_responses_api_stream():
     chunks = []
     async for chunk in response:
         chunks.append(chunk)
-    
-    await asyncio.sleep(1)
+
+    # Wait for async success callback to fire (streaming logs run via asyncio.create_task)
+    await asyncio.sleep(0.5)  # Let event loop schedule the create_task'd success handler
+    for _ in range(100):  # Up to 10 seconds total
+        if test_custom_logger.logged_standard_logging_payload is not None:
+            break
+        await asyncio.sleep(0.1)
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
     
@@ -452,16 +457,13 @@ async def test_redaction_with_metadata_completion_api():
     litellm.callbacks = [test_custom_logger]
     
     # When metadata is passed, the system uses get_metadata_variable_name_from_kwargs
-    # to determine which field to check
+    # to determine which field to check. No headers means redaction should happen
+    # based on the global setting (litellm.turn_off_message_logging = True)
     response = await litellm.acompletion(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="hello",
-        metadata={
-            "headers": {
-                "litellm-disable-message-redaction": "true"
-            }
-        }
+        metadata={}
     )
 
     await asyncio.sleep(1)

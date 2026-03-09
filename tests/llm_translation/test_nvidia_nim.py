@@ -184,6 +184,69 @@ def test_chat_completion_nvidia_nim_with_tools():
         assert request_body["tool_choice"] == "auto"
         assert request_body["parallel_tool_calls"] == True
 
+@pytest.mark.asyncio()
+async def test_nvidia_nim_rerank_ranking_endpoint():
+    """
+    Test that using "nvidia_nim/ranking/<model>" forces the /v1/ranking endpoint.
+    
+    This allows users to explicitly use the /v1/ranking endpoint for models like
+    nvidia/llama-3.2-nv-rerankqa-1b-v2.
+    
+    Reference: https://build.nvidia.com/nvidia/llama-3_2-nv-rerankqa-1b-v2/deploy
+    """
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "rankings": [
+                {"index": 0, "logit": 0.95},
+                {"index": 1, "logit": 0.75},
+            ],
+        }
+
+    mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
+    mock_response.status_code = 200
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Use "ranking/" prefix to force /v1/ranking endpoint
+        response = await litellm.arerank(
+            model="nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2",
+            query="What is the GPU memory bandwidth?",
+            documents=["H100 delivers 3TB/s memory bandwidth", "A100 has 2TB/s memory bandwidth"],
+            top_n=2,
+            api_key="fake-api-key",
+        )
+
+        mock_post.assert_called_once()
+        
+        args_to_api = mock_post.call_args.kwargs["data"]
+        _url = mock_post.call_args.kwargs["url"]
+        print("url = ", _url)
+
+        # Verify URL is /v1/ranking
+        assert _url == "https://ai.api.nvidia.com/v1/ranking"
+
+        # Verify request body structure
+        request_data = json.loads(args_to_api)
+        print("request_data=", request_data)
+
+        # Query should be an object with 'text' field
+        assert request_data["query"] == {"text": "What is the GPU memory bandwidth?"}
+
+        # Documents should be 'passages'
+        assert request_data["passages"] == [
+            {"text": "H100 delivers 3TB/s memory bandwidth"},
+            {"text": "A100 has 2TB/s memory bandwidth"},
+        ]
+
+        # Model name in body should NOT have "ranking/" prefix
+        assert request_data["model"] == "nvidia/llama-3.2-nv-rerankqa-1b-v2"
+
+
 class TestNvidiaNim(BaseLLMRerankTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.NVIDIA_NIM

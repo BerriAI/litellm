@@ -72,7 +72,7 @@ class CustomOpenAPISpec:
             openapi_schema["components"]["schemas"] = {}
         
         # Add the schema
-        openapi_schema["components"]["schemas"][schema_name] = schema_def
+        CustomOpenAPISpec._move_defs_to_components(openapi_schema, {schema_name: schema_def})
     
     @staticmethod
     def add_request_body_to_paths(openapi_schema: Dict[str, Any], paths: List[str], schema_ref: str) -> None:

@@ -830,7 +830,73 @@ asyncio.run(router_acompletion())
 </TabItem>
 </Tabs>
 
+## Traffic Mirroring / Silent Experiments
+
+Traffic mirroring allows you to "mimic" production traffic to a secondary (silent) model for evaluation purposes. The silent model's response is gathered in the background and does not affect the latency or result of the primary request.
+
+[**See detailed guide on A/B Testing - Traffic Mirroring here**](./traffic_mirroring.md)
+
 ## Basic Reliability
+
+### Deployment Ordering (Priority)
+
+Set `order` in `litellm_params` to prioritize deployments. Lower values = higher priority. When multiple deployments share the same `order`, the routing strategy picks among them.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router
+
+model_list = [
+    {
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "azure/gpt-4-primary",
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "order": 1,  # 👈 Highest priority
+        },
+    },
+    {
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "azure/gpt-4-fallback",
+            "api_key": os.getenv("AZURE_API_KEY_2"),
+            "order": 2,  # 👈 Used when order=1 is unavailable
+        },
+    },
+]
+
+router = Router(model_list=model_list, enable_pre_call_checks=True)  # 👈 Required for 'order' to work
+```
+
+:::important
+The `order` parameter requires `enable_pre_call_checks=True` to be set on the Router.
+:::
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-primary
+      api_key: os.environ/AZURE_API_KEY
+      order: 1  # 👈 Highest priority
+
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-fallback
+      api_key: os.environ/AZURE_API_KEY_2
+      order: 2  # 👈 Used when order=1 is unavailable
+
+router_settings:
+  enable_pre_call_checks: true  # 👈 Required for 'order' to work
+```
+
+</TabItem>
+</Tabs>
 
 ### Weighted Deployments 
 
@@ -1273,6 +1339,10 @@ router = Router(model_list: Optional[list] = None,
 				 cache_responses=True)
 ```
 
+:::info
+When configuring Redis caching in router settings, use `cache_kwargs` to pass additional Redis parameters, especially for non-string values that may fail when set via `REDIS_*` environment variables.
+:::
+
 ## Pre-Call Checks (Context Window, EU-Regions)
 
 Enable pre-call checks to filter out:
@@ -1518,11 +1588,13 @@ Get a slack webhook url from https://api.slack.com/messaging/webhooks
 Initialize an `AlertingConfig` and pass it to `litellm.Router`. The following code will trigger an alert because `api_key=bad-key` which is invalid
 
 ```python
-from litellm.router import AlertingConfig
 import litellm
+from litellm.router import Router
+from litellm.types.router import AlertingConfig
 import os
+import asyncio
 
-router = litellm.Router(
+router = Router(
 	model_list=[
 		{
 			"model_name": "gpt-3.5-turbo",
@@ -1533,17 +1605,28 @@ router = litellm.Router(
 		}
 	],
 	alerting_config= AlertingConfig(
-		alerting_threshold=10,                        # threshold for slow / hanging llm responses (in seconds). Defaults to 300 seconds
-		webhook_url= os.getenv("SLACK_WEBHOOK_URL")   # webhook you want to send alerts to
+		alerting_threshold=10,
+		webhook_url= "https:/..."
 	),
 )
-try:
-	await router.acompletion(
-		model="gpt-3.5-turbo",
-		messages=[{"role": "user", "content": "Hey, how's it going?"}],
-	)
-except:
-	pass
+
+async def main():
+	print(f"\n=== Configuration ===")
+	print(f"Slack logger exists: {router.slack_alerting_logger is not None}")
+	
+	try:
+		await router.acompletion(
+			model="gpt-3.5-turbo",
+			messages=[{"role": "user", "content": "Hey, how's it going?"}],
+		)
+	except Exception as e:
+		print(f"\n=== Exception caught ===")
+		print(f"Waiting 10 seconds for alerts to be sent via periodic flush...")
+		await asyncio.sleep(10)
+		print(f"\n=== After waiting ===")
+		print(f"Alert should have been sent to Slack!")
+
+asyncio.run(main())
 ```
 
 ## Track cost for Azure Deployments

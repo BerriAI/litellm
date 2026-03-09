@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -50,16 +51,25 @@ class OpenAITextToSpeechHandler(BaseTranslation):
             return data
 
         if isinstance(input_text, str):
-            guardrailed_input = await guardrail_to_apply.apply_guardrail(
-                text=input_text
+            inputs = GenericGuardrailAPIInputs(texts=[input_text])
+            # Include model information if available (voice model)
+            model = data.get("model")
+            if model:
+                inputs["model"] = model
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs=inputs,
+                request_data=data,
+                input_type="request",
+                logging_obj=litellm_logging_obj,
             )
-            data["input"] = guardrailed_input
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
+            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_text
 
             verbose_proxy_logger.debug(
                 "OpenAI Text-to-Speech: Applied guardrail to input text. "
                 "Original length: %d, New length: %d",
                 len(input_text),
-                len(guardrailed_input),
+                len(data["input"]),
             )
         else:
             verbose_proxy_logger.debug(
@@ -74,6 +84,7 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         response: "HttpxBinaryResponseContent",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
         Process output - not applicable for text-to-speech.
@@ -84,6 +95,8 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         Args:
             response: Binary audio response
             guardrail_to_apply: The guardrail instance (unused)
+            litellm_logging_obj: Optional logging object (unused)
+            user_api_key_dict: User API key metadata (unused)
 
         Returns:
             Unmodified response (audio data doesn't need text guardrails)

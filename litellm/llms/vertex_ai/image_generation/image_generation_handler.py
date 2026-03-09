@@ -176,7 +176,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        model_response: litellm.ImageResponse,
+        model_response: ImageResponse,
         logging_obj: Any,
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Optional[AsyncHTTPHandler] = None,

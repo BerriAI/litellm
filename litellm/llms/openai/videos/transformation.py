@@ -1,18 +1,21 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from io import BufferedReader
-from typing import cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+
 import httpx
 from httpx._types import RequestFiles
 
+import litellm
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-from litellm.types.videos.main import VideoCreateOptionalRequestParams
+from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.videos.main import VideoObject
-from litellm.types.videos.utils import encode_video_id_with_provider, extract_original_video_id
-import litellm
-from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
+from litellm.types.videos.utils import (
+    encode_video_id_with_provider,
+    extract_original_video_id,
+)
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -169,18 +172,22 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        variant: Optional[str] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - GET /v1/videos/{video_id}/content
+        - GET /v1/videos/{video_id}/content?variant=thumbnail
         """
         original_video_id = extract_original_video_id(video_id)
-        
+
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{original_video_id}/content"
-        
+        if variant is not None:
+            url = f"{url}?variant={variant}"
+
         # No additional data needed for GET content request
         data: Dict[str, Any] = {}
 
@@ -266,26 +273,27 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """
         Transform the video list request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - GET /v1/videos
         """
         # Use the api_base directly for video list
         url = api_base
-        
+
         # Prepare query parameters
         params = {}
         if after is not None:
-            params["after"] = after
+            # Decode the wrapped video ID back to the original provider ID
+            params["after"] = extract_original_video_id(after)
         if limit is not None:
             params["limit"] = str(limit)
         if order is not None:
             params["order"] = order
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
-        
+
         return url, params
 
     def transform_video_list_response(
@@ -293,18 +301,40 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
-    ) -> Dict[str,str]:
+    ) -> Dict[str, str]:
         response_data = raw_response.json()
-        
+
         if custom_llm_provider and "data" in response_data:
             for video_obj in response_data.get("data", []):
                 if isinstance(video_obj, dict) and "id" in video_obj:
                     video_obj["id"] = encode_video_id_with_provider(
-                        video_obj["id"], 
-                        custom_llm_provider, 
-                        video_obj.get("model")
+                        video_obj["id"],
+                        custom_llm_provider,
+                        video_obj.get("model"),
                     )
-        
+
+            # Encode pagination cursor IDs so they remain consistent
+            # with the wrapped data[].id format
+            data_list = response_data.get("data", [])
+            if response_data.get("first_id"):
+                first_model = None
+                if data_list and isinstance(data_list[0], dict):
+                    first_model = data_list[0].get("model")
+                response_data["first_id"] = encode_video_id_with_provider(
+                    response_data["first_id"],
+                    custom_llm_provider,
+                    first_model,
+                )
+            if response_data.get("last_id"):
+                last_model = None
+                if data_list and isinstance(data_list[-1], dict):
+                    last_model = data_list[-1].get("model")
+                response_data["last_id"] = encode_video_id_with_provider(
+                    response_data["last_id"],
+                    custom_llm_provider,
+                    last_model,
+                )
+
         return response_data
 
     def transform_video_delete_request(

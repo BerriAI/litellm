@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Button, Spin, Alert } from "antd";
+import { Button, Spin, Alert, Collapse } from "antd";
 import { CheckCircleOutlined, ExclamationCircleOutlined, ReloadOutlined, ToolOutlined } from "@ant-design/icons";
 import { Card, Title, Text } from "@tremor/react";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
@@ -12,7 +12,7 @@ interface MCPConnectionStatusProps {
 }
 
 const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, oauthAccessToken, formValues, onToolsLoaded }) => {
-  const { tools, isLoadingTools, toolsError, canFetchTools, fetchTools } = useTestMCPConnection({
+  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools } = useTestMCPConnection({
     accessToken,
     oauthAccessToken,
     formValues, 
@@ -25,7 +25,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
   }, [tools, onToolsLoaded]);
 
   // Don't show anything if required fields aren't filled
-  if (!canFetchTools && !formValues.url) {
+  if (!canFetchTools && !formValues.url && !formValues.spec_path) {
     return null;
   }
 
@@ -37,7 +37,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
           <Title>Connection Status</Title>
         </div>
 
-        {!canFetchTools && formValues.url && (
+        {!canFetchTools && (formValues.url || formValues.spec_path) && (
           <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
             <ToolOutlined className="text-2xl mb-2" />
             <Text>Complete required fields to test connection</Text>
@@ -60,7 +60,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
                         : "Ready to test connection"}
                 </Text>
                 <br />
-                <Text className="text-gray-500 text-sm">Server: {formValues.url}</Text>
+                <Text className="text-gray-500 text-sm">Server: {formValues.url || formValues.spec_path}</Text>
               </div>
 
               {isLoadingTools && (
@@ -95,7 +95,38 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
             {toolsError && (
               <Alert
                 message="Connection Failed"
-                description={toolsError}
+                description={
+                  <div>
+                    <div>{toolsError}</div>
+                    {toolsErrorStackTrace && (
+                      <Collapse
+                        items={[
+                          {
+                            key: "stack-trace",
+                            label: "Stack Trace",
+                            children: (
+                              <pre style={{ 
+                                whiteSpace: "pre-wrap", 
+                                wordBreak: "break-word",
+                                fontSize: "12px",
+                                fontFamily: "monospace",
+                                margin: 0,
+                                padding: "8px",
+                                backgroundColor: "#f5f5f5",
+                                borderRadius: "4px",
+                                maxHeight: "400px",
+                                overflow: "auto"
+                              }}>
+                                {toolsErrorStackTrace}
+                              </pre>
+                            ),
+                          },
+                        ]}
+                        style={{ marginTop: "12px" }}
+                      />
+                    )}
+                  </div>
+                }
                 type="error"
                 showIcon
                 action={

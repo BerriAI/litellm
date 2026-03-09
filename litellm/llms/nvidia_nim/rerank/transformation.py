@@ -55,6 +55,12 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
     def __init__(self) -> None:
         pass
 
+    def _get_clean_model_name(self, model: str) -> str:
+        """Strip 'nvidia_nim/' prefix from model name if present."""
+        if model.startswith("nvidia_nim/"):
+            return model[len("nvidia_nim/"):]
+        return model
+
     def get_complete_url(
         self, 
         api_base: Optional[str], 
@@ -82,7 +88,10 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         if api_base.endswith("/v1"):
             api_base = api_base[:-3]
         
-        return f"{api_base}/v1/retrieval/{model}/reranking"
+        # Strip nvidia_nim/ prefix from model name if present
+        clean_model = self._get_clean_model_name(model)
+        
+        return f"{api_base}/v1/retrieval/{clean_model}/reranking"
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         """
@@ -210,9 +219,12 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             else:
                 passages.append({"text": str(doc)})
         
+        # Strip nvidia_nim/ prefix from model name if present
+        clean_model = self._get_clean_model_name(model)
+        
         # Note: URL path uses underscores (llama-3_2) but JSON body uses periods (llama-3.2)
         # Convert underscores back to periods for the model field in request body
-        model_for_body = model.replace("_", ".")
+        model_for_body = clean_model.replace("_", ".")
         
         # Build request using TypedDict
         request_data: NvidiaNimRerankRequest = {

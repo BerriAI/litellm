@@ -1,8 +1,13 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
+
+if TYPE_CHECKING:
+    from a2a.types import SendMessageResponse
 
 
 # AgentProvider
@@ -162,16 +167,37 @@ class AugmentedAgentCard(AgentCard):
     is_public: bool
 
 
+# Object permission shape for agent MCP tool access (mirrors LiteLLM_ObjectPermissionBase)
+class AgentObjectPermission(TypedDict, total=False):
+    mcp_servers: Optional[List[str]]
+    mcp_access_groups: Optional[List[str]]
+    mcp_tool_permissions: Optional[Dict[str, List[str]]]
+
+
 class AgentConfig(TypedDict, total=False):
     agent_name: Required[str]
     agent_card_params: Required[AgentCard]
     litellm_params: Dict[str, Any]  # allow for any future litellm params
+    object_permission: AgentObjectPermission
+    tpm_limit: Optional[int]
+    rpm_limit: Optional[int]
+    session_tpm_limit: Optional[int]
+    session_rpm_limit: Optional[int]
+    static_headers: Optional[Dict[str, str]]
+    extra_headers: Optional[List[str]]
 
 
 class PatchAgentRequest(TypedDict, total=False):
     agent_name: str
     agent_card_params: AgentCard
     litellm_params: Dict[str, Any]
+    object_permission: AgentObjectPermission
+    tpm_limit: Optional[int]
+    rpm_limit: Optional[int]
+    session_tpm_limit: Optional[int]
+    session_rpm_limit: Optional[int]
+    static_headers: Optional[Dict[str, str]]
+    extra_headers: Optional[List[str]]
 
 
 # Request/Response models for CRUD endpoints
@@ -182,6 +208,14 @@ class AgentResponse(BaseModel):
     agent_name: str
     litellm_params: Optional[Dict[str, Any]] = None
     agent_card_params: Dict[str, Any]
+    object_permission: Optional[Dict[str, Any]] = None
+    spend: Optional[float] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    session_tpm_limit: Optional[int] = None
+    session_rpm_limit: Optional[int] = None
+    static_headers: Optional[Dict[str, str]] = None
+    extra_headers: Optional[List[str]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None
@@ -200,3 +234,57 @@ class AgentMakePublicResponse(BaseModel):
 
 class MakeAgentsPublicRequest(BaseModel):
     agent_ids: List[str]
+
+
+class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
+    """
+    LiteLLM wrapper for A2A SendMessageResponse.
+
+    Wraps the a2a SDK's SendMessageResponse with LiteLLM's _hidden_params
+    for cost tracking and logging integration.
+    """
+
+    # A2A response fields
+    id: str
+    jsonrpc: str = "2.0"
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[Dict[str, Any]] = None
+
+    # LiteLLM usage tracking
+    usage: Optional[Dict[str, Any]] = None
+
+    model_config = {"extra": "allow"}
+
+    # LiteLLM private attributes for logging/cost tracking
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @classmethod
+    def from_a2a_response(
+        cls, response: "SendMessageResponse"
+    ) -> "LiteLLMSendMessageResponse":
+        """
+        Create a LiteLLMSendMessageResponse from an a2a SDK SendMessageResponse.
+
+        Args:
+            response: The a2a SDK SendMessageResponse
+
+        Returns:
+            LiteLLMSendMessageResponse with _hidden_params support
+        """
+        # Convert the a2a response to a dict
+        response_dict = response.model_dump(mode="json", exclude_none=True)
+
+        return cls(**response_dict)
+
+    @classmethod
+    def from_dict(cls, response_dict: Dict[str, Any]) -> "LiteLLMSendMessageResponse":
+        """
+        Create a LiteLLMSendMessageResponse from a dict.
+
+        Args:
+            response_dict: Dict with A2A response structure
+
+        Returns:
+            LiteLLMSendMessageResponse with _hidden_params support
+        """
+        return cls(**response_dict)
