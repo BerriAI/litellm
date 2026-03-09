@@ -309,7 +309,7 @@ tests:
   - it: should be able to set minReadySeconds
     template: deployment.yaml
     set:
-      deploymentminReadySeconds: 5
+      deploymentMinReadySeconds: 5
     asserts:
       - equal:
           path: spec.minReadySeconds
