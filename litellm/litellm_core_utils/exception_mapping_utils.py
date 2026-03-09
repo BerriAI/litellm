@@ -1041,9 +1041,17 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=_response,
                         litellm_debug_info=extra_information,
                     )
-                elif oci_status == 401 or oci_status == 403:
+                elif oci_status == 401:
                     raise AuthenticationError(
-                        message=f"{exception_provider}: Authentication/Authorization Error - {oci_message}",
+                        message=f"{exception_provider}: Authentication Error - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
+                elif oci_status == 403:
+                    raise PermissionDeniedError(
+                        message=f"{exception_provider}: Authorization Error - {oci_message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=_response,
