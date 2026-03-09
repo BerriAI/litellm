@@ -1521,7 +1521,10 @@ class TestPanwAirsDeduplicationMissingCallId:
 
         assert already_scanned is False
         assert data["litellm_call_id"]
-        assert data["litellm_metadata"][f"_panw_pre_scanned_{data['litellm_call_id']}"] is True
+        assert (
+            data["litellm_metadata"][f"_panw_pre_scanned_{data['litellm_call_id']}"]
+            is True
+        )
 
     @pytest.mark.asyncio
     async def test_call_panw_api_blocks_on_missing_call_id(self):
@@ -4453,18 +4456,19 @@ class TestPanwAirsMcpToolCallWithoutCallId:
             "input": '{"path": "/tmp/safe"}',
         }
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
+        ) as mock_get_client:
             mock_response = MagicMock()
-            mock_response.status_code = 200
             mock_response.json.return_value = {
                 "action": "allow",
                 "category_info": [{"category": "benign"}],
             }
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
+            mock_response.raise_for_status.return_value = None
+            mock_async_client = AsyncMock()
+            mock_async_client.client = MagicMock()
+            mock_async_client.client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_async_client
 
             await handler._call_panw_api(
                 call_id=None,
@@ -4473,7 +4477,7 @@ class TestPanwAirsMcpToolCallWithoutCallId:
             )
 
             # Verify the payload sent to AIRS has no tr_id
-            call_args = mock_client.post.call_args
+            call_args = mock_async_client.client.post.call_args
             sent_payload = call_args.kwargs.get("json") or call_args[1].get("json")
             assert "tr_id" not in sent_payload
             assert sent_payload["contents"] == [{"tool_event": mcp_tool_event}]
@@ -4528,6 +4532,288 @@ class TestPanwAirsMcpToolCallWithoutCallId:
             assert call_kwargs["call_id"] is not None
             assert call_kwargs["call_id"].startswith("web-search-exa-")
             assert request_data.get("litellm_call_id") == call_kwargs["call_id"]
+
+
+class TestPanwAirsStreamingFallbackFix:
+    """Tests for streaming fallback handling when _is_transient or _always_block is set."""
+
+    @pytest.fixture
+    def handler(self):
+        return make_handler(fallback_on_error="allow")
+
+    @pytest.mark.asyncio
+    async def test_streaming_transient_returns_tuple_without_raising(self, handler):
+        """_scan_and_process_streaming_response should return the tuple
+        (not raise HTTPException) when _is_transient is set."""
+        assembled = ModelResponse(
+            id="chatcmpl-123",
+            choices=[
+                Choices(index=0, message=Message(role="assistant", content="hello"))
+            ],
+            model="gpt-4",
+        )
+        request_data = _simple_data(litellm_call_id="test-call-id")
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "_is_transient": True,
+                "action": "block",
+                "category": "api_error",
+            }
+            result = await handler._scan_and_process_streaming_response(
+                assembled, request_data, datetime.now()
+            )
+            content_was_modified, response, scan_result = result
+            assert content_was_modified is False
+            assert scan_result.get("_is_transient") is True
+
+    @pytest.mark.asyncio
+    async def test_streaming_always_block_returns_tuple_without_raising(self, handler):
+        """_scan_and_process_streaming_response should return the tuple
+        (not raise HTTPException) when _always_block is set."""
+        assembled = ModelResponse(
+            id="chatcmpl-123",
+            choices=[
+                Choices(index=0, message=Message(role="assistant", content="hello"))
+            ],
+            model="gpt-4",
+        )
+        request_data = _simple_data(litellm_call_id="test-call-id")
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "_always_block": True,
+                "action": "block",
+                "category": "missing_call_id",
+            }
+            result = await handler._scan_and_process_streaming_response(
+                assembled, request_data, datetime.now()
+            )
+            content_was_modified, response, scan_result = result
+            assert content_was_modified is False
+            assert scan_result.get("_always_block") is True
+
+
+class TestPanwAirsMcpMasking:
+    """Tests for MCP request masking when mask_request_content=True."""
+
+    @pytest.fixture
+    def handler_masking(self):
+        return make_handler(mask_request_content=True)
+
+    @pytest.fixture
+    def handler_no_masking(self):
+        return make_handler(mask_request_content=False)
+
+    @pytest.mark.asyncio
+    async def test_mcp_block_with_masking_rewrites_arguments(self, handler_masking):
+        """Block + prompt_masked_data + mask_request_content=True should rewrite arguments."""
+        inputs: GenericGuardrailAPIInputs = {"texts": []}
+        request_data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "call tool"}],
+            "mcp_tool_name": "file_reader",
+            "arguments": {"path": "/etc/passwd", "secret": "s3cret"},
+            "mcp_arguments": {"path": "/etc/passwd", "secret": "s3cret"},
+            "litellm_call_id": "test-call-id",
+        }
+
+        with patch.object(
+            handler_masking, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            # texts is empty, so only the MCP tool_event scan fires
+            mock_api.return_value = {
+                "action": "block",
+                "category": "dlp",
+                "prompt_masked_data": {
+                    "data": '{"path": "/etc/passwd", "secret": "****"}'
+                },
+            }
+
+            await handler_masking.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+            # Arguments should be rewritten with masked data
+            assert request_data["arguments"] == {
+                "path": "/etc/passwd",
+                "secret": "****",
+            }
+            assert request_data["mcp_arguments"] == {
+                "path": "/etc/passwd",
+                "secret": "****",
+            }
+
+    @pytest.mark.asyncio
+    async def test_mcp_block_without_masking_raises_400(self, handler_no_masking):
+        """Block + prompt_masked_data + mask_request_content=False should still raise 400."""
+        inputs: GenericGuardrailAPIInputs = {"texts": []}
+        request_data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "call tool"}],
+            "mcp_tool_name": "file_reader",
+            "arguments": {"path": "/etc/passwd"},
+            "litellm_call_id": "test-call-id",
+        }
+
+        with patch.object(
+            handler_no_masking, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "dlp",
+                "prompt_masked_data": {"data": '{"path": "/etc/passwd"}'},
+            }
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler_no_masking.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="request",
+                    logging_obj=None,
+                )
+            assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_mcp_structured_args_stay_structured(self, handler_masking):
+        """When original args are dict and masked text is valid JSON, result stays dict."""
+        inputs: GenericGuardrailAPIInputs = {"texts": []}
+        request_data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "call tool"}],
+            "mcp_tool_name": "file_reader",
+            "arguments": {"key": "value"},
+            "litellm_call_id": "test-call-id",
+        }
+
+        with patch.object(
+            handler_masking, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "dlp",
+                "prompt_masked_data": {"data": '{"key": "****"}'},
+            }
+
+            await handler_masking.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+            assert isinstance(request_data["arguments"], dict)
+            assert request_data["arguments"] == {"key": "****"}
+
+    @pytest.mark.asyncio
+    async def test_mcp_structured_args_with_unparseable_masked_text_raises(
+        self, handler_masking
+    ):
+        """When original args are dict but masked text is not valid JSON, should block."""
+        inputs: GenericGuardrailAPIInputs = {"texts": []}
+        request_data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "call tool"}],
+            "mcp_tool_name": "file_reader",
+            "arguments": {"key": "value"},
+            "litellm_call_id": "test-call-id",
+        }
+
+        with patch.object(
+            handler_masking, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "dlp",
+                "prompt_masked_data": {"data": "not valid json {{{"},
+            }
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler_masking.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="request",
+                    logging_obj=None,
+                )
+            assert exc_info.value.status_code == 400
+            assert "not valid JSON" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_mcp_no_rewritable_field_raises(self, handler_masking):
+        """When neither arguments nor mcp_arguments is in request_data, should block."""
+        inputs: GenericGuardrailAPIInputs = {"texts": []}
+        request_data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "call tool"}],
+            "mcp_tool_name": "file_reader",
+            "litellm_call_id": "test-call-id",
+            # No "arguments" or "mcp_arguments" keys
+        }
+
+        with patch.object(
+            handler_masking, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "dlp",
+                "prompt_masked_data": {"data": '{"key": "****"}'},
+            }
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler_masking.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="request",
+                    logging_obj=None,
+                )
+            assert exc_info.value.status_code == 400
+            assert "no rewritable argument field" in str(exc_info.value.detail)
+
+
+class TestPanwAirsResponseToolCallMasking:
+    """Tests for response-side tool-call masking using prompt_masked_data."""
+
+    @pytest.fixture
+    def handler(self):
+        return make_handler(mask_response_content=True)
+
+    @pytest.mark.asyncio
+    async def test_response_side_tool_call_uses_prompt_masked_data(self, handler):
+        """_scan_tool_calls_for_guardrail(is_response=True) should look up
+        prompt_masked_data (not response_masked_data) and mask instead of blocking."""
+        tool_call = MagicMock()
+        tool_call.function = MagicMock()
+        tool_call.function.arguments = '{"query": "sensitive-data"}'
+        tool_call.function.name = "search"
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "dlp",
+                # AIRS returns prompt_masked_data for tool_event scans
+                "prompt_masked_data": {"data": '{"query": "****"}'},
+            }
+
+            await handler._scan_tool_calls_for_guardrail(
+                tool_calls=[tool_call],
+                is_response=True,
+                metadata={"model": "gpt-4"},
+                call_id="test-call-id",
+                request_data=_simple_data(litellm_call_id="test-call-id"),
+                start_time=datetime.now(),
+            )
+
+            # Should have been masked (not raised)
+            assert tool_call.function.arguments == '{"query": "****"}'
 
 
 if __name__ == "__main__":

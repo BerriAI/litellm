@@ -423,7 +423,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     has_input = "input" in tool_event
                     input_len = len(tool_event["input"]) if has_input else 0
                     diag_parts.append(f"input present={has_input}, len={input_len}")
-                diag_parts.append(f"response body: {error_body}")
+                diag_parts.append(f"response body: {error_body[:500]}")
                 verbose_proxy_logger.error(" | ".join(diag_parts))
 
             is_profile_error = any(
@@ -498,6 +498,63 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             else:
                 new_content.append(part)
         return new_content
+
+    @staticmethod
+    def _apply_mcp_masking(
+        request_data: dict, original_args: Any, masked_text: str
+    ) -> None:
+        """Write masked arguments back to MCP request_data fields.
+
+        - ``arguments`` is the authoritative field that ``call_mcp_tool``
+          reads, so it must be updated first.
+        - ``mcp_arguments`` is mirrored for consistency / test observability.
+        - If the original args were structured (dict/list), attempt
+          ``json.loads`` to preserve the type; block if the masked text
+          is not valid JSON (to avoid corrupting structured args).
+        - If neither ``arguments`` nor ``mcp_arguments`` is present in
+          request_data, block — do not silently invent a new field.
+        """
+        has_arguments = "arguments" in request_data
+        has_mcp_arguments = "mcp_arguments" in request_data
+        if not has_arguments and not has_mcp_arguments:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {
+                        "message": "MCP request blocked: no rewritable argument field present",
+                        "type": "guardrail_violation",
+                        "code": "panw_prisma_airs_blocked",
+                    }
+                },
+            )
+
+        # If the original args were structured, preserve the type.
+        if isinstance(original_args, (dict, list)):
+            try:
+                parsed = json.loads(masked_text)
+            except (json.JSONDecodeError, TypeError):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": {
+                            "message": "MCP request blocked: masked data is not valid JSON for structured arguments",
+                            "type": "guardrail_violation",
+                            "code": "panw_prisma_airs_blocked",
+                        }
+                    },
+                )
+            masked_value: Any = parsed
+        else:
+            masked_value = masked_text
+
+        if has_arguments:
+            request_data["arguments"] = masked_value
+        if has_mcp_arguments:
+            request_data["mcp_arguments"] = masked_value
+
+        verbose_proxy_logger.warning(
+            "PANW Prisma AIRS: MCP request blocked but masked instead (mask_request_content=True)"
+        )
 
     def _apply_masking_to_messages(
         self, messages: List[Dict[str, Any]], masked_text: str
@@ -1192,6 +1249,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             call_id=request_data.get("litellm_call_id"),
         )
 
+        # Early return for transient/always-block results — let the
+        # streaming iterator hook handle fallback_on_error semantics.
+        if scan_result.get("_is_transient") or scan_result.get("_always_block"):
+            return (content_was_modified, assembled_model_response, scan_result)
+
         action = scan_result.get("action", "block")
         category = scan_result.get("category", "unknown")
         masked_text = self._get_masked_text(scan_result, is_response=True)
@@ -1434,7 +1496,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 continue  # fallback_on_error="allow" — leave args unchanged
 
             action = scan_result.get("action", "block")
-            masked_text = self._get_masked_text(scan_result, is_response=is_response)
+            # Always is_response=False for masked data lookup because
+            # tool_event scans are request-side in AIRS schema and
+            # AIRS returns prompt_masked_data for them.
+            masked_text = self._get_masked_text(scan_result, is_response=False)
 
             if action == "allow":
                 if masked_text:
@@ -1823,10 +1888,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 # If we reach here, fallback_on_error="allow"
             elif mcp_scan_result.get("action", "block") != "allow":
-                error_detail = self._build_error_detail(
-                    mcp_scan_result, is_response=False
-                )
-                raise HTTPException(status_code=400, detail=error_detail)
+                masked_text = self._get_masked_text(mcp_scan_result, is_response=False)
+                if masked_text and self.mask_request_content:
+                    self._apply_mcp_masking(request_data, mcp_arguments, masked_text)
+                else:
+                    error_detail = self._build_error_detail(
+                        mcp_scan_result, is_response=False
+                    )
+                    raise HTTPException(status_code=400, detail=error_detail)
 
         inputs["texts"] = new_texts
         return inputs

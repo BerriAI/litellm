@@ -276,16 +276,19 @@ The `x-litellm-call-id` is also returned in response headers. If you pass `litel
 - Response masking works on OpenAI chat streaming (`mask_response_content: true`)
 - `/v1/messages` and `/v1/responses` raw streaming blocks instead of masking when violations are detected
 - Request-side masking (`mask_request_content`) is unaffected by endpoint type
+- When `fallback_on_error: "allow"` is set, streaming responses fail open on transient PANW API errors (timeout, 5xx, network) — original chunks are yielded unchanged
 
 ## MCP Tool Security
 
 Tool invocations are sent to AIRS as structured `tool_event` payloads containing tool name, ecosystem, and serialized arguments. Tool-event scans always use request mode.
 
-**What is scanned:** LLM-driven `tool_calls` (name + arguments) and MCP request-side invocations when `mcp_tool_name` (or fallback `name`) is present.
+**What is scanned:** LLM-driven `tool_calls` (name + arguments) and MCP request-side invocations when `mcp_tool_name` (or fallback `name`) is present. Response-side OpenAI-compatible `tool_calls` are also scanned when surfaced into `apply_guardrail()`.
 
-**What is not scanned:** Tool definitions in `inputs["tools"]` and response-side MCP events unless they appear as regular `tool_calls`.
+**What is not scanned:** Tool definitions in `inputs["tools"]` and post-MCP tool results (no `post_mcp_call` hook exists yet).
+
 
 ### Current Limitations
 
+- **No post-MCP response scanning.** Actual post-MCP tool-result scanning is not supported because there is no `post_mcp_call` hook in the framework. Response-side MCP events are only scanned when they appear as regular `tool_calls` in the LLM response.
 - **Guardrail selection not inherited by MCP sub-calls.** With `default_on: false`, MCP request-side child-call scans can be skipped because the parent request's guardrail selection is not propagated to the synthetic MCP payload. Workaround: use a dedicated guardrail with `mode: pre_mcp_call` and `default_on: true`.
 - **MCP transaction correlation.** MCP tool scans use the parent `litellm_call_id` when available; otherwise a fallback ID is synthesized and will not be grouped with the parent request in AIRS dashboards.
