@@ -1,8 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
 import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from "@ant-design/icons";
-import { Badge, Spin, Checkbox, Input } from "antd";
+import { Badge, Spin, Checkbox, Input, Tooltip } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
+
+interface KeyTool {
+  name: string;
+  description: string;
+}
 
 interface MCPToolConfigurationProps {
   accessToken: string | null;
@@ -15,6 +20,8 @@ interface MCPToolConfigurationProps {
   toolNameToDescription: Record<string, string>;
   onToolNameToDisplayNameChange: (map: Record<string, string>) => void;
   onToolNameToDescriptionChange: (map: Record<string, string>) => void;
+  /** Curated key tools from the OpenAPI registry preset (shown before spec loads). */
+  keyTools?: KeyTool[];
 }
 
 const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
@@ -28,6 +35,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   toolNameToDescription,
   onToolNameToDisplayNameChange,
   onToolNameToDescriptionChange,
+  keyTools,
 }) => {
   const previousToolsRef = useRef<any[]>([]);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
@@ -173,8 +181,13 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         {isLoadingTools && (
           <div className="flex items-center justify-center py-6">
             <Spin size="large" />
-            <Text className="ml-3">Loading tools...</Text>
+            <Text className="ml-3">Loading tools from spec...</Text>
           </div>
+        )}
+
+        {/* Key tools preview — shown while loading or when spec hasn't loaded yet */}
+        {keyTools && keyTools.length > 0 && (isLoadingTools || (!isLoadingTools && !toolsError && tools.length === 0)) && (
+          <KeyToolsPreview tools={keyTools} />
         )}
 
         {/* Error state */}
@@ -188,7 +201,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         )}
 
         {/* No tools state */}
-        {!isLoadingTools && !toolsError && tools.length === 0 && canFetchTools && (
+        {!isLoadingTools && !toolsError && tools.length === 0 && canFetchTools && (!keyTools || keyTools.length === 0) && (
           <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
             <ToolOutlined className="text-2xl mb-2" />
             <Text>No tools available for configuration</Text>
@@ -361,6 +374,35 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         )}
       </div>
     </Card>
+  );
+};
+
+const KeyToolsPreview: React.FC<{ tools: KeyTool[] }> = ({ tools }) => {
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? tools : tools.slice(0, 4);
+
+  return (
+    <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+      <p className="text-xs font-medium text-gray-500 mb-2">Key tools from this API (preview — all tools load from the spec)</p>
+      <div className="flex flex-wrap gap-1.5">
+        {shown.map((tool) => (
+          <Tooltip key={tool.name} title={tool.description} placement="top">
+            <span className="inline-flex items-center px-2 py-0.5 rounded bg-white border border-gray-300 text-xs text-gray-700 font-mono cursor-default hover:border-blue-400 transition-colors">
+              {tool.name}
+            </span>
+          </Tooltip>
+        ))}
+      </div>
+      {tools.length > 4 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-2 text-xs text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none p-0"
+        >
+          {expanded ? "Show less" : `+ ${tools.length - 4} more`}
+        </button>
+      )}
+    </div>
   );
 };
 

@@ -10,7 +10,7 @@ import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
-import OpenAPIFormSection from "./OpenAPIFormSection";
+import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -58,6 +58,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
   const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [transportType, setTransportType] = useState<string>("");
+  const [keyTools, setKeyTools] = useState<OpenAPIKeyTool[]>([]);
   const [searchValue, setSearchValue] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const authType = formValues.auth_type as string | undefined;
@@ -612,6 +613,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 onValuesChange={(updates) =>
                   setFormValues((prev) => ({ ...prev, ...updates }))
                 }
+                onKeyToolsChange={setKeyTools}
               />
             )}
 
@@ -794,6 +796,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               toolNameToDescription={toolNameToDescription}
               onToolNameToDisplayNameChange={setToolNameToDisplayName}
               onToolNameToDescriptionChange={setToolNameToDescription}
+              keyTools={keyTools}
             />
           </div>
 
