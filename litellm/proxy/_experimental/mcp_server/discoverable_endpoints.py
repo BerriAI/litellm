@@ -420,6 +420,20 @@ async def callback(code: str, state: str):
         )
 
 
+def _html_safe_json(value: object) -> str:
+    """
+    JSON-serialize a value for safe embedding inside HTML <script> tags.
+    Escapes characters that could break out of the script block (XSS).
+    """
+    s = json.dumps(value)
+    return (
+        s.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("'", "\\u0027")
+    )
+
+
 def _build_mcp_oauth_callback_html(code: Optional[str], state: Optional[str]) -> str:
     """
     Build the inline HTML page for the MCP OAuth callback.
@@ -432,8 +446,8 @@ def _build_mcp_oauth_callback_html(code: Optional[str], state: Optional[str]) ->
     Served as a backend route so it works even when the static-files
     mount for /ui is unavailable (e.g. read-only container filesystems).
     """
-    code_json = json.dumps(code)
-    state_json = json.dumps(state)
+    code_json = _html_safe_json(code)
+    state_json = _html_safe_json(state)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -506,25 +520,8 @@ def _build_mcp_oauth_callback_html(code: Optional[str], state: Optional[str]) ->
 </html>"""
 
 
-@router.get("/ui/mcp/oauth/callback", include_in_schema=False)
-async def mcp_oauth_ui_callback(
-    code: Optional[str] = None,
-    state: Optional[str] = None,
-) -> HTMLResponse:
-    """
-    OAuth callback landing page for the MCP UI flow.
-
-    After the external OAuth provider redirects the browser to /callback,
-    LiteLLM decodes the state and performs a second redirect to this page
-    (the original redirect_uri supplied by the UI).
-
-    This backend route serves an inline HTML page that stores the OAuth
-    result in browser storage and redirects the user back to the LiteLLM
-    dashboard.  It acts as a reliable fallback for environments where the
-    static-file mount for /ui is unavailable (read-only container
-    filesystems, Kubernetes deployments, etc.).
-    """
-    return HTMLResponse(content=_build_mcp_oauth_callback_html(code, state))
+# The /ui/mcp/oauth/callback route is registered in proxy_server.py (before
+# the StaticFiles mount) to ensure it takes precedence over static files.
 
 
 # ------------------------------
