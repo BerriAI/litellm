@@ -999,13 +999,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 oci_status = (
                     getattr(original_exception, "status_code", None)
                     or oci_err.get("status")
-                    or oci_err.get("code")
                 )
-                # Normalize status to int if possible
-                try:
-                    oci_status = int(oci_status)
-                except Exception:
-                    oci_status = None
 
                 oci_message = (
                     getattr(original_exception, "message", None)
