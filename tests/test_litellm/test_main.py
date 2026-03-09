@@ -609,6 +609,24 @@ def test_responses_api_bridge_check_strips_responses_prefix():
         assert model_info["mode"] == "responses"
 
 
+def test_responses_api_bridge_check_gpt_5_4_pro():
+    """Test that gpt-5.4-pro routes through responses API bridge, not chat completions.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/23014
+    gpt-5.4-pro is a responses-only model and must not be sent to /v1/chat/completions.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    for model_name in ["gpt-5.4-pro", "gpt-5.4-pro-2026-03-05"]:
+        model_info, model = responses_api_bridge_check(
+            model=model_name,
+            custom_llm_provider="openai",
+        )
+        assert model_info.get("mode") == "responses", (
+            f"{model_name} should have mode='responses', got '{model_info.get('mode')}'"
+        )
+
+
 def test_responses_api_bridge_check_handles_exception():
     """Test that responses_api_bridge_check handles exceptions and still processes responses/ models."""
     from litellm.main import responses_api_bridge_check

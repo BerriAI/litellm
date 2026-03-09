@@ -4,6 +4,8 @@ import { getProxyBaseUrl } from "@/components/networking";
 interface ThemeContextType {
   logoUrl: string | null;
   setLogoUrl: (url: string | null) => void;
+  faviconUrl: string | null;
+  setFaviconUrl: (url: string | null) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -23,20 +25,16 @@ interface ThemeProviderProps {
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessToken }) => {
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [faviconUrl, setFaviconUrl] = useState<string | null>(null);
 
-  // Load logo URL from backend on mount
-  // Note: /get/ui_theme_settings is now a public endpoint (no auth required)
-  // so all users can see custom branding set by admins
   useEffect(() => {
-    const loadLogoSettings = async () => {
+    const loadThemeSettings = async () => {
       try {
         const proxyBaseUrl = getProxyBaseUrl();
         const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_theme_settings` : "/get/ui_theme_settings";
         const response = await fetch(url, {
           method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
         });
 
         if (response.ok) {
@@ -44,14 +42,37 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
           if (data.values?.logo_url) {
             setLogoUrl(data.values.logo_url);
           }
+          if (data.values?.favicon_url) {
+            setFaviconUrl(data.values.favicon_url);
+          }
         }
       } catch (error) {
-        console.warn("Failed to load logo settings from backend:", error);
+        console.warn("Failed to load theme settings from backend:", error);
       }
     };
 
-    loadLogoSettings();
+    loadThemeSettings();
   }, []);
 
-  return <ThemeContext.Provider value={{ logoUrl, setLogoUrl }}>{children}</ThemeContext.Provider>;
+  useEffect(() => {
+    if (faviconUrl) {
+      const existingLinks = document.querySelectorAll("link[rel*='icon']");
+      if (existingLinks.length > 0) {
+        existingLinks.forEach((link) => {
+          (link as HTMLLinkElement).href = faviconUrl;
+        });
+      } else {
+        const link = document.createElement("link");
+        link.rel = "icon";
+        link.href = faviconUrl;
+        document.head.appendChild(link);
+      }
+    }
+  }, [faviconUrl]);
+
+  return (
+    <ThemeContext.Provider value={{ logoUrl, setLogoUrl, faviconUrl, setFaviconUrl }}>
+      {children}
+    </ThemeContext.Provider>
+  );
 };

@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
@@ -15,6 +15,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,
     _get_enforced_params,
+    _get_metadata_variable_name,
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
@@ -45,6 +46,47 @@ def test_check_if_token_is_service_account():
         api_key="test-key", metadata={"user_id": "test-user"}
     )
     assert check_if_token_is_service_account(other_metadata_token) == False
+
+
+class TestGetMetadataVariableName:
+    """Tests for _get_metadata_variable_name()"""
+
+    def _make_request(self, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.url.path = path
+        return request
+
+    def test_returns_litellm_metadata_for_thread_routes(self):
+        request = self._make_request("/v1/threads/thread_123/messages")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_assistant_routes(self):
+        request = self._make_request("/v1/assistants/asst_123")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_batches_route(self):
+        request = self._make_request("/v1/batches")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_messages_route(self):
+        request = self._make_request("/v1/messages")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_files_route(self):
+        request = self._make_request("/v1/files")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_metadata_for_chat_completions(self):
+        request = self._make_request("/chat/completions")
+        assert _get_metadata_variable_name(request) == "metadata"
+
+    def test_returns_metadata_for_completions(self):
+        request = self._make_request("/v1/completions")
+        assert _get_metadata_variable_name(request) == "metadata"
+
+    def test_returns_metadata_for_embeddings(self):
+        request = self._make_request("/v1/embeddings")
+        assert _get_metadata_variable_name(request) == "metadata"
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -1103,6 +1145,47 @@ async def test_add_litellm_metadata_from_request_headers():
         litellm.callbacks = original_callbacks
 
 
+def test_add_litellm_metadata_from_request_headers_x_litellm_trace_id_sets_chain_id():
+    """x-litellm-trace-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
+    headers = {"x-litellm-trace-id": "foo"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "foo"
+    assert data["metadata"]["session_id"] == "foo"
+    assert data["litellm_session_id"] == "foo"
+    assert data["litellm_trace_id"] == "foo"
+
+
+def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
+    """x-litellm-session-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
+    headers = {"x-litellm-session-id": "bar"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "bar"
+    assert data["metadata"]["session_id"] == "bar"
+    assert data["litellm_session_id"] == "bar"
+    assert data["litellm_trace_id"] == "bar"
+
+
+def test_add_litellm_metadata_from_request_headers_both_headers_trace_id_precedence():
+    """When both x-litellm-trace-id and x-litellm-session-id are present, trace-id takes precedence for chain_id."""
+    headers = {
+        "x-litellm-trace-id": "trace-value",
+        "x-litellm-session-id": "session-value",
+    }
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "trace-value"
+    assert data["metadata"]["session_id"] == "trace-value"
+    assert data["litellm_session_id"] == "trace-value"
+    assert data["litellm_trace_id"] == "trace-value"
+
 
 def test_get_internal_user_header_from_mapping_returns_expected_header():
     mappings = [
@@ -1489,7 +1572,8 @@ async def test_embedding_header_forwarding_without_model_group_config():
         litellm.model_group_settings = original_model_group_settings
 
 
-def test_add_guardrails_from_policy_engine():
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine():
     """
     Test that add_guardrails_from_policy_engine adds guardrails from matching policies
     and tracks applied policies in metadata.
@@ -1536,7 +1620,7 @@ def test_add_guardrails_from_policy_engine():
     attachment_registry._initialized = True
 
     # Call the function
-    add_guardrails_from_policy_engine(
+    await add_guardrails_from_policy_engine(
         data=data,
         metadata_variable_name="metadata",
         user_api_key_dict=user_api_key_dict,
@@ -1559,11 +1643,12 @@ def test_add_guardrails_from_policy_engine():
     attachment_registry._initialized = False
 
 
-def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
     """
     Test that add_guardrails_from_policy_engine accepts dynamic 'policies' from the request body
     and removes them to prevent forwarding to the LLM provider.
-    
+
     This is critical because 'policies' is a LiteLLM proxy-specific parameter that should
     not be sent to the actual LLM API (e.g., OpenAI, Anthropic, etc.).
     """
@@ -1589,7 +1674,7 @@ def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_fro
     policy_registry._initialized = False
 
     # Call the function - should accept dynamic policies and not raise an error
-    add_guardrails_from_policy_engine(
+    await add_guardrails_from_policy_engine(
         data=data,
         metadata_variable_name="metadata",
         user_api_key_dict=user_api_key_dict,
@@ -1604,3 +1689,131 @@ def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_fro
     assert "messages" in data
     assert data["messages"] == [{"role": "user", "content": "Hello"}]
     assert "metadata" in data
+
+
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_policy_version_by_id():
+    """
+    Test that add_guardrails_from_policy_engine executes a specific policy version
+    when policy_<uuid> is passed in the request body.
+    """
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    policy_version_uuid = "12345678-1234-5678-1234-567812345678"
+    policy_version_ref = f"policy_{policy_version_uuid}"
+
+    # Policy from the specific version (e.g. published) - different guardrail than production
+    published_version_policy = Policy(
+        guardrails=PolicyGuardrails(add=["published_version_guardrail"]),
+    )
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "policies": [policy_version_ref],
+        "metadata": {},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_alias="test-team",
+        key_alias="test-key",
+    )
+
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {}
+    policy_registry._initialized = True
+
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = []
+    attachment_registry._initialized = True
+
+    with patch.object(
+        policy_registry,
+        "get_policy_by_id_for_request",
+        return_value=("test-policy-from-version", published_version_policy),
+    ):
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    # Verify guardrails from the specific version were applied
+    assert "metadata" in data
+    assert "guardrails" in data["metadata"]
+    assert "published_version_guardrail" in data["metadata"]["guardrails"]
+    assert "policies" not in data
+
+    # Clean up
+    policy_registry._policies = {}
+    policy_registry._initialized = False
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_not_in_debug_logs():
+    """
+    E2E regression test for the client-reported JWT leak.
+
+    Calls add_litellm_data_to_request with a Bearer token in the request
+    headers and captures all debug log output. Asserts the raw token never
+    appears in any log message — covering the exact paths the client reported:
+      - "Request Headers: ..."
+      - "receiving data: ..."
+      - "[PROXY] returned data from litellm_pre_call_utils: ..."
+    """
+    import logging
+    from io import StringIO
+
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    secret_token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.fakesignature"
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {
+        "authorization": f"Bearer {secret_token}",
+        "content-type": "application/json",
+    }
+    mock_request.url = MagicMock()
+    mock_request.url.__str__ = lambda self: "http://localhost:4000/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.query_params = {}
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+
+    # Capture all debug log output from the proxy logger
+    log_capture = StringIO()
+    log_handler = logging.StreamHandler(log_capture)
+    log_handler.setLevel(logging.DEBUG)
+    logger = logging.getLogger("LiteLLM Proxy")
+    logger.addHandler(log_handler)
+    original_level = logger.level
+    logger.setLevel(logging.DEBUG)
+
+    try:
+        with patch("litellm.proxy.proxy_server.llm_router", None), \
+             patch("litellm.proxy.proxy_server.premium_user", True):
+            await add_litellm_data_to_request(
+                data=data,
+                request=mock_request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=ProxyConfig(),
+                general_settings={},
+            )
+    finally:
+        logger.removeHandler(log_handler)
+        logger.setLevel(original_level)
+
+    log_output = log_capture.getvalue()
+    assert secret_token not in log_output, (
+        f"Bearer token leaked in debug logs. "
+        f"Found token in log output:\n{log_output[:500]}"
+    )

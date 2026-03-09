@@ -158,6 +158,14 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
+        # Native OpenRouter models have IDs like "openrouter/free" where the
+        # "openrouter/" prefix is part of the actual model name on the API.
+        # When called from a bridge (e.g. anthropic_messages adapter),
+        # custom_llm_provider is already resolved, so return early to prevent
+        # the provider-list stripping below from removing the prefix.
+        if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
+            return model, custom_llm_provider, dynamic_api_key, api_base
+
         if api_key and api_key.startswith("os.environ/"):
             dynamic_api_key = get_secret_str(api_key)
 
@@ -551,6 +559,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "bedrock_mantle":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "nvidia_nim":

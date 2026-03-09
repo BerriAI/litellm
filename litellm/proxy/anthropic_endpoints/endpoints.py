@@ -204,7 +204,12 @@ async def count_tokens(
         # Create TokenCountRequest for the internal endpoint
         from litellm.proxy._types import TokenCountRequest
 
-        token_request = TokenCountRequest(model=model_name, messages=messages)
+        token_request = TokenCountRequest(
+            model=model_name,
+            messages=messages,
+            tools=data.get("tools"),
+            system=data.get("system"),
+        )
 
         # Call the internal token counter function with direct request flag set to False
         token_response = await internal_token_counter(

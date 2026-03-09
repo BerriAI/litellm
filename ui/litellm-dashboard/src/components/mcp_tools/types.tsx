@@ -22,11 +22,17 @@ export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
   STDIO: "stdio",
+  OPENAPI: "openapi",
 };
 
-export const handleTransport = (transport?: string | null): string => {
+export const handleTransport = (transport?: string | null, specPath?: string | null): string => {
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
+  }
+
+  // If server has spec_path, display as "openapi" instead of the raw transport type
+  if (specPath && transport !== TRANSPORT.STDIO) {
+    return TRANSPORT.OPENAPI;
   }
 
   return transport;
@@ -131,6 +137,7 @@ export interface MCPToolsViewerProps {
   userRole: string | null;
   userID: string | null;
   serverAlias?: string | null;
+  extraHeaders?: string[] | null;
 }
 
 export interface MCPServer {
@@ -143,6 +150,7 @@ export interface MCPServer {
    * For `stdio`, the backend can return null/undefined.
    */
   url?: string | null;
+  spec_path?: string | null;
   transport?: string | null;
   auth_type?: string | null;
   authorization_url?: string | null;
@@ -161,6 +169,8 @@ export interface MCPServer {
   teams?: Team[];
   mcp_access_groups?: string[];
   allowed_tools?: string[];
+  tool_name_to_display_name?: Record<string, string>;
+  tool_name_to_description?: Record<string, string>;
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
 
@@ -168,6 +178,12 @@ export interface MCPServer {
   command?: string | null;
   args?: string[] | null;
   env?: Record<string, string> | null;
+
+  /** BYOK (Bring Your Own Key) fields */
+  is_byok?: boolean | null;
+  byok_description?: string[] | null;
+  byok_api_key_help_url?: string | null;
+  has_user_credential?: boolean | null;
 }
 
 export interface MCPServerProps {

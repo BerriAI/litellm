@@ -1,25 +1,24 @@
 """
-Prometheus Auth Middleware
-
-Pure ASGI middleware — avoids Starlette's BaseHTTPMiddleware which wraps
-streaming responses with receive_or_disconnect per chunk, blocking the
-event loop and causing severe throughput degradation under concurrent
-streaming load.
+Prometheus Auth Middleware - Pure ASGI implementation
 """
-from starlette.requests import Request
-from starlette.responses import JSONResponse
+import json
+
+from fastapi import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import litellm
 from litellm.proxy._types import SpecialHeaders
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
+# Cache the header name at module level to avoid repeated enum attribute access
+_AUTHORIZATION_HEADER = SpecialHeaders.openai_authorization.value  # "Authorization"
+
 
 class PrometheusAuthMiddleware:
     """
-    Middleware to authenticate requests to the metrics endpoint
+    Middleware to authenticate requests to the metrics endpoint.
 
-    By default, auth is not run on the metrics endpoint
+    By default, auth is not run on the metrics endpoint.
 
     Enabled by setting the following in proxy_config.yaml:
 
@@ -33,51 +32,42 @@ class PrometheusAuthMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] not in ("http", "websocket"):
+        # Fast path: only inspect HTTP requests; pass through websocket/lifespan immediately
+        if scope["type"] != "http" or "/metrics" not in scope.get("path", ""):
             await self.app(scope, receive, send)
             return
 
-        request = Request(scope, receive)
+        # Only run auth if configured to do so
+        if litellm.require_auth_for_metrics_endpoint is True:
+            # Construct Request only when auth is actually needed
+            request = Request(scope, receive)
+            api_key = request.headers.get(_AUTHORIZATION_HEADER) or ""
 
-        if self._is_prometheus_metrics_endpoint(request):
-            if self._should_run_auth_on_metrics_endpoint() is True:
-                try:
-                    await user_api_key_auth(
-                        request=request,
-                        api_key=request.headers.get(
-                            SpecialHeaders.openai_authorization.value
-                        )
-                        or "",
-                    )
-                except Exception as e:
-                    response = JSONResponse(
-                        status_code=401,
-                        content=f"Unauthorized access to metrics endpoint: {getattr(e, 'message', str(e))}",
-                    )
-                    await response(scope, receive, send)
-                    return
+            try:
+                await user_api_key_auth(request=request, api_key=api_key)
+            except Exception as e:
+                # Send 401 response directly via ASGI protocol
+                error_message = getattr(e, "message", str(e))
+                body = json.dumps(
+                    f"Unauthorized access to metrics endpoint: {error_message}"
+                ).encode("utf-8")
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [
+                            [b"content-type", b"application/json"],
+                            [b"content-length", str(len(body)).encode("ascii")],
+                        ],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": body,
+                    }
+                )
+                return
 
+        # Pass through to the inner application
         await self.app(scope, receive, send)
-
-    @staticmethod
-    def _is_prometheus_metrics_endpoint(request: Request):
-        try:
-            if "/metrics" in request.url.path:
-                return True
-            return False
-        except Exception:
-            return False
-
-    @staticmethod
-    def _should_run_auth_on_metrics_endpoint():
-        """
-        Returns True if auth should be run on the metrics endpoint
-
-        False by default, set to True in proxy_config.yaml to enable
-
-        ```yaml
-        litellm_settings:
-            require_auth_for_metrics_endpoint: true
-        ```
-        """
-        return litellm.require_auth_for_metrics_endpoint
