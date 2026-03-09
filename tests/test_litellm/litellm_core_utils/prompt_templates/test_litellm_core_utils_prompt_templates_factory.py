@@ -1741,3 +1741,260 @@ def test_bedrock_tool_call_invoke_multiple_normal_tools():
     assert len(result) == 2
     assert result[0]["toolUse"]["toolUseId"] == "call_1"
     assert result[1]["toolUse"]["toolUseId"] == "call_2"
+
+
+def test_anthropic_messages_pt_preserves_interleaved_thinking_and_tool_use_order():
+    """
+    Test that anthropic_messages_pt preserves the original interleaved order of
+    thinking blocks, server_tool_use, and web_search_tool_result blocks.
+
+    When Claude performs multiple web searches with extended thinking enabled,
+    the response content array interleaves thinking blocks between tool use/result
+    blocks. The previous implementation prepended all thinking_blocks first and then
+    appended content blocks, corrupting the order and causing Anthropic's thinking
+    block signature verification to fail.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/23047
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    # Simulate a round-trip message where the assistant performed 2 web searches
+    # with thinking enabled. The content array has interleaved blocks:
+    # [thinking_1, server_tool_use_1, web_search_result_1, thinking_2, text,
+    #  server_tool_use_2, web_search_result_2]
+    messages = [
+        {"role": "user", "content": "Search the web for the latest news about fast.ai and answer.ai"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for fast.ai news first.",
+                    "signature": "sig-thinking-1",
+                },
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01ABC",
+                    "name": "web_search",
+                    "input": {"query": "fast.ai latest news"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01ABC",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://fast.ai",
+                            "title": "fast.ai",
+                            "encrypted_content": "enc_content_1",
+                        }
+                    ],
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now let me search for answer.ai.",
+                    "signature": "sig-thinking-2",
+                },
+                {
+                    "type": "text",
+                    "text": "Here are the results so far.",
+                },
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_02DEF",
+                    "name": "web_search",
+                    "input": {"query": "answer.ai latest news"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_02DEF",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://answer.ai",
+                            "title": "answer.ai",
+                            "encrypted_content": "enc_content_2",
+                        }
+                    ],
+                },
+            ],
+            # thinking_blocks is also set (extracted from the response)
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for fast.ai news first.",
+                    "signature": "sig-thinking-1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now let me search for answer.ai.",
+                    "signature": "sig-thinking-2",
+                },
+            ],
+            "role": "assistant",
+        },
+        {"role": "user", "content": "Now summarize what you found."},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        llm_provider="anthropic",
+    )
+
+    # Find the assistant message
+    assistant_msgs = [m for m in result if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 1
+    assistant_content = assistant_msgs[0]["content"]
+
+    # Extract the types in order
+    content_types = [block.get("type") for block in assistant_content]
+
+    # The order must match the original interleaved order from the content array.
+    # It should NOT have thinking blocks duplicated or reordered to the front.
+    expected_types = [
+        "thinking",              # thinking_1
+        "server_tool_use",       # web search 1
+        "web_search_tool_result",  # result 1
+        "thinking",              # thinking_2
+        "text",                  # intermediate text
+        "server_tool_use",       # web search 2
+        "web_search_tool_result",  # result 2
+    ]
+    assert content_types == expected_types, (
+        f"Content block order was corrupted. Expected {expected_types}, got {content_types}"
+    )
+
+    # Verify thinking blocks have correct signatures (not swapped)
+    thinking_blocks_in_result = [
+        b for b in assistant_content if b.get("type") == "thinking"
+    ]
+    assert len(thinking_blocks_in_result) == 2
+    assert thinking_blocks_in_result[0]["signature"] == "sig-thinking-1"
+    assert thinking_blocks_in_result[1]["signature"] == "sig-thinking-2"
+
+
+def test_anthropic_messages_pt_thinking_blocks_field_only_no_content_list():
+    """
+    Test that when content is a string (not a list) and thinking_blocks field
+    is present, the thinking_blocks are still prepended correctly.
+
+    This is the backward-compatible case where content doesn't contain
+    interleaved thinking blocks.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "The answer is 4.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Simple arithmetic: 2+2=4",
+                    "signature": "sig-1",
+                }
+            ],
+            "role": "assistant",
+        },
+        {"role": "user", "content": "Thanks!"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        llm_provider="anthropic",
+    )
+
+    assistant_msgs = [m for m in result if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 1
+    assistant_content = assistant_msgs[0]["content"]
+
+    content_types = [block.get("type") for block in assistant_content]
+
+    # thinking_blocks should be prepended before the text content
+    assert content_types == ["thinking", "text"]
+    assert assistant_content[0]["thinking"] == "Simple arithmetic: 2+2=4"
+    assert assistant_content[1]["text"] == "The answer is 4."
+
+
+def test_anthropic_messages_pt_single_web_search_with_thinking():
+    """
+    Test that a single web search with thinking also preserves order correctly.
+    This is the case that previously worked by coincidence.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "Search for Python 3.13 release date"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for this.",
+                    "signature": "sig-1",
+                },
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01XYZ",
+                    "name": "web_search",
+                    "input": {"query": "Python 3.13 release date"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01XYZ",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://python.org",
+                            "title": "Python 3.13",
+                            "encrypted_content": "enc_1",
+                        }
+                    ],
+                },
+                {
+                    "type": "text",
+                    "text": "Python 3.13 was released on October 7, 2024.",
+                },
+            ],
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for this.",
+                    "signature": "sig-1",
+                }
+            ],
+            "role": "assistant",
+        },
+        {"role": "user", "content": "Thanks!"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        llm_provider="anthropic",
+    )
+
+    assistant_msgs = [m for m in result if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 1
+    assistant_content = assistant_msgs[0]["content"]
+
+    content_types = [block.get("type") for block in assistant_content]
+
+    expected_types = [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+    ]
+    assert content_types == expected_types, (
+        f"Content block order was corrupted. Expected {expected_types}, got {content_types}"
+    )

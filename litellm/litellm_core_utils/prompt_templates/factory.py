@@ -2445,9 +2445,27 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     assistant_content.extend(_compaction_blocks)  # type: ignore
 
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
+
+            # Check if the content list already contains thinking blocks.
+            # If so, the original interleaved order is preserved in content,
+            # and we should NOT prepend thinking_blocks separately to avoid
+            # duplication and order corruption.
+            # Fixes: https://github.com/BerriAI/litellm/issues/23047
+            _content_list = assistant_content_block.get("content")
+            _content_has_thinking = False
+            if isinstance(_content_list, list):
+                _content_has_thinking = any(
+                    isinstance(m, dict) and m.get("type") == "thinking"
+                    for m in _content_list
+                )
+
             if (
-                thinking_blocks is not None
+                thinking_blocks is not None and not _content_has_thinking
             ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
+                # Only add thinking_blocks when content doesn't already contain
+                # them (e.g. content is a string or None). When content is a list
+                # with interleaved thinking/tool_use/text blocks, we preserve
+                # the original order by processing content directly below.
                 assistant_content.extend(thinking_blocks)
             if "content" in assistant_content_block and isinstance(
                 assistant_content_block["content"], list
@@ -2464,6 +2482,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             AnthropicMessagesTextParam,
                         ] = cast(ChatCompletionThinkingBlock, m)
                         assistant_content.append(anthropic_message)
+                    # handle redacted_thinking blocks - pass through as-is
+                    elif m.get("type", "") == "redacted_thinking":
+                        assistant_content.append(m)  # type: ignore
                     # handle text
                     elif (
                         m.get("type", "") == "text" and len(text_block) > 0
