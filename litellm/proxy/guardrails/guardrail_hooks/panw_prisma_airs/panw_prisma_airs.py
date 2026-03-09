@@ -478,6 +478,35 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             verbose_proxy_logger.error(f"PANW Prisma AIRS: Unexpected error: {str(e)}")
             return {"action": "block", "category": "api_error", "_is_transient": True}
 
+    @staticmethod
+    def _get_mcp_server_name(request_data: dict, mcp_tool_name: str) -> str:
+        """Resolve MCP server name from request data or MCP registry."""
+        if request_data.get("mcp_server_name"):
+            return request_data["mcp_server_name"]
+        if request_data.get("server_name"):
+            return request_data["server_name"]
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            server_id = request_data.get("server_id")
+            if server_id:
+                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                if server:
+                    return (
+                        getattr(server, "alias", None)
+                        or getattr(server, "server_name", None)
+                        or getattr(server, "name", None)
+                        or getattr(server, "server_id", None)
+                        or "unknown"
+                    )
+            return global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.get(
+                mcp_tool_name, "unknown"
+            )
+        except Exception:
+            return "unknown"
+
     def _get_masked_text(
         self, scan_result: Dict[str, Any], is_response: bool = False
     ) -> Optional[str]:
@@ -860,7 +889,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 is_response=True,
                 event_type=GuardrailEventHooks.post_call,
             )
-            return  # fail-open
+            return  # _always_block raises inside; transient errors fail-open here
         action = scan_result.get("action", "block")
         if action != "allow":
             masked_text = self._get_masked_text(scan_result, is_response=True)
@@ -1473,7 +1502,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 tool_event["input"] = args_text
 
             scan_result = await self._call_panw_api(
-                content=args_text or "",
                 is_response=False,  # tool_event is always request-side in AIRS schema
                 metadata=metadata,
                 call_id=call_id,
@@ -1855,7 +1883,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 "metadata": {
                     "ecosystem": "mcp",
                     "method": "tools/call",
-                    "server_name": mcp_tool_name,
+                    "server_name": self._get_mcp_server_name(request_data, mcp_tool_name),
                     "tool_invoked": mcp_tool_name,
                 },
             }

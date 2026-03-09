@@ -2578,6 +2578,8 @@ class TestPanwAirsMcpToolEventScan:
         }
 
         with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
@@ -2595,7 +2597,7 @@ class TestPanwAirsMcpToolEventScan:
             assert_canonical_tool_event(
                 te,
                 ecosystem="mcp",
-                server_name="file_reader",
+                server_name="test_server",
                 tool_invoked="file_reader",
             )
             assert te["input"] == '{"path": "/etc/passwd"}'
@@ -2687,6 +2689,8 @@ class TestPanwAirsMcpToolEventScan:
         }
 
         with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
@@ -2700,7 +2704,7 @@ class TestPanwAirsMcpToolEventScan:
             call_kwargs = mock_api.call_args.kwargs
             te = call_kwargs["tool_event"]
             assert_canonical_tool_event(
-                te, ecosystem="mcp", server_name="list_tools", tool_invoked="list_tools"
+                te, ecosystem="mcp", server_name="test_server", tool_invoked="list_tools"
             )
             assert "input" not in te
 
@@ -2716,6 +2720,8 @@ class TestPanwAirsMcpToolEventScan:
         }
 
         with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
@@ -2729,9 +2735,52 @@ class TestPanwAirsMcpToolEventScan:
             call_kwargs = mock_api.call_args.kwargs
             te = call_kwargs["tool_event"]
             assert_canonical_tool_event(
-                te, ecosystem="mcp", server_name="echo", tool_invoked="echo"
+                te, ecosystem="mcp", server_name="test_server", tool_invoked="echo"
             )
             assert te["input"] == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_event_server_id_resolution(self, handler):
+        """server_id in request_data resolves server name via get_mcp_server_by_id."""
+        inputs: GenericGuardrailAPIInputs = {"texts": []}
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gpt-4",
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"to": "user@example.com"},
+            "server_id": "abc-123",
+        }
+
+        mock_server = MagicMock()
+        mock_server.alias = "gmail_server"
+        mock_server.server_name = "gmail"
+        mock_server.name = "gmail-mcp"
+        mock_server.server_id = "abc-123"
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+        ) as mock_manager, patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_manager.get_mcp_server_by_id.return_value = mock_server
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+            mock_manager.get_mcp_server_by_id.assert_called_once_with("abc-123")
+            mock_api.assert_called_once()
+            call_kwargs = mock_api.call_args.kwargs
+            te = call_kwargs["tool_event"]
+            assert_canonical_tool_event(
+                te,
+                ecosystem="mcp",
+                server_name="gmail_server",
+                tool_invoked="send_email",
+            )
 
 
 class TestPanwAirsRestMcpFallback:
@@ -2753,6 +2802,8 @@ class TestPanwAirsRestMcpFallback:
         }
 
         with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
@@ -2770,7 +2821,7 @@ class TestPanwAirsRestMcpFallback:
             assert_canonical_tool_event(
                 te,
                 ecosystem="mcp",
-                server_name="rest_file_reader",
+                server_name="test_server",
                 tool_invoked="rest_file_reader",
             )
             # content defaults to "" when only tool_event is sent
@@ -2817,6 +2868,8 @@ class TestPanwAirsRestMcpFallback:
         }
 
         with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
@@ -2833,7 +2886,7 @@ class TestPanwAirsRestMcpFallback:
             assert_canonical_tool_event(
                 te,
                 ecosystem="mcp",
-                server_name="canonical_tool",
+                server_name="test_server",
                 tool_invoked="canonical_tool",
             )
             assert te["input"] == '{"key": "canonical_val"}'
@@ -2869,6 +2922,8 @@ class TestPanwAirsDuplicateScanRegression:
         }
 
         with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
@@ -2904,7 +2959,7 @@ class TestPanwAirsDuplicateScanRegression:
             # Third call: MCP scan (tool_event with file_reader)
             assert (
                 calls[2].kwargs["tool_event"]["metadata"]["server_name"]
-                == "file_reader"
+                == "test_server"
             )
             assert calls[2].kwargs["tool_event"]["metadata"]["ecosystem"] == "mcp"
             assert calls[2].kwargs["tool_event"]["metadata"]["method"] == "tools/call"
@@ -3807,6 +3862,8 @@ class TestPanwAirsMcpRestToolInvoked:
         }
 
         with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
@@ -3820,7 +3877,7 @@ class TestPanwAirsMcpRestToolInvoked:
             mock_api.assert_called_once()
             te = mock_api.call_args.kwargs["tool_event"]
             assert te["metadata"]["tool_invoked"] == "my_tool"
-            assert te["metadata"]["server_name"] == "my_tool"
+            assert te["metadata"]["server_name"] == "test_server"
             assert te["metadata"]["ecosystem"] == "mcp"
 
 
@@ -4450,7 +4507,7 @@ class TestPanwAirsMcpToolCallWithoutCallId:
             "metadata": {
                 "ecosystem": "mcp",
                 "method": "tools/call",
-                "server_name": "file_reader",
+                "server_name": "test_server",
                 "tool_invoked": "file_reader",
             },
             "input": '{"path": "/tmp/safe"}',
