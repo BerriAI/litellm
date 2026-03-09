@@ -59,7 +59,11 @@ class AiohttpResponseWrapper(HTTPResponse):
     @property
     def text(self) -> str:
         if self._body is not None:
-            return self._body.decode("utf-8", errors="replace")
+            encoding = self._response.get_encoding()
+            try:
+                return self._body.decode(encoding or "utf-8", errors="replace")
+            except Exception:
+                return self._body.decode("utf-8", errors="replace")
         return ""
 
     @property
@@ -859,11 +863,25 @@ class BaseLLMAIOHTTPHandler:
             api_key=api_key,
         )
 
-    def _handle_error(self, e: Exception, provider_config: BaseConfig):
-        status_code = getattr(e, "status_code", 500)
+    def _handle_error(
+        self,
+        e: Exception,
+        provider_config: BaseConfig,
+        response: Optional[HTTPResponse] = None,
+    ):
+        status_code = getattr(e, "status_code", None)
+        if status_code is None:
+            status_code = getattr(e, "status", 500)
         error_headers = getattr(e, "headers", None)
         error_text = getattr(e, "text", str(e))
         error_response = getattr(e, "response", None)
+
+        if response is not None:
+            if error_headers is None:
+                error_headers = response.headers
+            if not error_text or error_text == str(e):
+                error_text = response.text
+
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):

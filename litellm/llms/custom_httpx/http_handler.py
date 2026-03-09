@@ -182,19 +182,29 @@ class HTTPXAdapter(HTTPClientAdapterSync):
         self.client = client
 
     def get(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(self.client.get(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("GET", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
 
     def post(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(self.client.post(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("POST", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
 
     def put(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(self.client.put(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("PUT", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
 
     def patch(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(self.client.patch(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("PATCH", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
 
     def delete(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(self.client.delete(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("DELETE", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
 
     def build_request(self, method: str, url: str, **kwargs) -> Any:
         return self.client.build_request(method, url, **kwargs)
@@ -214,19 +224,29 @@ class HTTPXAsyncAdapter(HTTPClientAdapterAsync):
         self.client = client
 
     async def get(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(await self.client.get(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("GET", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
 
     async def post(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(await self.client.post(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("POST", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
 
     async def put(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(await self.client.put(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("PUT", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
 
     async def patch(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(await self.client.patch(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("PATCH", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
 
     async def delete(self, url: str, **kwargs) -> HTTPResponse:
-        return HTTPXResponseWrapper(await self.client.delete(url, **kwargs))
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("DELETE", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
 
     def build_request(self, method: str, url: str, **kwargs) -> Any:
         return self.client.build_request(method, url, **kwargs)
