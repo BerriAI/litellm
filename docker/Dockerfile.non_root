@@ -53,12 +53,10 @@ RUN mkdir -p /var/lib/litellm/ui && \
     mkdir -p /var/lib/litellm/assets && \
     cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
     ( cd /var/lib/litellm/ui && \
-      for html_file in *.html; do \
-        if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
-          folder_name="${html_file%.html}" && \
-          mkdir -p "$folder_name" && \
-          mv "$html_file" "$folder_name/index.html"; \
-        fi; \
+      find . -name "*.html" ! -name "index.html" | while read html_file; do \
+        folder_name="${html_file%.html}" && \
+        mkdir -p "$folder_name" && \
+        mv "$html_file" "$folder_name/index.html"; \
       done && \
       touch .litellm_ui_ready ) && \
     cd /app/ui/litellm-dashboard && rm -rf ./out

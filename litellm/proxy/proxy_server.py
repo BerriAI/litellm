@@ -353,6 +353,9 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.compliance_endpoints import (
     router as compliance_router,
 )
+from litellm.proxy.management_endpoints.config_override_endpoints import (
+    router as config_override_router,
+)
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
 )
@@ -367,6 +370,9 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     user_update,
+)
+from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
+    router as jwt_key_mapping_router,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
@@ -584,6 +590,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     ORJSONResponse,
     RedirectResponse,
@@ -1330,6 +1337,17 @@ try:
         name="next_static",
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
+
+    # Register the MCP OAuth callback route BEFORE mounting the /ui StaticFiles
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_mcp_oauth_callback_html,
+    )
+
+    @app.get("/ui/mcp/oauth/callback", include_in_schema=False)
+    async def _mcp_oauth_ui_callback(
+        code: Optional[str] = None, state: Optional[str] = None
+    ) -> HTMLResponse:
+        return HTMLResponse(content=_build_mcp_oauth_callback_html(code, state))
 
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
