@@ -384,6 +384,41 @@ class LiteLLMCompletionResponsesConfig:
                     if call_id_raw:
                         existing_tool_call_ids.add(str(call_id_raw))
 
+                    #########################################################
+                    # Merge consecutive function_call items into a single assistant
+                    # message. Anthropic requires that all tool_use blocks appear in
+                    # ONE assistant message immediately followed by the tool_result
+                    # blocks. Without this merging, each function_call creates its own
+                    # assistant message, producing back-to-back assistant messages that
+                    # Anthropic rejects with "tool_use ids were found without
+                    # tool_result blocks immediately after".
+                    #########################################################
+                    if messages:
+                        last_msg = messages[-1]
+                        last_role = (
+                            last_msg.get("role")
+                            if isinstance(last_msg, dict)
+                            else getattr(last_msg, "role", None)
+                        )
+                        if last_role == "assistant":
+                            for new_msg in chat_completion_messages:
+                                new_role = (
+                                    new_msg.get("role")
+                                    if isinstance(new_msg, dict)
+                                    else getattr(new_msg, "role", None)
+                                )
+                                if new_role == "assistant":
+                                    new_tcs = (
+                                        new_msg.get("tool_calls")
+                                        if isinstance(new_msg, dict)
+                                        else getattr(new_msg, "tool_calls", None)
+                                    ) or []
+                                    for tc in new_tcs:
+                                        LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
+                                            last_msg, tc
+                                        )
+                            continue
+
                 #########################################################
                 # If Input Item is a Tool Call Output, add it to the tool_call_output_messages list
                 # preserving the ordering of tool call outputs. Some models require the tool 
