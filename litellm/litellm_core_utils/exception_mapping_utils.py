@@ -1014,25 +1014,22 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 if opc_request_id:
                     oci_message += f" [opc-request-id: {opc_request_id}]"
 
-                # Build a canonical message
+                # Heuristic fallback when status is missing but throttling is obvious
+                if not oci_status and ("throttled" in error_str.lower() or "request limit" in error_str.lower()):
+                    oci_status = 429
+
                 exception_mapping_worked = True
                 exception_provider = "OciException"
-# Heuristic fallback when status is missing but throttling is obvious
-if not oci_status and ("throttled" in error_str.lower() or "request limit" in error_str.lower()):
-    oci_status = 429
-
-exception_mapping_worked = True
-exception_provider = "OciException"
-_response = getattr(original_exception, "response", None)
-if _response is None and oci_status:
-    _response = httpx.Response(
-        status_code=oci_status,
-        request=httpx.Request(
-            method="POST",
-            url="https://inference.generativeai.oci.oraclecloud.com",
-        ),
-        content=str(error_str).encode("utf-8"),
-    )
+                _response = getattr(original_exception, "response", None)
+                if _response is None and oci_status:
+                    _response = httpx.Response(
+                        status_code=oci_status,
+                        request=httpx.Request(
+                            method="POST",
+                            url="https://inference.generativeai.oci.oraclecloud.com",
+                        ),
+                        content=str(error_str).encode("utf-8"),
+                    )
 
                 # Map OCI status to LiteLLM exceptions (consistent with other providers)
                 bad_oci_request_statuses = (400, 406, 413, 415, 422, 424)
