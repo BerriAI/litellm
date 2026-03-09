@@ -58,6 +58,7 @@ jobs:
         run: poetry build
 
       - name: Commit version bump and create PR
+        id: create-pr
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -72,7 +73,15 @@ jobs:
             --body "Version bump for litellm-enterprise. Merge to update main." \
             --head "$BRANCH" \
             --base main \
-          || echo "PR already exists"
+          || true
+          PR_URL=$(gh pr list --head "$BRANCH" --json url -q '.[0].url')
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Enable auto-merge
+        run: |
+          gh pr merge "${{ steps.create-pr.outputs.pr_url }}" --auto --squash
         env:
           GH_TOKEN: ${{ github.token }}
 
