@@ -12090,6 +12090,14 @@
             "notes": "SearXNG is an open-source metasearch engine. Free to use when self-hosted or using public instances."
         }
     },
+    "serper/search": {
+        "input_cost_per_query": 0.001,
+        "litellm_provider": "serper",
+        "mode": "search",
+        "metadata": {
+            "notes": "Serper Google Search API. Pricing: $1.00/1k queries (Starter), $0.75/1k (Standard), $0.50/1k (Scale), $0.30/1k (Ultimate)."
+        }
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
