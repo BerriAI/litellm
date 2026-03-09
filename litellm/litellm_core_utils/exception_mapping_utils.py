@@ -986,7 +986,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             exception_status_code=original_exception.status_code,
                         )
             elif custom_llm_provider in (
-                "oci", "oci_generative_ai", "oracle", "oracle_cloud"
+                "oci", "oci_generative_ai"
             ):
                 # Try to parse an OCI-style JSON error body
                 oci_err = None
