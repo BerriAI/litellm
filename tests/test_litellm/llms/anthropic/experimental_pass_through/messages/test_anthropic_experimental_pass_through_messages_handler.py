@@ -213,12 +213,104 @@ class TestThinkingParameterTransformation:
         from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
             LiteLLMAnthropicMessagesAdapter,
         )
-        
+
         thinking = {"type": "enabled", "budget_tokens": 1024}
         result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
             thinking=thinking,
             model="openai/gpt-5.2",
         )
-        
+
         assert result == {"reasoning_effort": "minimal"}
         assert "thinking" not in result
+
+
+class TestNormalizeTools:
+    """Unit tests for AnthropicMessagesConfig._normalize_tools.
+
+    Claude Code sends MCP server tools in OpenAI format (type: "function") even
+    when targeting the Anthropic /v1/messages endpoint.  The normalization must
+    convert those to Anthropic's native tool schema so the API accepts them.
+    """
+
+    def _config(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        return AnthropicMessagesConfig()
+
+    def test_openai_function_tool_converted_to_anthropic(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "mcp__sentry__search_issues",
+                    "description": "Search Sentry issues",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"}
+                        },
+                        "required": ["query"],
+                    },
+                },
+            }
+        ]
+        result = self._config()._normalize_tools(tools)
+        assert len(result) == 1
+        tool = result[0]
+        # Must NOT have the OpenAI wrapper fields
+        assert "type" not in tool or tool.get("type") != "function"
+        assert "function" not in tool
+        # Must have Anthropic fields
+        assert tool["name"] == "mcp__sentry__search_issues"
+        assert tool["description"] == "Search Sentry issues"
+        assert tool["input_schema"]["type"] == "object"
+
+    def test_anthropic_native_tool_unchanged(self):
+        """Tools already in Anthropic format should pass through untouched."""
+        tools = [
+            {
+                "name": "bash",
+                "type": "bash_20250124",
+            }
+        ]
+        result = self._config()._normalize_tools(tools)
+        assert result == tools
+
+    def test_mixed_tools_normalized_correctly(self):
+        """Mixed list: OpenAI tools converted, Anthropic tools unchanged."""
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "my_tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "name": "bash",
+                "type": "bash_20250124",
+            },
+        ]
+        result = self._config()._normalize_tools(tools)
+        assert len(result) == 2
+        # First tool converted
+        assert result[0]["name"] == "my_tool"
+        assert "function" not in result[0]
+        # Second tool unchanged
+        assert result[1] == {"name": "bash", "type": "bash_20250124"}
+
+    def test_function_tool_without_description(self):
+        """Tools without description should not get a description key."""
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "no_desc_tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+        result = self._config()._normalize_tools(tools)
+        assert "description" not in result[0]

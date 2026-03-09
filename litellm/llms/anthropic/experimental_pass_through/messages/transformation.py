@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -133,6 +133,34 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         return headers, api_base
 
+    @staticmethod
+    def _normalize_tools(tools: List[Dict]) -> List[Dict]:
+        """Convert OpenAI-format tools (type: "function") to Anthropic format.
+
+        Claude Code sends MCP server tools using OpenAI's {"type": "function", "function": {...}}
+        schema even when calling the Anthropic /v1/messages endpoint.  Anthropic's API rejects
+        any tool whose "type" field is "function" — it expects "custom" (or a built-in type).
+
+        This normalises those tools in-place so the request succeeds.
+        """
+        normalized = []
+        for tool in tools:
+            if tool.get("type") == "function" and "function" in tool:
+                fn = tool["function"]
+                anthropic_tool: Dict[str, Any] = {
+                    "name": fn["name"],
+                    "input_schema": fn.get(
+                        "parameters",
+                        {"type": "object", "properties": {}},
+                    ),
+                }
+                if fn.get("description"):
+                    anthropic_tool["description"] = fn["description"]
+                normalized.append(anthropic_tool)
+            else:
+                normalized.append(tool)
+        return normalized
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -174,6 +202,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
             if transformed_context_management is not None:
                 anthropic_messages_optional_request_params["context_management"] = transformed_context_management
+
+        # Normalize any OpenAI-format tools (type: "function") to Anthropic format.
+        # Claude Code sends MCP server tools in OpenAI schema even on the Anthropic endpoint.
+        tools = anthropic_messages_optional_request_params.get("tools")
+        if tools:
+            anthropic_messages_optional_request_params["tools"] = self._normalize_tools(tools)
 
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
