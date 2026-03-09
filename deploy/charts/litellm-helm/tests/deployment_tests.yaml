@@ -324,3 +324,10 @@ tests:
       - equal:
           path: spec.strategy.rollingUpdate.maxSurge
           value: 1
+  - it: should work when deployment strategy is not set
+    template: deployment.yaml
+    set:
+      deploymentStrategy: null
+    asserts:
+      - notExists:
+          path: spec.strategy
