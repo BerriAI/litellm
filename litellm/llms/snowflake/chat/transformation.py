@@ -3,12 +3,36 @@ Support for Snowflake REST API
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx
 
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+)
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Delta,
+    Function,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
+from litellm.types.utils import _generate_id
 
 from ...openai_like.chat.transformation import OpenAIGPTConfig
 
@@ -270,3 +294,208 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             **optional_params,
             **extra_body,
         }
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        """
+        Return a Snowflake-specific streaming handler that transforms
+        Snowflake's content_block streaming format to OpenAI-compatible format.
+
+        Snowflake uses Anthropic-style streaming with content_block_start/delta/stop
+        events for tool calls, which requires custom handling.
+        """
+        return SnowflakeStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class SnowflakeStreamingHandler(BaseModelResponseIterator):
+    """
+    Streaming handler for Snowflake Cortex LLM REST API.
+
+    Snowflake uses an Anthropic-style streaming format with content_block events
+    for tool calls. This handler transforms those events to OpenAI-compatible
+    streaming chunks.
+
+    Snowflake streaming format (tool calls):
+        - content_block_start: {"type": "content_block_start", "content_block": {"type": "tool_use", "id": "...", "name": "..."}}
+        - content_block_delta: {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "..."}}
+        - content_block_stop: {"type": "content_block_stop"}
+
+    OpenAI streaming format (tool calls):
+        - {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "...", "function": {"name": "...", "arguments": "..."}}]}}]}
+    """
+
+    def __init__(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        super().__init__(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+        # Track tool call index across chunks
+        self.tool_index = -1
+        # Track current content block type
+        self.current_content_block_type: Optional[str] = None
+        # Track current tool call ID and name for delta chunks
+        self.current_tool_id: Optional[str] = None
+        self.current_tool_name: Optional[str] = None
+        # Generate consistent response ID for the stream
+        self.response_id = _generate_id()
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        """
+        Parse a Snowflake streaming chunk and transform it to OpenAI format.
+
+        Handles both:
+        1. OpenAI-compatible format (choices with delta) - pass through
+        2. Anthropic-style format (content_block events) - transform to OpenAI format
+        """
+        # Check if this is OpenAI-compatible format (has choices)
+        if "choices" in chunk:
+            return self._handle_openai_format_chunk(chunk)
+
+        # Otherwise, handle Anthropic-style content_block format
+        return self._handle_content_block_chunk(chunk)
+
+    def _handle_openai_format_chunk(self, chunk: dict) -> ModelResponseStream:
+        """Handle chunks that are already in OpenAI-compatible format."""
+        return ModelResponseStream(
+            id=chunk.get("id", self.response_id),
+            object="chat.completion.chunk",
+            created=chunk.get("created"),
+            model=chunk.get("model"),
+            choices=chunk.get("choices", []),
+        )
+
+    def _handle_content_block_chunk(self, chunk: dict) -> ModelResponseStream:
+        """
+        Handle Anthropic-style content_block chunks from Snowflake.
+
+        Event types:
+        - message_start: Start of message with usage info
+        - content_block_start: Start of a content block (text or tool_use)
+        - content_block_delta: Delta update for the current block
+        - content_block_stop: End of current content block
+        - message_delta: End of message with finish_reason
+        """
+        type_chunk = chunk.get("type", "")
+        text = ""
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        finish_reason: Optional[str] = None
+        usage: Optional[Usage] = None
+
+        if type_chunk == "message_start":
+            # Extract usage from message_start if available
+            message = chunk.get("message", {})
+            if "usage" in message:
+                usage_data = message["usage"]
+                usage = Usage(
+                    prompt_tokens=usage_data.get("input_tokens", 0),
+                    completion_tokens=usage_data.get("output_tokens", 0),
+                    total_tokens=usage_data.get("input_tokens", 0)
+                    + usage_data.get("output_tokens", 0),
+                )
+
+        elif type_chunk == "content_block_start":
+            content_block = chunk.get("content_block", {})
+            self.current_content_block_type = content_block.get("type")
+
+            if self.current_content_block_type == "text":
+                # Text block start - may have initial text
+                text = content_block.get("text", "")
+
+            elif self.current_content_block_type == "tool_use":
+                # Tool use block start - extract id and name
+                self.tool_index += 1
+                self.current_tool_id = content_block.get("id", "")
+                self.current_tool_name = content_block.get("name", "")
+
+                tool_use = ChatCompletionToolCallChunk(
+                    id=self.current_tool_id,
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=self.current_tool_name,
+                        arguments="",
+                    ),
+                    index=self.tool_index,
+                )
+
+        elif type_chunk == "content_block_delta":
+            delta = chunk.get("delta", {})
+            delta_type = delta.get("type", "")
+
+            if delta_type == "text_delta":
+                text = delta.get("text", "")
+
+            elif delta_type == "input_json_delta":
+                # Tool argument delta - only emit if in tool_use block
+                if self.current_content_block_type == "tool_use":
+                    partial_json = delta.get("partial_json", "")
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=None,
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=None,
+                            arguments=partial_json,
+                        ),
+                        index=self.tool_index,
+                    )
+
+        elif type_chunk == "content_block_stop":
+            # Reset current content block tracking
+            self.current_content_block_type = None
+            self.current_tool_id = None
+            self.current_tool_name = None
+
+        elif type_chunk == "message_delta":
+            # End of message - extract finish_reason and final usage
+            delta = chunk.get("delta", {})
+            stop_reason = delta.get("stop_reason")
+            if stop_reason:
+                # Map Anthropic stop reasons to OpenAI finish reasons
+                if stop_reason == "end_turn":
+                    finish_reason = "stop"
+                elif stop_reason == "tool_use":
+                    finish_reason = "tool_calls"
+                elif stop_reason == "max_tokens":
+                    finish_reason = "length"
+                else:
+                    finish_reason = stop_reason
+
+            # Extract final usage if available
+            if "usage" in chunk:
+                usage_data = chunk["usage"]
+                usage = Usage(
+                    prompt_tokens=usage_data.get("input_tokens", 0),
+                    completion_tokens=usage_data.get("output_tokens", 0),
+                    total_tokens=usage_data.get("input_tokens", 0)
+                    + usage_data.get("output_tokens", 0),
+                )
+
+        # Build the response chunk
+        return ModelResponseStream(
+            id=self.response_id,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=text if text else None,
+                        tool_calls=[tool_use] if tool_use is not None else None,
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+            usage=usage,
+        )
