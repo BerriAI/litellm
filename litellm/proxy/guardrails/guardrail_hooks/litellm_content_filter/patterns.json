@@ -192,7 +192,7 @@
     {
       "name": "gender_sexual_orientation",
       "display_name": "Gender & Sexual Orientation (Protected Class)",
-      "pattern": "\\b(non-?binary|enby|genderqueer|genderfluid|gender-?fluid|agender|bigender|pangender|two-?spirit|trans(gender|sexual|masc|fem)?|cis(gender)?|intersex|MTF|FTM|AMAB|AFAB|assigned\\s+(male|female)\\s+at\\s+birth|gay|lesbian|bisexual|pansexual|omnisexual|polysexual|asexual|aromantic|demisexual|heterosexual|homosexual|queer|LGBTQ\\+?|LGBT\\+?|LGBTQIA\\+?|same-?sex|opposite-?sex|sexual\\s+orientation|sexual\\s+preference|gender\\s+identity|sex\\s+change|gender\\s+reassignment|gender\\s+confirmation|sexual\\s+minority|he\\/him|she\\/her|they\\/them|xe\\/xem|ze\\/zir)\\b",
+      "pattern": "\\b(non-?binary|enby|genderqueer|genderfluid|gender-?fluid|agender|bigender|pangender|two-?spirit|trans(gender|sexual|masc|fem)?|cis(gender)?|intersex|MTF|FTM|AMAB|AFAB|assigned\\s+(male|female)\\s+at\\s+birth|gay|lesbian|bisexual|pansexual|omnisexual|polysexual|asexual|aromantic|demisexual|heterosexual|homosexual|queer|LGBTQ\\+?|LGBT\\+?|LGBTQIA\\+?|same-?sex|opposite-?sex|sexual\\s+orientation|sexual\\s+preference|gender\\s+identity|sex\\s+change|gender\\s+reassignment|gender\\s+confirmation|sexual\\s+minority|he\\/him|she\\/her|they\\/them|xe\\/xem|ze\\/zir|wom[ae]ns?|females?|males?)\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects gender identity and sexual orientation terms - protected under fair lending regulations"
     },
@@ -206,21 +206,21 @@
     {
       "name": "religion",
       "display_name": "Religion & Creed (Protected Class)",
-      "pattern": "\\b(christian|catholic|protestant|baptist|methodist|lutheran|presbyterian|episcopal|pentecostal|evangelical|orthodox\\s+christian|mormon|latter[- ]?day\\s+saint|LDS|jehovah'?s?\\s+witness|seventh[- ]?day\\s+adventist|amish|mennonite|quaker|jewish|jew|judaism|orthodox\\s+jew|hasidic|muslim|islam(ic)?|sunni|shia|shiite|sufi|nation\\s+of\\s+islam|hindu(ism)?|buddhist|buddhism|sikh(ism)?|jain(ism)?|shinto|taoist|taoism|confucian|zoroastrian|baha'?i|rastafari(an)?|pagan|wiccan|druid|satanist|scientolog(y|ist)|unitarian|agnostic|atheist|secular|non-?religious|spiritual\\s+but\\s+not\\s+religious|religious\\s+belief|religious\\s+practice|place\\s+of\\s+worship|church|mosque|synagogue|temple|gurdwara|kosher|halal|sabbath|shabbat|ramadan|lent|yom\\s+kippur|rosh\\s+hashanah|diwali|eid|hijab|yarmulke|kippah|turban|religious\\s+head\\s*covering)\\b",
+      "pattern": "\\b(christians?|catholics?|protestants?|baptists?|methodists?|lutherans?|presbyterians?|episcopal|pentecostal|evangelicals?|orthodox\\s+christian|mormons?|latter[- ]?day\\s+saint|LDS|jehovah'?s?\\s+witness(es)?|seventh[- ]?day\\s+adventist|amish|mennonite|quakers?|jewish|jews?|judaism|orthodox\\s+jew|hasidic|muslims?|islam(ic)?|sunni|shia|shiite|sufi|nation\\s+of\\s+islam|hindus?(ism)?|buddhists?|buddhism|sikhs?(ism)?|jains?(ism)?|shinto|taoists?|taoism|confucian|zoroastrian|baha'?i|rastafari(an)?|pagans?|wiccans?|druids?|satanist|scientolog(y|ist)|unitarian|agnostics?|atheists?|secular|non-?religious|spiritual\\s+but\\s+not\\s+religious|religious\\s+belief|religious\\s+practice|place\\s+of\\s+worship|church|mosque|synagogue|temple|gurdwara|kosher|halal|sabbath|shabbat|ramadan|lent|yom\\s+kippur|rosh\\s+hashanah|diwali|eid|hijab|yarmulke|kippah|turban|religious\\s+head\\s*covering)\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects religious affiliation and practice terms - protected under ECOA"
     },
     {
       "name": "age_discrimination",
       "display_name": "Age-Related Terms (Protected Class)",
-      "pattern": "\\b(elderly|senior\\s+citizen|old\\s+age|aged\\s+\\d+|retiree|retired|pensioner|baby\\s+boomer|boomer|geriatric|over\\s+the\\s+hill|too\\s+old|too\\s+young|young\\s+person|millennial|gen[- ]?z|junior|age\\s+discrimination|ageism|years?\\s+old|date\\s+of\\s+birth|DOB|birth\\s*date|born\\s+in\\s+\\d{4}|age\\s+\\d{2,3})\\b",
+      "pattern": "\\b(elderly|senior\\s+citizens?|seniors?|old\\s+age|aged\\s+\\d+|retirees?|retired|pensioners?|baby\\s+boomers?|boomers?|geriatric|over\\s+the\\s+hill|too\\s+old|too\\s+young|young\\s+person|millennials?|gen[- ]?z|junior|age\\s+discrimination|ageism|years?\\s+old|\\d+\\s*years?\\s*old|over\\s+\\d+|under\\s+\\d+|older\\s+workers?|older\\s+employees?|older\\s+candidates?|in\\s+their\\s+\\d{2}s?|date\\s+of\\s+birth|DOB|birth\\s*date|born\\s+in\\s+\\d{4}|age\\s+\\d{2,3})\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects age-related terms - protected under ECOA for applicants 62+"
     },
     {
       "name": "disability",
       "display_name": "Disability Status (Protected Class)",
-      "pattern": "\\b(disabled|disability|handicap(ped)?|impair(ed|ment)|wheelchair|blind(ness)?|deaf(ness)?|hard\\s+of\\s+hearing|hearing\\s+impaired|visually\\s+impaired|mute|paralyz(ed|is)|quadriplegic|paraplegic|amputee|prosthetic|cripple[d]?|mentally\\s+ill|mental\\s+illness|mental\\s+disorder|psychiatric|schizophren(ia|ic)|bipolar|depression|depressed|anxiety\\s+disorder|PTSD|autis(m|tic)|asperger'?s?|ADHD|ADD|dyslexia|dyslexic|learning\\s+disabilit(y|ies)|intellectual\\s+disabilit(y|ies)|down'?s?\\s+syndrome|cerebral\\s+palsy|epilep(sy|tic)|seizure\\s+disorder|multiple\\s+sclerosis|MS\\s+patient|parkinson'?s?|alzheimer'?s?|dementia|chronic\\s+illness|chronic\\s+pain|fibromyalgia|lupus|crohn'?s?|cancer\\s+patient|HIV|AIDS|diabetic|diabetes|SSI|SSDI|disability\\s+benefits|disability\\s+income|ADA|reasonable\\s+accommodation|special\\s+needs|service\\s+animal|service\\s+dog|guide\\s+dog)\\b",
+      "pattern": "\\b(disabled|disabilit(y|ies)|handicap(ped)?|impair(ed|ment|ments)?|wheelchair|blind(ness)?|deaf(ness)?|hard\\s+of\\s+hearing|hearing\\s+impaired|visually\\s+impaired|mute|paralyz(ed|is)|quadriplegic|paraplegic|amputee|prosthetic|cripple[d]?|mentally\\s+ill|mental\\s+illness|mental\\s+disorder|psychiatric|schizophren(ia|ic)|bipolar|depression|depressed|anxiety\\s+disorder|PTSD|autis(m|tic)|asperger'?s?|ADHD|ADD|dyslexia|dyslexic|learning\\s+disabilit(y|ies)|intellectual\\s+disabilit(y|ies)|down'?s?\\s+syndrome|cerebral\\s+palsy|epilep(sy|tic)|seizure\\s+disorder|multiple\\s+sclerosis|MS\\s+patient|parkinson'?s?|alzheimer'?s?|dementia|chronic\\s+illness|chronic\\s+pain|fibromyalgia|lupus|crohn'?s?|cancer\\s+patient|HIV|AIDS|diabetic|diabetes|SSI|SSDI|disability\\s+benefits|disability\\s+income|ADA|reasonable\\s+accommodation|special\\s+needs|service\\s+animal|service\\s+dog|guide\\s+dog)\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects disability-related terms - protected under ECOA and ADA"
     },
@@ -234,7 +234,7 @@
     {
       "name": "military_status",
       "display_name": "Military Status (Protected Class)",
-      "pattern": "\\b(veteran|military|armed\\s+forces|army|navy|air\\s+force|marine(s|\\s+corps)?|coast\\s+guard|national\\s+guard|reserve(s|ist)?|active\\s+duty|deployment|deployed|enlisted|commissioned|honorable\\s+discharge|dishonorable\\s+discharge|VA\\s+benefits|GI\\s+bill|military\\s+service|service\\s+member|servicemember|SCRA|MLA|military\\s+lending)\\b",
+      "pattern": "\\b(veterans?|military|armed\\s+forces|army|navy|air\\s+force|marines?(?:\\s+corps)?|coast\\s+guard|national\\s+guard|reserves?(?:ist)?|active\\s+duty|deployment|deployed|enlisted|commissioned|honorable\\s+discharge|dishonorable\\s+discharge|VA\\s+benefits|GI\\s+bill|military\\s+service|service\\s+members?|servicemembers?|SCRA|MLA|military\\s+lending)\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects military status terms - protected under SCRA and MLA"
     },
@@ -492,6 +492,137 @@
       "category": "Aviation PII Patterns",
       "description": "Detects airline flight numbers (major IATA 2-letter codes + 1-4 digit flight number) when near flight context",
       "keyword_pattern": "\\b(?:flight|departure|arrival|gate|boarding|schedule|operate|route|aircraft|plane|outbound|inbound|leg|sector|flying)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "sg_nric",
+      "display_name": "NRIC/FIN (Singapore National ID)",
+      "pattern": "\\b[STFGM]\\d{7}[A-Z]\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore NRIC and FIN numbers (S/T for citizens/PRs, F/G/M for foreigners + 7 digits + checksum letter)"
+    },
+    {
+      "name": "sg_phone",
+      "display_name": "Phone Number (Singapore)",
+      "pattern": "(?<!\\d)(?:\\+65|0065|65)\\s?[689]\\d{3}\\s?\\d{4}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore phone numbers (+65/0065/65 prefix with 6/8/9 starting digit for landline and mobile)"
+    },
+    {
+      "name": "sg_postal_code",
+      "display_name": "Postal Code (Singapore)",
+      "pattern": "\\b[0-8]\\d{5}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore 6-digit postal codes (ranges 01xxxx to 83xxxx)",
+      "keyword_pattern": "\\b(?:postal\\s*code|postcode|zip\\s*code|Singapore\\s*\\d|blk|block|address|HDB|flat|unit)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "passport_singapore",
+      "display_name": "Passport (Singapore)",
+      "pattern": "\\b[EK]\\d{7}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore passport numbers (E/K prefix + 7 digits)",
+      "keyword_pattern": "\\b(?:passport|travel\\s*document|document\\s*number|immigration|ICA)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "sg_uen",
+      "display_name": "UEN (Singapore Unique Entity Number)",
+      "pattern": "\\b(?:\\d{8}[A-Z]|\\d{9}[A-Z]|[TR]\\d{2}[A-Z]{2}\\d{4}[A-Z])\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore Unique Entity Numbers for business registration (various formats: 8/9 digits + letter, or T/R prefix)",
+      "keyword_pattern": "\\b(?:UEN|company\\s*registration|business\\s*registration|ACRA|entity\\s*number|ROC|ROS)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "sg_bank_account",
+      "display_name": "Bank Account (Singapore)",
+      "pattern": "\\b\\d{3}-\\d{5,6}-\\d{1,3}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore bank account numbers (XXX-XXXXX(X)-X(XX) format for DBS/POSB/OCBC/UOB)",
+      "keyword_pattern": "\\b(?:bank\\s*account|account\\s*number|DBS|OCBC|UOB|POSB|savings|current\\s*account|bank\\s*statement)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_sin",
+      "display_name": "SIN (Canadian Social Insurance Number)",
+      "pattern": "\\b[1-9]\\d{2}[\\-\\s]\\d{3}[\\-\\s]\\d{3}\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Canadian Social Insurance Numbers (9-digit federal identifier, dashed or spaced format, first digit 1-9)",
+      "keyword_pattern": "\\b(?:social\\s*insurance\\s*number|numéro\\s*d'assurance\\s*sociale|social\\s*insurance|SIN|NAS)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_ohip",
+      "display_name": "OHIP (Ontario Health Insurance Plan Number)",
+      "pattern": "\\b\\d{4}[\\-\\s]?\\d{3}[\\-\\s]?\\d{3}[\\-\\s]?[A-Z]{2}\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Ontario Health Insurance Plan numbers (10 digits + 2-letter version code)",
+      "keyword_pattern": "\\b(?:OHIP\\s*number|health\\s*card\\s*number|health\\s*insurance\\s*number|OHIP|health\\s*card|health\\s*insurance|ontario\\s*health|health\\s*number|carte\\s*santé)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_on_drivers_licence",
+      "display_name": "Driver's Licence (Ontario)",
+      "pattern": "\\b[A-Z]\\d{4}[\\-\\s]\\d{5}[\\-\\s]\\d{5}\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Ontario driver's licence numbers (1 letter + 14 digits, dashed format)",
+      "keyword_pattern": "\\b(?:driver'?s?\\s*licen[cs]e\\s*number|ontario\\s*licen[cs]e\\s*number|driver'?s?\\s*licen[cs]e|licen[cs]e\\s*number|DL\\s*number|ontario\\s*licen[cs]e|permis\\s*de\\s*conduire|numéro\\s*de\\s*permis)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_immigration_doc",
+      "display_name": "Immigration Document (Canada IRCC)",
+      "pattern": "\\b(?:\\d{4}[\\-\\s]\\d{4}[\\-\\s]\\d{2}|[TUFW]\\d{8,10}|IMM[\\-\\s]?\\d{4,5})\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Canadian immigration document numbers including UCI (10-digit), work/study permits, and IMM document references",
+      "keyword_pattern": "\\b(?:unique\\s*client\\s*identifier|study\\s*permit\\s*number|work\\s*permit\\s*number|study\\s*permit|work\\s*permit|UCI|immigration|IRCC|permanent\\s*resident|PR\\s*card|permis\\s*d'études|permis\\s*de\\s*travail|landed\\s*immigrant|temporary\\s*resident)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_bank_account",
+      "display_name": "Bank Account (Canada)",
+      "pattern": "\\b\\d{5}[\\-\\s]\\d{3}[\\-\\s]\\d{7,12}\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Canadian bank account routing information (transit-institution-account format)",
+      "keyword_pattern": "\\b(?:bank\\s*account|account\\s*number|transit\\s*number|institution\\s*number|branch\\s*number|routing\\s*number|direct\\s*deposit|void\\s*cheque|chequing|savings\\s*account|numéro\\s*de\\s*compte|dépôt\\s*direct)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "ca_postal_code",
+      "display_name": "Postal Code (Canada)",
+      "pattern": "\\b[ABCEGHJ-NPRSTVXY]\\d[ABCEGHJ-NPRSTV-Z][\\-\\s]?\\d[ABCEGHJ-NPRSTV-Z]\\d\\b",
+      "category": "Canadian PII Patterns",
+      "description": "Detects Canadian postal codes (A1A 1A1 format, excludes invalid first-letter characters per Canada Post spec)",
+      "keyword_pattern": "\\b(?:postal\\s*code|zip\\s*code|mailing\\s*address|street\\s*address|shipping\\s*address|home\\s*address|code\\s*postal|postcode)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uoft_student_id",
+      "display_name": "Student/Employee Number (University of Toronto)",
+      "pattern": "\\b10\\d{8}\\b",
+      "category": "Canadian Institutional Identifiers (FIPPA)",
+      "description": "Detects University of Toronto student and employee numbers (10-digit, prefix '10'). Subject to Ontario FIPPA.",
+      "keyword_pattern": "\\b(?:student\\s*id\\s*number|student\\s*number|employee\\s*id\\s*number|employee\\s*number|student\\s*id|employee\\s*id|utorid|uoft\\s*id|university\\s*of\\s*toronto|u\\s*of\\s*t)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uoft_utorid",
+      "display_name": "UTORid (University of Toronto Login)",
+      "pattern": "\\b[a-z]{2,6}\\d{1,4}\\b",
+      "category": "Canadian Institutional Identifiers (FIPPA)",
+      "description": "Detects University of Toronto UTORid login identifiers (e.g. smithj12). Context keywords are essential due to the generic format.",
+      "keyword_pattern": "\\b(?:utorid|utoid|utor\\s*id|uoft\\s*login|university\\s*of\\s*toronto\\s*login|acorn\\s*login|acorn\\s*portal|quercus\\s*login|quercus\\s*course|portal\\s*login|weblogin|shibboleth)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uoft_tcard",
+      "display_name": "TCard Number (University of Toronto Campus ID)",
+      "pattern": "\\b\\d{16}\\b",
+      "category": "Canadian Institutional Identifiers (FIPPA)",
+      "description": "Detects University of Toronto TCard campus ID card numbers (16-digit). Context keywords are critical to distinguish from payment card numbers.",
+      "keyword_pattern": "\\b(?:tcard\\s*number|t-card\\s*number|tcard|t-card|campus\\s*card|campus\\s*id|university\\s*card)\\b",
       "allow_word_numbers": false
     }
   ]

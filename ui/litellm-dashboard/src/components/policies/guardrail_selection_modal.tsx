@@ -16,6 +16,7 @@ interface GuardrailSelectionModalProps {
   onConfirm: (selectedGuardrails: any[]) => void;
   onCancel: () => void;
   isLoading?: boolean;
+  progressInfo?: { current: number; total: number } | null;
 }
 
 const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
@@ -25,6 +26,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
   onConfirm,
   onCancel,
   isLoading = false,
+  progressInfo,
 }) => {
   const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(
     new Set()
@@ -90,8 +92,15 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
     <Modal
       title={
         <div>
-          <h3 className="text-lg font-semibold mb-1">{template?.title}</h3>
-          <p className="text-sm text-gray-500 font-normal">
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold mb-0">{template?.title}</h3>
+            {progressInfo && (
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-600 border border-blue-100">
+                Template {progressInfo.current} of {progressInfo.total}
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-gray-500 font-normal mt-1">
             Review and select guardrails to create for this template
           </p>
         </div>

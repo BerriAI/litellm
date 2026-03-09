@@ -41,11 +41,37 @@ After creating the app, copy your **Client ID** and **Client Secret** from the a
 
 Ensure users are assigned to the app in the **Assignments** tab. If Federation Broker Mode is enabled, you may need to disable it to assign users manually.
 
-#### Step 3: Configure Authorization Server Access Policy
+#### Step 3: Set Environment Variables
 
-:::warning Important
-This step is required. Without an Access Policy for your app, users will get a `no_matching_policy` error when attempting to log in.
+Set the following environment variables. The only difference between the two Okta authorization servers is the endpoint URLs:
+
+**Org Authorization Server** (available on all Okta plans, no additional SKU required):
+```bash
+GENERIC_CLIENT_ID="<your-client-id>"
+GENERIC_CLIENT_SECRET="<your-client-secret>"
+GENERIC_AUTHORIZATION_ENDPOINT="https://<your-okta-domain>/oauth2/v1/authorize"
+GENERIC_TOKEN_ENDPOINT="https://<your-okta-domain>/oauth2/v1/token"
+GENERIC_USERINFO_ENDPOINT="https://<your-okta-domain>/oauth2/v1/userinfo"
+PROXY_BASE_URL="https://<your-proxy-base-url>"
+```
+
+**Custom Authorization Server** (requires the Okta API Access Management SKU):
+```bash
+GENERIC_CLIENT_ID="<your-client-id>"
+GENERIC_CLIENT_SECRET="<your-client-secret>"
+GENERIC_AUTHORIZATION_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/authorize"
+GENERIC_TOKEN_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/token"
+GENERIC_USERINFO_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/userinfo"
+PROXY_BASE_URL="https://<your-proxy-base-url>"
+```
+
+:::tip
+You can find all OAuth endpoints at `https://<your-okta-domain>/.well-known/openid-configuration`
 :::
+
+#### Step 3a: Configure Access Policy (Custom Authorization Server only)
+
+If you are using the Custom Authorization Server, you must configure an Access Policy. Without it, users will get a `no_matching_policy` error. Skip this step if you are using the Org Authorization Server.
 
 1. Go to **Security** → **API**
 
@@ -62,21 +88,21 @@ This step is required. Without an Access Policy for your app, users will get a `
 
 See [Okta's Access Policy documentation](https://help.okta.com/en-us/content/topics/security/api-access-management/access-policies.htm) for more details.
 
-#### Step 4: Configure LiteLLM Environment Variables
+#### Step 4: Configure Okta Security Settings
+
+**GENERIC_CLIENT_STATE** is recommended for Okta to prevent CSRF attacks:
 
 ```bash
-GENERIC_CLIENT_ID="<your-client-id>"
-GENERIC_CLIENT_SECRET="<your-client-secret>"
-GENERIC_AUTHORIZATION_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/authorize"
-GENERIC_TOKEN_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/token"
-GENERIC_USERINFO_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/userinfo"
 GENERIC_CLIENT_STATE="random-string"
-PROXY_BASE_URL="https://<your-proxy-base-url>"
 ```
 
-:::tip
-You can find all OAuth endpoints at `https://<your-okta-domain>/.well-known/openid-configuration`
-:::
+**PKCE (Proof Key for Code Exchange)** — If your Okta application is configured to require PKCE, enable it by setting:
+
+```bash
+GENERIC_CLIENT_USE_PKCE="true"
+```
+
+LiteLLM will automatically handle PKCE parameter generation and verification during the OAuth flow.
 
 #### Step 5: Test the SSO Flow
 
@@ -91,7 +117,7 @@ You can find all OAuth endpoints at `https://<your-okta-domain>/.well-known/open
 |-------|-------|----------|
 | `redirect_uri` error | Redirect URI not configured | Add `<proxy_base_url>/sso/callback` to Sign-in redirect URIs in Okta |
 | `access_denied` | User not assigned to app | Assign the user in the Assignments tab |
-| `no_matching_policy` | Missing Access Policy | Create an Access Policy in the Authorization Server (see Step 3) |
+| `no_matching_policy` | Missing Access Policy (Custom Authorization Server only) | Create an Access Policy in the Authorization Server (see Step 3a) |
 
 </TabItem>
 <TabItem value="google" label="Google SSO">
@@ -456,23 +482,9 @@ PROXY_BASE_URL=http://litellm.platform.com
 PROXY_BASE_URL=litellm.platform.com
 ```
 
-**2. For Okta specifically, ensure GENERIC_CLIENT_STATE is set**
+**2. For Okta specifically, ensure `GENERIC_CLIENT_STATE` is set and PKCE is configured if required**
 
-Okta requires the `GENERIC_CLIENT_STATE` parameter:
-
-```bash
-GENERIC_CLIENT_STATE="random-string" # Required for Okta
-```
-
-### Okta PKCE
-
-If your Okta application is configured to require PKCE (Proof Key for Code Exchange), enable it by setting:
-
-```bash
-GENERIC_CLIENT_USE_PKCE="true"
-```
-
-This is required when your Okta app settings enforce PKCE for enhanced security. LiteLLM will automatically handle PKCE parameter generation and verification during the OAuth flow.
+See [Okta SSO — Step 4: Configure Okta Security Settings](#step-4-configure-okta-security-settings) for details on `GENERIC_CLIENT_STATE` and PKCE configuration.
 
 ### Common Configuration Issues
 

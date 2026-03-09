@@ -69,9 +69,11 @@ jobs:
       - run:
           name: Install Python
           command: |
-            choco install python --version=3.11.0 -y
+            choco install python --version=3.11.0 -y --no-progress --force
             refreshenv
             python --version
+          environment:
+            CHOCOLATEY_CONFIRM_ALL: "true"
       - run:
           name: Install Dependencies
           command: |
@@ -1181,7 +1183,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part2.xml --durations=10 -n 8 --timeout=300 -vv --log-cli-level=INFO
+            python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part2.xml --durations=10 -n 4 --timeout=300 -vv --log-cli-level=INFO
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1456,6 +1458,7 @@ jobs:
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
             pip install "boto3==1.36.0"
+            pip install "semantic_router==0.1.10"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1698,7 +1701,7 @@ jobs:
           command: |
             prisma generate
             export PYTHONUNBUFFERED=1
-            python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 8 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
+            python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 4 --maxfail=5 --timeout=120 -vv --log-cli-level=WARNING -r A
           no_output_timeout: 60m
       - run:
           name: Rename the coverage files
@@ -3688,6 +3691,114 @@ jobs:
       - store_test_results:
           path: test-results
 
+  proxy_e2e_azure_batches_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Docker CLI
+          command: |
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
+      - run:
+          name: Install Python 3.12
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.12 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Poetry
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            pip install poetry
+      - run:
+          name: Install dockerize
+          command: |
+            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=llmproxy \
+              -e POSTGRES_PASSWORD=dbpassword9090 \
+              -e POSTGRES_DB=litellm \
+              -p 5432:5432 \
+              postgres:15
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Install system dependencies
+          command: |
+            sudo apt-get update -y
+            sudo apt-get install -y libpq-dev
+      - run:
+          name: Install Dependencies
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            poetry config virtualenvs.in-project true
+            poetry install --with dev,proxy-dev --extras "proxy"
+            poetry run pip install psycopg2-binary uvicorn fastapi httpx tenacity
+      - run:
+          name: Setup litellm-enterprise
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            poetry run pip install --force-reinstall --no-deps -e enterprise/
+      - run:
+          name: Generate Prisma client
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            poetry run prisma generate --schema litellm/proxy/schema.prisma
+      - run:
+          name: Run Prisma migrations
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            export DATABASE_URL=postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
+            cd litellm/proxy
+            poetry run prisma migrate deploy --schema schema.prisma
+            cd ../..
+      - run:
+          name: Run Azure Batch E2E Tests
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            export DATABASE_URL=postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
+            export USE_LOCAL_LITELLM=true
+            export USE_MOCK_MODELS=true
+            export USE_STATE_TRACKER=true
+            export LITELLM_LOG=DEBUG
+            poetry run pytest tests/proxy_e2e_azure_batches_tests/test_proxy_e2e_azure_batches.py \
+              -vv -s -k "test_e2e_managed_batch" \
+              --tb=short \
+              --maxfail=3 \
+              --durations=10 \
+              --junitxml=test-results/junit.xml
+          no_output_timeout: 30m
+
   upload-coverage:
     docker:
       - image: cimg/python:3.9
@@ -3885,7 +3996,7 @@ jobs:
           command: |
             cd ~/project
             # Check pyproject.toml
-            CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['dependencies']['litellm-proxy-extras'].split('\"')[1])")
+            CURRENT_VERSION=$(python -c "import toml; dep = toml.load('pyproject.toml')['tool']['poetry']['dependencies']['litellm-proxy-extras']; print(dep['version'] if isinstance(dep, dict) else dep)")
             if [ "$CURRENT_VERSION" != "$NEW_VERSION" ]; then
               echo "Error: Version in pyproject.toml ($CURRENT_VERSION) doesn't match new version ($NEW_VERSION)"
               exit 1
@@ -4099,6 +4210,63 @@ jobs:
           path: playwright-report
           destination: playwright-report
 
+  prisma_schema_sync:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Install Neon CLI
+          command: |
+            npm i -g neonctl
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Sync schema on base e2e database
+          command: |
+            BASE_DATABASE_URL=$(neon connection-string \
+              --project-id $NEON_PROJECT_ID \
+              --api-key $NEON_API_KEY \
+              --branch br-fancy-paper-ad1olsb3 \
+              --database-name yuneng-trial-db \
+              --role neondb_owner)
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$BASE_DATABASE_URL \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              --name schema-sync \
+              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --use_prisma_db_push
+      - run:
+          name: Start outputting logs
+          command: docker logs -f schema-sync
+          background: true
+      - run:
+          name: Wait for proxy to be ready (schema sync complete)
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Stop schema sync container
+          command: docker stop schema-sync
+
   test_nonroot_image:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -4297,6 +4465,15 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - prisma_schema_sync:
+          context: e2e_ui_tests
+          requires:
+            - build_docker_database_image
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - e2e_ui_testing:
           name: e2e_ui_testing_chromium
           browser: chromium
@@ -4304,6 +4481,7 @@ workflows:
           requires:
             - ui_build
             - build_docker_database_image
+            - prisma_schema_sync
           filters:
             branches:
               only:
@@ -4316,6 +4494,7 @@ workflows:
           requires:
             - ui_build
             - build_docker_database_image
+            - prisma_schema_sync
           filters:
             branches:
               only:
@@ -4384,6 +4563,12 @@ workflows:
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - proxy_e2e_azure_batches_tests:
           filters:
             branches:
               only:

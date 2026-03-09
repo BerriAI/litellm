@@ -14,7 +14,7 @@ test.describe("Create Key", () => {
     await page.getByTestId("base-input").fill("e2eUITestingCreateKeyAllTeamModels");
     await page.locator(".ant-select-selection-overflow").click();
     await page.getByText("All Team Models").click();
-    await page.getByRole("combobox", { name: "* Models info-circle :" }).press("Escape");
+    await page.getByRole("combobox", { name: /models/i }).press("Escape");
     await page.getByRole("button", { name: "Create Key" }).click();
     await page.keyboard.press("Escape");
     await expect(page.getByText("e2eUITestingCreateKeyAllTeamModels")).toBeVisible();
