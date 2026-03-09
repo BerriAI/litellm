@@ -351,15 +351,15 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.config_override_endpoints import (
-    router as config_override_router,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     admin_can_invite_user,
 )
 from litellm.proxy.management_endpoints.compliance_endpoints import (
     router as compliance_router,
+)
+from litellm.proxy.management_endpoints.config_override_endpoints import (
+    router as config_override_router,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
@@ -373,9 +373,8 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
-from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
-    router as jwt_key_mapping_router,
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
 )
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     router as jwt_key_mapping_router,
@@ -445,7 +444,9 @@ from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_route
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -544,7 +545,9 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -592,6 +595,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     ORJSONResponse,
     RedirectResponse,
@@ -1379,6 +1383,17 @@ try:
         name="next_static",
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
+
+    # Register the MCP OAuth callback route BEFORE mounting the /ui StaticFiles
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_mcp_oauth_callback_html,
+    )
+
+    @app.get("/ui/mcp/oauth/callback", include_in_schema=False)
+    async def _mcp_oauth_ui_callback(
+        code: Optional[str] = None, state: Optional[str] = None
+    ) -> HTMLResponse:
+        return HTMLResponse(content=_build_mcp_oauth_callback_html(code, state))
 
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
