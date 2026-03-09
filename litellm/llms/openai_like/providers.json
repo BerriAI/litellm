@@ -90,5 +90,9 @@
     "headers": {
       "api-subscription-key": "{api_key}"
     }
+  },
+  "assemblyai": {
+    "base_url": "https://llm-gateway.assemblyai.com/v1",
+    "api_key_env": "ASSEMBLYAI_API_KEY"
   }
 }
