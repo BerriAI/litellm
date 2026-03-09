@@ -42,6 +42,8 @@ const TIMEZONE_OPTIONS: { label: string; offset: number }[] = [
   { label: "UTC+4 (Dubai)", offset: -240 },
   { label: "UTC+5 (Pakistan)", offset: -300 },
   { label: "UTC+5:30 (India)", offset: -330 },
+  { label: "UTC+5:45 (Nepal)", offset: -345 },
+  { label: "UTC+6 (Bangladesh)", offset: -360 },
   { label: "UTC+7 (Bangkok)", offset: -420 },
   { label: "UTC+8 (Singapore)", offset: -480 },
   { label: "UTC+9 (Japan/Korea)", offset: -540 },
@@ -461,20 +463,26 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
         )}
       </div>
       {/* Timezone selector */}
-      {onTimezoneChange && (
-        <select
-          value={timezoneOffset !== undefined ? timezoneOffset : getLocalTimezoneOffset()}
-          onChange={(e) => onTimezoneChange(Number(e.target.value))}
-          className="px-2 py-2 text-xs border border-gray-300 rounded-md bg-white cursor-pointer hover:border-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-700"
-        >
-          <option value={getLocalTimezoneOffset()}>Local ({formatTimezoneLabel(getLocalTimezoneOffset())})</option>
-          {TIMEZONE_OPTIONS.map((tz) => (
-            <option key={tz.label} value={tz.offset}>
-              {tz.label}
-            </option>
-          ))}
-        </select>
-      )}
+      {onTimezoneChange && (() => {
+        const localOffset = getLocalTimezoneOffset();
+        const hasLocalInList = TIMEZONE_OPTIONS.some((tz) => tz.offset === localOffset);
+        return (
+          <select
+            value={timezoneOffset !== undefined ? timezoneOffset : localOffset}
+            onChange={(e) => onTimezoneChange(Number(e.target.value))}
+            className="px-2 py-2 text-xs border border-gray-300 rounded-md bg-white cursor-pointer hover:border-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-700"
+          >
+            {!hasLocalInList && (
+              <option value={localOffset}>Local ({formatTimezoneLabel(localOffset)})</option>
+            )}
+            {TIMEZONE_OPTIONS.map((tz) => (
+              <option key={tz.label} value={tz.offset}>
+                {tz.label}{tz.offset === localOffset ? " (Local)" : ""}
+              </option>
+            ))}
+          </select>
+        );
+      })()}
     </div>
   );
 };
