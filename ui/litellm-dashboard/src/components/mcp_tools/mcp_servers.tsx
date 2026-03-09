@@ -1,6 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
+import NewBadge from "../common_components/NewBadge";
 import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
@@ -342,7 +343,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
-            {isAdminRole(userRole) && <Tab>Submissions</Tab>}
+            {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Team MCPs <NewBadge /></span></Tab>}
           </div>
         </TabList>
         <TabPanels>
