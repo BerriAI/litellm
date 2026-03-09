@@ -5,6 +5,7 @@ import pytest
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 
 def test_validate_environment_uses_vertex_ai_location():
@@ -276,8 +277,6 @@ def test_transform_anthropic_messages_request_removes_scope_from_cache_control()
             }
         ],
     }
-
-    from litellm.types.router import GenericLiteLLMParams
 
     result = config.transform_anthropic_messages_request(
         model="claude-sonnet-4-6",
