@@ -406,6 +406,93 @@ async def test_get_api_key_metadata_regenerated_key_uses_most_recent_deleted_rec
 
 
 @pytest.mark.asyncio
+async def test_tag_daily_activity_metadata_totals_not_zero():
+    """Test that tag daily activity returns correct metadata totals.
+
+    Regression test: previously compute_tag_metadata_totals skipped records
+    with NULL request_id, causing metadata totals (total_spend, etc.) to be 0.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    # Create mock tag spend records (request_id is NULL for aggregated rows)
+    mock_record_1 = MagicMock()
+    mock_record_1.request_id = None  # NULL in aggregated daily rows
+    mock_record_1.tag = "production"
+    mock_record_1.date = "2024-01-01"
+    mock_record_1.api_key = "key-1"
+    mock_record_1.model = "gpt-4"
+    mock_record_1.model_group = "gpt-4"
+    mock_record_1.custom_llm_provider = "openai"
+    mock_record_1.mcp_namespaced_tool_name = None
+    mock_record_1.endpoint = "/chat/completions"
+    mock_record_1.spend = 25.0
+    mock_record_1.prompt_tokens = 500
+    mock_record_1.completion_tokens = 200
+    mock_record_1.cache_read_input_tokens = 0
+    mock_record_1.cache_creation_input_tokens = 0
+    mock_record_1.api_requests = 10
+    mock_record_1.successful_requests = 9
+    mock_record_1.failed_requests = 1
+
+    mock_record_2 = MagicMock()
+    mock_record_2.request_id = None
+    mock_record_2.tag = "staging"
+    mock_record_2.date = "2024-01-01"
+    mock_record_2.api_key = "key-2"
+    mock_record_2.model = "gpt-3.5-turbo"
+    mock_record_2.model_group = "gpt-3.5-turbo"
+    mock_record_2.custom_llm_provider = "openai"
+    mock_record_2.mcp_namespaced_tool_name = None
+    mock_record_2.endpoint = "/chat/completions"
+    mock_record_2.spend = 5.0
+    mock_record_2.prompt_tokens = 300
+    mock_record_2.completion_tokens = 100
+    mock_record_2.cache_read_input_tokens = 0
+    mock_record_2.cache_creation_input_tokens = 0
+    mock_record_2.api_requests = 5
+    mock_record_2.successful_requests = 5
+    mock_record_2.failed_requests = 0
+
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=2)
+    mock_table.find_many = AsyncMock(return_value=[mock_record_1, mock_record_2])
+    mock_prisma.db.litellm_dailytagspend = mock_table
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+        metadata_metrics_func=None,  # No custom func — matches the fix
+    )
+
+    # Metadata totals must reflect actual spend, NOT be zero
+    assert result.metadata.total_spend == 30.0  # 25.0 + 5.0
+    assert result.metadata.total_api_requests == 15  # 10 + 5
+    assert result.metadata.total_successful_requests == 14  # 9 + 5
+    assert result.metadata.total_failed_requests == 1
+    assert result.metadata.total_tokens == 1100  # (500+200) + (300+100)
+
+    # Verify breakdown still works
+    assert len(result.results) == 1
+    daily = result.results[0]
+    assert "production" in daily.breakdown.entities
+    assert "staging" in daily.breakdown.entities
+    assert daily.breakdown.entities["production"].metrics.spend == 25.0
+    assert daily.breakdown.entities["staging"].metrics.spend == 5.0
+
+
+@pytest.mark.asyncio
 async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     """Test that the full aggregation pipeline should preserve metadata for deleted keys."""
     mock_prisma = MagicMock()
