@@ -13,6 +13,7 @@ import PolicyTestPanel from "./policy_test_panel";
 import PolicyTemplates from "./policy_templates";
 import GuardrailSelectionModal from "./guardrail_selection_modal";
 import TemplateParameterModal from "./template_parameter_modal";
+import AiSuggestionModal from "./ai_suggestion_modal";
 import {
   getPoliciesList,
   deletePolicyCall,
@@ -63,6 +64,10 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [isParameterModalOpen, setIsParameterModalOpen] = useState(false);
   const [isEnrichingTemplate, setIsEnrichingTemplate] = useState(false);
   const [pendingTemplate, setPendingTemplate] = useState<any>(null);
+  const [isAiSuggestionModalOpen, setIsAiSuggestionModalOpen] = useState(false);
+  const [loadedTemplates, setLoadedTemplates] = useState<any[]>([]);
+  const [templateQueue, setTemplateQueue] = useState<any[]>([]);
+  const [templateQueueProgress, setTemplateQueueProgress] = useState<{ current: number; total: number } | null>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -325,8 +330,23 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           `Failed to create ${failedGuardrails.length} guardrail(s): ${failedGuardrails.join(", ")}. You may need to create them manually.`
         );
       }
+
+      // Process next template in queue if any
+      if (templateQueue.length > 0) {
+        const [nextTemplate, ...remaining] = templateQueue;
+        setTemplateQueue(remaining);
+        setTemplateQueueProgress((prev) =>
+          prev ? { ...prev, current: prev.current + 1 } : null
+        );
+        // Small delay so user can see the success message
+        setTimeout(() => handleUseTemplate(nextTemplate), 500);
+      } else {
+        setTemplateQueueProgress(null);
+      }
     } catch (error) {
       setIsCreatingGuardrails(false);
+      setTemplateQueue([]);
+      setTemplateQueueProgress(null);
       console.error("Error creating guardrails:", error);
       message.error("Failed to create guardrails. Please try again.");
     }
@@ -335,6 +355,8 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const handleGuardrailSelectionCancel = () => {
     setIsGuardrailSelectionModalOpen(false);
     setSelectedTemplate(null);
+    setTemplateQueue([]);
+    setTemplateQueueProgress(null);
   };
 
   return (
@@ -378,7 +400,12 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               closable
               className="mb-6"
             />
-            <PolicyTemplates onUseTemplate={handleUseTemplate} accessToken={accessToken} />
+            <PolicyTemplates
+              onUseTemplate={handleUseTemplate}
+              onOpenAiSuggestion={() => setIsAiSuggestionModalOpen(true)}
+              onTemplatesLoaded={setLoadedTemplates}
+              accessToken={accessToken}
+            />
           </TabPanel>
 
           <TabPanel>
@@ -425,11 +452,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onEdit={(policy) => {
                   setEditingPolicy(policy);
                   setSelectedPolicyId(null);
-                  if (policy.pipeline) {
-                    setShowFlowBuilder(true);
-                  } else {
-                    setIsAddPolicyModalVisible(true);
-                  }
+                  setShowFlowBuilder(true);
                 }}
                 accessToken={accessToken}
                 isAdmin={isAdmin}
@@ -442,11 +465,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onDeleteClick={handleDeleteClick}
                 onEditClick={(policy) => {
                   setEditingPolicy(policy);
-                  if (policy.pipeline) {
-                    setShowFlowBuilder(true);
-                  } else {
-                    setIsAddPolicyModalVisible(true);
-                  }
+                  setShowFlowBuilder(true);
                 }}
                 onViewClick={(policyId) => setSelectedPolicyId(policyId)}
                 isAdmin={isAdmin}
@@ -492,6 +511,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               onConfirm={handleGuardrailSelectionConfirm}
               onCancel={handleGuardrailSelectionCancel}
               isLoading={isCreatingGuardrails}
+              progressInfo={templateQueueProgress}
             />
 
             <TemplateParameterModal
@@ -579,6 +599,27 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
         </TabPanels>
       </TabGroup>
 
+      <AiSuggestionModal
+        visible={isAiSuggestionModalOpen}
+        onSelectTemplates={(selectedTemplates) => {
+          setIsAiSuggestionModalOpen(false);
+          if (selectedTemplates.length > 0) {
+            // Queue all templates: process first immediately, queue the rest
+            const [first, ...rest] = selectedTemplates;
+            setTemplateQueue(rest);
+            setTemplateQueueProgress(
+              selectedTemplates.length > 1
+                ? { current: 1, total: selectedTemplates.length }
+                : null
+            );
+            handleUseTemplate(first);
+          }
+        }}
+        onCancel={() => setIsAiSuggestionModalOpen(false)}
+        accessToken={accessToken}
+        allTemplates={loadedTemplates}
+      />
+
       {showFlowBuilder && (
         <FlowBuilderPage
           onBack={() => {
@@ -594,6 +635,17 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           availableGuardrails={guardrailsList}
           createPolicy={createPolicyCall}
           updatePolicy={updatePolicyCall}
+          onVersionCreated={(newPolicy) => {
+            setEditingPolicy(newPolicy);
+            fetchPolicies();
+          }}
+          onSelectVersion={(policy) => {
+            setEditingPolicy(policy);
+          }}
+          onVersionStatusUpdated={(updatedPolicy) => {
+            setEditingPolicy(updatedPolicy);
+            fetchPolicies();
+          }}
         />
       )}
     </div>

@@ -293,7 +293,7 @@ async def test_user_model_access():
         await chat_completion(
             session=session,
             key=key,
-            model="anthropic/claude-3-5-haiku-20241022",
+            model="anthropic/claude-haiku-4-5-20251001",
         )
 
         await chat_completion(
