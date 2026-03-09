@@ -9,7 +9,45 @@ interface AdvancedDatePickerProps {
   label?: string;
   className?: string;
   showTimeRange?: boolean;
+  timezoneOffset?: number;
+  onTimezoneChange?: (offset: number) => void;
 }
+
+const getLocalTimezoneOffset = (): number => new Date().getTimezoneOffset();
+
+const formatTimezoneLabel = (offsetMinutes: number): string => {
+  if (offsetMinutes === 0) return "UTC";
+  const sign = offsetMinutes > 0 ? "-" : "+";
+  const absMinutes = Math.abs(offsetMinutes);
+  const hours = Math.floor(absMinutes / 60);
+  const minutes = absMinutes % 60;
+  const formatted = minutes > 0 ? `${hours}:${String(minutes).padStart(2, "0")}` : `${hours}`;
+  return `UTC${sign}${formatted}`;
+};
+
+// Common timezone options: offset in minutes (JS getTimezoneOffset convention: positive = west of UTC)
+const TIMEZONE_OPTIONS: { label: string; offset: number }[] = [
+  { label: "UTC-10 (Hawaii)", offset: 600 },
+  { label: "UTC-9 (Alaska)", offset: 540 },
+  { label: "UTC-8 (Pacific)", offset: 480 },
+  { label: "UTC-7 (Mountain)", offset: 420 },
+  { label: "UTC-6 (Central)", offset: 360 },
+  { label: "UTC-5 (Eastern)", offset: 300 },
+  { label: "UTC-4 (Atlantic)", offset: 240 },
+  { label: "UTC-3 (Buenos Aires)", offset: 180 },
+  { label: "UTC (London/UTC)", offset: 0 },
+  { label: "UTC+1 (Central Europe)", offset: -60 },
+  { label: "UTC+2 (Eastern Europe)", offset: -120 },
+  { label: "UTC+3 (Moscow)", offset: -180 },
+  { label: "UTC+4 (Dubai)", offset: -240 },
+  { label: "UTC+5 (Pakistan)", offset: -300 },
+  { label: "UTC+5:30 (India)", offset: -330 },
+  { label: "UTC+7 (Bangkok)", offset: -420 },
+  { label: "UTC+8 (Singapore)", offset: -480 },
+  { label: "UTC+9 (Japan/Korea)", offset: -540 },
+  { label: "UTC+10 (Sydney)", offset: -600 },
+  { label: "UTC+12 (Auckland)", offset: -720 },
+];
 
 interface RelativeTimeOption {
   label: string;
@@ -68,6 +106,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   onValueChange,
   label = "Select Time Range",
   showTimeRange = true,
+  timezoneOffset,
+  onTimezoneChange,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
@@ -420,6 +460,21 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
           </div>
         )}
       </div>
+      {/* Timezone selector */}
+      {onTimezoneChange && (
+        <select
+          value={timezoneOffset !== undefined ? timezoneOffset : getLocalTimezoneOffset()}
+          onChange={(e) => onTimezoneChange(Number(e.target.value))}
+          className="px-2 py-2 text-xs border border-gray-300 rounded-md bg-white cursor-pointer hover:border-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-700"
+        >
+          <option value={getLocalTimezoneOffset()}>Local ({formatTimezoneLabel(getLocalTimezoneOffset())})</option>
+          {TIMEZONE_OPTIONS.map((tz) => (
+            <option key={tz.label} value={tz.offset}>
+              {tz.label}
+            </option>
+          ))}
+        </select>
+      )}
     </div>
   );
 };

@@ -78,6 +78,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     to: initialToDate,
   });
 
+  const [timezoneOffset, setTimezoneOffset] = useState<number>(() => new Date().getTimezoneOffset());
+
   const [allTags, setAllTags] = useState<EntityList[]>([]);
   const { data: customers = [] } = useCustomers();
   const { data: agentsResponse } = useAgents();
@@ -378,14 +380,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     try {
       // Prefer aggregated endpoint to avoid many page requests
       try {
-        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId);
+        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId, timezoneOffset);
         setUserSpendData(aggregated);
         return;
       } catch (e) {
         // Fallback to paginated calls if aggregated endpoint is unavailable
       }
 
-      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime, 1, effectiveUserId);
+      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime, 1, effectiveUserId, timezoneOffset);
 
       if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData);
@@ -396,7 +398,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       const aggregatedMetadata = { ...firstPageData.metadata };
 
       for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
-        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page, effectiveUserId);
+        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page, effectiveUserId, timezoneOffset);
         allResults.push(...pageData.results);
         if (pageData.metadata) {
           aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
@@ -417,7 +419,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       setLoading(false);
       setIsDateChanging(false);
     }
-  }, [accessToken, dateValue.from, dateValue.to, selectedUserId, isAdmin, userID]);
+  }, [accessToken, dateValue.from, dateValue.to, selectedUserId, isAdmin, userID, timezoneOffset]);
 
   // Super responsive date change handler
   const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
@@ -493,7 +495,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               onChange={(value) => setUsageView(value)}
               isAdmin={isAdmin}
             />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} timezoneOffset={timezoneOffset} onTimezoneChange={setTimezoneOffset} />
           </div>
           {/* Your Usage Panel */}
           {usageView === "global" && (
@@ -825,6 +827,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 })) || null
               }
               premiumUser={premiumUser}
+              timezoneOffset={timezoneOffset}
             />
           )}
 
@@ -843,6 +846,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
               premiumUser={premiumUser}
               dateValue={dateValue}
+              timezoneOffset={timezoneOffset}
             />
           )}
 
@@ -861,6 +865,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
               premiumUser={premiumUser}
               dateValue={dateValue}
+              timezoneOffset={timezoneOffset}
             />
           )}
           {/* Tag Usage Panel */}
@@ -891,6 +896,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 entityList={allTags}
                 premiumUser={premiumUser}
                 dateValue={dateValue}
+                timezoneOffset={timezoneOffset}
               />
             </>
           )}
@@ -905,6 +911,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
               premiumUser={premiumUser}
               dateValue={dateValue}
+              timezoneOffset={timezoneOffset}
             />
           )}
           {/* User Usage Panel */}
@@ -917,6 +924,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               entityList={userOptions.length > 0 ? userOptions : null}
               premiumUser={premiumUser}
               dateValue={dateValue}
+              timezoneOffset={timezoneOffset}
             />
           )}
           {/* User Agent Activity Panel */}
