@@ -7,6 +7,8 @@ logging, callbacks, and retry logic still run in Python — only the TCP
 connection pooling and HTTP round-trip move to Rust.
 """
 
+import asyncio
+import json
 import typing
 from typing import Optional
 
@@ -27,7 +29,7 @@ class SidecarResponseStream(httpx.AsyncByteStream):
             yield chunk
 
     async def aclose(self) -> None:
-        self._response.close()
+        self._response.release()
 
 
 class LiteLLMSidecarTransport(httpx.AsyncBaseTransport):
@@ -42,18 +44,23 @@ class LiteLLMSidecarTransport(httpx.AsyncBaseTransport):
     def __init__(self, sidecar_url: str = "http://127.0.0.1:8787"):
         self._sidecar_url = sidecar_url
         self._session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
 
-    def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(
-                    limit=0,
-                    keepalive_timeout=90,
-                    enable_cleanup_closed=True,
-                ),
-                timeout=aiohttp.ClientTimeout(total=None, connect=5),
-            )
-        return self._session
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is not None and not self._session.closed:
+            return self._session
+        async with self._session_lock:
+            # Double-check after acquiring lock
+            if self._session is None or self._session.closed:
+                self._session = aiohttp.ClientSession(
+                    connector=aiohttp.TCPConnector(
+                        limit=0,
+                        keepalive_timeout=90,
+                        enable_cleanup_closed=True,
+                    ),
+                    timeout=aiohttp.ClientTimeout(total=None, connect=5),
+                )
+            return self._session
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         # Extract the provider host from the full URL for the sidecar headers
@@ -69,8 +76,20 @@ class LiteLLMSidecarTransport(httpx.AsyncBaseTransport):
         if auth.lower().startswith("bearer "):
             api_key = auth[7:]
 
-        # Determine if streaming from content-type or accept headers
-        is_stream = "text/event-stream" in request.headers.get("accept", "")
+        try:
+            body = request.content
+        except httpx.RequestNotRead:
+            body = b""
+
+        # Determine if streaming from the request body's "stream" field
+        is_stream = False
+        try:
+            if body:
+                parsed_body = json.loads(body)
+                if isinstance(parsed_body, dict):
+                    is_stream = parsed_body.get("stream", False) is True
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
 
         # Get timeout from request extensions
         timeout_config = request.extensions.get("timeout", {})
@@ -79,11 +98,6 @@ class LiteLLMSidecarTransport(httpx.AsyncBaseTransport):
             timeout_secs = int(timeout_secs)
         else:
             timeout_secs = 300
-
-        try:
-            body = request.content
-        except httpx.RequestNotRead:
-            body = b""
 
         headers = {
             "X-LiteLLM-Provider-URL": provider_base,
@@ -100,7 +114,7 @@ class LiteLLMSidecarTransport(httpx.AsyncBaseTransport):
             if val:
                 headers[f"X-LiteLLM-Fwd-{key}"] = val
 
-        session = self._get_session()
+        session = await self._get_session()
         resp = await session.post(
             f"{self._sidecar_url}/forward",
             data=body,

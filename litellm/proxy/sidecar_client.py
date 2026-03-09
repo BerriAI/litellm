@@ -142,7 +142,15 @@ class SidecarClient:
             self._session = None
         if self._process:
             self._process.terminate()
-            self._process.wait(timeout=5)
+            try:
+                await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None, self._process.wait
+                    ),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                self._process.kill()
             self._process = None
         self._healthy = False
 

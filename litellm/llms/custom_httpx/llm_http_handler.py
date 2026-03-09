@@ -1,5 +1,4 @@
 import json
-import orjson
 import ssl
 from typing import (
     TYPE_CHECKING,
@@ -16,6 +15,7 @@ from typing import (
 )
 
 import httpx  # type: ignore
+import orjson
 from openai.types.file_deleted import FileDeleted
 
 import litellm
@@ -23,9 +23,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
+from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -181,7 +179,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else orjson.dumps(data)
+                        else orjson.dumps(data).decode()
                     ),
                     timeout=timeout,
                     stream=stream,
@@ -241,7 +239,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else orjson.dumps(data)
+                        else orjson.dumps(data).decode()
                     ),
                     timeout=timeout,
                     stream=stream,

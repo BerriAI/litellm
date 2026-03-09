@@ -33,18 +33,18 @@ impl Sidecar {
     }
 
     fn get_or_create_client(&self, host: &str) -> Client {
-        if let Some(client) = self.pools.get(host) {
-            return client.clone();
-        }
-        let client = Client::builder()
-            .pool_max_idle_per_host(200)
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .tcp_keepalive(std::time::Duration::from_secs(60))
-            .tcp_nodelay(true)
-            .build()
-            .expect("Failed to build reqwest client");
-        self.pools.insert(host.to_string(), client.clone());
-        client
+        self.pools
+            .entry(host.to_string())
+            .or_insert_with(|| {
+                Client::builder()
+                    .pool_max_idle_per_host(200)
+                    .pool_idle_timeout(std::time::Duration::from_secs(90))
+                    .tcp_keepalive(std::time::Duration::from_secs(60))
+                    .tcp_nodelay(true)
+                    .build()
+                    .expect("Failed to build reqwest client")
+            })
+            .clone()
     }
 }
 
