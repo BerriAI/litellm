@@ -1002,15 +1002,16 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 )
 
                 oci_message = (
-                    getattr(original_exception, "message", None)
-                    or oci_err.get("message")
+                    oci_err.get("message")
+                    or getattr(original_exception, "message", None)
                     or error_str
                 )
                 opc_request_id = oci_err.get("opc-request-id") or (
                     getattr(getattr(original_exception, "response", None), "headers", {}) or {}
                 ).get("opc-request-id")
                 
-                oci_message = oci_err.get("message") or str(original_exception)
+                if opc_request_id:
+                    oci_message += f" [opc-request-id: {opc_request_id}]"
                 if opc_request_id:
                     oci_message += f" [opc-request-id: {opc_request_id}]"
 
