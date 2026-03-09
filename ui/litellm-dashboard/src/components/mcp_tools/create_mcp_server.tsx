@@ -575,6 +575,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             </Form.Item>
 
             <Form.Item
+              label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
+              name="source_url"
+            >
+              <TextInput
+                placeholder="https://github.com/org/mcp-server"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
               label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
               name="transport"
               rules={[{ required: true, message: "Please select a transport type" }]}

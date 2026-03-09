@@ -19,6 +19,7 @@ import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilt
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
+import MCPStandardsSettings from "./MCPStandardsSettings";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -344,6 +345,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
             {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Team MCPs <NewBadge /></span></Tab>}
+            {isAdminRole(userRole) && <Tab>Standards</Tab>}
           </div>
         </TabList>
         <TabPanels>
@@ -430,6 +432,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           {isAdminRole(userRole) && (
             <TabPanel>
               <MCPSubmissionsTab accessToken={accessToken} />
+            </TabPanel>
+          )}
+          {isAdminRole(userRole) && (
+            <TabPanel>
+              <MCPStandardsSettings accessToken={accessToken} />
             </TabPanel>
           )}
         </TabPanels>

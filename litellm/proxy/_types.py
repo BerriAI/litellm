@@ -1123,6 +1123,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
+    source_url: Optional[str] = None
     # BYOM submission fields (set by endpoint, not by caller)
     approval_status: Optional[str] = None
     submitted_by: Optional[str] = None
@@ -1186,6 +1187,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
+    source_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1249,6 +1251,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     has_user_credential: Optional[bool] = None
+    source_url: Optional[str] = None
     # BYOM submission fields
     approval_status: Optional[str] = Field(
         default="active",

@@ -185,6 +185,9 @@ export interface MCPServer {
   byok_api_key_help_url?: string | null;
   has_user_credential?: boolean | null;
 
+  /** GitHub / source repository URL */
+  source_url?: string | null;
+
   /** BYOM (Bring Your Own MCP) submission fields */
   approval_status?: "active" | "pending_review" | "rejected" | null;
   submitted_by?: string | null;

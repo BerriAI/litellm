@@ -12,8 +12,10 @@ import {
   fetchMCPSubmissions,
   approveMCPServer,
   rejectMCPServer,
+  getGeneralSettingsCall,
 } from "@/components/networking";
 import { MCPServer, MCPSubmissionsSummary } from "./types";
+import { MCP_REQUIRED_FIELD_DEFS } from "./MCPStandardsSettings";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 
 type MCPStatus = "active" | "pending_review" | "rejected";
@@ -139,11 +141,20 @@ type MCPServerCardProps = {
   server: MCPServer;
   onApprove: () => void;
   onReject: () => void;
+  requiredFields: string[];
 };
 
-function MCPServerCard({ server, onApprove, onReject }: MCPServerCardProps) {
+function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServerCardProps) {
   const approvalStatus = (server.approval_status ?? "active") as MCPStatus;
   const statusCfg = STATUS_CONFIG[approvalStatus] ?? STATUS_CONFIG["active"];
+
+  const checks = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key)).map((f) => ({
+    key: f.key,
+    label: f.label,
+    passed: f.check(server),
+  }));
+  const passCount = checks.filter((c) => c.passed).length;
+  const allPassed = checks.length > 0 && passCount === checks.length;
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-4">
@@ -156,6 +167,15 @@ function MCPServerCard({ server, onApprove, onReject }: MCPServerCardProps) {
               <span className={`w-1.5 h-1.5 rounded-full ${statusCfg.dot}`} />
               {statusCfg.label}
             </span>
+            {checks.length > 0 && (
+              <span
+                className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                  allPassed ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"
+                }`}
+              >
+                {passCount}/{checks.length} checks
+              </span>
+            )}
           </div>
           <h3 className="text-sm font-semibold text-gray-900 mb-1">
             {server.alias ?? server.server_name ?? server.server_id}
@@ -187,6 +207,25 @@ function MCPServerCard({ server, onApprove, onReject }: MCPServerCardProps) {
             <p className="text-xs text-red-600 mt-1">
               Rejection reason: {server.review_notes}
             </p>
+          )}
+          {checks.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-gray-100">
+              {checks.map((c) => (
+                <span
+                  key={c.key}
+                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${
+                    c.passed ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+                  }`}
+                >
+                  {c.passed ? (
+                    <CheckIcon className="h-3 w-3" />
+                  ) : (
+                    <XIcon className="h-3 w-3" />
+                  )}
+                  {c.label}
+                </span>
+              ))}
+            </div>
           )}
         </div>
         {approvalStatus === "pending_review" && (
@@ -233,6 +272,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [requiredFields, setRequiredFields] = useState<string[]>([]);
 
   const fetchData = useCallback(async () => {
     if (!accessToken) {
@@ -242,8 +282,19 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     setIsLoading(true);
     setError(null);
     try {
-      const res: MCPSubmissionsSummary = await fetchMCPSubmissions(accessToken);
+      const [res, settings] = await Promise.all([
+        fetchMCPSubmissions(accessToken),
+        getGeneralSettingsCall(accessToken).catch(() => null),
+      ]);
       setSummary(res);
+      if (settings?.data && Array.isArray(settings.data)) {
+        const row = settings.data.find(
+          (r: { field_name: string; field_value: unknown }) => r.field_name === "mcp_required_fields",
+        );
+        if (row && Array.isArray(row.field_value)) {
+          setRequiredFields(row.field_value as string[]);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load submissions");
     } finally {
@@ -340,6 +391,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
             <MCPServerCard
               key={server.server_id}
               server={server}
+              requiredFields={requiredFields}
               onApprove={() =>
                 setConfirmAction({
                   serverId: server.server_id,
