@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 import traceback
 from datetime import datetime
@@ -655,8 +656,9 @@ class ProxyBaseLLMRequestProcessing:
         # automatically add stream_options={'include_usage': True} if not already set
         if (
             general_settings.get("always_include_stream_usage", False) is True
-            and self.data.get("stream", False) is True
-        ):
+            or os.environ.get("LITELLM_ENFORCE_STREAMED_USAGE", "false").lower()
+            == "true"
+        ) and self.data.get("stream", False) is True:
             # Only set if stream_options is not already provided by the client
             if "stream_options" not in self.data:
                 self.data["stream_options"] = {"include_usage": True}

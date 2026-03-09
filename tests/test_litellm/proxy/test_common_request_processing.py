@@ -759,6 +759,115 @@ class TestProxyBaseLLMRequestProcessing:
             metadata["queue_time_seconds"] >= 0.5
         ), f"queue_time_seconds should be at least 0.5, got {metadata['queue_time_seconds']}"
 
+    @pytest.mark.asyncio
+    async def test_enforce_streamed_usage_env_var(self, monkeypatch):
+        """
+        When LITELLM_ENFORCE_STREAMED_USAGE=true, streaming requests should
+        automatically get stream_options={'include_usage': True}.
+        """
+        monkeypatch.setenv("LITELLM_ENFORCE_STREAMED_USAGE", "true")
+
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "stream": True,
+            }
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_logging_obj = MagicMock()
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.aliases = None
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=mock_pre_call_hook
+        )
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr(
+            litellm.utils,
+            "function_setup",
+            lambda *args, **kwargs: (mock_logging_obj, kwargs),
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=mock_user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+
+        assert returned_data["stream_options"] == {"include_usage": True}
+
+    @pytest.mark.asyncio
+    async def test_enforce_streamed_usage_env_var_no_effect_on_non_streaming(
+        self, monkeypatch
+    ):
+        """
+        LITELLM_ENFORCE_STREAMED_USAGE should not add stream_options to
+        non-streaming requests.
+        """
+        monkeypatch.setenv("LITELLM_ENFORCE_STREAMED_USAGE", "true")
+
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_logging_obj = MagicMock()
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.aliases = None
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=mock_pre_call_hook
+        )
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr(
+            litellm.utils,
+            "function_setup",
+            lambda *args, **kwargs: (mock_logging_obj, kwargs),
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=mock_user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+
+        assert "stream_options" not in returned_data
+
 
 @pytest.mark.asyncio
 class TestCommonRequestProcessingHelpers:

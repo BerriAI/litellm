@@ -64,6 +64,12 @@ general_settings:
   always_include_stream_usage: true
 ```
 
+Or set the environment variable (no config file change needed):
+
+```bash
+LITELLM_ENFORCE_STREAMED_USAGE=true
+```
+
 Alternatively, configure it through the UI:
 
 1. Navigate to the LiteLLM Proxy UI
