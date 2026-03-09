@@ -1061,9 +1061,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                     )
                 elif oci_status == 404:
-                    # if NotFoundError exists in your litellm version; 
-                    # otherwise use BadRequestError
-                    raise NotFoundError(  
+                    raise NotFoundError(
+                        message=f"{exception_provider}: Not Found - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
                         message=f"{exception_provider}: Not Found - {oci_message}",
                         llm_provider=custom_llm_provider,
                         model=model,
