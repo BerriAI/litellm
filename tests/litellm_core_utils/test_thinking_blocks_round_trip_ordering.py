@@ -11,7 +11,6 @@ content block order.  Anthropic's API verifies thinking block signatures
 and rejects requests where the blocks have been reordered.
 """
 
-import json
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
