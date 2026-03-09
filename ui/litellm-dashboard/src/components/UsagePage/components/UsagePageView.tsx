@@ -631,12 +631,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </Text>
                           </Card>
                           <Card>
-                            <Title>Total Tokens</Title>
-                            <Text className="text-2xl font-bold mt-2">
-                              {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
                             <Title>Average Cost per Request</Title>
                             <Text className="text-2xl font-bold mt-2">
                               $
@@ -646,39 +640,47 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               )}
                             </Text>
                           </Card>
-                        </Grid>
-                      </Card>
-                    </Col>
-
-                    <Col numColSpan={2}>
-                      <Card>
-                        <Title>Token Breakdown</Title>
-                        <Grid numItems={4} className="gap-4 mt-4">
                           <Card>
-                            <Title>Input Tokens</Title>
-                            <Text className="text-2xl font-bold mt-2 text-blue-600">
-                              {userSpendData.metadata?.total_prompt_tokens?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
-                            <Title>Output Tokens</Title>
-                            <Text className="text-2xl font-bold mt-2 text-cyan-600">
-                              {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
-                            <Title>Cache Read Tokens</Title>
-                            <Text className="text-2xl font-bold mt-2 text-green-600">
-                              {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
-                            <Title>Cache Write Tokens</Title>
-                            <Text className="text-2xl font-bold mt-2 text-purple-600">
-                              {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
+                            <Title>Total Tokens</Title>
+                            <Text className="text-2xl font-bold mt-2">
+                              {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
                             </Text>
                           </Card>
                         </Grid>
+                        <div className="flex justify-center gap-4 mt-4">
+                          <div className="flex-1 max-w-[20%]">
+                            <Card>
+                              <Title>Input Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-blue-600">
+                                {userSpendData.metadata?.total_prompt_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                          </div>
+                          <div className="flex-1 max-w-[20%]">
+                            <Card>
+                              <Title>Output Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-cyan-600">
+                                {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                          </div>
+                          <div className="flex-1 max-w-[20%]">
+                            <Card>
+                              <Title>Cache Read Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-green-600">
+                                {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                          </div>
+                          <div className="flex-1 max-w-[20%]">
+                            <Card>
+                              <Title>Cache Write Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-purple-600">
+                                {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                          </div>
+                        </div>
                       </Card>
                     </Col>
 
