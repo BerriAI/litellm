@@ -138,8 +138,8 @@ def test_litellm_proxy_server_config_no_general_settings():
             ]
         )
 
-        # Allow some time for the server to start
-        time.sleep(60)  # Adjust the sleep time if necessary
+        # Allow some time for the server to start (increased for CI environments)
+        time.sleep(90)  # Increased from 60s for slower CI runners
 
         # Send a request to the /health/liveliness endpoint
         response = requests.get("http://localhost:4000/health/liveliness")

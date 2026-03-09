@@ -164,9 +164,8 @@ class RouteChecks:
 
         if RouteChecks.is_llm_api_route(route=route):
             pass
-        elif (
-            route in LiteLLMRoutes.info_routes.value
-        ):  # check if user allowed to call an info route
+        elif RouteChecks.is_info_route(route=route):
+            # check if user allowed to call an info route
             if route == "/key/info":
                 # handled by function itself
                 pass
@@ -357,6 +356,13 @@ class RouteChecks:
         Check if route is a management route
         """
         return route in LiteLLMRoutes.management_routes.value
+
+    @staticmethod
+    def is_info_route(route: str) -> bool:
+        """
+        Check if route is an info route
+        """
+        return route in LiteLLMRoutes.info_routes.value
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:

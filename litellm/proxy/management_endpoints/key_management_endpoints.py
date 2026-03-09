@@ -14,13 +14,13 @@ import copy
 import inspect
 import json
 import os
+import re
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
-import prisma
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
@@ -126,7 +126,7 @@ def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
 
 
 def _set_key_rotation_fields(
-    data: dict, auto_rotate: bool, rotation_interval: Optional[str]
+    data: dict, auto_rotate: bool, rotation_interval: Optional[str], existing_key_alias: Optional[str] = None
 ) -> None:
     """
     Helper function to set rotation fields in key data if auto_rotate is enabled.
@@ -135,8 +135,21 @@ def _set_key_rotation_fields(
         data: Dictionary to update with rotation fields
         auto_rotate: Whether auto rotation is enabled
         rotation_interval: The rotation interval string (required if auto_rotate is True)
+        existing_key_alias: The existing key alias from the database (if any)
     """
     if auto_rotate and rotation_interval:
+        if (
+            litellm._key_management_settings is not None
+            and litellm._key_management_settings.store_virtual_keys is True
+            and data.get("key_alias") is None
+            and existing_key_alias is None
+        ):
+            raise ProxyException(
+                message="key_alias is required when auto_rotate=True and store_virtual_keys is enabled. This ensures stable secret naming during rotation.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key_alias",
+                code=400,
+            )
         data.update(
             {
                 "auto_rotate": auto_rotate,
@@ -521,8 +534,8 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                         upperbound_duration = duration_in_seconds(
                             duration=upperbound_value
                         )
-                        # Handle special case where duration is "-1" (never expires)
-                        if value == "-1":
+                        # Handle special case where duration is None or "-1" (never expires)
+                        if value is None or value == "-1":
                             user_duration = float("inf")  # Infinite duration
                         else:
                             user_duration = duration_in_seconds(duration=value)
@@ -597,6 +610,10 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     if _budget_id is not None:
         data_json["budget_id"] = _budget_id
 
+    # Only set budget_duration on key when explicitly provided. Keys with budget_id
+    # but no explicit budget_duration follow their linked budget tier's schedule;
+    # reset_budget_for_keys_linked_to_budgets() resets them when the tier resets.
+    # This avoids duplicating budget_duration on keys so tier updates apply automatically.
     if "budget_duration" in data_json:
         data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
@@ -625,6 +642,8 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         data_json=data_json,
         prisma_client=prisma_client,
     )
+
+    _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
 
     await _enforce_unique_key_alias(
         key_alias=data_json.get("key_alias", None),
@@ -1071,7 +1090,9 @@ async def generate_key_fn(
     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
+    - agent_id: Optional[str] - The agent id associated with the key.
     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
+    - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
@@ -1445,7 +1466,7 @@ async def prepare_key_update_data(
 
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        if duration == "-1":
+        if duration is None or duration == "-1":
             # Set expires to None to indicate the key never expires
             non_default_values["expires"] = None
         elif duration and (isinstance(duration, str)) and len(duration) > 0:
@@ -1749,6 +1770,7 @@ async def update_key_fn(
     - key_alias: Optional[str] - User-friendly key alias
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
+    - agent_id: Optional[str] - The agent id associated with the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
@@ -1768,7 +1790,7 @@ async def update_key_fn(
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
-    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.) or "-1" to never expire
+    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
@@ -1929,6 +1951,8 @@ async def update_key_fn(
             data=data, existing_key_row=existing_key_row
         )
 
+        _validate_key_alias_format(key_alias=non_default_values.get("key_alias", None))
+
         await _enforce_unique_key_alias(
             key_alias=non_default_values.get("key_alias", None),
             prisma_client=prisma_client,
@@ -1940,6 +1964,7 @@ async def update_key_fn(
             non_default_values,
             non_default_values.get("auto_rotate", False),
             non_default_values.get("rotation_interval"),
+            existing_key_alias=existing_key_row.key_alias,
         )
 
         _data = {**non_default_values, "token": key}
@@ -2535,6 +2560,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     user_id: Optional[str] = None,
     user_alias: Optional[str] = None,
     team_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
     user_email: Optional[str] = None,
     user_role: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,
@@ -2668,6 +2694,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "max_budget": key_max_budget,
             "user_id": user_id,
             "team_id": team_id,
+            "agent_id": agent_id,
             "project_id": project_id,
             "max_parallel_requests": max_parallel_requests,
             "metadata": metadata_json,
@@ -2954,6 +2981,7 @@ async def delete_verification_tokens(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    failed_tokens: List = []
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
@@ -2997,6 +3025,10 @@ async def delete_verification_tokens(
 
             if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
                 deleted_tokens = await prisma_client.delete_data(tokens=tokens)
+                if deleted_tokens is not None and len(deleted_tokens) != len(tokens):
+                    failed_tokens = [
+                        token for token in tokens if token not in deleted_tokens
+                    ]
             else:
                 deletion_tasks = [
                     prisma_client.delete_data(tokens=[key.token])
@@ -3009,10 +3041,6 @@ async def delete_verification_tokens(
                     failed_tokens = [
                         token for token in tokens if token not in deleted_tokens
                     ]
-                    raise Exception(
-                        "Failed to delete all tokens. Failed to delete tokens: "
-                        + str(failed_tokens)
-                    )
         else:
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
@@ -3030,7 +3058,7 @@ async def delete_verification_tokens(
         hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
 
-    return {"deleted_keys": deleted_tokens}, _keys_being_deleted
+    return {"deleted_keys": deleted_tokens, "failed_tokens": failed_tokens}, _keys_being_deleted
 
 
 def _transform_verification_tokens_to_deleted_records(
@@ -3152,6 +3180,8 @@ async def _rotate_master_key( # noqa: PLR0915
     3. Encrypt the values with the new master key
     4. Update the values in the DB
     """
+    import prisma
+
     from litellm.proxy.proxy_server import proxy_config
 
     try:
@@ -3371,6 +3401,7 @@ async def _execute_virtual_key_regeneration(
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=key_in_db
         )
+        _validate_key_alias_format(key_alias=non_default_values.get("key_alias"))
         verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
     update_data.update(non_default_values)
     update_data = prisma_client.jsonify_object(data=update_data)
@@ -3868,17 +3899,14 @@ async def validate_key_list_check(
     return complete_user_info
 
 
-async def get_admin_team_ids(
+async def _fetch_user_team_objects(
     complete_user_info: Optional[LiteLLM_UserTable],
-    user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-) -> List[str]:
-    """
-    Get all team IDs where the user is an admin.
-    """
-    if complete_user_info is None:
+) -> List[LiteLLM_TeamTable]:
+    """Fetch team objects for all teams a user belongs to (single DB query)."""
+    if complete_user_info is None or not complete_user_info.teams:
         return []
-    # Get all teams that user is an admin of
+
     teams: Optional[
         List[BaseModel]
     ] = await prisma_client.db.litellm_teamtable.find_many(
@@ -3887,14 +3915,60 @@ async def get_admin_team_ids(
     if teams is None:
         return []
 
-    teams_pydantic_obj = [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
+    return [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
 
-    admin_team_ids = [
+
+def _get_admin_team_ids_from_objects(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_objects: List[LiteLLM_TeamTable],
+) -> List[str]:
+    """Filter team objects to those where the user is an admin."""
+    return [
         team.team_id
-        for team in teams_pydantic_obj
+        for team in team_objects
         if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
     ]
-    return admin_team_ids
+
+
+def _get_member_team_ids_from_objects(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_objects: List[LiteLLM_TeamTable],
+) -> List[str]:
+    """Filter team objects to those where the user is a member (any role)."""
+    return [
+        team.team_id
+        for team in team_objects
+        if any(
+            member.user_id is not None
+            and member.user_id == user_api_key_dict.user_id
+            for member in team.members_with_roles
+        )
+    ]
+
+
+async def get_admin_team_ids(
+    complete_user_info: Optional[LiteLLM_UserTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> List[str]:
+    """Get all team IDs where the user is an admin."""
+    team_objects = await _fetch_user_team_objects(complete_user_info, prisma_client)
+    return _get_admin_team_ids_from_objects(user_api_key_dict, team_objects)
+
+
+async def get_member_team_ids(
+    complete_user_info: Optional[LiteLLM_UserTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> List[str]:
+    """
+    Get all team IDs where the user is a member (any role, including admin).
+
+    Used to determine which teams' service accounts (keys with user_id=NULL)
+    a regular team member can see.
+    """
+    team_objects = await _fetch_user_team_objects(complete_user_info, prisma_client)
+    return _get_member_team_ids_from_objects(user_api_key_dict, team_objects)
 
 
 @router.get(
@@ -3932,6 +4006,10 @@ async def list_keys(
     ),
     status: Optional[str] = Query(
         None, description="Filter by status (e.g. 'deleted')"
+    ),
+    project_id: Optional[str] = Query(None, description="Filter keys by project ID"),
+    access_group_id: Optional[str] = Query(
+        None, description="Filter keys by access group ID"
     ),
 ) -> KeyListResponseObject:
     """
@@ -3980,11 +4058,25 @@ async def list_keys(
             prisma_client=prisma_client,
         )
 
-        if include_team_keys:
-            admin_team_ids = await get_admin_team_ids(
+        # Fetch team objects once when needed for either admin or member filtering.
+        # This avoids duplicate DB queries for the same team data.
+        if include_team_keys or include_created_by_keys:
+            team_objects = await _fetch_user_team_objects(
                 complete_user_info=complete_user_info,
-                user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,
+            )
+            member_team_ids = _get_member_team_ids_from_objects(
+                user_api_key_dict=user_api_key_dict,
+                team_objects=team_objects,
+            )
+        else:
+            team_objects = []
+            member_team_ids = None
+
+        if include_team_keys:
+            admin_team_ids = _get_admin_team_ids_from_objects(
+                user_api_key_dict=user_api_key_dict,
+                team_objects=team_objects,
             )
         else:
             admin_team_ids = None
@@ -4006,11 +4098,14 @@ async def list_keys(
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
+            member_team_ids=member_team_ids,
             include_created_by_keys=include_created_by_keys,
             sort_by=sort_by,
             sort_order=sort_order,
             expand=expand,
             status=status,
+            project_id=project_id,
+            access_group_id=access_group_id,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -4044,13 +4139,27 @@ async def list_keys(
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def key_aliases() -> Dict[str, List[str]]:
+async def key_aliases(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(50, ge=1, le=100, description="Page size"),
+    search: Optional[str] = Query(
+        None, description="Search key aliases (case-insensitive partial match)"
+    ),
+) -> Dict[str, Any]:
     """
-    Lists all key aliases
+    Lists key aliases with pagination and optional search.
+
+    Non-admin users only see aliases for keys they own or keys belonging to
+    their teams.
 
     Returns:
         {
-            "aliases": List[str]
+            "aliases": List[str],
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+            "size": int,
         }
     """
     try:
@@ -4062,36 +4171,90 @@ async def key_aliases() -> Dict[str, List[str]]:
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
 
-        where: Dict[str, Any] = {}
-        try:
-            where.update(_get_condition_to_filter_out_ui_session_tokens())
-        except NameError:
-            # Helper may not exist in some builds; ignore if missing
-            pass
+        # Build a parameterized WHERE clause to avoid loading full rows into
+        # memory. Raw SQL is used because the Prisma client wrapper does not
+        # support column-level SELECT projection on find_many.
+        #
+        # $1 is always UI_SESSION_TOKEN_TEAM_ID (filters out UI session tokens).
+        query_params: List[Any] = [UI_SESSION_TOKEN_TEAM_ID]
+        where_parts = [
+            "key_alias IS NOT NULL",
+            "key_alias != ''",
+            "(team_id IS NULL OR team_id != $1)",
+        ]
 
-        rows = await prisma_client.db.litellm_verificationtoken.find_many(
-            where=where,
-            order=[{"key_alias": "asc"}],
+        # Scope results for non-admin users: only show aliases for keys the
+        # user owns or keys belonging to teams they are a member of.
+        is_proxy_admin = user_api_key_dict.user_role in [
+            LitellmUserRoles.PROXY_ADMIN.value,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        ]
+        if not is_proxy_admin:
+            scope_conditions: List[str] = []
+            if user_api_key_dict.user_id:
+                query_params.append(user_api_key_dict.user_id)
+                scope_conditions.append(f"user_id = ${len(query_params)}")
+
+            # Look up the user's teams from the user table
+            user_teams: List[str] = []
+            if user_api_key_dict.user_id:
+                user_row = await prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_id": user_api_key_dict.user_id}
+                )
+                if user_row is not None:
+                    user_teams = getattr(user_row, "teams", []) or []
+
+            if user_teams:
+                team_placeholders = ", ".join(
+                    f"${len(query_params) + i + 1}" for i in range(len(user_teams))
+                )
+                query_params.extend(user_teams)
+                scope_conditions.append(f"team_id IN ({team_placeholders})")
+
+            if scope_conditions:
+                where_parts.append(f"({' OR '.join(scope_conditions)})")
+            else:
+                # No user_id and no teams — return nothing
+                where_parts.append("FALSE")
+
+        if search:
+            query_params.append(f"%{search}%")
+            where_parts.append(f"key_alias ILIKE ${len(query_params)}")
+
+        where_sql = " AND ".join(where_parts)
+
+        count_sql = (
+            f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
+        )
+        count_rows = await prisma_client.db.query_raw(count_sql, *query_params)
+        total_count = int(count_rows[0]["count"]) if count_rows else 0
+
+        aliases_params = query_params + [size, (page - 1) * size]
+        limit_idx = len(aliases_params) - 1
+        offset_idx = len(aliases_params)
+        aliases_sql = (
+            f"SELECT key_alias"
+            f' FROM "LiteLLM_VerificationToken"'
+            f" WHERE {where_sql}"
+            f" ORDER BY key_alias ASC"
+            f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
+        )
+        alias_rows = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
+        aliases: List[str] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
+
+        total_pages = -(-total_count // size) if total_count > 0 else 0
+        verbose_proxy_logger.debug(
+            f"key_aliases: page={page}, size={size}, search={search!r}, "
+            f"total_count={total_count}, total_pages={total_pages}"
         )
 
-        seen = set()
-        aliases: List[str] = []
-        for row in rows:
-            alias = getattr(row, "key_alias", None)
-            if alias is None and isinstance(row, dict):
-                alias = row.get("key_alias")
-
-            if not alias:
-                continue
-
-            alias_str = str(alias).strip()
-            if alias_str and alias_str not in seen:
-                seen.add(alias_str)
-                aliases.append(alias_str)
-
-        verbose_proxy_logger.debug(f"Returning {len(aliases)} key aliases")
-
-        return {"aliases": aliases}
+        return {
+            "aliases": aliases,
+            "total_count": total_count,
+            "current_page": page,
+            "total_pages": total_pages,
+            "size": size,
+        }
 
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in key_aliases: {e}")
@@ -4156,9 +4319,21 @@ def _build_key_filter_conditions(
     key_hash: Optional[str],
     exclude_team_id: Optional[str],
     admin_team_ids: Optional[List[str]],
-    include_created_by_keys: bool,
+    member_team_ids: Optional[List[str]] = None,
+    include_created_by_keys: bool = False,
+    project_id: Optional[str] = None,
+    access_group_id: Optional[str] = None,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
-    """Build filter conditions for key listing."""
+    """Build filter conditions for key listing.
+
+    Visibility rules:
+    - Users always see their own keys (user_id match)
+    - Team admins see ALL keys for their admin teams (via admin_team_ids)
+    - Regular team members see only service accounts (user_id=NULL) for their
+      teams (via member_team_ids). This prevents leaking other members' spend data.
+    - created_by visibility is scoped to teams the user currently belongs to,
+      so former members cannot see service accounts they created after leaving.
+    """
     # Prepare filter conditions
     where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
     where.update(_get_condition_to_filter_out_ui_session_tokens())
@@ -4170,8 +4345,6 @@ def _build_key_filter_conditions(
     user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
         user_condition["user_id"] = user_id
-    if team_id and isinstance(team_id, str):
-        user_condition["team_id"] = team_id
     if key_alias and isinstance(key_alias, str):
         user_condition["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
@@ -4184,19 +4357,69 @@ def _build_key_filter_conditions(
     if user_condition:
         or_conditions.append(user_condition)
 
-    # Add condition for created by keys if provided
+    # Add condition for created_by keys, scoped to user's current teams
     if include_created_by_keys and user_id:
-        or_conditions.append({"created_by": user_id})
+        if member_team_ids is not None:
+            if member_team_ids:
+                # Scope created_by keys to teams user is still a member of,
+                # or keys that have no team (personal keys)
+                or_conditions.append(
+                    {
+                        "AND": [
+                            {"created_by": user_id},
+                            {
+                                "OR": [
+                                    {"team_id": {"in": member_team_ids}},
+                                    {"team_id": None},
+                                ]
+                            },
+                        ]
+                    }
+                )
+            else:
+                # User is not a member of any team, only show non-team created_by keys
+                or_conditions.append(
+                    {"AND": [{"created_by": user_id}, {"team_id": None}]}
+                )
+        else:
+            # No team membership info provided (backward compatibility for
+            # direct _list_key_helper callers like Prometheus)
+            or_conditions.append({"created_by": user_id})
 
-    # Add condition for admin team keys if provided
+    # Add condition for admin team keys (admins see ALL team keys)
     if admin_team_ids:
         or_conditions.append({"team_id": {"in": admin_team_ids}})
+
+    # Add condition for member team service accounts (members only see keys with user_id=NULL)
+    if member_team_ids:
+        # Exclude teams where user is already admin (those are covered above with full visibility)
+        member_only_team_ids = [
+            tid for tid in member_team_ids if tid not in (admin_team_ids or [])
+        ]
+        if member_only_team_ids:
+            or_conditions.append(
+                {
+                    "AND": [
+                        {"team_id": {"in": member_only_team_ids}},
+                        {"user_id": None},
+                    ]
+                }
+            )
 
     # Combine conditions with OR if we have multiple conditions
     if len(or_conditions) > 1:
         where = {"AND": [where, {"OR": or_conditions}]}
     elif len(or_conditions) == 1:
         where.update(or_conditions[0])
+
+    # Apply team_id, project_id and access_group_id as global AND filters so they
+    # narrow results across all visibility conditions (own keys, team keys, etc.)
+    if team_id and isinstance(team_id, str):
+        where = {"AND": [where, {"team_id": team_id}]}
+    if project_id:
+        where = {"AND": [where, {"project_id": project_id}]}
+    if access_group_id:
+        where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
@@ -4216,11 +4439,16 @@ async def _list_key_helper(
     admin_team_ids: Optional[
         List[str]
     ] = None,  # New parameter for teams where user is admin
+    member_team_ids: Optional[
+        List[str]
+    ] = None,  # Team IDs where user is a member (any role) - for service account visibility
     include_created_by_keys: bool = False,
     sort_by: Optional[str] = None,
     sort_order: str = "desc",
     expand: Optional[List[str]] = None,
     status: Optional[str] = None,
+    project_id: Optional[str] = None,
+    access_group_id: Optional[str] = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -4233,6 +4461,7 @@ async def _list_key_helper(
         exclude_team_id: Optional[str] # exclude a specific team_id
         return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
         admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
+        member_team_ids: Optional[List[str]] # list of team IDs where user is a member (for service account visibility)
 
     Returns:
         KeyListResponseObject
@@ -4251,7 +4480,10 @@ async def _list_key_helper(
         key_hash=key_hash,
         exclude_team_id=exclude_team_id,
         admin_team_ids=admin_team_ids,
+        member_team_ids=member_team_ids,
         include_created_by_keys=include_created_by_keys,
+        project_id=project_id,
+        access_group_id=access_group_id,
     )
 
     # Calculate skip for pagination
@@ -4799,6 +5031,37 @@ async def test_key_logging(
             callbacks=logging_callbacks,
             status="healthy",
             details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
+        )
+
+
+_KEY_ALIAS_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.@]{0,253}[a-zA-Z0-9]$")
+
+
+def _validate_key_alias_format(key_alias: Optional[str]) -> None:
+    """
+    Validate the format of the key_alias.
+
+    Gated behind ``litellm.enable_key_alias_format_validation`` (default **False**).
+    When disabled, no validation is performed so existing workflows are not broken.
+
+    Rules (when enabled):
+    - None is OK (no alias).
+    - Otherwise must be 2–255 chars
+    - start/end with alphanumeric
+    - only allow a-zA-Z0-9_-/.@
+    """
+    if not litellm.enable_key_alias_format_validation:
+        return
+
+    if key_alias is None:
+        return
+
+    if not _KEY_ALIAS_PATTERN.match(key_alias):
+        raise ProxyException(
+            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.@.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key_alias",
+            code=400,
         )
 
 

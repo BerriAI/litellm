@@ -365,6 +365,7 @@ def rerank(  # noqa: PLR0915
                 max_chunks_per_doc=max_chunks_per_doc,
                 _is_async=_is_async,
                 optional_params=optional_params.model_dump(exclude_unset=True),
+                timeout=optional_params.timeout,
                 api_base=api_base,
                 extra_headers=merged_headers,
                 logging_obj=litellm_logging_obj,

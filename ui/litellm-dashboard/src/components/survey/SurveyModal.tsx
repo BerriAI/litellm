@@ -101,21 +101,21 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         return reasonLabels[r] || r;
       });
 
-      await fetch("https://hooks.zapier.com/hooks/catch/16331268/ugms6w0/", {
+      // Submit to feedback endpoint (redirects to Google Form)
+      const feedbackUrl = "https://feedback.litellm.ai/survey";
+      
+      const formData = new URLSearchParams({
+        "entry.2015264290": data.usingAtCompany ? "Yes" : "No",
+        "entry.1876243786": data.companyName || "",
+        "entry.1282591459": data.startDate,
+        "entry.393456108": readableReasons.join(", "),
+        "entry.928142208": data.email || "",
+      });
+
+      await fetch(feedbackUrl, {
         method: "POST",
         mode: "no-cors",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          usingAtCompany: data.usingAtCompany ? "Yes" : "No",
-          companyName: data.companyName || null,
-          startDate: data.startDate,
-          reasons: readableReasons.join(", "),
-          otherReason: data.otherReason || null,
-          email: data.email || null,
-          submittedAt: new Date().toISOString(),
-        }),
+        body: formData,
       });
     } catch (error) {
       // Silently fail - don't block the user experience

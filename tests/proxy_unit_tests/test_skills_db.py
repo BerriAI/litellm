@@ -80,6 +80,7 @@ def prisma_client():
     return prisma_client
 
 
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.asyncio
 async def test_create_skill_sdk(prisma_client):
     """
@@ -120,6 +121,7 @@ async def test_create_skill_sdk(prisma_client):
     )
 
 
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.asyncio
 async def test_list_skills_sdk(prisma_client):
     """
@@ -170,6 +172,7 @@ async def test_list_skills_sdk(prisma_client):
         )
 
 
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.asyncio
 async def test_get_skill_sdk(prisma_client):
     """
@@ -211,6 +214,7 @@ async def test_get_skill_sdk(prisma_client):
     )
 
 
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.asyncio
 async def test_delete_skill_sdk(prisma_client):
     """

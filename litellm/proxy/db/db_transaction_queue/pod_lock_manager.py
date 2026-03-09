@@ -80,6 +80,14 @@ class PodLockManager:
                         )
                         self._emit_acquired_lock_event(cronjob_id, self.pod_id)
                         return True
+                    else:
+                        verbose_proxy_logger.info(
+                            "Spend tracking - pod %s could not acquire lock for cronjob_id=%s, "
+                            "held by pod %s. Spend updates in Redis will wait for the leader pod to commit.",
+                            self.pod_id,
+                            cronjob_id,
+                            current_value,
+                        )
             return False
         except Exception as e:
             verbose_proxy_logger.error(
@@ -124,10 +132,12 @@ class PodLockManager:
                             pod_id=self.pod_id,
                         )
                     else:
-                        verbose_proxy_logger.debug(
-                            "Pod %s failed to release Redis lock for cronjob_id=%s",
+                        verbose_proxy_logger.warning(
+                            "Spend tracking - pod %s failed to release Redis lock for cronjob_id=%s. "
+                            "Lock will expire after TTL=%ds.",
                             self.pod_id,
                             cronjob_id,
+                            DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
                         )
                 else:
                     verbose_proxy_logger.debug(

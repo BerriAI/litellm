@@ -122,6 +122,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         Returns: Complete URL for Azure DI analyze endpoint
         """
         if api_base is None:
+            api_base = get_secret_str("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
+
+        if api_base is None:
             raise ValueError(
                 "Missing Azure Document Intelligence Endpoint - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT environment variable or pass api_base parameter"
             )
