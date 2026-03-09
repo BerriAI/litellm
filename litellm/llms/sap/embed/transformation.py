@@ -5,6 +5,7 @@ Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 from typing import Optional, List, Dict, Literal, Union
 from pydantic import BaseModel, Field
 from functools import cached_property
+from litellm.llms.sap.chat.models import MaskingModuleConfig
 
 import httpx
 
@@ -48,24 +49,31 @@ class EmbeddingModel(BaseModel):
     name: str
     version: str = "latest"
     params: dict = Field(default_factory=dict, validation_alias="parameters")
+    timeout: Optional[int] = Field(default=600, ge=1, le=600)
+    max_retries: Optional[int] = Field(default=2, ge=0, le=5)
 
+class EmbeddingsModelConfig(BaseModel):
+    model: EmbeddingModel
 
 class EmbeddingsModules(BaseModel):
-    embeddings: EmbeddingModel
+    embeddings: EmbeddingsModelConfig
+    masking: Optional[MaskingModuleConfig] = None
 
 
 class EmbeddingInput(BaseModel):
     text: Union[str, List[str]]
     type: Literal["text", "document", "query"] = "text"
 
+class EmbeddingComfig(BaseModel):
+    modules: EmbeddingsModules
 
 class EmbeddingRequest(BaseModel):
-    config: EmbeddingsModules
+    config: EmbeddingComfig
     input: EmbeddingInput
 
 
 def validate_dict(data: dict, model) -> dict:
-    return model(**data).model_dump()
+    return model(**data).model_dump(exclude_none=True, by_alias=True)
 
 
 class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
@@ -153,14 +161,20 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         model_dict["version"] = optional_params.get("version", "latest")
         model_dict["params"] = optional_params.get("parameters", {})
         input_dict = {"text": input}
+        if optional_params.get("type"):
+            input_dict["type"] = optional_params.get("type")
+        masking = {"masking": optional_params.get("masking")} if optional_params.get("masking") else {}
         body = {
             "config": {
                 "modules": {
-                    "embeddings": {"model": validate_dict(model_dict, EmbeddingModel)}
+                    "embeddings": {"model": model_dict},
+                    **masking
                 }
             },
-            "input": validate_dict(input_dict, EmbeddingInput),
+            "input": input_dict,
         }
+        body = validate_dict(body, EmbeddingRequest)
+
         return body
 
     def transform_embedding_response(

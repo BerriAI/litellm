@@ -21,7 +21,9 @@ def test_basic_config_transform(fake_token_creator, fake_deployment_url):
                     'model': {
                         'name': 'text-embedding-3-small',
                         'version': 'latest',
-                        'params': {}
+                        'params': {},
+                        'timeout': 600,
+                        'max_retries': 2
                     }
                 }
             }

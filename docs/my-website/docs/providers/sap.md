@@ -595,7 +595,7 @@ For more information about all available translation configurations, see the [do
 The data masking module serves to anonymize or pseudonymize personally identifiable information from the input for selected entities.
 
 ```python showLineNumbers title="Data Masking Example"
-from litellm import completion
+from litellm import completion, embedding
 masking_config = {
             'providers':
                 [
@@ -620,8 +620,18 @@ response = completion(model="sap/gpt-4o",
                       placeholder_values={"cv": mock_cv},
                       masking=masking_config)
 print(response.choices[0].message.content)
+
+###Data masking module also available for embedding 
+response = embedding(model="sap/text-embedding-3-small",
+                      input=mock_cv,
+                      masking=masking_config)
+print(response.data[0])
 ```
 For more information about all available data masking configurations, see the [documentation](https://help.sap.com/docs/sap-ai-core/generative-ai/enhancing-model-consumption-with-data-masking-66ad6f469afc4c2cbaa91a27a33f7b21?locale=en-US)
+
+
+
+
 
 #### Content Filtering
 The content filtering module allows you to filter input and output based on content safety criteria. 
@@ -680,7 +690,7 @@ except Exception as e:
 ```
 For more information about all available content filtering configurations, see the [documentation](https://help.sap.com/docs/sap-ai-core/generative-ai/content-filtering?locale=en-US)
 
-#### List of moduls configuration for fallback
+#### List of modules configuration for fallback
 SAP GEN AI Hub supports a fallback mechanism for handling errors. This mechanism allows you to specify a list of fallback modules to use in case of errors. The fallback modules should contain all parameters that are required for configuring the request.
 
 Required parameters:
@@ -698,8 +708,6 @@ Optional parameters:
 
 
 ```python showLineNumbers title="Fallback Example"
-from litellm import completion
-
 from litellm import completion
 
 translation_config = {
