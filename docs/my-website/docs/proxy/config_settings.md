@@ -355,7 +355,7 @@ router_settings:
 | set_verbose | boolean | [DEPRECATED PARAM - see debug docs](./debugging) If true, sets the logging level to verbose. |
 | retry_after | int | Time to wait before retrying a request in seconds. Defaults to 0. If `x-retry-after` is received from LLM API, this value is overridden. |
 | provider_budget_config | ProviderBudgetConfig | Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None. [Further Docs](./provider_budget_routing.md) |
-| enable_pre_call_checks | boolean | If true, checks if a call is within the model's context window before making the call. [More information here](reliability) |
+| enable_pre_call_checks | boolean | If true, checks if a call is within the model's context window before making the call. **Required** for `model_info.max_input_tokens` enforcement. Default: false. [More information here](reliability) |
 | model_group_retry_policy | Dict[str, RetryPolicy] | [SDK-only arg] Set retry policy for model groups. |
 | context_window_fallbacks | List[Dict[str, List[str]]] | Fallback models for context window violations. |
 | redis_url | str | URL for Redis server. **Known performance issue with Redis URL.** |
