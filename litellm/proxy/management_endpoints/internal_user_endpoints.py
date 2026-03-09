@@ -1847,21 +1847,27 @@ async def delete_user(
     # to avoid FK constraint violations on LiteLLM_InvitationLink.
     # Side effect: invitations targeting non-deleted users are also removed
     # when a deleted user is the creator or updater of those invitations.
-    verbose_proxy_logger.warning(
-        "delete_user: removing all invitation links referencing user_ids=%s "
-        "(user_id, created_by, updated_by). Pending invitations for other "
-        "users may be deleted as a side effect.",
-        data.user_ids,
+    _invitation_link_where = {
+        "OR": [
+            {"user_id": {"in": data.user_ids}},
+            {"created_by": {"in": data.user_ids}},
+            {"updated_by": {"in": data.user_ids}},
+        ]
+    }
+    _invitation_link_count = await prisma_client.db.litellm_invitationlink.count(
+        where=_invitation_link_where
     )
-    await prisma_client.db.litellm_invitationlink.delete_many(
-        where={
-            "OR": [
-                {"user_id": {"in": data.user_ids}},
-                {"created_by": {"in": data.user_ids}},
-                {"updated_by": {"in": data.user_ids}},
-            ]
-        }
-    )
+    if _invitation_link_count > 0:
+        verbose_proxy_logger.warning(
+            "delete_user: removing %d invitation links referencing user_ids=%s "
+            "(user_id, created_by, updated_by). Pending invitations for other "
+            "users may be deleted as a side effect.",
+            _invitation_link_count,
+            data.user_ids,
+        )
+        await prisma_client.db.litellm_invitationlink.delete_many(
+            where=_invitation_link_where
+        )
 
     ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS
     await prisma_client.db.litellm_organizationmembership.delete_many(
