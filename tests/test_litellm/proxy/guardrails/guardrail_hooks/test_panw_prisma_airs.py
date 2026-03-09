@@ -4922,5 +4922,43 @@ class TestPanwAirsResponseToolCallMasking:
             assert tool_call.function.arguments == '{"query": "****"}'
 
 
+class TestPanwAirsMcpMaskOnAllow:
+    """Verify that action=allow + prompt_masked_data applies masking unconditionally."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mask_request_content", [True, False])
+    async def test_apply_guardrail_mcp_mask_on_allow(self, mask_request_content):
+        """Allow + masked_data should rewrite args regardless of mask_request_content."""
+        handler = make_handler(mask_request_content=mask_request_content)
+        inputs: GenericGuardrailAPIInputs = {"texts": []}
+        request_data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "call tool"}],
+            "mcp_tool_name": "file_reader",
+            "arguments": '{"query": "my SSN is 123-45-6789"}',
+            "mcp_arguments": '{"query": "my SSN is 123-45-6789"}',
+            "litellm_call_id": "test-call-id",
+        }
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "action": "allow",
+                "prompt_masked_data": {"data": '{"query": "my SSN is ****"}'},
+            }
+
+            await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+            # Masking must be applied unconditionally for action=allow
+            assert request_data["arguments"] == '{"query": "my SSN is ****"}'
+            assert request_data["mcp_arguments"] == '{"query": "my SSN is ****"}'
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

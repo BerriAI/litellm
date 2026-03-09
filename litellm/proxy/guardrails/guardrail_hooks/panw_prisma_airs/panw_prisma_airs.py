@@ -322,6 +322,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             "metadata": panw_metadata,
             "contents": contents,
         }
+        # Use per-request litellm_call_id as AIRS tr_id; keep litellm_trace_id in metadata.
         if call_id:
             payload["tr_id"] = call_id
 
@@ -1920,9 +1921,17 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     is_response=False,
                 )
                 # If we reach here, fallback_on_error="allow"
-            elif mcp_scan_result.get("action", "block") != "allow":
+            else:
+                action = mcp_scan_result.get("action", "block")
                 masked_text = self._get_masked_text(mcp_scan_result, is_response=False)
-                if masked_text and self.mask_request_content:
+                if action == "allow":
+                    # PANW says OK — apply PII scrubbing if present (unconditional,
+                    # matching _scan_tool_calls_for_guardrail behavior).
+                    if masked_text:
+                        self._apply_mcp_masking(
+                            request_data, mcp_arguments, masked_text
+                        )
+                elif masked_text and self.mask_request_content:
                     self._apply_mcp_masking(request_data, mcp_arguments, masked_text)
                 else:
                     error_detail = self._build_error_detail(
