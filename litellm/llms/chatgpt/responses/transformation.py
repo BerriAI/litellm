@@ -1,14 +1,14 @@
 import json
 from typing import Any, Optional
 
-from litellm.exceptions import AuthenticationError
 from litellm.constants import STREAM_SSE_DONE_STRING
+from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.llms.openai.common_utils import OpenAIError
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
+from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -200,3 +200,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
         api_base = api_base.rstrip("/")
         return f"{api_base}/responses"
+
+    def supports_native_websocket(self) -> bool:
+        """ChatGPT does not support native WebSocket for Responses API"""
+        return False

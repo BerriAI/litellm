@@ -15,13 +15,11 @@ Flow:
 from fastapi_sso.sso.base import OpenID
 
 from litellm.proxy._types import LitellmUserRoles, SSOUserDefinedValues
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+from litellm.proxy import proxy_server
 
 
 async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:
     try:
-        print("inside custom sso handler")  # noqa
-        print(f"userIDPInfo: {userIDPInfo}")  # noqa
 
         if userIDPInfo.id is None:
             raise ValueError(f"No ID found for user. userIDPInfo.id is None {userIDPInfo}")
@@ -32,8 +30,8 @@ async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:
         # user_groups = extra_fields.get("group", [])
 
         # check if user exists in litellm proxy DB
-        _user_info = await user_info(user_id=userIDPInfo.id)
-        print("_user_info from litellm DB ", _user_info)  # noqa
+        if proxy_server.prisma_client is not None:
+            _user_info = await proxy_server.prisma_client.get_data(user_id=userIDPInfo.id)
 
         return SSOUserDefinedValues(
             models=[],

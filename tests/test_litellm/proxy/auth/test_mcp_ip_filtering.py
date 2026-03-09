@@ -91,3 +91,58 @@ class TestMCPServerIPFiltering:
 
         result = manager.filter_server_ids_by_ip(["priv"], client_ip=None)
         assert result == ["priv"]
+
+
+class TestFilterServerIdsByIpWithInfo:
+    """Tests that filter_server_ids_by_ip_with_info returns accurate block counts."""
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_external_ip_reports_blocked_count(self):
+        pub = _make_server("pub", available_on_public_internet=True)
+        priv = _make_server("priv", available_on_public_internet=False)
+        manager = _make_manager([pub, priv])
+
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["pub", "priv"], client_ip="8.8.8.8"
+        )
+        assert allowed == ["pub"]
+        assert blocked == 1
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_internal_ip_reports_zero_blocked(self):
+        pub = _make_server("pub", available_on_public_internet=True)
+        priv = _make_server("priv", available_on_public_internet=False)
+        manager = _make_manager([pub, priv])
+
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["pub", "priv"], client_ip="192.168.1.1"
+        )
+        assert allowed == ["pub", "priv"]
+        assert blocked == 0
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_no_ip_returns_all_with_zero_blocked(self):
+        priv = _make_server("priv", available_on_public_internet=False)
+        manager = _make_manager([priv])
+
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["priv"], client_ip=None
+        )
+        assert allowed == ["priv"]
+        assert blocked == 0
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_all_private_external_ip_reports_all_blocked(self):
+        priv1 = _make_server("priv1", available_on_public_internet=False)
+        priv2 = _make_server("priv2", available_on_public_internet=False)
+        manager = _make_manager([priv1, priv2])
+
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["priv1", "priv2"], client_ip="1.2.3.4"
+        )
+        assert allowed == []
+        assert blocked == 2

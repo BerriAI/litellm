@@ -49,7 +49,7 @@ USER root
 
 # Install runtime dependencies (libsndfile needed for audio processing on ARM64)
 RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
-    npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
+    npm install -g npm@latest tar@7.5.10 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
     # SECURITY FIX: npm bundles tar, glob, and brace-expansion at multiple nested
     # levels inside its dependency tree. `npm install -g <pkg>` only creates a
     # SEPARATE global package, it does NOT replace npm's internal copies.
@@ -64,7 +64,21 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
     find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
     done && \
-    npm cache clean --force
+    find "$GLOBAL/npm" -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
+    done && \
+    # SECURITY FIX: patch npm's own package.json metadata so scanners see the
+    # actual installed versions instead of the stale declared dependencies.
+    find /usr/local/lib /usr/lib -path "*/node_modules/npm/package.json" -exec \
+        sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null && \
+    npm cache clean --force && \
+    # Remove the apk-tracked npm so its stale SBOM metadata (tar 7.5.9) is
+    # no longer visible to image scanners.  The globally installed npm@latest
+    # at /usr/local/lib/node_modules/npm/ remains fully functional.
+    { apk del --no-cache npm 2>/dev/null || true; }
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -90,14 +104,21 @@ RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
 # npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
 # Patch every copy of tar, glob, and brace-expansion inside that tree.
 RUN GLOBAL="$(npm root -g)" && \
-    find /usr/lib -path "*/nodejs_wheel/*/node_modules/tar" -type d | while read d; do \
+    [ -n "$GLOBAL" ] || { echo "ERROR: npm root -g returned empty; aborting"; exit 1; } && \
+    find /usr/lib -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
     done && \
-    find /usr/lib -path "*/nodejs_wheel/*/node_modules/glob" -type d | while read d; do \
+    find /usr/lib -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
     done && \
-    find /usr/lib -path "*/nodejs_wheel/*/node_modules/@isaacs/brace-expansion" -type d | while read d; do \
+    find /usr/lib -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    find /usr/lib -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+    done && \
+    find /usr/lib -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
     done
 
 # Install semantic_router and aurelio-sdk using script

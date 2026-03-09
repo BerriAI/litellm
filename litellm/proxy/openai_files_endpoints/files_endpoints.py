@@ -454,8 +454,35 @@ async def create_file(  # noqa: PLR0915
                     model=router_model, llm_router=llm_router
                 )
 
+        # Apply team-level file expiry enforcement
+        team_metadata = user_api_key_dict.team_metadata or {}
+        enforced_file_expiry = team_metadata.get("enforced_file_expires_after")
+        if enforced_file_expiry is not None:
+            if "anchor" not in enforced_file_expiry or "seconds" not in enforced_file_expiry:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Server configuration error: team metadata field 'enforced_file_expires_after' is malformed - must contain 'anchor' and 'seconds' keys. Contact your team or proxy admin to fix this setting.",
+                    },
+                )
+            if enforced_file_expiry["anchor"] != "created_at":
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": f"Server configuration error: team metadata field 'enforced_file_expires_after' has invalid anchor '{enforced_file_expiry['anchor']}' - must be 'created_at'. Contact your team or proxy admin to fix this setting.",
+                    },
+                )
+            expires_after = FileExpiresAfter(
+                anchor="created_at",
+                seconds=int(enforced_file_expiry["seconds"]),
+            )
+
+        verbose_proxy_logger.debug(
+            "create_file expires_after: %s", expires_after
+        )
+
         _create_file_request = CreateFileRequest(
-            file=file_data, 
+            file=file_data,
             purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose),
             expires_after=expires_after,
             **data

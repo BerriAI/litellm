@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         ALL_RESPONSES_API_TOOL_PARAMS,
         AllMessageValues,
         ChatCompletionImageObject,
+        ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
@@ -161,7 +162,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             "type": "message",
                             "role": role,
                             "content": self._convert_content_to_responses_format(
-                                content,
+                                content,  # type: ignore[arg-type]
                                 role,  # type: ignore
                             ),
                         }
@@ -213,7 +214,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     {
                         "type": "message",
                         "role": role,
-                        "content": self._convert_content_to_responses_format(content, cast(str, role)),
+                        "content": self._convert_content_to_responses_format(content, cast(str, role)),  # type: ignore[arg-type]
                     }
                 )
 
@@ -579,7 +580,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         content: Optional[
             Union[
                 str,
-                Iterable[Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock"]],
+                List[Any],
+                Iterable[Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]],
             ]
         ],
         role: str,
@@ -949,9 +951,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 if provider_specific_fields:
                     function_chunk["provider_specific_fields"] = provider_specific_fields
 
+                tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
-                    index=0,
+                    index=tool_call_index,
                     type="function",
                     function=function_chunk,
                 )
@@ -972,6 +975,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         elif event_type == "response.function_call_arguments.delta":
             content_part: Optional[str] = parsed_chunk.get("delta", None)
             if content_part:
+                tool_call_index = parsed_chunk.get("output_index", 0)
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
@@ -980,7 +984,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                 tool_calls=[
                                     ChatCompletionToolCallChunk(
                                         id=None,
-                                        index=0,
+                                        index=tool_call_index,
                                         type="function",
                                         function=ChatCompletionToolCallFunctionChunk(name=None, arguments=content_part),
                                     )
@@ -1012,9 +1016,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 if provider_specific_fields:
                     function_chunk["provider_specific_fields"] = provider_specific_fields
 
+                tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
-                    index=0,
+                    index=tool_call_index,
                     type="function",
                     function=function_chunk,
                 )
@@ -1023,12 +1028,16 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 if provider_specific_fields:
                     tool_call_chunk.provider_specific_fields = provider_specific_fields  # type: ignore
 
+                # Do NOT emit finish_reason here — response.completed handles the terminal
+                # finish_reason. Emitting "tool_calls" here would prematurely terminate
+                # the stream before subsequent tool calls arrive (same fix as #17246 for
+                # the message-type branch).
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
                             index=0,
-                            delta=Delta(tool_calls=[tool_call_chunk]),
-                            finish_reason="tool_calls",
+                            delta=Delta(),
+                            finish_reason=None,
                         )
                     ]
                 )

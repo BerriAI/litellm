@@ -1,0 +1,74 @@
+name: Publish litellm-proxy-extras to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: github.repository == 'BerriAI/litellm'
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: litellm-proxy-extras
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Bump version
+        id: bump
+        run: |
+          OLD=$(poetry version -s)
+          poetry version ${{ github.event.inputs.bump }}
+          NEW=$(poetry version -s)
+          echo "old=$OLD" >> $GITHUB_OUTPUT
+          echo "new=$NEW" >> $GITHUB_OUTPUT
+
+      - name: Update version refs in root pyproject.toml and requirements.txt
+        run: |
+          OLD=${{ steps.bump.outputs.old }}
+          NEW=${{ steps.bump.outputs.new }}
+          sed -i "s/litellm-proxy-extras = {version = \"${OLD}\"/litellm-proxy-extras = {version = \"${NEW}\"/" ../pyproject.toml
+          sed -i "s/litellm-proxy-extras==${OLD}/litellm-proxy-extras==${NEW}/" ../requirements.txt
+
+      - name: Update poetry.lock
+        working-directory: .
+        run: poetry lock
+
+      - name: Build
+        run: poetry build
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cd ..
+          git add litellm-proxy-extras/pyproject.toml pyproject.toml requirements.txt poetry.lock
+          git commit -m "bump: litellm-proxy-extras ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
+          git push
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_PUBLISH_PASSWORD }}
+        run: |
+          pip install twine
+          twine upload dist/litellm_proxy_extras-${{ steps.bump.outputs.new }}*

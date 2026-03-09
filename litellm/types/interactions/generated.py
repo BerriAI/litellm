@@ -392,6 +392,7 @@ class Status3(Enum):
     COMPLETED = 'COMPLETED'
     FAILED = 'FAILED'
     CANCELLED = 'CANCELLED'
+    INCOMPLETE = 'INCOMPLETE'
 
 
 class ModelOption(RootModel[str]):

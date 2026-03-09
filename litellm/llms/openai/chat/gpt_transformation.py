@@ -162,6 +162,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "service_tier",
             "safety_identifier",
             "prompt_cache_key",
+            "prompt_cache_retention",
             "store",
         ]  # works across all models
 

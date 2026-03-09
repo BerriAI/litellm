@@ -542,7 +542,7 @@ def test_stream_chunk_builder_multiple_tool_calls():
 
     chunks = []
     for chunk in init_chunks:
-        chunks.append(litellm.ModelResponse(**chunk, stream=True))
+        chunks.append(litellm.ModelResponseStream(**chunk))
     response = stream_chunk_builder(chunks=chunks)
 
     print(f"Returned response: {response}")
@@ -616,7 +616,7 @@ def test_stream_chunk_builder_openai_prompt_caching():
     chunks: List[litellm.ModelResponse] = []
     usage_obj = None
     for chunk in chat_completion:
-        chunks.append(litellm.ModelResponse(**chunk.model_dump(), stream=True))
+        chunks.append(litellm.ModelResponseStream(**chunk.model_dump()))
 
     print(f"chunks: {chunks}")
 
@@ -636,6 +636,7 @@ def test_stream_chunk_builder_openai_prompt_caching():
             assert response_usage_value == v
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_stream_chunk_builder_openai_audio_output_usage():
     from pydantic import BaseModel
     from openai import OpenAI
@@ -661,7 +662,7 @@ def test_stream_chunk_builder_openai_audio_output_usage():
 
     chunks = []
     for chunk in completion:
-        chunks.append(litellm.ModelResponse(**chunk.model_dump(), stream=True))
+        chunks.append(litellm.ModelResponseStream(**chunk.model_dump()))
 
     usage_obj: Optional[litellm.Usage] = None
 

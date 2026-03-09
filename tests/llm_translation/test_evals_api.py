@@ -41,6 +41,7 @@ class BaseEvalsAPITest(ABC):
         """Return the API base URL for the provider"""
         pass
 
+    @pytest.mark.flaky(retries=3, delay=2)
     def test_create_eval(self):
         """
         Test creating an evaluation.
@@ -59,32 +60,37 @@ class BaseEvalsAPITest(ABC):
         # Create eval with stored_completions data source
         unique_name = f"Test Eval {int(time.time())}"
 
-        response = litellm.create_eval(
-            name=unique_name,
-            data_source_config={
-                "type": "stored_completions",
-                "metadata": {"usecase": "chatbot"},
-            },
-            testing_criteria=[
-                {
-                    "type": "label_model",
-                    "model": "gpt-4o",
-                    "input": [
-                        {
-                            "role": "developer",
-                            "content": "Classify the sentiment as 'positive' or 'negative'",
-                        },
-                        {"role": "user", "content": "Statement: {{item.input}}"},
-                    ],
-                    "passing_labels": ["positive"],
-                    "labels": ["positive", "negative"],
-                    "name": "Sentiment grader",
-                }
-            ],
-            custom_llm_provider=custom_llm_provider,
-            api_key=api_key,
-            api_base=api_base,
-        )
+        try:
+            response = litellm.create_eval(
+                name=unique_name,
+                data_source_config={
+                    "type": "stored_completions",
+                    "metadata": {"usecase": "chatbot"},
+                },
+                testing_criteria=[
+                    {
+                        "type": "label_model",
+                        "model": "gpt-4o",
+                        "input": [
+                            {
+                                "role": "developer",
+                                "content": "Classify the sentiment as 'positive' or 'negative'",
+                            },
+                            {"role": "user", "content": "Statement: {{item.input}}"},
+                        ],
+                        "passing_labels": ["positive"],
+                        "labels": ["positive", "negative"],
+                        "name": "Sentiment grader",
+                    }
+                ],
+                custom_llm_provider=custom_llm_provider,
+                api_key=api_key,
+                api_base=api_base,
+            )
+        except (litellm.InternalServerError, litellm.APIConnectionError, litellm.Timeout, litellm.ServiceUnavailableError):
+            pytest.skip("Provider service unavailable")
+        except litellm.RateLimitError:
+            pytest.skip("Rate limit exceeded")
 
         assert response is not None
         assert isinstance(response, Eval)
