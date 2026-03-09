@@ -355,6 +355,22 @@ def test_oci_no_status_code():
             custom_llm_provider=custom_llm_provider,
         )
 
+def test_oci_exception_mapping_from_json_body():
+    """Tests that oci_status is derived from a parsed JSON error body when status_code is absent."""
+    import json
+    model = "oci/test-model"
+    custom_llm_provider = "oci"
+    body = json.dumps({"status": 429, "message": "TooManyRequests", "code": "TooManyRequests"})
+    original_exception = Exception(body)
+    # No status_code attribute set — forces JSON parsing path
+
+    with pytest.raises(litellm.RateLimitError):
+        exception_type(
+            model=model,
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+        )
+        
 class TestExtractAndRaiseLitellmException:
     """Tests for extract_and_raise_litellm_exception function"""
 
