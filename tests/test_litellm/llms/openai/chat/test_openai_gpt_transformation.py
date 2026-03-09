@@ -13,6 +13,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 
 
 class TestOpenAIGPTConfig:
@@ -324,3 +325,104 @@ class TestPromptCacheParams:
         )
         assert optional_params.get("prompt_cache_key") == "my-cache-key"
         assert optional_params.get("prompt_cache_retention") == "24h"
+
+
+class TestGPT5ReasoningEffortPreservation:
+    """Tests for GPT-5 reasoning_effort dict preservation for Responses API."""
+
+    def setup_method(self):
+        self.config = OpenAIGPT5Config()
+
+    def test_reasoning_effort_string_preserved(self):
+        """Test that reasoning_effort as string is preserved."""
+        non_default_params = {"reasoning_effort": "high"}
+        optional_params = {}
+        
+        self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-5.4",
+            drop_params=False,
+        )
+        
+        # String format should be preserved
+        assert non_default_params.get("reasoning_effort") == "high"
+
+    def test_reasoning_effort_dict_with_only_effort_normalized(self):
+        """Test that reasoning_effort dict with only 'effort' key is normalized to string."""
+        non_default_params = {"reasoning_effort": {"effort": "high"}}
+        optional_params = {}
+        
+        self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-5.4",
+            drop_params=False,
+        )
+        
+        # Dict with only 'effort' should be normalized to string
+        assert non_default_params.get("reasoning_effort") == "high"
+
+    def test_reasoning_effort_dict_with_summary_preserved(self):
+        """Test that reasoning_effort dict with 'summary' field is preserved for Responses API.
+        
+        Regression test for: User reported that summary field was being dropped when
+        routing to Responses API. The dict format with additional fields should be
+        preserved so it can be properly handled by the Responses API transformation.
+        """
+        non_default_params = {"reasoning_effort": {"effort": "high", "summary": "detailed"}}
+        optional_params = {}
+        
+        self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-5.4",
+            drop_params=False,
+        )
+        
+        # Dict with additional fields should be preserved
+        assert non_default_params.get("reasoning_effort") == {"effort": "high", "summary": "detailed"}
+        assert isinstance(non_default_params.get("reasoning_effort"), dict)
+        assert non_default_params["reasoning_effort"]["effort"] == "high"
+        assert non_default_params["reasoning_effort"]["summary"] == "detailed"
+
+    def test_reasoning_effort_dict_with_generate_summary_preserved(self):
+        """Test that reasoning_effort dict with 'generate_summary' field is preserved."""
+        non_default_params = {"reasoning_effort": {"effort": "medium", "generate_summary": "auto"}}
+        optional_params = {}
+        
+        self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-5.4",
+            drop_params=False,
+        )
+        
+        # Dict with additional fields should be preserved
+        assert non_default_params.get("reasoning_effort") == {"effort": "medium", "generate_summary": "auto"}
+        assert isinstance(non_default_params.get("reasoning_effort"), dict)
+
+    def test_reasoning_effort_dict_with_all_fields_preserved(self):
+        """Test that reasoning_effort dict with all fields is preserved."""
+        non_default_params = {
+            "reasoning_effort": {
+                "effort": "high",
+                "summary": "detailed",
+                "generate_summary": "concise"
+            }
+        }
+        optional_params = {}
+        
+        self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-5.4",
+            drop_params=False,
+        )
+        
+        # Dict with all fields should be preserved
+        reasoning = non_default_params.get("reasoning_effort")
+        assert isinstance(reasoning, dict)
+        assert reasoning["effort"] == "high"
+        assert reasoning["summary"] == "detailed"
+        assert reasoning["generate_summary"] == "concise"

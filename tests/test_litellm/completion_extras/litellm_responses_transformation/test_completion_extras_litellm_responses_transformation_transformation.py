@@ -1778,3 +1778,35 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
     )
 
     print("✓ Parallel tool calls with split argument deltas stream correctly end-to-end")
+
+
+def test_map_optional_params_preserves_reasoning_summary():
+    """Test that reasoning_effort dict with summary field is preserved.
+    
+    Regression test for: User reported that summary field was being dropped
+    when routing to Responses API. The dict format should be fully preserved.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    optional_params = {
+        "stream": False,
+        "tools": [{"type": "function", "function": {"name": "test_tool"}}],
+        "tool_choice": "auto",
+        "reasoning_effort": {"effort": "high", "summary": "detailed"},
+    }
+
+    responses_api_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        optional_params, responses_api_request
+    )
+
+    # Verify reasoning_effort dict with summary was fully preserved
+    assert "reasoning" in responses_api_request
+    assert responses_api_request["reasoning"] == {"effort": "high", "summary": "detailed"}
+    assert responses_api_request["reasoning"]["effort"] == "high"
+    assert responses_api_request["reasoning"]["summary"] == "detailed"
