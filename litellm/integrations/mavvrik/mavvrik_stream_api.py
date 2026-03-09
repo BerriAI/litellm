@@ -4,7 +4,7 @@ Implements the 3-step upload pattern used by the k8s-appliance:
 
   Step 1 — GET signed URL from Mavvrik API
       GET {api_endpoint}/{tenant}/ai-account/agent/{instance_id}/upload-url
-          ?name={interval}&provider=k8s&type=metrics
+          ?name={interval}&type=metrics
       Header: x-api-key: {api_key}
       Response: { "url": "https://storage.googleapis.com/..." }
 
@@ -198,7 +198,7 @@ class MavvrikStreamer:
     def _get_signed_url(self, date_str: str) -> str:
         path = UPLOAD_URL_PATH.format(tenant=self.tenant, instance_id=self.instance_id)
         url = f"{self.api_endpoint}{path}"
-        params = {"name": date_str, "provider": "k8s", "type": "metrics"}
+        params = {"name": date_str, "type": "metrics"}
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
 
         last_exc: Exception = Exception("unknown error")
