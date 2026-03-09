@@ -59,11 +59,11 @@ class SidecarClient:
         self._healthy = await self._check_health()
         if self._healthy:
             verbose_proxy_logger.info(
-                f"Sidecar client connected to {self.sidecar_url}"
+                "Sidecar client connected to %s", self.sidecar_url
             )
         else:
             verbose_proxy_logger.warning(
-                f"Sidecar not available at {self.sidecar_url}, will use fallback"
+                "Sidecar not available at %s, will use fallback", self.sidecar_url
             )
 
     async def _start_sidecar(self):
@@ -74,8 +74,8 @@ class SidecarClient:
             self._process = subprocess.Popen(
                 [self.sidecar_binary],
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
             for _ in range(50):
                 await asyncio.sleep(0.1)

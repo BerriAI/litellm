@@ -4,8 +4,14 @@ OpenAI-like chat completion handler
 For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 """
 
-import orjson
+import json
 from typing import Any, Callable, Optional, Union
+
+try:
+    import orjson
+    _has_orjson = True
+except ImportError:
+    _has_orjson = False
 
 import httpx
 
@@ -139,7 +145,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             client=client,
             api_base=api_base,
             headers=headers,
-            data=orjson.dumps(data),
+            data=(orjson.dumps(data) if _has_orjson else json.dumps(data).encode()),
             model=model,
             messages=messages,
             logging_obj=logging_obj,
@@ -185,7 +191,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
 
         try:
             response = await client.post(
-                api_base, headers=headers, data=orjson.dumps(data), timeout=timeout
+                api_base, headers=headers, data=(orjson.dumps(data) if _has_orjson else json.dumps(data).encode()), timeout=timeout
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -350,7 +356,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     ),
                     api_base=api_base,
                     headers=headers,
-                    data=orjson.dumps(data),
+                    data=(orjson.dumps(data) if _has_orjson else json.dumps(data).encode()),
                     model=model,
                     messages=messages,
                     logging_obj=logging_obj,
@@ -370,7 +376,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     client = HTTPHandler(timeout=timeout)  # type: ignore
                 try:
                     response = client.post(
-                        url=api_base, headers=headers, data=orjson.dumps(data)
+                        url=api_base, headers=headers, data=(orjson.dumps(data) if _has_orjson else json.dumps(data).encode())
                     )
                     response.raise_for_status()
 

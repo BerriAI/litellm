@@ -33,18 +33,18 @@ impl Sidecar {
     }
 
     fn get_or_create_client(&self, host: &str) -> Client {
-        if let Some(client) = self.pools.get(host) {
-            return client.clone();
-        }
-        let client = Client::builder()
-            .pool_max_idle_per_host(200)
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .tcp_keepalive(std::time::Duration::from_secs(60))
-            .tcp_nodelay(true)
-            .build()
-            .expect("Failed to build reqwest client");
-        self.pools.insert(host.to_string(), client.clone());
-        client
+        self.pools
+            .entry(host.to_string())
+            .or_insert_with(|| {
+                Client::builder()
+                    .pool_max_idle_per_host(200)
+                    .pool_idle_timeout(std::time::Duration::from_secs(90))
+                    .tcp_keepalive(std::time::Duration::from_secs(60))
+                    .tcp_nodelay(true)
+                    .build()
+                    .expect("Failed to build reqwest client")
+            })
+            .clone()
     }
 }
 
@@ -117,6 +117,13 @@ async fn handle_request(
         .map(|v| v == "true")
         .unwrap_or(false);
 
+    let method_str = req
+        .headers()
+        .get("x-litellm-method")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("POST")
+        .to_uppercase();
+
     let content_type = req
         .headers()
         .get("content-type")
@@ -157,11 +164,21 @@ async fn handle_request(
     let client = sidecar.get_or_create_client(&host);
     let full_url = format!("{}{}", provider_url.trim_end_matches('/'), request_path);
 
-    let mut req_builder = client
-        .post(&full_url)
+    let mut req_builder = match method_str.as_str() {
+        "GET" => client.get(&full_url),
+        "PUT" => client.put(&full_url),
+        "PATCH" => client.patch(&full_url),
+        "DELETE" => client.delete(&full_url),
+        _ => client.post(&full_url),
+    };
+
+    req_builder = req_builder
         .header("content-type", &content_type)
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .body(body_bytes.to_vec());
+        .timeout(std::time::Duration::from_secs(timeout_secs));
+
+    if method_str != "GET" {
+        req_builder = req_builder.body(body_bytes.to_vec());
+    }
 
     if !api_key.is_empty() {
         req_builder = req_builder.header("authorization", format!("Bearer {}", api_key));
@@ -197,7 +214,13 @@ async fn handle_request(
 
     if is_stream {
         let stream = provider_response.bytes_stream().map(|result| {
-            Ok::<_, Infallible>(Frame::data(result.unwrap_or_default()))
+            match result {
+                Ok(bytes) => Ok::<_, Infallible>(Frame::data(bytes)),
+                Err(e) => {
+                    tracing::warn!("Stream chunk error: {}", e);
+                    Ok(Frame::data(Bytes::new()))
+                }
+            }
         });
         let elapsed = start.elapsed().as_micros() as u64;
         sidecar.total_latency_us.fetch_add(elapsed, Ordering::Relaxed);

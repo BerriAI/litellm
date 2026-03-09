@@ -1,6 +1,11 @@
 import json
-import orjson
 import ssl
+
+try:
+    import orjson
+    _has_orjson = True
+except ImportError:
+    _has_orjson = False
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -181,7 +186,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else orjson.dumps(data)
+                        else (orjson.dumps(data) if _has_orjson else json.dumps(data).encode())
                     ),
                     timeout=timeout,
                     stream=stream,
@@ -241,7 +246,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else orjson.dumps(data)
+                        else (orjson.dumps(data) if _has_orjson else json.dumps(data).encode())
                     ),
                     timeout=timeout,
                     stream=stream,

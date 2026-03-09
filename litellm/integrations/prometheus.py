@@ -887,7 +887,7 @@ class PrometheusLogger(CustomLogger):
         from litellm.types.utils import StandardLoggingPayload
 
         verbose_logger.debug(
-            "prometheus Logging - Enters success logging function"
+            f"prometheus Logging - Enters success logging function for kwargs {kwargs}"
         )
 
         # unpack kwargs
@@ -943,10 +943,9 @@ class PrometheusLogger(CustomLogger):
         else:
             _tags = []
 
-        if litellm.set_verbose:
-            print_verbose(
-                f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}"
-            )
+        print_verbose(
+            f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
+        )
 
         enum_values = UserAPIKeyLabelValues(
             end_user=end_user_id,
@@ -3057,13 +3056,15 @@ def prometheus_label_factory(
 
     Ensures end_user param is not sent to prometheus if it is not supported.
     """
-    enum_dict = enum_values.get_label_dict()
+    # Extract dictionary from Pydantic object
+    enum_dict = enum_values.model_dump()
 
-    supported_set = frozenset(supported_enum_labels) if not isinstance(supported_enum_labels, (set, frozenset)) else supported_enum_labels
+    # Filter supported labels and sanitize values to prevent breaking
+    # the Prometheus text format (e.g. U+2028 Line Separator in label values)
     filtered_labels = {
         label: _sanitize_prometheus_label_value(value)
         for label, value in enum_dict.items()
-        if label in supported_set
+        if label in supported_enum_labels
     }
 
     if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
@@ -3078,14 +3079,14 @@ def prometheus_label_factory(
         for key, value in enum_values.custom_metadata_labels.items():
             # check sanitized key
             sanitized_key = _sanitize_prometheus_label_name(key)
-            if sanitized_key in supported_set:
+            if sanitized_key in supported_enum_labels:
                 filtered_labels[sanitized_key] = _sanitize_prometheus_label_value(value)
 
     # Add custom tags if configured
     if enum_values.tags is not None:
         custom_tag_labels = get_custom_labels_from_tags(enum_values.tags)
         for key, value in custom_tag_labels.items():
-            if key in supported_set:
+            if key in supported_enum_labels:
                 filtered_labels[key] = _sanitize_prometheus_label_value(value)
 
     for label in supported_enum_labels:

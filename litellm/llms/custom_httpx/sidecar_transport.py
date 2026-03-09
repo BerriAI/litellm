@@ -27,7 +27,7 @@ class SidecarResponseStream(httpx.AsyncByteStream):
             yield chunk
 
     async def aclose(self) -> None:
-        self._response.close()
+        self._response.release()
 
 
 class LiteLLMSidecarTransport(httpx.AsyncBaseTransport):
@@ -94,11 +94,17 @@ class LiteLLMSidecarTransport(httpx.AsyncBaseTransport):
             "Content-Type": request.headers.get("content-type", "application/json"),
         }
 
-        # Copy provider-specific headers the sidecar should forward
-        for key in ("x-api-key", "anthropic-version", "x-goog-api-key"):
-            val = request.headers.get(key)
-            if val:
-                headers[f"X-LiteLLM-Fwd-{key}"] = val
+        _skip_headers = frozenset({
+            "host", "content-length", "transfer-encoding", "connection",
+            "authorization", "content-type", "accept", "user-agent",
+            "accept-encoding",
+        })
+        for key, val in request.headers.items():
+            lower = key.lower()
+            if lower not in _skip_headers and not lower.startswith("x-litellm-"):
+                headers[f"X-LiteLLM-Fwd-{lower}"] = val
+
+        headers["X-LiteLLM-Method"] = str(request.method)
 
         session = self._get_session()
         resp = await session.post(

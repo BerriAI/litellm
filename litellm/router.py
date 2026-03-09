@@ -1314,30 +1314,24 @@ class Router:
 
     def print_deployment(self, deployment: dict):
         """
-        Returns a lightweight dict with model_name + litellm_params (api key masked).
+        returns a copy of the deployment with the api key masked
 
-        Only includes model_name and litellm_params to avoid deep-copying
-        the full deployment dict on every log call.
+        Only returns 2 characters of the api key and masks the rest with * (10 *).
         """
         try:
-            litellm_params: dict = deployment.get("litellm_params", {})
+            _deployment_copy = copy.deepcopy(deployment)
+            litellm_params: dict = _deployment_copy["litellm_params"]
+
             if litellm.redact_user_api_key_info:
                 masker = SensitiveDataMasker(visible_prefix=2, visible_suffix=0)
-                masked_params = masker.mask_dict(dict(litellm_params))
-            else:
-                masked_params = dict(litellm_params)
-                if "api_key" in masked_params:
-                    api_key = masked_params["api_key"]
-                    masked_params["api_key"] = (
-                        api_key[:2] + "*" * 10 if api_key else api_key
-                    )
-            return {
-                "model_name": deployment.get("model_name"),
-                "litellm_params": masked_params,
-            }
+                _deployment_copy["litellm_params"] = masker.mask_dict(litellm_params)
+            elif "api_key" in litellm_params:
+                litellm_params["api_key"] = litellm_params["api_key"][:2] + "*" * 10
+
+            return _deployment_copy
         except Exception as e:
             verbose_router_logger.debug(
-                "Error occurred while printing deployment - %s", str(e)
+                f"Error occurred while printing deployment - {str(e)}"
             )
             raise e
 
@@ -8931,13 +8925,9 @@ class Router:
                     parent_otel_span=parent_otel_span,
                 )
                 raise exception
-            if verbose_router_logger.isEnabledFor(logging.INFO):
-                verbose_router_logger.info(
-                    "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
-                    model,
-                    self.print_deployment(deployment),
-                    model,
-                )
+            verbose_router_logger.info(
+                f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
+            )
 
             end_time = time.time()
             _duration = end_time - start_time
@@ -9087,12 +9077,9 @@ class Router:
                 )
                 raise exception
 
-            if verbose_router_logger.isEnabledFor(logging.INFO):
-                verbose_router_logger.info(
-                    "async_get_available_deployment_for_pass_through model: %s, selected deployment: %s",
-                    model,
-                    self.print_deployment(deployment),
-                )
+            verbose_router_logger.info(
+                f"async_get_available_deployment_for_pass_through model: {model}, selected deployment: {self.print_deployment(deployment)}"
+            )
 
             end_time = time.perf_counter()
             _duration = end_time - start_time
@@ -9281,13 +9268,9 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
             )
-        if verbose_router_logger.isEnabledFor(logging.INFO):
-            verbose_router_logger.info(
-                "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
-                model,
-                self.print_deployment(deployment),
-                model,
-            )
+        verbose_router_logger.info(
+            f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
+        )
         return deployment
 
     def get_available_deployment_for_pass_through(
@@ -9448,12 +9431,9 @@ class Router:
                 cooldown_list=_cooldown_list,
             )
 
-        if verbose_router_logger.isEnabledFor(logging.INFO):
-            verbose_router_logger.info(
-                "get_available_deployment_for_pass_through model: %s, selected deployment: %s",
-                model,
-                self.print_deployment(deployment),
-            )
+        verbose_router_logger.info(
+            f"get_available_deployment_for_pass_through model: {model}, selected deployment: {self.print_deployment(deployment)}"
+        )
         return deployment
 
     def _filter_cooldown_deployments(
