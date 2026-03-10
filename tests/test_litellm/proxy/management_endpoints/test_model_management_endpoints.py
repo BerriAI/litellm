@@ -523,6 +523,33 @@ class TestBuildTeamModelLimitUpdates:
 class TestTeamModelUpdate:
     """Test team model update handles team_id consistently with model creation"""
 
+    def test_get_public_model_name_ignores_internal_unique_model_name(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+
+        db_model = Deployment(
+            model_name="model_name_team_123_internal_uuid",
+            litellm_params=LiteLLM_Params(model="test_model"),
+            model_info=ModelInfo(
+                team_id="team_123",
+                team_public_model_name="public-team-model",
+            ),
+        )
+
+        # Caller accidentally sends internal unique model_name in patch body.
+        patch_data = updateDeployment(
+            model_name="model_name_team_123_internal_uuid",
+            model_info=ModelInfo(team_id="team_123"),
+        )
+
+        public_name = _get_public_model_name(
+            patch_data=patch_data,
+            db_model=db_model,
+        )
+
+        assert public_name == "public-team-model"
+
     @pytest.mark.asyncio
     async def test_patch_model_with_team_id_creates_proper_setup(self):
         """Test PATCH with team_id creates unique model name, alias, and team membership like POST does"""

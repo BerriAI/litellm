@@ -53,7 +53,11 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
+from litellm.proxy.auth.auth_checks import (
+    ExperimentalUIJWTToken,
+    get_team_object,
+    get_user_object,
+)
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1237,17 +1241,29 @@ async def cli_sso_callback(
         team_details: List[Dict[str, Any]] = []
         try:
             if teams:
-                prisma_teams = await prisma_client.db.litellm_teamtable.find_many(
-                    where={"team_id": {"in": teams}}
-                )
-                for team_row in prisma_teams:
-                    team_dict = team_row.model_dump()
-                    team_details.append(
-                        {
-                            "team_id": team_dict.get("team_id"),
-                            "team_alias": team_dict.get("team_alias"),
-                        }
-                    )
+                for team_id in teams:
+                    try:
+                        team_obj = await get_team_object(
+                            team_id=team_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                        team_details.append(
+                            {
+                                "team_id": team_obj.team_id,
+                                "team_alias": team_obj.team_alias,
+                            }
+                        )
+                    except Exception:
+                        # If a team lookup fails, preserve the team_id-only
+                        # representation without failing SSO.
+                        team_details.append(
+                            {
+                                "team_id": team_id,
+                                "team_alias": None,
+                            }
+                        )
         except Exception as e:
             # If anything goes wrong here, fall back gracefully without
             # impacting the SSO flow.

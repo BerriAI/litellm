@@ -321,13 +321,15 @@ async def _build_team_model_limit_updates(
     prisma_client: PrismaClient,
     model_info: Optional[ModelInfo],
     old_public_model_name: Optional[str] = None,
+    team_table_client: Optional[Any] = None,
 ) -> Dict[str, Dict[str, int]]:
     """
     Return merged team-level model_rpm_limit/model_tpm_limit payload for /team/update.
 
     This preserves existing team model limits and only mutates the target model entry.
     """
-    team_row = await prisma_client.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    _team_table_client = team_table_client or prisma_client.db.litellm_teamtable
+    team_row = await _team_table_client.find_unique(where={"team_id": team_id})
     if team_row is None:
         return {}
 
@@ -394,6 +396,64 @@ async def _build_team_model_limit_updates(
     return team_model_limit_updates
 
 
+async def _apply_team_model_limit_updates_transactionally(
+    team_id: str,
+    public_model_name: str,
+    prisma_client: PrismaClient,
+    model_info: Optional[ModelInfo],
+    old_public_model_name: Optional[str] = None,
+) -> Dict[str, Dict[str, int]]:
+    """
+    Apply team model limit updates in a single DB transaction.
+
+    Prevents read-modify-write races when multiple requests update
+    model_rpm_limit/model_tpm_limit for the same team concurrently.
+    """
+    async def _update_team_table_metadata(team_table_client: Any) -> Dict[str, Dict[str, int]]:
+        team_model_limit_updates = await _build_team_model_limit_updates(
+            team_id=team_id,
+            public_model_name=public_model_name,
+            prisma_client=prisma_client,
+            model_info=model_info,
+            old_public_model_name=old_public_model_name,
+            team_table_client=team_table_client,
+        )
+
+        if not team_model_limit_updates:
+            return {}
+
+        team_row = await team_table_client.find_unique(where={"team_id": team_id})
+        if team_row is None:
+            return {}
+
+        team_metadata: Dict[str, Any] = (
+            team_row.metadata if isinstance(team_row.metadata, dict) else {}
+        )
+        updated_metadata: Dict[str, Any] = dict(team_metadata)
+        if "model_rpm_limit" in team_model_limit_updates:
+            updated_metadata["model_rpm_limit"] = team_model_limit_updates[
+                "model_rpm_limit"
+            ]
+        if "model_tpm_limit" in team_model_limit_updates:
+            updated_metadata["model_tpm_limit"] = team_model_limit_updates[
+                "model_tpm_limit"
+            ]
+
+        await team_table_client.update(
+            where={"team_id": team_id},
+            data={"metadata": updated_metadata},
+        )
+        return team_model_limit_updates
+
+    tx_fn = getattr(cast(Any, prisma_client.db), "tx", None)
+    if callable(tx_fn):
+        async with cast(Any, tx_fn)() as tx:
+            return await _update_team_table_metadata(tx.litellm_teamtable)
+
+    # Fallback path used by lightweight/mocked Prisma clients in unit tests.
+    return await _update_team_table_metadata(prisma_client.db.litellm_teamtable)
+
+
 async def _add_team_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
@@ -425,7 +485,7 @@ async def _add_team_model_to_db(
     )
 
     ## CREATE MODEL ALIAS IN DB ##
-    team_model_limit_updates = await _build_team_model_limit_updates(
+    await _apply_team_model_limit_updates_transactionally(
         team_id=_team_id,
         public_model_name=original_model_name,
         prisma_client=prisma_client,
@@ -436,8 +496,6 @@ async def _add_team_model_to_db(
         data=UpdateTeamRequest(
             team_id=_team_id,
             model_aliases={original_model_name: unique_model_name},
-            model_rpm_limit=team_model_limit_updates.get("model_rpm_limit"),
-            model_tpm_limit=team_model_limit_updates.get("model_tpm_limit"),
         ),
         user_api_key_dict=user_api_key_dict,
         http_request=Request(scope={"type": "http"}),
@@ -527,7 +585,10 @@ def _get_public_model_name(
     db_model: Deployment,
 ) -> str:
     """Determine the public model name from patch or existing model."""
-    if patch_data.model_name:
+    # patch_data.model_name can be the internal unique DB model_name for
+    # team models. Treat it as a public alias only when it differs from
+    # the stored internal model_name.
+    if patch_data.model_name and patch_data.model_name != db_model.model_name:
         return patch_data.model_name
     
     if db_model.model_info and db_model.model_info.team_public_model_name:
@@ -547,7 +608,7 @@ async def _setup_new_team_model_assignment(
     unique_model_name = f"model_name_{team_id}_{uuid.uuid4()}"
     patch_data.model_name = unique_model_name
     
-    team_model_limit_updates = await _build_team_model_limit_updates(
+    await _apply_team_model_limit_updates_transactionally(
         team_id=team_id,
         public_model_name=public_model_name,
         prisma_client=prisma_client,
@@ -558,8 +619,6 @@ async def _setup_new_team_model_assignment(
         data=UpdateTeamRequest(
             team_id=team_id,
             model_aliases={public_model_name: unique_model_name},
-            model_rpm_limit=team_model_limit_updates.get("model_rpm_limit"),
-            model_tpm_limit=team_model_limit_updates.get("model_tpm_limit"),
         ),
         user_api_key_dict=user_api_key_dict,
         http_request=Request(scope={"type": "http"}),
@@ -590,7 +649,7 @@ async def _update_existing_team_model_assignment(
         else None
     )
     
-    team_model_limit_updates = await _build_team_model_limit_updates(
+    await _apply_team_model_limit_updates_transactionally(
         team_id=team_id,
         public_model_name=public_model_name,
         old_public_model_name=old_public_name,
@@ -598,10 +657,7 @@ async def _update_existing_team_model_assignment(
         model_info=patch_data.model_info,
     )
 
-    update_team_request_kwargs: Dict[str, Any] = {
-        "team_id": team_id,
-        **team_model_limit_updates,
-    }
+    update_team_request_kwargs: Dict[str, Any] = {"team_id": team_id}
 
     # Update alias only if public name changed
     if old_public_name and public_model_name != old_public_name:
@@ -1211,26 +1267,19 @@ async def update_model(
                 and model_params.model_info.team_id is not None
             ):
                 team_id_for_limit_update = model_params.model_info.team_id
-            if model_params.model_name is not None:
+            if (
+                model_params.model_name is not None
+                and model_params.model_name != deployment.model_name
+            ):
                 public_model_name_for_limit_update = model_params.model_name
 
             if team_id_for_limit_update is not None and model_params.model_info is not None:
-                team_model_limit_updates = await _build_team_model_limit_updates(
+                await _apply_team_model_limit_updates_transactionally(
                     team_id=team_id_for_limit_update,
                     public_model_name=public_model_name_for_limit_update,
                     prisma_client=prisma_client,
                     model_info=model_params.model_info,
                 )
-                if team_model_limit_updates:
-                    await update_team(
-                        data=UpdateTeamRequest(
-                            team_id=team_id_for_limit_update,
-                            model_rpm_limit=team_model_limit_updates.get("model_rpm_limit"),
-                            model_tpm_limit=team_model_limit_updates.get("model_tpm_limit"),
-                        ),
-                        user_api_key_dict=user_api_key_dict,
-                        http_request=Request(scope={"type": "http"}),
-                    )
 
             _new_litellm_params_dict = model_params.litellm_params.dict(
                 exclude_none=True
