@@ -13,7 +13,7 @@ export interface OpenAPIRegistryEntry {
   description: string;
   icon_url: string;
   spec_url: string;
-  oauth: {
+  oauth?: {
     authorization_url: string;
     token_url: string;
     pkce: boolean;

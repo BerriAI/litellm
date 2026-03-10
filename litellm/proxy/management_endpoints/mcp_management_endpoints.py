@@ -15,6 +15,7 @@ Endpoints here:
 
 """
 
+import functools
 import importlib
 import json
 import os
@@ -1370,6 +1371,7 @@ if MCP_AVAILABLE:
         "openapi_registry.json",
     )
 
+    @functools.lru_cache(maxsize=1)
     def _load_openapi_registry() -> Dict[str, Any]:
         try:
             with open(_OPENAPI_REGISTRY_PATH, "r") as f:

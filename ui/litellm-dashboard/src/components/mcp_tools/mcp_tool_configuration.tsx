@@ -152,6 +152,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   const previousToolsRef = useRef<ToolEntry[]>([]);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
   const hasInitializedRef = useRef(false);
+  const previousSuggestedToolNamesRef = useRef<string>("");
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   const { tools, isLoadingTools, toolsError, canFetchTools } = useTestMCPConnection({
@@ -222,6 +223,15 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     const currentToolNames = tools.map((tool) => tool.name).sort().join(",");
     const previousToolNames = previousToolsRef.current.map((tool) => tool.name).sort().join(",");
     const toolsListChanged = currentToolNames !== previousToolNames;
+
+    // Reset initialization when a new preset is selected (suggestedTools fingerprint changes)
+    const currentSuggestedNames = suggestedTools.map((t) => t.name).sort().join(",");
+    if (currentSuggestedNames !== previousSuggestedToolNamesRef.current) {
+      previousSuggestedToolNamesRef.current = currentSuggestedNames;
+      if (currentSuggestedNames !== "") {
+        hasInitializedRef.current = false;
+      }
+    }
 
     if (tools.length > 0 && toolsListChanged) {
       const availableToolNames = tools.map((tool) => tool.name);
