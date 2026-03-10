@@ -35,6 +35,9 @@ from litellm.litellm_core_utils.litellm_logging import (
     use_custom_pricing_for_model,
 )
 from litellm.litellm_core_utils.litellm_logging import CustomLogger
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+    AnthropicPassthroughLoggingHandler,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -285,10 +288,8 @@ class TestRouterMetadataPropagation:
 
     def test_responses_api_metadata_for_callbacks_gets_model_info(self):
         """
-        In responses/main.py, metadata_for_callbacks should resolve to
-        litellm_metadata (which has model_info) when metadata param is None.
-
-        This simulates: metadata_for_callbacks = metadata or kwargs.get("litellm_metadata") or {}
+        In responses/main.py, metadata_for_callbacks should merge
+        litellm_metadata (which has model_info) with explicit metadata.
         """
         router = _make_router_with_custom_pricing("openai/gpt-4o")
         deployment = router.model_list[0]
@@ -300,28 +301,24 @@ class TestRouterMetadataPropagation:
             function_name="_ageneric_api_call_with_fallbacks",
         )
 
-        # Simulate responses/main.py line 733
-        metadata = None  # responses() call with no explicit metadata
-        metadata_for_callbacks = (
-            metadata or kwargs.get("litellm_metadata") or {}
-        )
+        metadata = {"user_field": "present"}
+        metadata_for_callbacks = dict(kwargs.get("litellm_metadata") or {})
+        metadata_for_callbacks.update(metadata)
 
-        # This should contain model_info with custom pricing
         model_info = metadata_for_callbacks.get("model_info", {})
         assert model_info.get("input_cost_per_token") == CUSTOM_INPUT_COST, (
             "metadata_for_callbacks should contain model_info with custom pricing "
-            "when metadata param is None"
+            "when explicit metadata is also passed"
         )
+        assert metadata_for_callbacks["user_field"] == "present"
 
-        # use_custom_pricing_for_model should return True
         litellm_params = {"metadata": metadata_for_callbacks}
         assert use_custom_pricing_for_model(litellm_params) is True
 
     def test_messages_api_metadata_resolves_via_litellm_metadata(self):
         """
-        For /v1/messages, the handler resolves metadata from litellm_metadata
-        via the fallthrough pattern: kwargs.get("metadata") or kwargs.get("litellm_metadata").
-        This ensures model_info with custom pricing reaches the logging object.
+        For /v1/messages, the handler should merge litellm_metadata with explicit
+        metadata so model_info with custom pricing survives.
         """
         router = _make_router_with_custom_pricing("anthropic/claude-sonnet-4-20250514")
         deployment = router.model_list[0]
@@ -333,19 +330,13 @@ class TestRouterMetadataPropagation:
             function_name="_ageneric_api_call_with_fallbacks",
         )
 
-        # Simulate the fixed llm_http_handler.py line 1886:
-        # metadata = kwargs.get("metadata") or kwargs.get("litellm_metadata") or {}
-        metadata_from_handler = (
-            kwargs.get("metadata") or kwargs.get("litellm_metadata") or {}
-        )
+        kwargs["metadata"] = {"user_field": "present"}
+        metadata_from_handler = dict(kwargs.get("litellm_metadata") or {})
+        metadata_from_handler.update(kwargs.get("metadata") or {})
         litellm_params = {"metadata": metadata_from_handler}
 
-        # With the fix, model_info with custom pricing is now visible
-        result = use_custom_pricing_for_model(litellm_params)
-        assert result is True, (
-            "After fix: use_custom_pricing_for_model should return True for "
-            "/v1/messages path because metadata falls through to litellm_metadata"
-        )
+        assert metadata_from_handler["user_field"] == "present"
+        assert use_custom_pricing_for_model(litellm_params) is True
 
     def test_use_custom_pricing_detects_top_level_model_info(self):
         """Custom pricing detection should work when model_info is top-level."""
@@ -581,6 +572,52 @@ class TestAnthropicMessagesCustomPricingCost:
             )
         finally:
             litellm.callbacks = []
+
+
+class TestAnthropicPassthroughLoggingPayload:
+    def test_metadata_merge_does_not_overwrite_existing_litellm_params(self):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {
+                "metadata": {
+                    "model_info": {
+                        "id": DEPLOYMENT_MODEL_ID,
+                        "input_cost_per_token": CUSTOM_INPUT_COST,
+                        "output_cost_per_token": CUSTOM_OUTPUT_COST,
+                    },
+                    "new_field": "from-logging-obj",
+                },
+                "stream_response": {"should": "not-overwrite"},
+            },
+        }
+        logging_obj.litellm_call_id = "call-test"
+
+        model_response = litellm.ModelResponse()
+        model_response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)  # type: ignore
+
+        with patch("litellm.completion_cost", return_value=123.0):
+            kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+                litellm_model_response=model_response,
+                model="claude-sonnet-4-20250514",
+                kwargs={
+                    "litellm_params": {
+                        "metadata": {"existing_field": "preserved"},
+                        "stream_response": {"keep": "existing"},
+                    }
+                },
+                start_time=time.time(),  # type: ignore[arg-type]
+                end_time=time.time(),  # type: ignore[arg-type]
+                logging_obj=logging_obj,
+            )
+
+        assert kwargs["litellm_params"]["metadata"]["existing_field"] == "preserved"
+        assert kwargs["litellm_params"]["metadata"]["new_field"] == "from-logging-obj"
+        assert (
+            kwargs["litellm_params"]["metadata"]["model_info"]["id"]
+            == DEPLOYMENT_MODEL_ID
+        )
+        assert kwargs["litellm_params"]["stream_response"] == {"keep": "existing"}
 
     @pytest.mark.asyncio
     async def test_streaming_messages_uses_custom_pricing(self):

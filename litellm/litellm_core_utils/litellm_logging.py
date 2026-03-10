@@ -1648,25 +1648,12 @@ class Logging(LiteLLMLoggingBaseClass):
             # handlers like Gemini/Vertex which call completion_cost directly)
             pass
         else:
-            # Extract router_model_id from metadata so that
-            # custom-pricing deployments resolve to the correct cost
-            # even when the result object lacks _hidden_params
-            # (e.g. Anthropic messages API responses).
-            _lp_meta = (
-                self.model_call_details
-                .get("litellm_params", {})
-                .get("metadata", {}) or {}
-            )
-            _lp = self.model_call_details.get("litellm_params", {}) or {}
-            _mi = (
-                _lp_meta.get("model_info")
-                or _lp.get("model_info")
-                or (_lp.get("litellm_metadata", {}) or {}).get("model_info")
-                or {}
+            model_info = _get_model_info_from_litellm_params(
+                self.model_call_details.get("litellm_params", {}) or {}
             )
             self.model_call_details["response_cost"] = self._response_cost_calculator(
                 result=logging_result,
-                router_model_id=_mi.get("id"),
+                router_model_id=model_info.get("id"),
             )
 
         self.model_call_details[
@@ -2486,24 +2473,13 @@ class Logging(LiteLLMLoggingBaseClass):
                         model_call_details=self.model_call_details
                     )
                     # base_model defaults to None if not set on model_info
-                    # Extract router_model_id from metadata for
-                    # custom-pricing deployments (e.g. /v1/messages)
-                    _lp_meta_s = (
-                        self.model_call_details
-                        .get("litellm_params", {})
-                        .get("metadata", {}) or {}
-                    )
-                    _lp_s = self.model_call_details.get("litellm_params", {}) or {}
-                    _mi_s = (
-                        _lp_meta_s.get("model_info")
-                        or _lp_s.get("model_info")
-                        or (_lp_s.get("litellm_metadata", {}) or {}).get("model_info")
-                        or {}
+                    model_info = _get_model_info_from_litellm_params(
+                        self.model_call_details.get("litellm_params", {}) or {}
                     )
                     self.model_call_details["response_cost"] = (
                         self._response_cost_calculator(
                             result=complete_streaming_response,
-                            router_model_id=_mi_s.get("id"),
+                            router_model_id=model_info.get("id"),
                         )
                     )
 
@@ -4463,6 +4439,21 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
     return {}
 
 
+def _get_model_info_from_litellm_params(
+    litellm_params: Optional[dict],
+) -> Dict[str, Any]:
+    if litellm_params is None:
+        return {}
+
+    metadata = litellm_params.get("metadata", {}) or {}
+    return (
+        metadata.get("model_info")
+        or litellm_params.get("model_info")
+        or (litellm_params.get("litellm_metadata", {}) or {}).get("model_info")
+        or {}
+    )
+
+
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     """
     Check if the model uses custom pricing
@@ -4479,19 +4470,12 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
             return True
 
     # Check model_info in all supported locations.
-    metadata: dict = litellm_params.get("metadata", {}) or {}
-    model_info_locations = [
-        metadata.get("model_info", {}) or {},
-        litellm_params.get("model_info", {}) or {},
-        (litellm_params.get("litellm_metadata", {}) or {}).get("model_info", {}) or {},
-    ]
-
-    for model_info in model_info_locations:
-        if model_info:
-            matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
-            for key in matching_keys:
-                if model_info.get(key) is not None:
-                    return True
+    model_info = _get_model_info_from_litellm_params(litellm_params)
+    if model_info:
+        matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
+        for key in matching_keys:
+            if model_info.get(key) is not None:
+                return True
 
     return False
 
