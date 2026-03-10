@@ -31,6 +31,20 @@ _request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.Contex
 )
 
 
+def _build_request_headers(
+    headers: Dict[str, str],
+    extra_headers: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    """Merge baked-in headers, extra_headers, and BYOK auth override."""
+    merged: Dict[str, str] = dict(headers)
+    if extra_headers:
+        merged.update(extra_headers)
+    override_auth = _request_auth_header.get()
+    if override_auth:
+        merged["Authorization"] = override_auth
+    return merged
+
+
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
     if param_value is None:
@@ -70,6 +84,7 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
         if "no running event loop" not in str(e).lower():
             raise
     return asyncio.run(load_openapi_spec_async(filepath))
+
 
 async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
@@ -115,7 +130,7 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
         scheme = spec.get("schemes", ["https"])[0]
         base_path = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
-    
+
     # Fallback: derive base URL from spec_path if it's a URL
     if spec_path and (spec_path.startswith("http://") or spec_path.startswith("https://")):
         for suffix in ["/openapi.json", "/openapi.yaml", "/swagger.json", "/swagger.yaml"]:
@@ -123,12 +138,12 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
                 base_url = spec_path[:-len(suffix)]
                 verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
                 return base_url
-        
+
         if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
             base_url = "/".join(spec_path.split("/")[:-1])
             verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
             return base_url
-    
+
     return ""
 
 
@@ -296,14 +311,9 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
-        # Allow per-request auth override (e.g. BYOK credential set via ContextVar).
-        # The ContextVar holds the full Authorization header value, including the
-        # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
-        # server.py based on the server's configured auth_type.
-        effective_headers = dict(headers)
-        override_auth = _request_auth_header.get()
-        if override_auth:
-            effective_headers["Authorization"] = override_auth
+        # Pop extra_headers before processing API parameters.
+        extra_headers: Optional[Dict[str, str]] = kwargs.pop("_extra_headers", None)
+        merged_headers = _build_request_headers(headers, extra_headers)
 
         # Build URL from base_url and path
         url = base_url + path
@@ -357,20 +367,20 @@ def create_tool_function(
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
         if original_method == "get":
-            response = await client.get(url, params=params, headers=effective_headers)
+            response = await client.get(url, params=params, headers=merged_headers)
         elif original_method == "post":
             response = await client.post(
-                url, params=params, json=json_body, headers=effective_headers
+                url, params=params, json=json_body, headers=merged_headers
             )
         elif original_method == "put":
             response = await client.put(
-                url, params=params, json=json_body, headers=effective_headers
+                url, params=params, json=json_body, headers=merged_headers
             )
         elif original_method == "delete":
-            response = await client.delete(url, params=params, headers=effective_headers)
+            response = await client.delete(url, params=params, headers=merged_headers)
         elif original_method == "patch":
             response = await client.patch(
-                url, params=params, json=json_body, headers=effective_headers
+                url, params=params, json=json_body, headers=merged_headers
             )
         else:
             return f"Unsupported HTTP method: {original_method}"
