@@ -44,10 +44,12 @@ from litellm.types.utils import CacheCreationTokenDetails, Usage
 @pytest.fixture(autouse=True)
 def setup_local_model_cost():
     """Use the local model cost map for all tests."""
+    original_model_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     yield
     os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+    litellm.model_cost = original_model_cost
  
 def test_reasoning_tokens_no_price_set():
     model = "o1-mini"
