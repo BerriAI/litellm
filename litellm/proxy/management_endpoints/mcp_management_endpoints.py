@@ -11,9 +11,11 @@ Endpoints here:
 - GET `/v1/mcp/tools - lists all the tools available for a key
 - GET `/v1/mcp/access_groups` - lists all available MCP access groups
 - GET `/v1/mcp/discover` - Returns curated list of well-known MCP servers for discovery UI
+- GET `/v1/mcp/openapi-registry` - Returns well-known OpenAPI APIs with OAuth 2.0 metadata
 
 """
 
+import functools
 import importlib
 import json
 import os
@@ -1608,3 +1610,40 @@ if MCP_AVAILABLE:
             "servers": servers,
             "categories": categories,
         }
+
+    # --- OpenAPI Registry ---
+
+    _OPENAPI_REGISTRY_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "openapi_registry.json",
+    )
+
+    @functools.lru_cache(maxsize=1)
+    def _load_openapi_registry() -> Dict[str, Any]:
+        with open(_OPENAPI_REGISTRY_PATH, "r") as f:
+            data: Dict[str, Any] = json.load(f)
+        return data
+
+    @router.get(
+        "/openapi-registry",
+        description="Returns well-known OpenAPI APIs with OAuth 2.0 metadata for the OpenAPI MCP picker",
+    )
+    async def get_openapi_registry(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins can access the OpenAPI registry. Your role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+        try:
+            return _load_openapi_registry()
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to load OpenAPI registry from {_OPENAPI_REGISTRY_PATH}: {e}"
+            )
+            return {"apis": []}
