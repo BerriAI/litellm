@@ -2816,5 +2816,136 @@
       "Singapore"
     ],
     "estimated_latency_ms": 1
+  },
+  {
+    "id": "claims-agent-safety",
+    "title": "Claims Agent Chatbot Safety",
+    "description": "Comprehensive safety guardrails for healthcare claims agent chatbots. Blocks fraud coaching (exaggeration, document forgery), PHI disclosure without authorization, prior-auth gaming (code manipulation, medical necessity misrepresentation), system override injection (prompt injection, role impersonation), and medical advice in claims context (diagnosis, treatment recommendations). Evaluated on 243 test cases with 100% precision and 100% recall across all 5 categories.",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "claims-fraud-coaching-filter",
+      "claims-phi-disclosure-filter",
+      "claims-prior-auth-gaming-filter",
+      "claims-system-override-filter",
+      "claims-medical-advice-filter"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "claims-fraud-coaching-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "claims_fraud_coaching",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_fraud_coaching.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks fraud coaching including exaggeration of injuries, fabrication of claims, document forgery, and insurance fraud tactics"
+        }
+      },
+      {
+        "guardrail_name": "claims-phi-disclosure-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "claims_phi_disclosure",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_phi_disclosure.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks unauthorized PHI disclosure, bulk data extraction, and HIPAA violations in claims context"
+        }
+      },
+      {
+        "guardrail_name": "claims-prior-auth-gaming-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "claims_prior_auth_gaming",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_prior_auth_gaming.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks prior-authorization gaming including code manipulation, upcoding, medical necessity misrepresentation, and approval guarantee schemes"
+        }
+      },
+      {
+        "guardrail_name": "claims-system-override-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "claims_system_override",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_system_override.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks system override injection, prompt manipulation, adjudication rule bypass, and unauthorized role impersonation (employer, TPA, broker)"
+        }
+      },
+      {
+        "guardrail_name": "claims-medical-advice-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "claims_medical_advice",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_medical_advice.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks medical advice in claims context including diagnosis, treatment recommendations, medication guidance, and dosage questions"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "claims-agent-safety",
+      "description": "Comprehensive safety policy for healthcare claims agent chatbots. Covers fraud coaching, PHI disclosure, prior-auth gaming, system override injection, and medical advice. Evaluated on 243 test cases with 100% precision and 100% recall.",
+      "guardrails_add": [
+        "claims-fraud-coaching-filter",
+        "claims-phi-disclosure-filter",
+        "claims-prior-auth-gaming-filter",
+        "claims-system-override-filter",
+        "claims-medical-advice-filter"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "Healthcare",
+      "Claims",
+      "Content Safety"
+    ],
+    "estimated_latency_ms": 1
   }
 ]

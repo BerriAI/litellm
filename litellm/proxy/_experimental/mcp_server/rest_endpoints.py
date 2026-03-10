@@ -10,9 +10,9 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
 )
 from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.types.mcp import MCPAuth
 from litellm.types.utils import CallTypes
 
@@ -283,8 +283,10 @@ if MCP_AVAILABLE:
                 )
                 allowed_server_ids_set.update(servers)
 
-            allowed_server_ids = global_mcp_server_manager.filter_server_ids_by_ip(
-                list(allowed_server_ids_set), _rest_client_ip
+            allowed_server_ids, _ip_blocked_count = (
+                global_mcp_server_manager.filter_server_ids_by_ip_with_info(
+                    list(allowed_server_ids_set), _rest_client_ip
+                )
             )
 
             list_tools_result = []
@@ -293,6 +295,26 @@ if MCP_AVAILABLE:
             # If server_id is specified, only query that specific server
             if server_id:
                 if server_id not in allowed_server_ids:
+                    _server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                    if (
+                        _server is not None
+                        and _rest_client_ip is not None
+                        and not global_mcp_server_manager._is_server_accessible_from_ip(
+                            _server, _rest_client_ip
+                        )
+                    ):
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "ip_filtering",
+                                "message": (
+                                    f"MCP server '{server_id}' is not accessible from your IP address "
+                                    f"({_rest_client_ip}). This server is restricted to internal "
+                                    "networks only. To make it externally accessible, set "
+                                    "'available_on_public_internet: true' in the server configuration."
+                                ),
+                            },
+                        )
                     raise HTTPException(
                         status_code=403,
                         detail={
@@ -330,6 +352,19 @@ if MCP_AVAILABLE:
                     }
             else:
                 if not allowed_server_ids:
+                    if _ip_blocked_count > 0:
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "ip_filtering",
+                                "message": (
+                                    f"No MCP tools are available for your IP address ({_rest_client_ip}). "
+                                    f"{_ip_blocked_count} server(s) are restricted to internal networks only. "
+                                    "To make servers externally accessible, set "
+                                    "'available_on_public_internet: true' in the server configuration."
+                                ),
+                            },
+                        )
                     raise HTTPException(
                         status_code=403,
                         detail={
@@ -631,21 +666,26 @@ if MCP_AVAILABLE:
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             build_input_schema,
             load_openapi_spec_async,
+            resolve_operation_params,
         )
 
         try:
             spec = await load_openapi_spec_async(spec_path)
             paths = spec.get("paths", {})
+            components = spec.get("components", {})
             tools: List[dict] = []
             for path, path_item in paths.items():
                 for method in ("get", "post", "put", "patch", "delete"):
                     operation = path_item.get(method)
                     if operation is None:
                         continue
+
+                    resolved_op = resolve_operation_params(operation, path_item, components)
+
                     op_id = operation.get("operationId", f"{method}_{path}")
                     summary = operation.get("summary", "")
                     description = operation.get("description", summary)
-                    input_schema = build_input_schema(operation)
+                    input_schema = build_input_schema(resolved_op)
                     tools.append(
                         {
                             "name": op_id,

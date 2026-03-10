@@ -835,6 +835,7 @@ def test_add_new_model(client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
 
+@pytest.mark.xdist_group("proxy_heavy")
 def test_health(client_no_auth):
     global headers
     import logging

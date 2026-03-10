@@ -55,4 +55,28 @@ describe("prepareModelAddRequest", () => {
     const [deployment] = deployments!;
     expect(deployment.litellmParamsObj.custom_llm_provider).toBe("petals");
   });
+
+  it("ignores litellm_credential_name inside LiteLLM Params JSON", async () => {
+    const formValues = {
+      model_mappings: [
+        {
+          public_name: "Public Model",
+          litellm_model: "litellm/public",
+        },
+      ],
+      model_name: "custom-model-name",
+      litellm_credential_name: "selected-credential",
+      litellm_extra_params: JSON.stringify({
+        litellm_credential_name: "from-json",
+        timeout: 5,
+      }),
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.litellmParamsObj.litellm_credential_name).toBe("selected-credential");
+    expect(deployment.litellmParamsObj.timeout).toBe(5);
+  });
 });

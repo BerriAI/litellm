@@ -791,3 +791,78 @@ def test_litellm_entity_type_has_project():
 
     assert hasattr(Litellm_EntityType, "PROJECT")
     assert Litellm_EntityType.PROJECT.value == "project"
+
+
+@pytest.mark.asyncio
+async def test_list_projects_returns_timestamps():
+    """
+    Test that /project/list returns created_at and updated_at for each project.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.management_endpoints.project_endpoints import list_projects
+    from litellm.proxy._types import LiteLLM_ProjectTable
+
+    now = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Build a fake DB row that includes created_at and updated_at
+    fake_project = MagicMock()
+    fake_project.model_dump.return_value = {
+        "project_id": "proj-1",
+        "project_alias": "test-project",
+        "team_id": "team-1",
+        "created_by": "admin",
+        "updated_by": "admin",
+        "created_at": now,
+        "updated_at": now,
+        "models": [],
+        "spend": 0.0,
+        "blocked": False,
+        "budget_id": None,
+        "description": None,
+        "metadata": None,
+        "model_spend": None,
+        "model_rpm_limit": None,
+        "model_tpm_limit": None,
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+        "object_permission": None,
+    }
+    # Make the fake row behave like a Pydantic model for FastAPI serialization
+    fake_project.project_id = "proj-1"
+    fake_project.created_at = now
+    fake_project.updated_at = now
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(
+        return_value=[fake_project]
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma
+    ):
+        response = await list_projects(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+
+    assert len(response) == 1
+    project = response[0]
+    assert project.created_at == now
+    assert project.updated_at == now
+
+
+def test_litellm_project_table_has_timestamp_fields():
+    """
+    Test that LiteLLM_ProjectTable model includes created_at and updated_at fields,
+    so the /project/list response_model exposes them.
+    """
+    from litellm.proxy._types import LiteLLM_ProjectTable
+
+    fields = LiteLLM_ProjectTable.model_fields
+    assert "created_at" in fields, "LiteLLM_ProjectTable must have created_at field"
+    assert "updated_at" in fields, "LiteLLM_ProjectTable must have updated_at field"
