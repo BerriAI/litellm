@@ -1847,3 +1847,100 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
         "thinking",            # extra - before text
         "text",
     ], f"Expected order but got: {types}"
+
+
+def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
+    """
+    Test that when assistant content is already a list containing interleaved
+    thinking blocks and server tool blocks, the thinking_blocks from
+    provider_specific_fields are NOT duplicated/prepended.
+
+    This covers the gap identified by Greptile where list-content messages
+    bypass INTERLEAVED MODE and fall into SEQUENTIAL MODE, which previously
+    would prepend all thinking_blocks again, causing duplication and
+    breaking Anthropic's position-dependent signature verification.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/23047
+    """
+    messages = [
+        {"role": "user", "content": "Search for AI news"},
+        {
+            "role": "assistant",
+            # Content is already a list with interleaved thinking + server tool blocks
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for AI news.",
+                    "signature": "sig_1",
+                },
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01SEARCH1",
+                    "name": "web_search",
+                    "input": {"query": "AI news"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01SEARCH1",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.com",
+                            "title": "AI News",
+                            "snippet": "Latest AI news",
+                        }
+                    ],
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now let me summarize.",
+                    "signature": "sig_2",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the AI news summary.",
+                },
+            ],
+            # thinking_blocks also present in provider_specific_fields
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for AI news.",
+                    "signature": "sig_1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now let me summarize.",
+                    "signature": "sig_2",
+                },
+            ],
+        },
+        {"role": "user", "content": "Tell me more"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    # The list content already has the correct interleaved order.
+    # thinking_blocks should NOT be prepended again (which would cause
+    # duplication and break signature verification).
+    assert types == [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "text",
+    ], f"Expected preserved list order without duplicate thinking blocks, but got: {types}"
+
+    # Verify no duplicate thinking blocks
+    thinking_count = sum(1 for t in types if t == "thinking")
+    assert thinking_count == 2, f"Expected 2 thinking blocks, got {thinking_count} (duplication detected)"
+
+    # Verify signatures preserved in correct positions
+    assert content[0]["signature"] == "sig_1"
+    assert content[3]["signature"] == "sig_2"
