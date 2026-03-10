@@ -182,7 +182,7 @@ def npm_pack_install(name, ver):
 # Versions chosen to match typical non_root patch sets; bump if your security scanner requires newer
 npm_pack_install("tar", "6.2.1")
 npm_pack_install("glob", "10.4.5")
-npm_pack_install("brace-expansion", "2.0.1")
+npm_pack_install("@isaacs/brace-expansion", "5.0.1")
 npm_pack_install("minimatch", "9.0.5")
 npm_pack_install("diff", "5.2.0")
 
