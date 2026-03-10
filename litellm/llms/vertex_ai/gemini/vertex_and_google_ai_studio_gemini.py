@@ -1241,7 +1241,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         from litellm.litellm_core_utils.core_helpers import _FINISH_REASON_MAP
 
-        return _FINISH_REASON_MAP
+        return dict(_FINISH_REASON_MAP)
 
     def translate_exception_str(self, exception_string: str):
         if (
