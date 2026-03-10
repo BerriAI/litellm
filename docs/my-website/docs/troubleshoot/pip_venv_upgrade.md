@@ -69,13 +69,13 @@ Activate your virtual environment first:
 source <venv>/bin/activate
 ```
 
-Then run the migration:
+Then run the migration with the explicit schema path:
 
 ```bash
-prisma migrate deploy
+prisma migrate deploy --schema <venv>/lib/python<version>/site-packages/litellm_proxy_extras/schema.prisma
 ```
 
-Run this from the `litellm_proxy_extras` directory, or set `--schema` to point to the schema file.
+Replace `<venv>` with your virtual environment path and `<version>` with your Python version (e.g., `python3.11`, `python3.12`, `python3.13`).
 
 ### 6. Start the proxy
 
