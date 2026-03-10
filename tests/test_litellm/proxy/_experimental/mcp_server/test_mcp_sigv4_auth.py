@@ -2,11 +2,14 @@
 Tests for AWS SigV4 authentication in MCP client.
 
 Tests the MCPSigV4Auth httpx.Auth subclass that enables per-request
-SigV4 signing for Bedrock AgentCore MCP servers.
+SigV4 signing for Bedrock AgentCore MCP servers, plus DB/UI path
+tests for credential encryption, merge-on-update, and build_from_table.
 """
 
+import json
+
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import httpx
 
@@ -315,3 +318,568 @@ class TestMCPServerManagerSigV4:
         client = await manager._create_mcp_client(server=server)
 
         assert client._aws_auth is None
+
+
+class TestSigV4CredentialEncryption:
+    """Test encrypt/decrypt round-trip for AWS SigV4 credentials."""
+
+    def test_encrypt_credentials_handles_aws_fields(self):
+        """AWS credential fields are encrypted in the credentials dict."""
+        from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
+
+        creds = {
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "aws_session_token": "FwoGZX...",
+            "aws_region_name": "us-east-1",
+            "aws_service_name": "bedrock-agentcore",
+        }
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+            side_effect=lambda value, new_encryption_key: f"enc:{value}",
+        ):
+            result = encrypt_credentials(credentials=creds, encryption_key="test-key")
+
+        # Secrets should be encrypted
+        assert result["aws_access_key_id"] == "enc:AKIAIOSFODNN7EXAMPLE"
+        assert (
+            result["aws_secret_access_key"]
+            == "enc:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        )
+        assert result["aws_session_token"] == "enc:FwoGZX..."
+        # Non-secrets should be unchanged
+        assert result["aws_region_name"] == "us-east-1"
+        assert result["aws_service_name"] == "bedrock-agentcore"
+
+    def test_encrypt_credentials_skips_absent_aws_fields(self):
+        """encrypt_credentials does not fail when AWS fields are absent."""
+        from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
+
+        creds = {"auth_value": "some-token"}
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+            side_effect=lambda value, new_encryption_key: f"enc:{value}",
+        ):
+            result = encrypt_credentials(credentials=creds, encryption_key="test-key")
+
+        assert result["auth_value"] == "enc:some-token"
+        assert "aws_access_key_id" not in result
+
+
+class TestCredentialMergeOnUpdate:
+    """Test that partial credential updates preserve existing fields."""
+
+    @pytest.mark.asyncio
+    async def test_partial_update_preserves_existing_credentials(self):
+        """Updating only aws_region_name should not wipe aws_secret_access_key."""
+        from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+        from litellm.proxy._types import UpdateMCPServerRequest
+
+        existing_record = MagicMock()
+        existing_record.auth_type = "aws_sigv4"
+        existing_record.credentials = json.dumps(
+            {
+                "aws_access_key_id": "enc:AKI",
+                "aws_secret_access_key": "enc:SAK",
+                "aws_region_name": "us-east-1",
+            }
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+            return_value=existing_record
+        )
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=MagicMock()
+        )
+
+        data = UpdateMCPServerRequest(
+            server_id="test-server",
+            auth_type="aws_sigv4",
+            credentials={"aws_region_name": "eu-west-1"},
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+            return_value=None,
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+            side_effect=lambda value, new_encryption_key: value,
+        ):
+            await update_mcp_server(mock_prisma, data, "test-user")
+
+        # Grab the data dict passed to prisma update
+        update_call = mock_prisma.db.litellm_mcpservertable.update
+        assert update_call.called
+        data_dict = update_call.call_args[1]["data"]
+        merged_creds = json.loads(data_dict["credentials"])
+
+        # Existing encrypted secrets should be preserved
+        assert merged_creds["aws_access_key_id"] == "enc:AKI"
+        assert merged_creds["aws_secret_access_key"] == "enc:SAK"
+        # New region value should be updated
+        assert merged_creds["aws_region_name"] == "eu-west-1"
+
+    @pytest.mark.asyncio
+    async def test_update_without_credentials_preserves_all(self):
+        """Update with no credentials field should not touch existing credentials."""
+        from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+        from litellm.proxy._types import UpdateMCPServerRequest
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=MagicMock()
+        )
+
+        data = UpdateMCPServerRequest(
+            server_id="test-server",
+            description="Updated description",
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+            return_value=None,
+        ):
+            await update_mcp_server(mock_prisma, data, "test-user")
+
+        data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+        assert "credentials" not in data_dict
+
+    @pytest.mark.asyncio
+    async def test_update_new_server_no_merge(self):
+        """Update with credentials on a server that has no existing credentials."""
+        from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+        from litellm.proxy._types import UpdateMCPServerRequest
+
+        existing_record = MagicMock()
+        existing_record.auth_type = "aws_sigv4"
+        existing_record.credentials = None
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+            return_value=existing_record
+        )
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=MagicMock()
+        )
+
+        data = UpdateMCPServerRequest(
+            server_id="test-server",
+            auth_type="aws_sigv4",
+            credentials={"aws_region_name": "us-east-1"},
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+            return_value=None,
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+            side_effect=lambda value, new_encryption_key: value,
+        ):
+            await update_mcp_server(mock_prisma, data, "test-user")
+
+        data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+        stored_creds = json.loads(data_dict["credentials"])
+        assert stored_creds == {"aws_region_name": "us-east-1"}
+
+    @pytest.mark.asyncio
+    async def test_auth_type_change_replaces_credentials_entirely(self):
+        """Switching auth_type should replace credentials, not merge."""
+        from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+        from litellm.proxy._types import UpdateMCPServerRequest
+
+        existing_record = MagicMock()
+        existing_record.auth_type = "aws_sigv4"
+        existing_record.credentials = json.dumps(
+            {
+                "aws_access_key_id": "enc:AKI",
+                "aws_secret_access_key": "enc:SAK",
+                "aws_region_name": "us-east-1",
+            }
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+            return_value=existing_record
+        )
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=MagicMock()
+        )
+
+        data = UpdateMCPServerRequest(
+            server_id="test-server",
+            auth_type="api_key",
+            credentials={"auth_value": "my-key"},
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+            return_value=None,
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+            side_effect=lambda value, new_encryption_key: f"enc:{value}",
+        ):
+            await update_mcp_server(mock_prisma, data, "test-user")
+
+        data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+        stored_creds = json.loads(data_dict["credentials"])
+        # Should only have the new api_key credential, no stale aws_* fields
+        assert stored_creds == {"auth_value": "enc:my-key"}
+
+    @pytest.mark.asyncio
+    async def test_same_auth_type_merges_credentials(self):
+        """Same auth_type should merge credentials (preserve untouched fields)."""
+        from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+        from litellm.proxy._types import UpdateMCPServerRequest
+
+        existing_record = MagicMock()
+        existing_record.auth_type = "oauth2"
+        existing_record.credentials = json.dumps(
+            {
+                "client_id": "enc:id",
+                "client_secret": "enc:secret",
+                "scopes": ["read"],
+            }
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+            return_value=existing_record
+        )
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=MagicMock()
+        )
+
+        data = UpdateMCPServerRequest(
+            server_id="test-server",
+            auth_type="oauth2",
+            credentials={"scopes": ["read", "write"]},
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+            return_value=None,
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+            side_effect=lambda value, new_encryption_key: value,
+        ):
+            await update_mcp_server(mock_prisma, data, "test-user")
+
+        data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+        merged_creds = json.loads(data_dict["credentials"])
+        assert merged_creds["client_id"] == "enc:id"
+        assert merged_creds["client_secret"] == "enc:secret"
+        assert merged_creds["scopes"] == ["read", "write"]
+
+
+class TestSigV4BuildFromTable:
+    """Test build_mcp_server_from_table correctly loads AWS SigV4 credentials."""
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_with_sigv4_credentials(self):
+        """SigV4 credentials from DB are decrypted and mapped to MCPServer fields."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        table_record = MagicMock()
+        table_record.server_id = "test-sigv4-server"
+        table_record.server_name = "sigv4_server"
+        table_record.alias = None
+        table_record.description = None
+        table_record.url = "https://bedrock-agentcore.us-east-1.amazonaws.com/invocations"
+        table_record.spec_path = None
+        table_record.transport = "http"
+        table_record.auth_type = "aws_sigv4"
+        table_record.mcp_info = {"server_name": "sigv4_server"}
+        table_record.credentials = json.dumps(
+            {
+                "aws_access_key_id": "enc:AKIAEXAMPLE",
+                "aws_secret_access_key": "enc:SECRET",
+                "aws_session_token": "enc:TOKEN",
+                "aws_region_name": "us-east-1",
+                "aws_service_name": "bedrock-agentcore",
+            }
+        )
+        table_record.extra_headers = None
+        table_record.static_headers = None
+        table_record.command = None
+        table_record.args = []
+        table_record.env = None
+        table_record.mcp_access_groups = []
+        table_record.allowed_tools = []
+        table_record.disallowed_tools = None
+        table_record.allow_all_keys = False
+        table_record.available_on_public_internet = True
+        table_record.authorization_url = None
+        table_record.token_url = None
+        table_record.registration_url = None
+        table_record.created_at = None
+        table_record.updated_at = None
+        table_record.client_id = None
+        table_record.client_secret = None
+        table_record.tool_name_to_display_name = None
+        table_record.tool_name_to_description = None
+        table_record.byok_api_key_help_url = None
+        table_record.oauth2_flow = None
+
+        manager = MCPServerManager()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.decrypt_value_helper",
+            side_effect=lambda value, key, exception_type, return_original_value: value.replace(
+                "enc:", ""
+            ),
+        ):
+            server = await manager.build_mcp_server_from_table(table_record)
+
+        assert server.auth_type == "aws_sigv4"
+        assert server.aws_access_key_id == "AKIAEXAMPLE"
+        assert server.aws_secret_access_key == "SECRET"
+        assert server.aws_session_token == "TOKEN"
+        assert server.aws_region_name == "us-east-1"
+        assert server.aws_service_name == "bedrock-agentcore"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_without_sigv4_credentials(self):
+        """Non-SigV4 servers still work — AWS fields default to None."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        table_record = MagicMock()
+        table_record.server_id = "test-bearer-server"
+        table_record.server_name = "bearer_server"
+        table_record.alias = None
+        table_record.description = None
+        table_record.url = "https://example.com/mcp"
+        table_record.spec_path = None
+        table_record.transport = "http"
+        table_record.auth_type = "bearer_token"
+        table_record.mcp_info = {"server_name": "bearer_server"}
+        table_record.credentials = json.dumps({"auth_value": "enc:tok"})
+        table_record.extra_headers = None
+        table_record.static_headers = None
+        table_record.command = None
+        table_record.args = []
+        table_record.env = None
+        table_record.mcp_access_groups = []
+        table_record.allowed_tools = []
+        table_record.disallowed_tools = None
+        table_record.allow_all_keys = False
+        table_record.available_on_public_internet = True
+        table_record.authorization_url = None
+        table_record.token_url = None
+        table_record.registration_url = None
+        table_record.created_at = None
+        table_record.updated_at = None
+        table_record.client_id = None
+        table_record.client_secret = None
+        table_record.tool_name_to_display_name = None
+        table_record.tool_name_to_description = None
+        table_record.byok_api_key_help_url = None
+        table_record.oauth2_flow = None
+
+        manager = MCPServerManager()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.decrypt_value_helper",
+            side_effect=lambda value, key, exception_type, return_original_value: value.replace(
+                "enc:", ""
+            ),
+        ):
+            server = await manager.build_mcp_server_from_table(table_record)
+
+        assert server.auth_type == "bearer_token"
+        assert server.aws_access_key_id is None
+        assert server.aws_secret_access_key is None
+        assert server.aws_session_token is None
+        assert server.aws_region_name is None
+        assert server.aws_service_name is None
+
+
+class TestDecryptCredentials:
+    """Test decrypt_credentials helper."""
+
+    def test_decrypt_credentials_handles_all_secret_fields(self):
+        """All secret fields are decrypted; non-secret fields are left as-is."""
+        from litellm.proxy._experimental.mcp_server.db import decrypt_credentials
+
+        creds = {
+            "auth_value": "enc:tok",
+            "client_id": "enc:cid",
+            "client_secret": "enc:csec",
+            "aws_access_key_id": "enc:AKI",
+            "aws_secret_access_key": "enc:SAK",
+            "aws_session_token": "enc:TOK",
+            "aws_region_name": "us-east-1",
+            "aws_service_name": "bedrock-agentcore",
+        }
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
+            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace("enc:", ""),
+        ):
+            result = decrypt_credentials(credentials=creds)
+
+        assert result["auth_value"] == "tok"
+        assert result["client_id"] == "cid"
+        assert result["client_secret"] == "csec"
+        assert result["aws_access_key_id"] == "AKI"
+        assert result["aws_secret_access_key"] == "SAK"
+        assert result["aws_session_token"] == "TOK"
+        # Non-secrets untouched
+        assert result["aws_region_name"] == "us-east-1"
+        assert result["aws_service_name"] == "bedrock-agentcore"
+
+    def test_decrypt_credentials_skips_absent_fields(self):
+        """Absent fields are not touched."""
+        from litellm.proxy._experimental.mcp_server.db import decrypt_credentials
+
+        creds = {"aws_access_key_id": "enc:AKI"}
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
+            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace("enc:", ""),
+        ):
+            result = decrypt_credentials(credentials=creds)
+
+        assert result["aws_access_key_id"] == "AKI"
+        assert "aws_secret_access_key" not in result
+
+
+class TestRotateCredentials:
+    """Test rotate_mcp_server_credentials_master_key decrypts before re-encrypting."""
+
+    @pytest.mark.asyncio
+    async def test_rotation_decrypts_then_reencrypts(self):
+        """Key rotation should decrypt with old key then encrypt with new key."""
+        from litellm.proxy._experimental.mcp_server.db import (
+            rotate_mcp_server_credentials_master_key,
+        )
+
+        server = MagicMock()
+        server.server_id = "srv-1"
+        server.credentials = {
+            "aws_access_key_id": "enc_old:AKI",
+            "aws_secret_access_key": "enc_old:SAK",
+            "aws_region_name": "us-east-1",
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[server]
+        )
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+            return_value="old-key",
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
+            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace("enc_old:", ""),
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+            side_effect=lambda value, new_encryption_key: f"enc_new:{value}",
+        ):
+            await rotate_mcp_server_credentials_master_key(
+                mock_prisma, "admin", "new-key"
+            )
+
+        update_call = mock_prisma.db.litellm_mcpservertable.update
+        assert update_call.called
+        stored_creds = json.loads(update_call.call_args[1]["data"]["credentials"])
+        # Should be decrypted from old, then encrypted with new
+        assert stored_creds["aws_access_key_id"] == "enc_new:AKI"
+        assert stored_creds["aws_secret_access_key"] == "enc_new:SAK"
+        # Non-secret fields should pass through unchanged
+        assert stored_creds["aws_region_name"] == "us-east-1"
+
+
+class TestAuthTypeSwitchClearsCredentials:
+    """Test that switching auth_type without credentials clears stale secrets."""
+
+    @pytest.mark.asyncio
+    async def test_auth_type_change_without_credentials_clears_stale(self):
+        """Changing auth_type without providing credentials should clear old ones."""
+        from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+        from litellm.proxy._types import UpdateMCPServerRequest
+
+        existing_record = MagicMock()
+        existing_record.auth_type = "oauth2"
+        existing_record.credentials = json.dumps(
+            {"client_id": "enc:cid", "client_secret": "enc:csec"}
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+            return_value=existing_record
+        )
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=MagicMock()
+        )
+
+        data = UpdateMCPServerRequest(
+            server_id="test-server",
+            auth_type="aws_sigv4",
+            # No credentials provided
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+            return_value=None,
+        ):
+            await update_mcp_server(mock_prisma, data, "test-user")
+
+        data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+        # Credentials should be cleared (set to None)
+        assert data_dict.get("credentials") is None
+
+
+class TestInheritCredentials:
+    """Test _inherit_credentials_from_existing_server copies AWS fields."""
+
+    def test_inherits_sigv4_credentials(self):
+        """SigV4 fields are copied from existing server to inherited credentials."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _inherit_credentials_from_existing_server,
+        )
+        from litellm.proxy._types import NewMCPServerRequest
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        existing = MCPServer(
+            server_id="existing-sigv4",
+            name="sigv4_server",
+            server_name="sigv4_server",
+            url="https://bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.aws_sigv4,
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="SECRET",
+            aws_session_token="TOKEN",
+            aws_region_name="us-east-1",
+            aws_service_name="bedrock-agentcore",
+        )
+
+        payload = NewMCPServerRequest(
+            server_id="existing-sigv4",
+            server_name="sigv4_server",
+            url="https://bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+            transport="http",
+            auth_type="aws_sigv4",
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager"
+        ) as mock_manager:
+            mock_manager.get_mcp_server_by_id.return_value = existing
+            result = _inherit_credentials_from_existing_server(payload)
+
+        assert result.credentials is not None
+        assert result.credentials["aws_access_key_id"] == "AKIAEXAMPLE"
+        assert result.credentials["aws_secret_access_key"] == "SECRET"
+        assert result.credentials["aws_session_token"] == "TOKEN"
+        assert result.credentials["aws_region_name"] == "us-east-1"
+        assert result.credentials["aws_service_name"] == "bedrock-agentcore"
