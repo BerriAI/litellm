@@ -87,16 +87,15 @@ litellm --config your_config.yaml --port 4000
 
 ## How to Verify Migrations
 
-### Before upgrading: Preview what will change
+### Before applying migrations: Preview what will change
+
+> **Note:** Run `pip install 'litellm[proxy]==<version>'` first (Step 3) so the new `schema.prisma` is available at `<schema-path>`.
 
 ```bash
 prisma migrate diff \
   --from-url $DATABASE_URL \
   --to-schema-datamodel <schema-path> \
   --script
-```
-
-This outputs the SQL that would be applied - you can review it before upgrading.
 
 ### After upgrading: Check migration status
 
