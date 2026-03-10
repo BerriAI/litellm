@@ -16,8 +16,10 @@ MiniMax offers the following models through their Anthropic-compatible API:
 | Model | Description | Input Cost | Output Cost | Prompt Caching Read | Prompt Caching Write |
 |-------|-------------|------------|-------------|---------------------|----------------------|
 | **MiniMax-M2.1** | Powerful Multi-Language Programming with Enhanced Programming Experience (~60 tps) | $0.3/M tokens | $1.2/M tokens | $0.03/M tokens | $0.375/M tokens |
+| **MiniMax-M2.1-lightning** | Deprecated model name. Use `MiniMax-M2.1-highspeed` for new integrations. | $0.3/M tokens | $2.4/M tokens | $0.03/M tokens | $0.375/M tokens |
 | **MiniMax-M2.1-highspeed** | High-speed variant of MiniMax M2.1 | $0.6/M tokens | $2.4/M tokens | $0.03/M tokens | $0.375/M tokens |
 | **MiniMax-M2.5** | MiniMax M2.5 general-purpose model | $0.3/M tokens | $1.2/M tokens | $0.03/M tokens | $0.375/M tokens |
+| **MiniMax-M2.5-lightning** | Deprecated model name. Use `MiniMax-M2.5-highspeed` for new integrations. | $0.3/M tokens | $2.4/M tokens | $0.03/M tokens | $0.375/M tokens |
 | **MiniMax-M2.5-highspeed** | High-speed variant of MiniMax M2.5 | $0.6/M tokens | $2.4/M tokens | $0.03/M tokens | $0.375/M tokens |
 | **MiniMax-M2** | Agentic capabilities, Advanced reasoning | $0.3/M tokens | $1.2/M tokens | $0.03/M tokens | $0.375/M tokens |
 
