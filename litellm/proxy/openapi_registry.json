@@ -187,9 +187,9 @@
     {
       "name": "shopify",
       "title": "Shopify",
-      "description": "Products, orders, customers, and store management (requires your store subdomain)",
+      "description": "Products, orders, customers, and store management via Shopify Admin REST API (requires your store subdomain)",
       "icon_url": "https://cdn.simpleicons.org/shopify",
-      "spec_url": "https://raw.githubusercontent.com/Shopify/shopify-api-specs/main/admin/rest/2024-01/openapi.json",
+      "spec_url": "https://raw.githubusercontent.com/Shopify/shopify-api-specs/main/admin/rest/2023-10/openapi.json",
       "oauth": {
         "authorization_url": "https://your-store.myshopify.com/admin/oauth/authorize",
         "token_url": "https://your-store.myshopify.com/admin/oauth/access_token",

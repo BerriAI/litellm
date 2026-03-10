@@ -468,42 +468,44 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                   </>
                 )}
                 {restFiltered.length > 0 && (
-                  <div className="flex items-center justify-between px-1 pt-2">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                      {pinnedFiltered.length > 0 ? "All tools" : "Tools"}
-                    </p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={handleEnableRest}
-                        className="text-xs text-blue-600 hover:text-blue-700"
-                      >
-                        Enable all
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleDisableRest}
-                        className="text-xs text-gray-500 hover:text-gray-700"
-                      >
-                        Disable all
-                      </button>
+                  <>
+                    <div className="flex items-center justify-between px-1 pt-2">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                        {pinnedFiltered.length > 0 ? "All tools" : "Tools"}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleEnableRest}
+                          className="text-xs text-blue-600 hover:text-blue-700"
+                        >
+                          Enable all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDisableRest}
+                          className="text-xs text-gray-500 hover:text-gray-700"
+                        >
+                          Disable all
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                    {restFiltered.map((tool) => (
+                      <ToolRow
+                        key={tool.name}
+                        tool={tool}
+                        isEnabled={allowedTools.includes(tool.name)}
+                        isEditExpanded={expandedTools.has(tool.name)}
+                        toolNameToDisplayName={toolNameToDisplayName}
+                        toolNameToDescription={toolNameToDescription}
+                        onToggle={handleToolToggle}
+                        onToggleExpand={handleToggleEditExpanded}
+                        onDisplayNameChange={handleDisplayNameChange}
+                        onDescriptionChange={handleDescriptionChange}
+                      />
+                    ))}
+                  </>
                 )}
-                {restFiltered.map((tool) => (
-                  <ToolRow
-                    key={tool.name}
-                    tool={tool}
-                    isEnabled={allowedTools.includes(tool.name)}
-                    isEditExpanded={expandedTools.has(tool.name)}
-                    toolNameToDisplayName={toolNameToDisplayName}
-                    toolNameToDescription={toolNameToDescription}
-                    onToggle={handleToolToggle}
-                    onToggleExpand={handleToggleEditExpanded}
-                    onDisplayNameChange={handleDisplayNameChange}
-                    onDescriptionChange={handleDescriptionChange}
-                  />
-                ))}
               </div>
             )}
           </div>
