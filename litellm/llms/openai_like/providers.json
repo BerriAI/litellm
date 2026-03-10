@@ -81,7 +81,7 @@
     "api_key_env": "GMI_API_KEY"
   },
   "perplexity": {
-    "base_url": "https://api.perplexity.ai",
+    "base_url": "https://api.perplexity.ai/v1",
     "api_key_env": "PERPLEXITYAI_API_KEY",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
