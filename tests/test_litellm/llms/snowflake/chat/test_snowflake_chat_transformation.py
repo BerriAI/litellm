@@ -437,7 +437,9 @@ class TestSnowflakeToolTransformation:
         tool_results = transformed[2]["content_list"]
         assert len(tool_results) == 2
         assert tool_results[0]["tool_results"]["tool_use_id"] == "call_1"
+        assert tool_results[0]["tool_results"]["name"] == "get_weather"
         assert tool_results[1]["tool_results"]["tool_use_id"] == "call_2"
+        assert tool_results[1]["tool_results"]["name"] == "get_weather"
 
     def test_transform_request_with_tool_messages(self):
         """
