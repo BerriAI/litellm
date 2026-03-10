@@ -386,12 +386,23 @@ class PrismaManager:
                     return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
                 else:
                     # Use prisma db push with increased timeout
-                    subprocess.run(
+                    result = subprocess.run(
                         ["prisma", "db", "push", "--accept-data-loss"],
                         timeout=60,
                         check=True,
+                        capture_output=True,
+                        text=True,
                     )
+                    if result.stdout:
+                        verbose_proxy_logger.debug(
+                            f"Prisma success output (stdout): {result.stdout}"
+                        )
+                    if result.stderr:
+                        verbose_proxy_logger.debug(
+                            f"Prisma success output (stderr): {result.stderr}"
+                        )
                     return True
+
             except subprocess.TimeoutExpired:
                 verbose_proxy_logger.warning(f"Attempt {attempt + 1} timed out")
                 time.sleep(random.randrange(5, 15))
@@ -402,9 +413,16 @@ class PrismaManager:
                     if attempts_left > 0
                     else ""
                 )
+                parts = [str(e)]
+                if getattr(e, "stderr", None):
+                    parts.append(f"Stderr: {e.stderr}")
+                if getattr(e, "stdout", None):
+                    parts.append(f"Stdout: {e.stdout}")
+                error_details = ". ".join(parts)
                 verbose_proxy_logger.warning(
-                    f"The process failed to execute. Details: {e}.{retry_msg}"
+                    f"The process failed to execute. Details: {error_details}.{retry_msg}"
                 )
+
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)
