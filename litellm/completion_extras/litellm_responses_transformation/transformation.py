@@ -390,6 +390,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ResponseOutputMessage,
             ResponseReasoningItem,
         )
+        from openai.types.responses.response_output_item import ResponseApplyPatchToolCall
 
         from litellm.types.utils import Choices, Message
 
@@ -444,6 +445,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         tool_call_item=item,
                         index=tool_call_index,
                     )
+                )
+                accumulated_tool_calls.append(tool_call_dict)
+                tool_call_index += 1
+
+            elif isinstance(item, ResponseApplyPatchToolCall):
+                from litellm.responses.litellm_completion_transformation.transformation import (
+                    LiteLLMCompletionResponsesConfig,
+                )
+
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_apply_patch_tool_call_to_chat_completion_tool_call(
+                    tool_call_item=item,
+                    index=tool_call_index,
                 )
                 accumulated_tool_calls.append(tool_call_dict)
                 tool_call_index += 1
@@ -1095,6 +1108,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
             finish_reason = "tool_calls" if has_function_calls else "stop"
 
+            usage = None
+            if response_data.get("usage"):
+                from litellm.responses.utils import ResponseAPILoggingUtils
+                usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    response_data.get("usage")
+                )
             return ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -1102,7 +1121,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         delta=Delta(content=""),
                         finish_reason=finish_reason,
                     )
-                ]
+                ],
+                usage=usage
             )
         else:
             pass

@@ -2369,3 +2369,42 @@ def test_get_registered_pass_through_route_with_custom_root():
 
     # Clean up
     _registered_pass_through_routes.clear()
+
+
+def test_mapped_pass_through_routes_with_server_root_path():
+    """
+    Mapped passthrough routes (vertex_ai, bedrock, etc) should match
+    even when SERVER_ROOT_PATH is set and the incoming route is prefixed.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22272
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
+        mock_get_root.return_value = "/litellm"
+
+        # prefixed route should match mapped routes like /vertex_ai
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/litellm/vertex_ai/v1/projects/foo"
+            )
+            is True
+        )
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/litellm/bedrock/model/invoke"
+            )
+            is True
+        )
+
+        # bare route without prefix should not match when root is set
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/vertex_ai/v1/projects/foo"
+            )
+            is False
+        )
