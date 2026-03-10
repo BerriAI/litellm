@@ -2,6 +2,10 @@
 
 Guide for upgrading LiteLLM Proxy when installed via pip in a virtual environment.
 
+:::info Important
+Always activate your virtual environment before running any `litellm` or `prisma` commands. All commands in this guide assume you're working inside an activated venv.
+:::
+
 ## How pip/venv Upgrades Work
 
 There are two pieces that need to stay in sync:
@@ -45,11 +49,27 @@ You have two options:
 
 The proxy automatically runs `prisma migrate deploy` on startup, which applies any new migrations.
 
+First, activate your virtual environment:
+
+```bash
+source <venv>/bin/activate
+```
+
+Then start the proxy:
+
 ```bash
 litellm --config your_config.yaml --port 4000
 ```
 
 **Option B: Run manually before starting**
+
+Activate your virtual environment first:
+
+```bash
+source <venv>/bin/activate
+```
+
+Then run the migration:
 
 ```bash
 prisma migrate deploy
@@ -59,7 +79,7 @@ Run this from the `litellm_proxy_extras` directory, or set `--schema` to point t
 
 ### 6. Start the proxy
 
-If you used Option B above, now start the proxy:
+If you used Option B above, now start the proxy (with venv still activated):
 
 ```bash
 litellm --config your_config.yaml --port 4000
