@@ -366,7 +366,7 @@ class TestSnowflakeToolTransformation:
             },
         ]
 
-        transformed = config._transform_messages(messages)
+        transformed = config._transform_messages(messages, model="claude-3-5-sonnet")
 
         # Should have 3 messages
         assert len(transformed) == 3
@@ -427,7 +427,7 @@ class TestSnowflakeToolTransformation:
             {"role": "tool", "tool_call_id": "call_2", "content": "55°F"},
         ]
 
-        transformed = config._transform_messages(messages)
+        transformed = config._transform_messages(messages, model="claude-3-5-sonnet")
 
         # Should have 3 messages (user, assistant, combined tool results)
         assert len(transformed) == 3

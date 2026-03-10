@@ -155,8 +155,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         return f"{api_base}/cortex/inference:complete"
 
     def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[Dict[str, Any]]:
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> List[AllMessageValues]:
         """
         Transform OpenAI messages to Snowflake format.
 
@@ -214,7 +214,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 )
             )
 
-        return transformed
+        return transformed  # type: ignore
 
     def _convert_assistant_tool_message(
         self, message: Dict[str, Any]
@@ -242,6 +242,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         # Add text content if present
         text_content = message.get("content")
+        if isinstance(text_content, list):
+            # Flatten multipart content to a single string
+            text_content = " ".join(
+                part.get("text", "") for part in text_content if isinstance(part, dict)
+            )
         if text_content:
             content_list.append({"type": "text", "text": text_content})
 
@@ -298,10 +303,17 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             function = tool_call.get("function", {})
             function_name = function.get("name", "")
 
-            # Get content - could be string or None
+            # Get content - could be string, list, or None
             content = tool_msg.get("content")
             if content is None:
                 content = "null"
+            elif isinstance(content, list):
+                # Flatten OpenAI multipart tool content to a plain string
+                content = " ".join(
+                    part.get("text", "") for part in content if isinstance(part, dict)
+                )
+            elif not isinstance(content, str):
+                content = str(content)
 
             content_list.append({
                 "type": "tool_results",
@@ -426,7 +438,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         # Transform messages from OpenAI format to Snowflake format
         # This handles role: "tool" -> role: "user" with tool_results content_list
         # and assistant messages with tool_calls -> content_list with tool_use blocks
-        transformed_messages = self._transform_messages(messages)
+        transformed_messages = self._transform_messages(messages, model=model)
 
         return {
             "model": model,
