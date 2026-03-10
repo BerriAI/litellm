@@ -149,7 +149,7 @@ def test_inline_pdf_tokens_costed_when_text_tokens_less_than_prompt_tokens():
         usage= usage,
         model = "gemini-2.0-flash-001",
     )
-    cost = response_cost_calculator(
+from litellm.cost_calculator import response_cost_calculator
         response_object= response,
         model = "gemini-2.0-flash-001",
         custom_llm_provider = "vertex_ai",
