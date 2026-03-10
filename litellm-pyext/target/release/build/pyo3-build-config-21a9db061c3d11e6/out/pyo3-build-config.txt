@@ -1,0 +1,11 @@
+implementation=CPython
+version=3.12
+shared=true
+abi3=false
+lib_name=python3.12
+lib_dir=/usr/lib/x86_64-linux-gnu
+executable=/home/ubuntu/.cache/pypoetry/virtualenvs/litellm-xS3fZVNL-py3.12/bin/python
+pointer_width=64
+build_flags=
+python_framework_prefix=
+suppress_build_script_link_lines=false

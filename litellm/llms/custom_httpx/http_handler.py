@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import os
 import ssl
 import sys
@@ -50,6 +51,21 @@ try:
     from litellm._version import version
 except Exception:
     version = "0.0.0"
+
+
+@functools.lru_cache(maxsize=64)
+def _parse_url(url: str) -> httpx.URL:
+    """Pre-parse a URL string into an httpx.URL to avoid regex-heavy
+    parsing inside httpx._merge_url on every request (~7μs → ~0.4μs).
+
+    Safe to use with ``build_request(params=...)``: httpx replaces the
+    query string entirely when ``params`` is non-None, so any query
+    params baked into the cached URL are harmless in that case.  When
+    ``params`` is None the cached URL preserves the original query
+    string, which is the correct behaviour.
+    """
+    return httpx.URL(url)
+
 
 def get_default_headers() -> dict:
     """
@@ -424,7 +440,7 @@ class AsyncHTTPHandler:
         params.update(HTTPHandler.extract_query_params(url))
 
         response = await self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+            _parse_url(url), params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
         )
         return response
 
@@ -452,9 +468,10 @@ class AsyncHTTPHandler:
                 data, content
             )
 
+            parsed_url = _parse_url(url)
             req = self.client.build_request(
                 "POST",
-                url,
+                parsed_url,
                 data=request_data,
                 json=json,
                 params=params,
@@ -533,7 +550,7 @@ class AsyncHTTPHandler:
             )
 
             req = self.client.build_request(
-                "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                "PUT", _parse_url(url), data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
             )
             response = await self.client.send(req)
             response.raise_for_status()
@@ -599,7 +616,7 @@ class AsyncHTTPHandler:
             )
 
             req = self.client.build_request(
-                "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                "PATCH", _parse_url(url), data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
             )
             response = await self.client.send(req)
             response.raise_for_status()
@@ -665,7 +682,7 @@ class AsyncHTTPHandler:
             )
 
             req = self.client.build_request(
-                "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                "DELETE", _parse_url(url), data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
             )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -717,7 +734,7 @@ class AsyncHTTPHandler:
         request_data, request_content = _prepare_request_data_and_content(data, content)
 
         req = client.build_request(
-            "POST", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+            "POST", _parse_url(url), data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
         )
         response = await client.send(req, stream=stream)
         response.raise_for_status()
@@ -737,18 +754,24 @@ class AsyncHTTPHandler:
     ) -> Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]:
         """
         - Creates a transport for httpx.AsyncClient
+            - if USE_RUST_TRANSPORT is set, use the in-process PyO3 Rust transport
+            - if USE_SIDECAR is set, use the Rust sidecar transport
             - if litellm.force_ipv4 is True, it will return AsyncHTTPTransport with local_address="0.0.0.0"
             - [Default] It will return AiohttpTransport
             - Users can opt out of using AiohttpTransport by setting litellm.use_aiohttp_transport to False
-
-
-        Notes on this handler:
-        - Why AiohttpTransport?
-            - By default, we use AiohttpTransport since it offers much higher throughput and lower latency than httpx.
-
-        - Why force ipv4?
-            - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
+        #########################################################
+        # RUST NATIVE TRANSPORT — in-process PyO3, GIL released
+        #########################################################
+        if AsyncHTTPHandler._should_use_rust_transport():
+            return AsyncHTTPHandler._create_rust_transport()
+
+        #########################################################
+        # SIDECAR TRANSPORT — Rust-based HTTP forwarding
+        #########################################################
+        if AsyncHTTPHandler._should_use_sidecar_transport():
+            return AsyncHTTPHandler._create_sidecar_transport()
+
         #########################################################
         # AIOHTTP TRANSPORT is off by default
         #########################################################
@@ -763,6 +786,40 @@ class AsyncHTTPHandler:
         # HTTPX TRANSPORT is used when aiohttp is not installed
         #########################################################
         return AsyncHTTPHandler._create_httpx_transport()
+
+    @staticmethod
+    def _should_use_sidecar_transport() -> bool:
+        """Check if the Rust sidecar transport is enabled via env var."""
+        return os.getenv("USE_SIDECAR", "").lower() == "true"
+
+    @staticmethod
+    def _create_sidecar_transport():
+        """Create a sidecar transport that forwards requests through the Rust binary."""
+        from litellm.llms.custom_httpx.sidecar_transport import (
+            LiteLLMSidecarTransport,
+        )
+
+        port = int(os.getenv("SIDECAR_PORT", "8787"))
+        sidecar_url = f"http://127.0.0.1:{port}"
+        verbose_logger.info("Using Sidecar transport → %s", sidecar_url)
+        return LiteLLMSidecarTransport(sidecar_url=sidecar_url)
+
+    @staticmethod
+    def _should_use_rust_transport() -> bool:
+        """Check if the in-process Rust (PyO3) transport is enabled."""
+        if os.getenv("USE_RUST_TRANSPORT", "").lower() != "true":
+            return False
+        from litellm.llms.custom_httpx.rust_transport import is_available
+
+        return is_available()
+
+    @staticmethod
+    def _create_rust_transport():
+        """Create a PyO3-based Rust transport (GIL released during HTTP)."""
+        from litellm.llms.custom_httpx.rust_transport import LiteLLMRustTransport
+
+        verbose_logger.info("Using in-process Rust (PyO3) transport")
+        return LiteLLMRustTransport()
 
     @staticmethod
     def _should_use_aiohttp_transport() -> bool:
@@ -968,7 +1025,7 @@ class HTTPHandler:
         params.update(self.extract_query_params(url))
 
         response = self.client.get(
-            url,
+            _parse_url(url),
             params=params,
             headers=headers,
         )
@@ -1007,10 +1064,11 @@ class HTTPHandler:
                 data, content
             )
 
+            parsed_url = _parse_url(url)
             if timeout is not None:
                 req = self.client.build_request(
                     "POST",
-                    url,
+                    parsed_url,
                     data=request_data,  # type: ignore
                     json=json,
                     params=params,
@@ -1021,7 +1079,7 @@ class HTTPHandler:
                 )
             else:
                 req = self.client.build_request(
-                    "POST", url, data=request_data, json=json, params=params, headers=headers, files=files, content=request_content  # type: ignore
+                    "POST", parsed_url, data=request_data, json=json, params=params, headers=headers, files=files, content=request_content  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1063,13 +1121,14 @@ class HTTPHandler:
                 data, content
             )
 
+            parsed_url = _parse_url(url)
             if timeout is not None:
                 req = self.client.build_request(
-                    "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                    "PATCH", parsed_url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "PATCH", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+                    "PATCH", parsed_url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1112,13 +1171,14 @@ class HTTPHandler:
                 data, content
             )
 
+            parsed_url = _parse_url(url)
             if timeout is not None:
                 req = self.client.build_request(
-                    "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                    "PUT", parsed_url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "PUT", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+                    "PUT", parsed_url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             return response
@@ -1148,13 +1208,14 @@ class HTTPHandler:
                 data, content
             )
 
+            parsed_url = _parse_url(url)
             if timeout is not None:
                 req = self.client.build_request(
-                    "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                    "DELETE", parsed_url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "DELETE", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+                    "DELETE", parsed_url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
