@@ -1,4 +1,5 @@
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -203,15 +204,10 @@ def test_router_silent_experiment_completion():
 
         assert response.choices[0].message.content == "hello"
 
-        # The sync background call uses a thread pool. We might need to wait a bit.
-        import time
-
+        # The sync background call uses a thread pool. We might need to wait.
         time.sleep(2.0)
 
         # Should have 1 acompletion call (the silent background call)
-        # The primary completion call still goes to the real litellm.completion (or we can mock it separately, but here it's testing the background one)
-        # Wait, the primary call in the test is router.completion.
-        # Actually, let's just mock both to avoid real network calls if it's hitting one.
         assert mock_acompletion_mock.call_count == 1
 
         call_args_list = mock_acompletion_mock.call_args_list
