@@ -782,7 +782,7 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
-        Admin approves a pending MCP server — sets approval_status=active and loads it into the runtime registry.
+        Admin approves a pending or previously-rejected MCP server — sets approval_status=active and loads it into the runtime registry.
         """
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
@@ -800,12 +800,10 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server '{server_id}' not found."},
             )
-        if existing.approval_status != MCPApprovalStatus.pending_review:
+        if existing.approval_status == MCPApprovalStatus.active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": f"MCP server is not pending review (approval_status={existing.approval_status})."
-                },
+                detail={"error": "MCP server is already active."},
             )
 
         approved = await approve_mcp_server(
