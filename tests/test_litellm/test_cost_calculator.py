@@ -332,6 +332,67 @@ def test_custom_pricing_with_router_model_id():
     assert model_info["cache_read_input_token_cost"] == 0.0000006
 
 
+def test_stale_db_zero_pricing_not_override_base_model():
+    """
+    Regression test: old proxy DB records have input_cost_per_token=0.0 and
+    output_cost_per_token=0.0 as defaults (from the old proxy ModelInfo class).
+    These stale 0.0 values should NOT override the base model's real pricing
+    in the UUID cost entry.  Intentional zero-cost via litellm_params must
+    still be respected.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm import Router
+
+    # Scenario 1: stale DB defaults — pricing should come from base model
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-opus",
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-4-6",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "id": "stale-uuid",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+        ]
+    )
+
+    uuid_info = litellm.model_cost.get("stale-uuid", {})
+    # Base model pricing should be used, not stale 0.0
+    assert uuid_info["input_cost_per_token"] == 5e-06
+    assert uuid_info["output_cost_per_token"] == 2.5e-05
+    assert uuid_info.get("cache_creation_input_token_cost") is not None
+    assert uuid_info["cache_creation_input_token_cost"] > 0
+
+    # Scenario 2: intentional zero via litellm_params — should stay 0.0
+    router2 = Router(
+        model_list=[
+            {
+                "model_name": "free-claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-4-6",
+                    "api_key": "fake",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "free-uuid",
+                },
+            },
+        ]
+    )
+
+    free_info = litellm.model_cost.get("free-uuid", {})
+    assert free_info["input_cost_per_token"] == 0.0
+    assert free_info["output_cost_per_token"] == 0.0
+
+
 def test_azure_realtime_cost_calculator():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

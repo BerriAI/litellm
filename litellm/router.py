@@ -203,6 +203,24 @@ class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
 
+def _get_base_model_cost_info(model_name: str) -> dict:
+    """
+    Get the base model's pricing info from litellm.model_cost.
+
+    Used when registering deployment-specific pricing under UUID to ensure
+    the UUID entry inherits complete pricing (e.g. cache costs) from the
+    base model, even if the deployment's model_info only has a subset of
+    pricing fields.
+
+    Returns an empty dict if the model is not found.
+    """
+    try:
+        info = litellm.get_model_info(model=model_name)
+        return dict(info)
+    except Exception:
+        return {}
+
+
 class Router:
     model_names: set = set()
     cache_responses: Optional[bool] = False
@@ -6386,14 +6404,6 @@ class Router:
 
             ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
             model_id = deployment.model_info.id
-            if model_id is not None:
-                litellm.register_model(
-                    model_cost={
-                        model_id: _model_info,
-                    }
-                )
-
-            ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
             _model_name = deployment.litellm_params.model
             if deployment.litellm_params.custom_llm_provider is not None:
                 _model_name = (
@@ -6414,6 +6424,44 @@ class Router:
                     _model_name: _shared_model_info,
                 }
             )
+
+            # Register deployment-specific pricing under UUID.
+            # Start with the base model's full pricing so that the UUID
+            # entry inherits all pricing fields (e.g. cache costs).
+            # Then overlay the deployment's model_info on top (which
+            # includes any custom pricing from both model_info config
+            # and litellm_params).
+            # Without this, UUID entries miss pricing fields not
+            # explicitly set on the deployment, causing $0 cost when
+            # custom_pricing=True triggers UUID-based cost lookup.
+            if model_id is not None:
+                _model_info_for_id = _get_base_model_cost_info(
+                    model_name=_model_name
+                )
+                # Overlay model_info but skip 0.0 pricing fields — these are
+                # stale DB defaults from the old proxy ModelInfo class that
+                # defaulted pricing to 0.0 instead of None.  Intentional
+                # zero-cost pricing set via litellm_params is already in
+                # _model_info (copied above) and will be re-applied below.
+                _pricing_fields = set(
+                    CustomPricingLiteLLMParams.model_fields.keys()
+                )
+                for k, v in _model_info.items():
+                    if v is None:
+                        continue
+                    if k in _pricing_fields and v == 0.0:
+                        continue
+                    _model_info_for_id[k] = v
+                # Re-apply litellm_params pricing (intentional, even if 0.0)
+                for field in _pricing_fields:
+                    field_value = deployment.litellm_params.get(field)
+                    if field_value is not None:
+                        _model_info_for_id[field] = field_value
+                litellm.register_model(
+                    model_cost={
+                        model_id: _model_info_for_id,
+                    }
+                )
 
             ## Check if LLM Deployment is allowed for this deployment
             if (
@@ -6866,11 +6914,32 @@ class Router:
             _model_info_dict: dict = deployment.model_info.model_dump(
                 exclude_none=True
             )
-            for field in CustomPricingLiteLLMParams.model_fields.keys():
+
+            # Start with the base model's full pricing so that the UUID
+            # entry inherits all pricing fields (e.g. cache costs).
+            _model_name = deployment.litellm_params.model
+            if deployment.litellm_params.custom_llm_provider is not None:
+                _model_name = (
+                    deployment.litellm_params.custom_llm_provider
+                    + "/"
+                    + _model_name
+                )
+            _base_info = _get_base_model_cost_info(model_name=_model_name)
+            # Skip 0.0 pricing fields — stale DB defaults (see _create_deployment)
+            _pricing_fields = set(
+                CustomPricingLiteLLMParams.model_fields.keys()
+            )
+            for k, v in _model_info_dict.items():
+                if v is None:
+                    continue
+                if k in _pricing_fields and v == 0.0:
+                    continue
+                _base_info[k] = v
+            for field in _pricing_fields:
                 field_value = deployment.litellm_params.get(field)
                 if field_value is not None:
-                    _model_info_dict[field] = field_value
-            litellm.register_model(model_cost={_model_id: _model_info_dict})
+                    _base_info[field] = field_value
+            litellm.register_model(model_cost={_model_id: _base_info})
 
         # add to model names
         self._add_model_to_list_and_index_map(
