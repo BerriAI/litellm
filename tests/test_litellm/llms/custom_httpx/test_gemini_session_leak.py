@@ -118,6 +118,25 @@ async def test_atexit_cleanup():
         return False
 
 
+def test_async_client_cleanup_registered_at_import_time():
+    """
+    Regression test for issue #23278: SSL transport errors with asyncio.gather.
+
+    acompletion is imported at module level via `from .main import *`, so
+    __getattr__ is never triggered when users call litellm.acompletion().
+    register_async_client_cleanup() must be called eagerly at import time,
+    not lazily inside __getattr__, otherwise SSL connections are left open
+    at process exit causing "Fatal error on SSL transport" errors.
+    """
+    import litellm
+
+    assert litellm._async_client_cleanup_registered is True, (
+        "register_async_client_cleanup() must be called at import time. "
+        "If this fails, SSL connections will leak on process exit when "
+        "acompletion() is used with asyncio.gather() (issue #23278)."
+    )
+
+
 def test_new_event_loop_atexit():
     """Test that the new atexit handler can create a fresh event loop"""
     print("\n" + "=" * 70)
