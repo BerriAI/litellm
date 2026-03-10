@@ -6410,6 +6410,64 @@ export const fetchMCPClientIp = async (accessToken: string): Promise<string | nu
   }
 };
 
+export const getMcpOAuth2ConnectUrl = async (
+  serverId: string,
+  accessToken: string,
+): Promise<{ authorization_url: string; server_id: string; server_name: string }> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth2/connect`
+      : `/v1/mcp/server/${serverId}/oauth2/connect`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      // Don't call handleError here: the caller (OAuth2ConnectButton) already
+      // renders an inline error via setError(), avoiding duplicate notifications.
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to get MCP OAuth2 connect URL:", error);
+    throw error;
+  }
+};
+
+export const getMcpOAuth2Status = async (
+  serverId: string,
+  accessToken: string,
+): Promise<{ connected: boolean }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth2/status`
+    : `/v1/mcp/server/${serverId}/oauth2/status`;
+
+  const response = await fetch(url, {
+    method: HTTP_REQUEST.GET,
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    // Do NOT call handleError here: this function is called inside a polling
+    // loop that silently ignores errors.  Calling handleError would surface
+    // UI notifications on every failed tick (e.g. transient 500s).
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    throw new Error(errorMessage);
+  }
+
+  return await response.json();
+};
+
 export const createMCPServer = async (
   accessToken: string,
   formValues: Record<string, any>, // Assuming formValues is an object

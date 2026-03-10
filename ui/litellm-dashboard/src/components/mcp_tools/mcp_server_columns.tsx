@@ -1,10 +1,11 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { MCPServer } from "./types";
+import { MCPServer, AUTH_TYPE } from "./types";
 import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
 import { CheckOutlined } from "@ant-design/icons";
+import { OAuth2ConnectButton } from "./OAuth2ConnectButton";
 
 export const mcpServerColumns = (
   userRole: string,
@@ -13,6 +14,8 @@ export const mcpServerColumns = (
   onDelete: (serverId: string) => void,
   isLoadingHealth?: boolean,
   onByokConnect?: (server: MCPServer) => void,
+  accessToken?: string,
+  refreshServers?: () => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -226,6 +229,26 @@ export const mcpServerColumns = (
       const server = row.original;
       if (!server.is_byok) {
         return <span className="text-gray-300 text-xs">—</span>;
+      }
+      if (server.is_byok && server.auth_type === AUTH_TYPE.OAUTH2) {
+        if (!accessToken || !refreshServers) {
+          return (
+            <button
+              disabled
+              className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-400 cursor-not-allowed"
+              title="Sign in to connect"
+            >
+              Connect
+            </button>
+          );
+        }
+        return (
+          <OAuth2ConnectButton
+            server={server}
+            accessToken={accessToken}
+            onConnected={refreshServers}
+          />
+        );
       }
       if (server.has_user_credential) {
         return (

@@ -5,9 +5,11 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import json
 import time
 import traceback
 import uuid
+from collections import OrderedDict
 from datetime import datetime
 from typing import (
     Any,
@@ -27,6 +29,7 @@ from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -41,6 +44,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    MCP_TOOL_PREFIX_SEPARATOR,
     add_server_prefix_to_name,
     get_server_prefix,
 )
@@ -59,9 +63,33 @@ from litellm.utils import Rules, client, function_setup
 # Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).
 # Storing the credential value (not just a bool) means _get_byok_credential and
 # _check_byok_credential share a single DB round-trip per TTL window.
-_byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
+#
+# Known trade-off: OAuth2 provider tokens may expire before the TTL elapses, causing
+# a brief 401 window (up to _BYOK_CRED_CACHE_TTL seconds) after a token expires at the
+# provider before the cache entry is evicted and a fresh DB lookup is made.  Mitigating
+# this (e.g. by storing and checking `expires_in`) is a future improvement.
+_byok_cred_cache: OrderedDict[Tuple[str, str], Tuple[Optional[str], float]] = OrderedDict()
 _BYOK_CRED_CACHE_TTL = 60  # seconds
 _BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
+
+
+def _extract_access_token(credential: Optional[str]) -> Optional[str]:
+    """Extract the access_token from a stored credential.
+
+    OAuth2 callbacks may store a JSON blob of the form
+    ``{"access_token": "...", "refresh_token": "..."}`` when the provider
+    returns a refresh token.  This helper transparently handles both the JSON
+    format and plain-string credentials (e.g. static API keys or older entries).
+    """
+    if credential is None:
+        return None
+    try:
+        data = json.loads(credential)
+        if isinstance(data, dict) and "access_token" in data:
+            return data["access_token"]
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return credential
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -73,13 +101,40 @@ def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
     _byok_cred_cache.pop((user_id, server_id), None)
 
 
+def get_cached_byok_credential(
+    user_id: str, server_id: str
+) -> Optional[Tuple[Optional[str], bool]]:
+    """Return (credential, True) if a valid cache entry exists, else None.
+
+    Promotes the entry to MRU on hit.  Returns None for expired or missing
+    entries so callers fall through to the DB without accessing cache internals.
+    """
+    cached = _byok_cred_cache.get((user_id, server_id))
+    if cached is None:
+        return None
+    cred, ts = cached
+    if time.monotonic() - ts >= _BYOK_CRED_CACHE_TTL:
+        return None
+    _byok_cred_cache.move_to_end((user_id, server_id))
+    return cred, True
+
+
 def _write_byok_cred_cache(
     user_id: str, server_id: str, credential: Optional[str]
 ) -> None:
-    """Write a credential value to the cache, evicting all entries if at capacity."""
-    if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
-        _byok_cred_cache.clear()
-    _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
+    """Write a credential value to the cache with LRU eviction.
+
+    Uses OrderedDict.move_to_end() so that every write (new or update) moves
+    the entry to the most-recently-used position.  When at capacity, the
+    least-recently-used (oldest) entry at the front is evicted.
+    """
+    cache_key = (user_id, server_id)
+    is_new = cache_key not in _byok_cred_cache
+    if is_new and len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
+        _byok_cred_cache.popitem(last=False)  # evict LRU (front of OrderedDict)
+    _byok_cred_cache[cache_key] = (credential, time.monotonic())
+    if not is_new:
+        _byok_cred_cache.move_to_end(cache_key)  # promote to most-recently-used
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -142,6 +197,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
     )
+    from litellm.proxy._experimental.mcp_server.db import get_user_credential
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -1546,23 +1602,43 @@ if MCP_AVAILABLE:
         if not user_id:
             return None
 
-        cache_key = (user_id, mcp_server.server_id)
-        cached = _byok_cred_cache.get(cache_key)
-        if cached is not None:
-            credential, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                return credential
+        result = get_cached_byok_credential(user_id, mcp_server.server_id)
+        if result is not None:
+            cached_credential, _ = result
+            return cached_credential
 
-        from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
+            # Without a database we cannot fetch the per-user credential.
+            # litellm.require_byok_credential_store defaults to False (legacy
+            # silent-bypass).  Set it to True to raise 503 so callers can
+            # distinguish "no credential" (401) from "credential store
+            # unavailable" (503).
+            if litellm.require_byok_credential_store:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "byok_store_unavailable",
+                        "server_id": mcp_server.server_id,
+                        "message": "Credential store is not available; cannot fetch BYOK credential.",
+                    },
+                )
             return None
-        credential = await get_user_credential(
+        # `get_user_credential` is the centralized data-access helper for the
+        # LiteLLM_MCPUserCredentials table (defined in mcp_server/db.py).
+        # The 60-second in-memory cache (_byok_cred_cache) ensures this is
+        # called at most once per TTL window, keeping the hot path DB-free.
+        raw = await get_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
+        # Credentials stored by the OAuth2 callback may be a JSON blob of the
+        # form {"access_token": "...", "refresh_token": "..."} when the provider
+        # returned a refresh token.  Extract just the access_token so the rest of
+        # the auth-injection path continues to receive a plain string.
+        credential = _extract_access_token(raw)
         _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
         return credential
 
@@ -1595,40 +1671,55 @@ if MCP_AVAILABLE:
             )
 
         # Check shared credential cache before hitting the DB.
-        cache_key = (user_id, mcp_server.server_id)
-        cached = _byok_cred_cache.get(cache_key)
-        if cached is not None:
-            cached_cred, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                if cached_cred is None:
-                    raise HTTPException(
-                        status_code=401,
-                        detail={
-                            "error": "byok_auth_required",
-                            "server_id": mcp_server.server_id,
-                            "server_name": mcp_server.server_name or mcp_server.name,
-                            "message": (
-                                "No stored credential found for this BYOK server. "
-                                "Complete the OAuth authorization flow to provide your API key."
-                            ),
-                        },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
-                    )
-                return
+        cache_result = get_cached_byok_credential(user_id, mcp_server.server_id)
+        if cache_result is not None:
+            cached_cred, _ = cache_result
+            if cached_cred is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "byok_auth_required",
+                        "server_id": mcp_server.server_id,
+                        "server_name": mcp_server.server_name or mcp_server.name,
+                        "message": (
+                            "No stored credential found for this BYOK server. "
+                            "Complete the OAuth authorization flow to provide your API key."
+                        ),
+                    },
+                    headers={
+                        "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+                    },
+                )
+            return
 
-        from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
+            # Without a database we cannot verify the credential.
+            # litellm.require_byok_credential_store defaults to False (legacy
+            # silent-bypass).  Set it to True to raise 503 and distinguish
+            # infra failures from missing credentials.
+            if litellm.require_byok_credential_store:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "byok_store_unavailable",
+                        "server_id": mcp_server.server_id,
+                        "message": "Credential store is not available; cannot verify BYOK access.",
+                    },
+                )
             return
 
-        credential = await get_user_credential(
+        raw_credential = await get_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
+        # Apply _extract_access_token so the cache always stores a plain token
+        # string.  Without this, a JSON blob {"access_token": ..., "refresh_token": ...}
+        # stored by the OAuth2 callback would be returned as-is by _get_byok_credential
+        # on the next request, causing Bearer-header corruption and silent 401s.
+        credential = _extract_access_token(raw_credential)
         _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
         if credential is None:
             raise HTTPException(
@@ -1765,6 +1856,18 @@ if MCP_AVAILABLE:
         # These tools are registered with their prefixed names
         #########################################################
         local_tool = global_mcp_tool_registry.get_tool(name)
+        # OpenAPI tools are always registered with their prefixed name.  If the
+        # caller used the bare (unprefixed) name and we already resolved the
+        # server, construct the prefixed name and try again.
+        if local_tool is None and mcp_server is not None and mcp_server.spec_path:
+            server_prefix = get_server_prefix(mcp_server)
+            # Only add the prefix when the tool name doesn't already carry it,
+            # otherwise we'd produce double-prefixed names like "github-github-get_user".
+            if not name.startswith(server_prefix + MCP_TOOL_PREFIX_SEPARATOR):
+                prefixed_name = add_server_prefix_to_name(name, server_prefix)
+                local_tool = global_mcp_tool_registry.get_tool(prefixed_name)
+                if local_tool:
+                    name = prefixed_name
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
             # For BYOK servers the credential must be injected via a ContextVar
@@ -1793,7 +1896,7 @@ if MCP_AVAILABLE:
         elif mcp_server:
             response = await _handle_managed_mcp_tool(
                 server_name=server_name,
-                name=original_tool_name,  # Pass the full name (potentially prefixed)
+                name=original_tool_name,  # Pass the unprefixed tool name to the managed server
                 arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
