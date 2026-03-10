@@ -41,10 +41,29 @@ class ChunkProcessor:
     def _sort_chunks(self, chunks: list) -> list:
         if not chunks:
             return []
-        if chunks[0]._hidden_params.get("created_at"):
-            return sorted(
-                chunks, key=lambda x: x._hidden_params.get("created_at", float("inf"))
-            )
+
+        first_chunk = chunks[0]
+        first_hidden_params: Dict[str, Any] = {}
+        if isinstance(first_chunk, dict):
+            candidate = first_chunk.get("_hidden_params", {})
+            if isinstance(candidate, dict):
+                first_hidden_params = candidate
+        else:
+            candidate = getattr(first_chunk, "_hidden_params", {})
+            if isinstance(candidate, dict):
+                first_hidden_params = candidate
+
+        if first_hidden_params.get("created_at"):
+            def _created_at(chunk: Any) -> Union[int, float]:
+                if isinstance(chunk, dict):
+                    params = chunk.get("_hidden_params", {})
+                else:
+                    params = getattr(chunk, "_hidden_params", {})
+                if isinstance(params, dict):
+                    return cast(Union[int, float], params.get("created_at", float("inf")))
+                return float("inf")
+
+            return sorted(chunks, key=_created_at)
         return chunks
 
     def update_model_response_with_hidden_params(

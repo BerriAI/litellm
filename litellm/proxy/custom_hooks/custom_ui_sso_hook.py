@@ -3,6 +3,7 @@ from fastapi_sso.sso.base import OpenID
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 
 
 class CustomSSOLoginHandler(CustomLogger):
@@ -18,7 +19,7 @@ class CustomSSOLoginHandler(CustomLogger):
         self,
         request: Request,
     ) -> OpenID:
-        request_headers_dict = dict(request.headers)
+        request_headers_dict = _safe_get_request_headers(request)
         verbose_logger.debug("inside custom ui sso sign in hook...")
         return OpenID(
             id=request_headers_dict.get("x-litellm-user-id") or "123",

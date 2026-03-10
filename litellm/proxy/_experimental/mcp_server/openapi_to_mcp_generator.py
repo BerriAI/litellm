@@ -2,8 +2,8 @@
 This module is used to generate MCP tools from OpenAPI specs.
 """
 
-import json
 import asyncio
+import json
 import os
 from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
@@ -80,7 +80,7 @@ async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
         return json.load(f)
 
 
-def get_base_url(spec: Dict[str, Any]) -> str:
+def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
@@ -90,6 +90,20 @@ def get_base_url(spec: Dict[str, Any]) -> str:
         scheme = spec.get("schemes", ["https"])[0]
         base_path = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
+    
+    # Fallback: derive base URL from spec_path if it's a URL
+    if spec_path and (spec_path.startswith("http://") or spec_path.startswith("https://")):
+        for suffix in ["/openapi.json", "/openapi.yaml", "/swagger.json", "/swagger.yaml"]:
+            if spec_path.endswith(suffix):
+                base_url = spec_path[:-len(suffix)]
+                verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+                return base_url
+        
+        if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
+            base_url = "/".join(spec_path.split("/")[:-1])
+            verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+            return base_url
+    
     return ""
 
 

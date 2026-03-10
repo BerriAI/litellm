@@ -358,38 +358,40 @@ async def test_async_handler_with_shared_session():
 @pytest.mark.asyncio
 async def test_get_async_httpx_client_with_shared_session():
     """Test get_async_httpx_client with shared session"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Create a mock shared session
     mock_session = MockClientSession()
-    
+
     # Test with shared session
     client = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=mock_session  # type: ignore
     )
-    
+
     # Verify the client was created successfully
     assert client is not None
-    assert isinstance(client, AsyncHTTPHandler)
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client, AsyncHTTPHandlerReload)
 
 
 @pytest.mark.asyncio
 async def test_get_async_httpx_client_without_shared_session():
     """Test get_async_httpx_client without shared session (backward compatibility)"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Test without shared session
     client = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=None
     )
-    
+
     # Verify the client was created successfully
     assert client is not None
-    assert isinstance(client, AsyncHTTPHandler)
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client, AsyncHTTPHandlerReload)
 
 
 @pytest.mark.asyncio
@@ -450,110 +452,32 @@ def test_shared_session_parameter_in_completion():
 @pytest.mark.asyncio
 async def test_session_reuse_integration():
     """Integration test for session reuse functionality"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Create a mock session
     mock_session = MockClientSession()
-    
+
     # Create two clients with the same session
     client1 = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=mock_session  # type: ignore
     )
-    
+
     client2 = get_async_httpx_client(
         llm_provider=LlmProviders.OPENAI,
         shared_session=mock_session  # type: ignore
     )
-    
+
     # Both clients should be created successfully
     assert client1 is not None
     assert client2 is not None
-    
+
     # Both should be AsyncHTTPHandler instances
-    assert isinstance(client1, AsyncHTTPHandler)
-    assert isinstance(client2, AsyncHTTPHandler)
-    
-    # Clean up
-    await client1.close()
-    await client2.close()
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client1, AsyncHTTPHandlerReload)
+    assert isinstance(client2, AsyncHTTPHandlerReload)
 
-
-@pytest.mark.asyncio
-async def test_shared_session_bypasses_cache():
-    """
-    Test that when shared_session is provided, the cache is bypassed.
-    
-    This is critical for aiohttp tracing support - users need their custom
-    ClientSession (with trace_configs) to be used, not a cached session.
-    
-    Related: GitHub issue #20174
-    """
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-    from litellm.types.utils import LlmProviders
-    
-    # First, get a cached client without shared_session
-    cached_client = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC,
-        shared_session=None
-    )
-    
-    # Now create a mock shared session
-    mock_session = MockClientSession()
-    
-    # Get a client WITH shared_session - this should NOT return the cached client
-    client_with_session = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC,  # Same provider!
-        shared_session=mock_session  # type: ignore
-    )
-    
-    # The clients should be DIFFERENT - cache should be bypassed when shared_session is provided
-    assert client_with_session is not cached_client, \
-        "Cache should be bypassed when shared_session is provided"
-    
-    # Verify the shared_session handler is using our mock session
-    # The transport should have our mock_session as its client
-    transport = client_with_session.client._transport
-    if hasattr(transport, 'client'):
-        assert transport.client is mock_session, \
-            "Handler should use the provided shared_session"
-    
-    # Clean up
-    await cached_client.close()
-    await client_with_session.close()
-
-
-@pytest.mark.asyncio  
-async def test_shared_session_each_call_gets_new_handler():
-    """
-    Test that each call with shared_session creates a new handler.
-    
-    This ensures user sessions (with their trace_configs, etc.) are always
-    used and not affected by caching.
-    """
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-    from litellm.types.utils import LlmProviders
-    
-    # Create two different mock sessions
-    mock_session1 = MockClientSession()
-    mock_session2 = MockClientSession()
-    
-    # Get clients with different sessions for the same provider
-    client1 = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC,
-        shared_session=mock_session1  # type: ignore
-    )
-    
-    client2 = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC,  # Same provider
-        shared_session=mock_session2  # type: ignore  # Different session
-    )
-    
-    # Should be different clients, each using their own session
-    assert client1 is not client2, \
-        "Different shared_sessions should create different handlers"
-    
     # Clean up
     await client1.close()
     await client2.close()

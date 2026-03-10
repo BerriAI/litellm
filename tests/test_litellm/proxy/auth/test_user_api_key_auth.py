@@ -181,6 +181,16 @@ def test_route_checks_is_llm_api_route():
     for route in mcp_routes:
         assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
 
+    # Test LiteLLM native RAG routes
+    rag_routes = [
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
+    ]
+    for route in rag_routes:
+        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+
     # Test routes with placeholders
     placeholder_routes = [
         "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ",
@@ -300,28 +310,36 @@ async def test_proxy_admin_expired_key_from_cache():
         mock_get_key_object.return_value = expired_token
         
         # Set attributes on proxy_server module (these are imported inside _user_api_key_auth_builder)
-        import litellm.proxy.proxy_server
-        
-        setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-        setattr(litellm.proxy.proxy_server, "user_api_key_cache", mock_cache)
-        setattr(litellm.proxy.proxy_server, "proxy_logging_obj", mock_proxy_logging_obj)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-master-key")
-        setattr(litellm.proxy.proxy_server, "general_settings", {})
-        setattr(litellm.proxy.proxy_server, "llm_model_list", [])
-        setattr(litellm.proxy.proxy_server, "llm_router", None)
-        setattr(litellm.proxy.proxy_server, "open_telemetry_logger", None)
-        setattr(litellm.proxy.proxy_server, "model_max_budget_limiter", MagicMock())
-        setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
-        setattr(litellm.proxy.proxy_server, "jwt_handler", None)
-        setattr(litellm.proxy.proxy_server, "litellm_proxy_admin_name", "admin")
-        
+        import litellm.proxy.proxy_server as _proxy_server_mod
+
+        _attrs_to_set = {
+            "prisma_client": mock_prisma_client,
+            "user_api_key_cache": mock_cache,
+            "proxy_logging_obj": mock_proxy_logging_obj,
+            "master_key": "sk-master-key",
+            "general_settings": {},
+            "llm_model_list": [],
+            "llm_router": None,
+            "open_telemetry_logger": None,
+            "model_max_budget_limiter": MagicMock(),
+            "user_custom_auth": None,
+            "jwt_handler": None,
+            "litellm_proxy_admin_name": "admin",
+        }
+        _original_values = {
+            attr: getattr(_proxy_server_mod, attr, None)
+            for attr in _attrs_to_set
+        }
         try:
-            
+            for attr, val in _attrs_to_set.items():
+                setattr(_proxy_server_mod, attr, val)
+
+
             # Create a mock request
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
             request_data = {}
-            
+
             # Call the auth builder - should raise ProxyException for expired key
             # Note: api_key needs "Bearer " prefix for get_api_key() to process it correctly
             with pytest.raises(ProxyException) as exc_info:
@@ -334,7 +352,7 @@ async def test_proxy_admin_expired_key_from_cache():
                     azure_apim_header=None,
                     request_data=request_data,
                 )
-            
+
             # Verify that ProxyException was raised with expired_key type
             assert hasattr(exc_info.value, "type"), "Exception should have 'type' attribute"
             assert exc_info.value.type == ProxyErrorTypes.expired_key, (
@@ -343,7 +361,7 @@ async def test_proxy_admin_expired_key_from_cache():
             assert "Expired Key" in str(exc_info.value.message), (
                 f"Exception message should mention 'Expired Key', got: {exc_info.value.message}"
             )
-            
+
             # Verify that the param field does NOT leak the full API key (Issue #18731)
             # The param should be abbreviated like "sk-...XXXX" not the full plaintext key
             assert exc_info.value.param is not None, "Exception should have 'param' attribute"
@@ -354,7 +372,7 @@ async def test_proxy_admin_expired_key_from_cache():
             assert exc_info.value.param.startswith("sk-..."), (
                 f"Param should be abbreviated to 'sk-...XXXX' format. Got: {exc_info.value.param}"
             )
-            
+
             # Verify that cache deletion was called
             mock_delete_cache.assert_called_once()
             call_args = mock_delete_cache.call_args
@@ -362,8 +380,9 @@ async def test_proxy_admin_expired_key_from_cache():
                 "Cache deletion should be called with the hashed key"
             )
         finally:
-            # Clean up - restore original values if needed
-            pass
+            # Restore all module-level attributes so subsequent tests are not affected
+            for attr, val in _original_values.items():
+                setattr(_proxy_server_mod, attr, val)
 
 
 

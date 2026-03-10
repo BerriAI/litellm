@@ -6,16 +6,17 @@ import {
   LeftOutlined,
   RightOutlined,
 } from "@ant-design/icons";
-import { Sparkles, Wrench } from "lucide-react";
+import { Bot, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
-import { MCP_CALL_TYPES } from "../constants";
+import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
-import { LogDetailContent } from "./LogDetailContent";
+import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
+import { normalizeGuardrailEntries } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 
@@ -45,9 +46,10 @@ interface TraceEventRowProps {
 
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   const isMcp = MCP_CALL_TYPES.includes(row.call_type);
+  const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
   const durationValue =
-    row.duration != null
-      ? row.duration.toFixed(3)
+    row.request_duration_ms != null
+      ? (row.request_duration_ms / 1000).toFixed(3)
       : row.startTime && row.endTime
         ? ((Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000).toFixed(3)
         : "-";
@@ -63,6 +65,8 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
       <div className="flex items-center gap-1">
         {isMcp ? (
           <Wrench size={12} className="text-slate-500 flex-shrink-0" />
+        ) : isAgent ? (
+          <Bot size={12} className="text-slate-500 flex-shrink-0" />
         ) : (
           <Sparkles size={12} className="text-slate-500 flex-shrink-0" />
         )}
@@ -124,7 +128,7 @@ export function LogDetailsDrawer({
       return allSessionLogs
         .map((row) => ({
           ...row,
-          duration: (Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000,
+          request_duration_ms: row.request_duration_ms ?? (Date.parse(row.endTime) - Date.parse(row.startTime)),
         }))
         .sort((a, b) => {
           const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
@@ -218,7 +222,10 @@ export function LogDetailsDrawer({
     : null;
   const sessionDurationSeconds =
     sessionStart && sessionEnd ? ((sessionEnd.getTime() - sessionStart.getTime()) / 1000).toFixed(2) : "0.00";
-  const llmCount = sessionLogs.filter((row) => !MCP_CALL_TYPES.includes(row.call_type)).length;
+  const llmCount = sessionLogs.filter(
+    (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
+  ).length;
+  const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
@@ -301,14 +308,25 @@ export function LogDetailsDrawer({
               </div>
               <div className="mt-1 text-[11px] text-slate-500 font-mono">
                 {logsForList.length} req
-                <span className="mx-1.5">·</span>
-                {isSessionMode
-                  ? `${llmCount} LLM`
-                  : `${logsForList.filter((row) => !MCP_CALL_TYPES.includes(row.call_type)).length} LLM`}
-                <span className="mx-1.5">·</span>
-                {isSessionMode
-                  ? `${mcpCount} MCP`
-                  : `${logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length} MCP`}
+                {[
+                  isSessionMode
+                    ? llmCount
+                    : logsForList.filter(
+                        (row) =>
+                          !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
+                      ).length,
+                  isSessionMode ? agentCount : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
+                  isSessionMode ? mcpCount : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
+                ].map((count, i) => {
+                  const label = [" LLM", " Agent", " MCP"][i];
+                  return count > 0 ? (
+                    <span key={label}>
+                      <span className="mx-1.5">·</span>
+                      {count}
+                      {label}
+                    </span>
+                  ) : null;
+                })}
                 <span className="mx-1.5">·</span>
                 {isSessionMode
                   ? getSpendString(totalSessionCost)
@@ -323,6 +341,11 @@ export function LogDetailsDrawer({
             </div>
 
             <div className="flex-1 overflow-y-auto">
+              {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
+                <div className="px-3 pt-2">
+                  <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
+                </div>
+              )}
               {isSessionMode ? (
                 <div className="py-1">
                   {/* Child events — vertical tree line with horizontal connectors */}
@@ -378,6 +401,7 @@ export function LogDetailsDrawer({
                 logEntry={enrichedLog}
                 onOpenSettings={onOpenSettings}
                 isLoadingDetails={isLoadingDetails}
+                accessToken={accessToken ?? null}
               />
             </div>
           </div>
