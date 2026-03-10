@@ -366,7 +366,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         raise Exception(f"Generic Guardrail API failed: {str(error)}")
 
     @log_guardrail_information
-    async def apply_guardrail(
+    async def apply_guardrail(  # noqa: PLR0915
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
