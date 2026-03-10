@@ -20747,11 +20747,9 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_service_tier": true,
         "supports_tool_choice": true,
-        "supports_vision": true,
-        "supports_web_search": true,
-        "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false
+        "supports_vision": true
     },
     "gpt-5.3-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
