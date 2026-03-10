@@ -2614,13 +2614,28 @@ def anthropic_messages_pt(  # noqa: PLR0915
             else:
                 # SEQUENTIAL MODE: No server tool calls, or no thinking blocks,
                 # or content is a list. Use the original sequential approach.
+
+                # When content is a list, check if it already contains thinking
+                # blocks inline. If so, skip prepending thinking_blocks to avoid
+                # duplication and preserve the original interleaved order.
+                # Fixes the gap where list-content messages bypass INTERLEAVED
+                # MODE and still get thinking blocks prepended out of order.
+                _content_is_list = "content" in assistant_content_block and isinstance(
+                    assistant_content_block["content"], list
+                )
+                _list_has_thinking = False
+                if _content_is_list:
+                    for _item in assistant_content_block["content"]:
+                        if isinstance(_item, dict) and _item.get("type") == "thinking":
+                            _list_has_thinking = True
+                            break
+
                 if (
                     thinking_blocks is not None
+                    and not _list_has_thinking
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
-                if "content" in assistant_content_block and isinstance(
-                    assistant_content_block["content"], list
-                ):
+                if _content_is_list:
                     for m in assistant_content_block["content"]:
                         # handle thinking blocks
                         thinking_block = cast(str, m.get("thinking", ""))
