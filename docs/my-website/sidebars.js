@@ -1158,6 +1158,7 @@ const sidebars = {
             "troubleshoot/prisma_migrations",
           ],
         },
+        "troubleshoot/pip_venv_upgrade",
         "troubleshoot/rollback",
         "troubleshoot",
       ],
