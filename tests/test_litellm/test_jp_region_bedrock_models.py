@@ -77,13 +77,18 @@ def test_jp_claude_sonnet_4_6_matches_other_regions():
             f"Mismatch for {key}: jp={jp_info[key]}, au={au_info[key]}"
 
 
-def test_jp_claude_sonnet_4_6_registered_in_bedrock_converse(monkeypatch):
-    """Test that jp.anthropic.claude-sonnet-4-6 is registered in bedrock_converse_models."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-    import importlib
-    importlib.reload(litellm)
+def test_jp_claude_sonnet_4_6_registered_in_bedrock_converse():
+    """Test that jp.anthropic.claude-sonnet-4-6 is registered in bedrock_converse_models via add_known_models."""
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
+    with open(json_path) as f:
+        model_data = json.load(f)
+
+    # Build a fresh set without global side-effects
+    original = litellm.bedrock_converse_models.copy()
+    litellm.add_known_models(model_data)
     assert "jp.anthropic.claude-sonnet-4-6" in litellm.bedrock_converse_models, \
         "jp.anthropic.claude-sonnet-4-6 not registered in bedrock_converse_models"
+    litellm.bedrock_converse_models = original
 
 
 def test_jp_amazon_nova_2_lite_exists():
@@ -145,10 +150,15 @@ def test_jp_amazon_nova_2_lite_matches_apac():
             f"Mismatch for {key}: jp={jp_info[key]}, apac={apac_info[key]}"
 
 
-def test_jp_amazon_nova_2_lite_registered_in_bedrock_converse(monkeypatch):
-    """Test that jp.amazon.nova-2-lite-v1:0 is registered in bedrock_converse_models."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-    import importlib
-    importlib.reload(litellm)
+def test_jp_amazon_nova_2_lite_registered_in_bedrock_converse():
+    """Test that jp.amazon.nova-2-lite-v1:0 is registered in bedrock_converse_models via add_known_models."""
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
+    with open(json_path) as f:
+        model_data = json.load(f)
+
+    # Build a fresh set without global side-effects
+    original = litellm.bedrock_converse_models.copy()
+    litellm.add_known_models(model_data)
     assert "jp.amazon.nova-2-lite-v1:0" in litellm.bedrock_converse_models, \
         "jp.amazon.nova-2-lite-v1:0 not registered in bedrock_converse_models"
+    litellm.bedrock_converse_models = original
