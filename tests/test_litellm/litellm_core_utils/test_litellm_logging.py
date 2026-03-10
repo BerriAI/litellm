@@ -1756,6 +1756,11 @@ def test_function_setup_litellm_metadata_populates_metadata():
     assert litellm_metadata is not None
     assert litellm_metadata.get("user_api_key_hash") == test_api_key_hash
 
+    # metadata should be a COPY, not an alias — mutating one must not affect the other
+    assert (
+        metadata is not litellm_metadata
+    ), "litellm_params['metadata'] should be a copy, not the same object"
+
 
 def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
     """
@@ -1796,3 +1801,35 @@ def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
     litellm_metadata = litellm_params.get("litellm_metadata")
     assert litellm_metadata is not None
     assert litellm_metadata.get("user_api_key_hash") == "sk-hashed-xyz"
+
+
+def test_function_setup_empty_metadata_falls_back_to_litellm_metadata():
+    """
+    Test that when metadata is explicitly set to {} (empty dict), litellm_metadata
+    is still used to populate litellm_params["metadata"] so API key fields are visible.
+    """
+    import litellm
+
+    kwargs = {
+        "model": "claude-3-5-sonnet",
+        "messages": [{"role": "user", "content": "hello"}],
+        "litellm_call_id": "test-call-id-789",
+        "metadata": {},
+        "litellm_metadata": {
+            "user_api_key_hash": "sk-hashed-empty-test",
+            "user_api_key_team_id": "team-empty-test",
+        },
+    }
+
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="anthropic_messages",
+        rules_obj=litellm.utils.Rules(),
+        start_time=time.time(),
+        **kwargs,
+    )
+
+    litellm_params = logging_obj.model_call_details.get("litellm_params", {})
+    metadata = litellm_params.get("metadata")
+    assert metadata is not None
+    assert metadata.get("user_api_key_hash") == "sk-hashed-empty-test"
+    assert metadata.get("user_api_key_team_id") == "team-empty-test"
