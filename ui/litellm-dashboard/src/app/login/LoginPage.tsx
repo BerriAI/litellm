@@ -6,9 +6,9 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { getProxyBaseUrl } from "@/components/networking";
 import { getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
+import { consumeReturnUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Alert, Button, Card, Form, Input, Space, Typography } from "antd";
+import { Alert, Button, Card, Form, Input, Popover, Space, Typography } from "antd";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -25,14 +25,32 @@ function LoginPageContent() {
       return;
     }
 
+    // Check if admin UI is disabled
+    if (uiConfig && uiConfig.admin_ui_disabled) {
+      setIsLoading(false);
+      return;
+    }
+
     const rawToken = getCookie("token");
     if (rawToken && !isJwtExpired(rawToken)) {
-      router.replace(`${getProxyBaseUrl()}/ui`);
+      // User already logged in - redirect to return URL or default
+      const returnUrl = consumeReturnUrl();
+      if (returnUrl) {
+        router.replace(returnUrl);
+      } else {
+        router.replace(`${getProxyBaseUrl()}/ui`);
+      }
       return;
     }
 
     if (uiConfig && uiConfig.auto_redirect_to_sso) {
-      router.push(`${getProxyBaseUrl()}/sso/key/generate`);
+      // For SSO, pass the return URL to the SSO endpoint
+      const returnUrl = getReturnUrl();
+      let ssoUrl = `${getProxyBaseUrl()}/sso/key/generate`;
+      if (returnUrl && isValidReturnUrl(returnUrl)) {
+        ssoUrl += `?redirect_to=${encodeURIComponent(returnUrl)}`;
+      }
+      router.push(ssoUrl);
       return;
     }
 
@@ -44,7 +62,13 @@ function LoginPageContent() {
       { username, password },
       {
         onSuccess: (data) => {
-          router.push(data.redirect_url);
+          // Check if we have a return URL to use instead of the default redirect
+          const returnUrl = consumeReturnUrl();
+          if (returnUrl) {
+            router.push(returnUrl);
+          } else {
+            router.push(data.redirect_url);
+          }
         },
       },
     );
@@ -57,6 +81,38 @@ function LoginPageContent() {
 
   if (isConfigLoading || isLoading) {
     return <LoadingScreen />;
+  }
+
+  // Show disabled message if admin UI is disabled
+  if (uiConfig && uiConfig.admin_ui_disabled) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Card className="w-full max-w-lg shadow-md">
+          <Space direction="vertical" size="middle" className="w-full">
+            <div className="text-center">
+              <Title level={2}>🚅 LiteLLM</Title>
+            </div>
+
+            <Alert
+              message="Admin UI Disabled"
+              description={
+                <>
+                  <Paragraph className="text-sm">
+                    The Admin UI has been disabled by the administrator. To re-enable it, please update the following
+                    environment variable:
+                  </Paragraph>
+                  <Paragraph className="text-sm">
+                    <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">DISABLE_ADMIN_UI=False</code>
+                  </Paragraph>
+                </>
+              }
+              type="warning"
+              showIcon
+            />
+          </Space>
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -141,19 +197,44 @@ function LoginPageContent() {
                 {isLoginLoading ? "Logging in..." : "Login"}
               </Button>
             </Form.Item>
+            <Form.Item>
+              {!uiConfig?.sso_configured ? (
+                <Popover
+                  content="Please configure SSO to log in with SSO."
+                  trigger="hover"
+                >
+                  <Button disabled block size="large">
+                    Login with SSO
+                  </Button>
+                </Popover>
+              ) : (
+                <Button
+                  disabled={isLoginLoading}
+                  onClick={() =>
+                    router.push(`${getProxyBaseUrl()}/sso/key/generate`)
+                  }
+                  block
+                  size="large"
+                >
+                  Login with SSO
+                </Button>
+              )}
+            </Form.Item>
           </Form>
         </Space>
+        {uiConfig?.sso_configured && (
+          <Alert
+            type="info"
+            showIcon
+            closable
+            message={<Text>Single Sign-On (SSO) is enabled. LiteLLM no longer automatically redirects to the SSO login flow upon loading this page. To re-enable auto-redirect-to-SSO, set <Text code>AUTO_REDIRECT_UI_LOGIN_TO_SSO=true</Text> in your environment configuration.</Text>}
+          />
+        )}
       </Card>
     </div>
   );
 }
 
 export default function LoginPage() {
-  const queryClient = new QueryClient();
-
-  return (
-    <QueryClientProvider client={queryClient}>
-      <LoginPageContent />
-    </QueryClientProvider>
-  );
+  return <LoginPageContent />;
 }

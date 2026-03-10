@@ -1,17 +1,22 @@
 import { isAdminRole } from "@/utils/roles";
 import { QuestionCircleOutlined } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
+import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
-import { deleteMCPServer, fetchMCPServers } from "../networking";
+import { deleteMCPServer } from "../networking";
 import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
 import { mcpServerColumns } from "./mcp_server_columns";
 import { MCPServerView } from "./mcp_server_view";
-import { MCPServer, MCPServerProps, Team } from "./types";
+import { DiscoverableMCPServer, MCPServer, MCPServerProps, Team } from "./types";
+import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
+import MCPNetworkSettings from "./MCPNetworkSettings";
+import MCPDiscovery from "./mcp_discovery";
+import { ByokCredentialModal } from "./ByokCredentialModal";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -19,30 +24,29 @@ const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
-  const {
-    data: mcpServers,
-    isLoading: isLoadingServers,
-    refetch,
-    dataUpdatedAt,
-  } = useQuery({
-    queryKey: ["mcpServers"],
-    queryFn: () => {
-      if (!accessToken) throw new Error("Access Token required");
-      return fetchMCPServers(accessToken);
-    },
-    enabled: !!accessToken,
-  }) as { data: MCPServer[]; isLoading: boolean; refetch: () => void; dataUpdatedAt: number };
+  const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
-  // Log allowed_tools from fetched servers
-  React.useEffect(() => {
-    if (mcpServers) {
-      console.log("MCP Servers fetched:", mcpServers);
-      mcpServers.forEach((server) => {
-        console.log(`Server: ${server.server_name || server.server_id}`);
-        console.log(`  allowed_tools:`, server.allowed_tools);
-      });
-    }
-  }, [mcpServers]);
+  // Fetch health status for all servers
+  const serverIds = useMemo(() => mcpServers?.map((server) => server.server_id), [mcpServers]);
+  const { data: healthStatuses, isLoading: isLoadingHealth } = useMCPServerHealth(serverIds);
+
+  // Merge health status data into servers
+  const serversWithHealth = useMemo(() => {
+    if (!mcpServers) return [];
+    if (!healthStatuses) return mcpServers;
+
+    const healthMap = new Map(healthStatuses.map((h) => [h.server_id, h.status]));
+
+    return mcpServers.map((server) => {
+      const healthStatus = healthMap.get(server.server_id);
+      return {
+        ...server,
+        status: healthStatus
+          ? (healthStatus as "healthy" | "unhealthy" | "unknown")
+          : server.status,
+      };
+    });
+  }, [mcpServers, healthStatuses]);
 
   // state
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
@@ -53,7 +57,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
+  const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
+  const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
+  const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
 
   useEffect(() => {
@@ -77,10 +84,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
-    if (!mcpServers) return [];
+    if (!serversWithHealth) return [];
     const teamsSet = new Set<string>();
     const uniqueTeamsArray: Team[] = [];
-    mcpServers.forEach((server: MCPServer) => {
+    serversWithHealth.forEach((server: MCPServer) => {
       if (server.teams) {
         server.teams.forEach((team: Team) => {
           const teamKey = team.team_id;
@@ -92,34 +99,22 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       }
     });
     return uniqueTeamsArray;
-  }, [mcpServers]);
+  }, [serversWithHealth]);
 
   // Get unique MCP access groups from all servers
   const uniqueMcpAccessGroups = React.useMemo(() => {
-    if (!mcpServers) return [];
+    if (!serversWithHealth) return [];
     return Array.from(
       new Set(
-        mcpServers.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
+        serversWithHealth.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
       ),
     );
-  }, [mcpServers]);
-
-  // Handle team filter change
-  const handleTeamChange = (teamId: string) => {
-    setSelectedTeam(teamId);
-    filterServers(teamId, selectedMcpAccessGroup);
-  };
-
-  // Handle MCP access group filter change
-  const handleMcpAccessGroupChange = (group: string) => {
-    setSelectedMcpAccessGroup(group);
-    filterServers(selectedTeam, group);
-  };
+  }, [serversWithHealth]);
 
   // Filtering logic for both team and access group
-  const filterServers = (teamId: string, group: string) => {
-    if (!mcpServers) return setFilteredServers([]);
-    let filtered = mcpServers;
+  const filterServers = useCallback((teamId: string, group: string) => {
+    if (!serversWithHealth) return setFilteredServers([]);
+    let filtered = serversWithHealth;
     if (teamId === "personal") {
       setFilteredServers([]);
       return;
@@ -133,12 +128,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       );
     }
     setFilteredServers(filtered);
+  }, [serversWithHealth]);
+
+  // Handle team filter change
+  const handleTeamChange = (teamId: string) => {
+    setSelectedTeam(teamId);
+    filterServers(teamId, selectedMcpAccessGroup);
   };
 
-  // Initial and effect-based filtering (trigger on query data updates)
+  // Handle MCP access group filter change
+  const handleMcpAccessGroupChange = (group: string) => {
+    setSelectedMcpAccessGroup(group);
+    filterServers(selectedTeam, group);
+  };
+
+  // Initial and effect-based filtering (trigger on query data updates and health data updates)
   useEffect(() => {
     filterServers(selectedTeam, selectedMcpAccessGroup);
-  }, [dataUpdatedAt]);
+  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, filterServers]);
 
   const columns = React.useMemo(
     () =>
@@ -153,8 +160,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           setEditServer(true);
         },
         handleDelete,
+        isLoadingHealth,
+        (server: MCPServer) => setByokModalServer(server),
       ),
-    [userRole],
+    [userRole, isLoadingHealth],
   );
 
   function handleDelete(server_id: string) {
@@ -195,108 +204,33 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     setModalVisible(false);
   };
 
+  // Memoize the selected server to prevent unnecessary re-renders
+  const selectedServer = React.useMemo(() => {
+    return filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
+      server_id: "",
+      server_name: "",
+      alias: "",
+      url: "",
+      transport: "",
+      auth_type: "",
+      created_at: "",
+      created_by: "",
+      updated_at: "",
+      updated_by: "",
+    };
+  }, [filteredServers, selectedServerId]);
+
+  // Memoize the onBack callback to prevent unnecessary re-renders
+  const handleBack = React.useCallback(() => {
+    setEditServer(false);
+    setSelectedServerId(null);
+    refetch();
+  }, [refetch]);
+
   if (!accessToken || !userRole || !userID) {
     console.log("Missing required authentication parameters", { accessToken, userRole, userID });
     return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
   }
-
-  const ServersTab = () =>
-    selectedServerId ? (
-      <MCPServerView
-        mcpServer={
-          filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
-            server_id: "",
-            server_name: "",
-            alias: "",
-            url: "",
-            transport: "",
-            auth_type: "",
-            created_at: "",
-            created_by: "",
-            updated_at: "",
-            updated_by: "",
-          }
-        }
-        onBack={() => {
-          setEditServer(false);
-          setSelectedServerId(null);
-          refetch();
-        }}
-        isProxyAdmin={isAdminRole(userRole)}
-        isEditing={editServer}
-        accessToken={accessToken}
-        userID={userID}
-        userRole={userRole}
-        availableAccessGroups={uniqueMcpAccessGroups}
-      />
-    ) : (
-      <div className="w-full h-full">
-        <div className="w-full px-6">
-          <div className="flex flex-col space-y-4">
-            <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
-              <div className="flex items-center gap-4">
-                <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
-                <Select value={selectedTeam} onChange={handleTeamChange} style={{ width: 300 }}>
-                  <Option value="all">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                      <span className="font-medium">{isInternalUser ? "All Available Servers" : "All Servers"}</span>
-                    </div>
-                  </Option>
-                  <Option value="personal">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                      <span className="font-medium">Personal</span>
-                    </div>
-                  </Option>
-                  {uniqueTeams.map((team) => (
-                    <Option key={team.team_id} value={team.team_id}>
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span className="font-medium">{team.team_alias || team.team_id}</span>
-                      </div>
-                    </Option>
-                  ))}
-                </Select>
-                <Text className="text-lg font-semibold text-gray-900 ml-6">
-                  Access Group:
-                  <Tooltip title="An MCP Access Group is a set of users or teams that have permission to access specific MCP servers. Use access groups to control and organize who can connect to which servers.">
-                    <QuestionCircleOutlined style={{ marginLeft: 4, color: "#888" }} />
-                  </Tooltip>
-                </Text>
-                <Select value={selectedMcpAccessGroup} onChange={handleMcpAccessGroupChange} style={{ width: 300 }}>
-                  <Option value="all">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                      <span className="font-medium">All Access Groups</span>
-                    </div>
-                  </Option>
-                  {uniqueMcpAccessGroups.map((group) => (
-                    <Option key={group} value={group}>
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span className="font-medium">{group}</span>
-                      </div>
-                    </Option>
-                  ))}
-                </Select>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="w-full px-6 mt-6">
-          <DataTable
-            data={filteredServers}
-            columns={columns}
-            renderSubComponent={() => <div></div>}
-            getRowCanExpand={() => false}
-            isLoading={isLoadingServers}
-            noDataMessage="No MCP servers configured"
-            loadingMessage="🚅 Loading MCP servers..."
-          />
-        </div>
-      </div>
-    );
 
   return (
     <div className="w-full h-full p-6">
@@ -312,34 +246,28 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         confirmLoading={isDeletingServer}
       >
         <div className="space-y-4">
-          <AntdText>Are you sure you want to delete this MCP Server? This action cannot be undone.</AntdText>
+          <AntdText className="text-gray-600">This action is permanent and cannot be undone. All associated configurations will be removed.</AntdText>
 
           {serverToDelete && (
-            <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
-              <AntdTitle level={5} className="mb-3 text-gray-900">
-                Server Information
-              </AntdTitle>
-              <Descriptions column={1} size="small">
+            <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <Descriptions column={1} size="small" colon={false}>
                 {serverToDelete.server_name && (
-                  <Descriptions.Item label={<span className="font-semibold text-gray-700">Server Name</span>}>
-                    <AntdText className="text-sm">{serverToDelete.server_name}</AntdText>
+                  <Descriptions.Item label={<span className="text-gray-500 text-sm">Name</span>}>
+                    <AntdText strong className="text-sm">{serverToDelete.server_name}</AntdText>
                   </Descriptions.Item>
                 )}
-                {serverToDelete.alias && (
-                  <Descriptions.Item label={<span className="font-semibold text-gray-700">Alias</span>}>
-                    <AntdText className="text-sm">{serverToDelete.alias}</AntdText>
-                  </Descriptions.Item>
-                )}
-                <Descriptions.Item label={<span className="font-semibold text-gray-700">Server ID</span>}>
-                  <AntdText code className="text-sm">
+                <Descriptions.Item label={<span className="text-gray-500 text-sm">ID</span>}>
+                  <AntdText code className="text-xs">
                     {serverToDelete.server_id}
                   </AntdText>
                 </Descriptions.Item>
-                <Descriptions.Item label={<span className="font-semibold text-gray-700">URL</span>}>
-                  <AntdText code className="text-sm">
-                    {serverToDelete.url}
-                  </AntdText>
-                </Descriptions.Item>
+                {serverToDelete.url && (
+                  <Descriptions.Item label={<span className="text-gray-500 text-sm">URL</span>}>
+                    <AntdText code className="text-xs break-all">
+                      {serverToDelete.url}
+                    </AntdText>
+                  </Descriptions.Item>
+                )}
               </Descriptions>
             </div>
           )}
@@ -352,30 +280,151 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         isModalVisible={isModalVisible}
         setModalVisible={setModalVisible}
         availableAccessGroups={uniqueMcpAccessGroups}
+        prefillData={prefillData}
+        onBackToDiscovery={() => {
+          setModalVisible(false);
+          setPrefillData(null);
+          setDiscoveryVisible(true);
+        }}
       />
-      <Title>MCP Servers</Title>
-      <Text className="text-tremor-content mt-2">Configure and manage your MCP servers</Text>
-      {isAdminRole(userRole) && (
-        <Button className="mt-4 mb-4" onClick={() => setModalVisible(true)}>
-          + Add New MCP Server
-        </Button>
-      )}
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <Title>MCP Servers</Title>
+            {filteredServers.length > 0 && (
+              <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                {filteredServers.length}
+              </span>
+            )}
+          </div>
+          <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
+        </div>
+        {isAdminRole(userRole) && (
+          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+            + Add New MCP Server
+          </Button>
+        )}
+      </div>
+      <MCPDiscovery
+        isVisible={isDiscoveryVisible}
+        onClose={() => setDiscoveryVisible(false)}
+        onSelectServer={(server: DiscoverableMCPServer) => {
+          setPrefillData(server);
+          setDiscoveryVisible(false);
+          setModalVisible(true);
+        }}
+        onCustomServer={() => {
+          setPrefillData(null);
+          setDiscoveryVisible(false);
+          setModalVisible(true);
+        }}
+        accessToken={accessToken}
+      />
       <TabGroup className="w-full h-full">
         <TabList className="flex justify-between mt-2 w-full items-center">
           <div className="flex">
             <Tab>All Servers</Tab>
             <Tab>Connect</Tab>
+            <Tab>Semantic Filter</Tab>
+            <Tab>Network Settings</Tab>
           </div>
         </TabList>
         <TabPanels>
           <TabPanel>
-            <ServersTab />
+            {selectedServerId ? (
+              <MCPServerView
+                key={selectedServerId}
+                mcpServer={selectedServer}
+                onBack={handleBack}
+                isProxyAdmin={isAdminRole(userRole)}
+                isEditing={editServer}
+                accessToken={accessToken}
+                userID={userID}
+                userRole={userRole}
+                availableAccessGroups={uniqueMcpAccessGroups}
+              />
+            ) : (
+              <div className="w-full h-full">
+                <div className="w-full">
+                  <div className="flex flex-col space-y-4">
+                    <div className="flex items-center gap-6 bg-white rounded-lg px-4 py-3 border border-gray-200">
+                      <div className="flex items-center gap-2">
+                        <Text className="text-sm font-medium text-gray-600 whitespace-nowrap">Team</Text>
+                        <Select value={selectedTeam} onChange={handleTeamChange} style={{ width: 220 }} size="middle">
+                          <Option value="all">
+                            <span className="font-medium">{isInternalUser ? "All Available Servers" : "All Servers"}</span>
+                          </Option>
+                          <Option value="personal">
+                            <span className="font-medium">Personal</span>
+                          </Option>
+                          {uniqueTeams.map((team) => (
+                            <Option key={team.team_id} value={team.team_id}>
+                              <span className="font-medium">{team.team_alias || team.team_id}</span>
+                            </Option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div className="h-6 w-px bg-gray-200"></div>
+                      <div className="flex items-center gap-2">
+                        <Text className="text-sm font-medium text-gray-600 whitespace-nowrap">
+                          Access Group
+                          <Tooltip title="An MCP Access Group is a set of users or teams that have permission to access specific MCP servers. Use access groups to control and organize who can connect to which servers.">
+                            <QuestionCircleOutlined style={{ marginLeft: 4, color: "#9ca3af" }} />
+                          </Tooltip>
+                        </Text>
+                        <Select value={selectedMcpAccessGroup} onChange={handleMcpAccessGroupChange} style={{ width: 220 }} size="middle">
+                          <Option value="all">
+                            <span className="font-medium">All Access Groups</span>
+                          </Option>
+                          {uniqueMcpAccessGroups.map((group) => (
+                            <Option key={group} value={group}>
+                              <span className="font-medium">{group}</span>
+                            </Option>
+                          ))}
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="w-full mt-6">
+                  <DataTable
+                    data={filteredServers}
+                    columns={columns}
+                    renderSubComponent={() => <div></div>}
+                    getRowCanExpand={() => false}
+                    isLoading={isLoadingServers}
+                    noDataMessage="No MCP servers configured. Click '+ Add New MCP Server' to get started."
+                    loadingMessage="Loading MCP servers..."
+                    enableSorting={true}
+                  />
+                </div>
+              </div>
+            )}
           </TabPanel>
           <TabPanel>
             <MCPConnect />
           </TabPanel>
+          <TabPanel>
+            <MCPSemanticFilterSettings accessToken={accessToken} />
+          </TabPanel>
+          <TabPanel>
+            <MCPNetworkSettings accessToken={accessToken} />
+          </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      {byokModalServer && (
+        <ByokCredentialModal
+          server={byokModalServer}
+          open={!!byokModalServer}
+          onClose={() => setByokModalServer(null)}
+          onSuccess={(_serverId) => {
+            refetch();
+            setByokModalServer(null);
+          }}
+          accessToken={accessToken || ""}
+        />
+      )}
     </div>
   );
 };

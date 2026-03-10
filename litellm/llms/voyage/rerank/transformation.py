@@ -12,7 +12,6 @@ from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
-    OptionalRerankParams,
     RerankBilledUnits,
     RerankResponse,
     RerankResponseMeta,
@@ -48,7 +47,9 @@ class VoyageRerankConfig(BaseRerankConfig):
             optional_params["top_k"] = top_n
         if return_documents is not None:
             optional_params["return_documents"] = return_documents
-        return dict(OptionalRerankParams(**optional_params))
+        # Return as dict - OptionalRerankParams is a TypedDict with total=False
+        # so all fields are optional and we can return the dict directly
+        return optional_params
 
     def get_complete_url(
         self,

@@ -14,6 +14,7 @@ import httpx
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.passthrough.utils import CommonUtils
 from litellm.types.llms.openai import AllMessageValues
 
 if TYPE_CHECKING:
@@ -94,6 +95,9 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
+
+        # Encode model ID for ARNs (e.g., :imported-model/ -> :imported-model%2F)
+        model_id = CommonUtils.encode_bedrock_runtime_modelid_arn(model_id)
         
         # Build the invoke URL
         if stream:

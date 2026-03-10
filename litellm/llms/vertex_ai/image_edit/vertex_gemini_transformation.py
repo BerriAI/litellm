@@ -8,9 +8,9 @@ import httpx
 from httpx._types import RequestFiles
 
 import litellm
-
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -94,10 +94,22 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
-        vertex_project = self._resolve_vertex_project()
-        vertex_credentials = self._resolve_vertex_credentials()
+        litellm_params = litellm_params or {}
+        
+        # If a custom api_base is provided, skip credential validation
+        # This allows users to use proxies or mock endpoints without needing Vertex AI credentials
+        _api_base = litellm_params.get("api_base") or api_base
+        if _api_base is not None:
+            return headers
+        
+        # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
+        # then fall back to environment variables and other sources
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -114,41 +126,50 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         """
         Get the complete URL for Vertex AI Gemini generateContent API
         """
-        vertex_project = self._resolve_vertex_project()
-        vertex_location = self._resolve_vertex_location()
-
-        if not vertex_project or not vertex_location:
-            raise ValueError("vertex_project and vertex_location are required for Vertex AI")
-
         # Use the model name as provided, handling vertex_ai prefix
         model_name = model
         if model.startswith("vertex_ai/"):
             model_name = model.replace("vertex_ai/", "")
 
+        # If a custom api_base is provided, use it directly
+        # This allows users to use proxies or mock endpoints
         if api_base:
-            base_url = api_base.rstrip("/")
-        else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            return api_base.rstrip("/")
+
+        # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
+        # then fall back to environment variables and other sources
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
+
+        if not vertex_project or not vertex_location:
+            raise ValueError("vertex_project and vertex_location are required for Vertex AI")
+
+        base_url = get_vertex_base_url(vertex_location)
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:generateContent"
 
     def transform_image_edit_request(  # type: ignore[override]
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[Dict[str, Any], Optional[RequestFiles]]:
-        inline_parts = self._prepare_inline_image_parts(image)
+        inline_parts = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise ValueError("Vertex AI Gemini image edit requires at least one image.")
+
+        # Build parts list with image and prompt (if provided)
+        parts = inline_parts.copy()
+        if prompt is not None and prompt != "":
+            parts.append({"text": prompt})
 
         # Correct format for Vertex AI Gemini image editing
         contents = {
             "role": "USER",
-            "parts": inline_parts + [{"text": prompt}]
+            "parts": parts
         }
 
         request_body: Dict[str, Any] = {"contents": contents}

@@ -4,8 +4,12 @@ All-in-one document ingestion pipeline: **Upload → Chunk → Embed → Vector 
 
 | Feature | Supported |
 |---------|-----------|
-| Logging | ✅ |
-| Supported Providers | `openai`, `bedrock`, `vertex_ai`, `gemini` |
+| Logging | Yes |
+| Supported Providers | `openai`, `bedrock`, `vertex_ai`, `gemini`, `s3_vectors` |
+
+:::tip
+After ingesting documents, use [/rag/query](./rag_query.md) to search and generate responses with your ingested content.
+:::
 
 ## Quick Start
 
@@ -71,6 +75,31 @@ curl -X POST "http://localhost:4000/v1/rag/ingest" \
     }"
 ```
 
+### AWS S3 Vectors
+
+```bash showLineNumbers title="Ingest to S3 Vectors"
+curl -X POST "http://localhost:4000/v1/rag/ingest" \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"file\": {
+            \"filename\": \"document.txt\",
+            \"content\": \"$(base64 -i document.txt)\",
+            \"content_type\": \"text/plain\"
+        },
+        \"ingest_options\": {
+            \"embedding\": {
+                \"model\": \"text-embedding-3-small\"
+            },
+            \"vector_store\": {
+                \"custom_llm_provider\": \"s3_vectors\",
+                \"vector_bucket_name\": \"my-embeddings\",
+                \"aws_region_name\": \"us-west-2\"
+            }
+        }
+    }"
+```
+
 ## Response
 
 ```json
@@ -82,9 +111,33 @@ curl -X POST "http://localhost:4000/v1/rag/ingest" \
 }
 ```
 
-## Query the Vector Store
+## Query with RAG
 
-After ingestion, query with `/vector_stores/{vector_store_id}/search`:
+After ingestion, use the [/rag/query](./rag_query.md) endpoint to search and generate LLM responses:
+
+```bash showLineNumbers title="RAG Query"
+curl -X POST "http://localhost:4000/v1/rag/query" \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "What is the main topic?"}],
+        "retrieval_config": {
+            "vector_store_id": "vs_xyz789",
+            "custom_llm_provider": "openai",
+            "top_k": 5
+        }
+    }'
+```
+
+This will:
+1. Search the vector store for relevant context
+2. Prepend the context to your messages
+3. Generate an LLM response
+
+### Direct Vector Store Search
+
+Alternatively, search the vector store directly with `/vector_stores/{vector_store_id}/search`:
 
 ```bash showLineNumbers title="Search the vector store"
 curl -X POST "http://localhost:4000/v1/vector_stores/vs_xyz789/search" \
@@ -236,6 +289,57 @@ When `vector_store_id` is omitted, LiteLLM automatically creates:
 3. Authenticate via `gcloud auth application-default login`
 4. Install: `pip install 'google-cloud-aiplatform>=1.60.0'`
 :::
+
+### vector_store (AWS S3 Vectors)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `custom_llm_provider` | string | - | `"s3_vectors"` |
+| `vector_bucket_name` | string | **required** | S3 vector bucket name |
+| `index_name` | string | auto-create | Vector index name |
+| `dimension` | integer | auto-detect | Vector dimension (auto-detected from embedding model) |
+| `distance_metric` | string | `cosine` | Distance metric: `cosine` or `euclidean` |
+| `non_filterable_metadata_keys` | array | `["source_text"]` | Metadata keys excluded from filtering |
+| `aws_region_name` | string | `us-west-2` | AWS region |
+| `aws_access_key_id` | string | env | AWS access key |
+| `aws_secret_access_key` | string | env | AWS secret key |
+
+:::info S3 Vectors Auto-Creation
+When `index_name` is omitted, LiteLLM automatically creates:
+- S3 vector bucket (if it doesn't exist)
+- Vector index with auto-detected dimensions from your embedding model
+
+**Dimension Auto-Detection**: The vector dimension is automatically detected by making a test embedding request to your specified model. No need to manually specify dimensions!
+
+**Supported Embedding Models**: Works with any LiteLLM-supported embedding model (OpenAI, Cohere, Bedrock, Azure, etc.)
+:::
+
+**Example with auto-detection:**
+```json
+{
+  "embedding": {
+    "model": "text-embedding-3-small"  // Dimension auto-detected as 1536
+  },
+  "vector_store": {
+    "custom_llm_provider": "s3_vectors",
+    "vector_bucket_name": "my-embeddings"
+  }
+}
+```
+
+**Example with custom embedding provider:**
+```json
+{
+  "embedding": {
+    "model": "cohere/embed-english-v3.0"  // Dimension auto-detected as 1024
+  },
+  "vector_store": {
+    "custom_llm_provider": "s3_vectors",
+    "vector_bucket_name": "my-embeddings",
+    "distance_metric": "cosine"
+  }
+}
+```
 
 ## Input Examples
 

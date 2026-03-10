@@ -27,6 +27,8 @@ CachingSupportedCallTypes = Literal[
     "text_completion",
     "arerank",
     "rerank",
+    "responses",
+    "aresponses",
 ]
 
 
@@ -48,6 +50,24 @@ class RedisPipelineSetOperation(TypedDict):
     key: str
     value: Any
     ttl: Optional[int]
+
+
+class RedisPipelineRpushOperation(TypedDict):
+    """
+    TypedDict for 1 Redis Pipeline RPUSH Operation
+    """
+
+    key: str
+    values: List[Any]
+
+
+class RedisPipelineLpopOperation(TypedDict):
+    """
+    TypedDict for 1 Redis Pipeline LPOP Operation
+    """
+
+    key: str
+    count: Optional[int]
 
 
 DynamicCacheControl = TypedDict(

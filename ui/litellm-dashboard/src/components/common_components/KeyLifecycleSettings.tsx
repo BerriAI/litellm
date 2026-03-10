@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Select, Tooltip, Divider, Switch } from "antd";
+import { Select, Tooltip, Divider, Switch, Checkbox } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput } from "@tremor/react";
 
@@ -11,6 +11,9 @@ interface KeyLifecycleSettingsProps {
   onAutoRotationChange: (enabled: boolean) => void;
   rotationInterval: string;
   onRotationIntervalChange: (interval: string) => void;
+  isCreateMode?: boolean; // If true, shows "leave empty to never expire" instead of "-1 to never expire"
+  neverExpire?: boolean;
+  onNeverExpireChange?: (checked: boolean) => void;
 }
 
 const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
@@ -19,6 +22,9 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
   onAutoRotationChange,
   rotationInterval,
   onRotationIntervalChange,
+  isCreateMode = false,
+  neverExpire = false,
+  onNeverExpireChange,
 }) => {
   // Predefined intervals
   const predefinedIntervals = ["7d", "30d", "90d", "180d", "365d"];
@@ -64,16 +70,39 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
         <div className="space-y-2">
           <label className="text-sm font-medium text-gray-700 flex items-center space-x-1">
             <span>Expire Key</span>
-            <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
+            <Tooltip
+              title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Leave empty to keep the current expiry unchanged."
+            >
               <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
             </Tooltip>
+            {!isCreateMode && onNeverExpireChange && (
+              <Checkbox
+                checked={neverExpire}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  onNeverExpireChange(checked);
+                  if (checked) {
+                    setDurationValue("");
+                    if (form && typeof form.setFieldValue === "function") {
+                      form.setFieldValue("duration", "");
+                    } else if (form && typeof form.setFieldsValue === "function") {
+                      form.setFieldsValue({ duration: "" });
+                    }
+                  }
+                }}
+                className="ml-2 text-sm font-normal text-gray-600"
+              >
+                Never Expire
+              </Checkbox>
+            )}
           </label>
           <TextInput
             name="duration"
-            placeholder="e.g., 30d"
+            placeholder={isCreateMode ? "e.g., 30d or leave empty to never expire" : "e.g., 30d"}
             className="w-full"
             value={durationValue}
             onValueChange={handleDurationChange}
+            disabled={!isCreateMode && neverExpire}
           />
         </div>
       </div>

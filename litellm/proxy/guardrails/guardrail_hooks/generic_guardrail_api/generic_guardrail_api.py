@@ -5,26 +5,157 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import fnmatch
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Set
+
+import httpx
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm._version import version as litellm_version
+from litellm.exceptions import GuardrailRaisedException, Timeout
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "generic_guardrail_api"
+
+# Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
+_HEADER_VALUE_ALLOWLIST = frozenset(
+    {
+        "host",
+        "accept-encoding",
+        "connection",
+        "accept",
+        "content-type",
+        "user-agent",
+        "x-stainless-*",
+        "x-litellm-*",
+        "content-length",
+    }
+)
+
+# Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
+_HEADER_PRESENT_PLACEHOLDER = "[present]"
+
+
+def _header_value_allowed(
+    header_name: str,
+    extra_allowlist: Optional[Set[str]] = None,
+) -> bool:
+    """Return True if this header's value may be forwarded (allowlist, including globs and extra_headers)."""
+    lower = header_name.lower()
+    if lower in _HEADER_VALUE_ALLOWLIST:
+        return True
+    for pattern in _HEADER_VALUE_ALLOWLIST:
+        if "*" in pattern and fnmatch.fnmatch(lower, pattern):
+            return True
+    if extra_allowlist and lower in extra_allowlist:
+        return True
+    return False
+
+
+def _sanitize_inbound_headers(
+    headers: Any,
+    extra_allowlist: Optional[Set[str]] = None,
+) -> Optional[Dict[str, str]]:
+    """
+    Sanitize inbound headers before passing them to a 3rd party guardrail service.
+
+    - Allowlist: default allowlist + extra_allowlist (from litellm_params.extra_headers); only these have values forwarded.
+    - All other headers are included with value "[present]" so the guardrail knows the header existed.
+    - Coerces values to str (for JSON serialization).
+    """
+    if not headers or not isinstance(headers, dict):
+        return None
+
+    sanitized: Dict[str, str] = {}
+    for k, v in headers.items():
+        if k is None:
+            continue
+        key = str(k)
+        if _header_value_allowed(key, extra_allowlist=extra_allowlist):
+            try:
+                sanitized[key] = str(v)
+            except Exception:
+                continue
+        else:
+            sanitized[key] = _HEADER_PRESENT_PLACEHOLDER
+
+    return sanitized or None
+
+
+def _extract_inbound_headers(
+    request_data: dict,
+    logging_obj: Optional["LiteLLMLoggingObj"],
+    extra_allowlist: Optional[Set[str]] = None,
+) -> Optional[Dict[str, str]]:
+    """
+    Extract inbound headers from available request context.
+
+    We try multiple locations to support different call paths:
+    - proxy endpoints: request_data["proxy_server_request"]["headers"]
+    - if the guardrail is passed the proxy_server_request object directly
+    - metadata headers captured in litellm_pre_call_utils
+    - response hooks: fallback to logging_obj.model_call_details
+    """
+    # 1) Most common path (proxy): full request context in proxy_server_request
+    headers = request_data.get("proxy_server_request", {}).get("headers")
+    if headers:
+        return _sanitize_inbound_headers(headers, extra_allowlist=extra_allowlist)
+
+    # 2) Some guardrails pass proxy_server_request as request_data itself
+    headers = request_data.get("headers")
+    if headers:
+        return _sanitize_inbound_headers(headers, extra_allowlist=extra_allowlist)
+
+    # 3) Pre-call: headers stored in request metadata
+    metadata_headers = (request_data.get("metadata") or {}).get("headers")
+    if metadata_headers:
+        return _sanitize_inbound_headers(
+            metadata_headers, extra_allowlist=extra_allowlist
+        )
+
+    litellm_metadata_headers = (request_data.get("litellm_metadata") or {}).get(
+        "headers"
+    )
+    if litellm_metadata_headers:
+        return _sanitize_inbound_headers(
+            litellm_metadata_headers, extra_allowlist=extra_allowlist
+        )
+
+    # 4) Post-call: headers not present on response; fallback to logging object
+    if logging_obj and getattr(logging_obj, "model_call_details", None):
+        try:
+            details = logging_obj.model_call_details or {}
+            headers = (
+                details.get("litellm_params", {})
+                .get("metadata", {})
+                .get("headers", None)
+            )
+            if headers:
+                return _sanitize_inbound_headers(
+                    headers, extra_allowlist=extra_allowlist
+                )
+        except Exception:
+            pass
+
+    return None
 
 
 class GenericGuardrailAPI(CustomGuardrail):
@@ -53,13 +184,22 @@ class GenericGuardrailAPI(CustomGuardrail):
         self,
         headers: Optional[Dict[str, Any]] = None,
         api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
+        unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
+        extra_headers: Optional[list] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
         self.headers = headers or {}
+        self.extra_headers = extra_headers or []
+
+        # If api_key is provided, add it as x-api-key header
+        if api_key:
+            self.headers["x-api-key"] = api_key
+
         base_url = api_base or os.environ.get("GENERIC_GUARDRAIL_API_BASE")
 
         if not base_url:
@@ -77,6 +217,10 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         self.additional_provider_specific_params = (
             additional_provider_specific_params or {}
+        )
+
+        self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
+            unreachable_fallback
         )
 
         # Set supported event hooks
@@ -142,6 +286,86 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         return result_metadata
 
+    def _fail_open_passthrough(
+        self,
+        *,
+        inputs: GenericGuardrailAPIInputs,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"],
+        error: Exception,
+        http_status_code: Optional[int] = None,
+    ) -> GenericGuardrailAPIInputs:
+        status_suffix = f" http_status_code={http_status_code}" if http_status_code else ""
+        verbose_proxy_logger.critical(
+            "Generic Guardrail API unreachable (fail-open). Proceeding without guardrail.%s "
+            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
+            status_suffix,
+            getattr(self, "guardrail_name", None),
+            getattr(self, "api_base", None),
+            input_type,
+            getattr(logging_obj, "litellm_call_id", None) if logging_obj else None,
+            getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None,
+            exc_info=error,
+        )
+        # Keep flow going - treat as action=NONE (no modifications)
+        return_inputs: GenericGuardrailAPIInputs = {}
+        return_inputs.update(inputs)
+        return return_inputs
+
+    def _build_request_headers(self) -> dict:
+        """Build HTTP headers for the guardrail API request."""
+        headers = {"Content-Type": "application/json"}
+        if self.headers:
+            headers.update(self.headers)
+        return headers
+
+    def _build_guardrail_return_inputs(
+        self,
+        *,
+        texts: list,
+        images: Any,
+        tools: Any,
+        guardrail_response: GenericGuardrailAPIResponse,
+    ) -> GenericGuardrailAPIInputs:
+        # Action is NONE or no modifications needed
+        return_inputs = GenericGuardrailAPIInputs(texts=texts)
+        if guardrail_response.texts:
+            return_inputs["texts"] = guardrail_response.texts
+        if guardrail_response.images:
+            return_inputs["images"] = guardrail_response.images
+        elif images:
+            return_inputs["images"] = images
+        if guardrail_response.tools:
+            return_inputs["tools"] = guardrail_response.tools
+        elif tools:
+            return_inputs["tools"] = tools
+        return return_inputs
+
+    def _handle_guardrail_request_error(
+        self,
+        error: Exception,
+        inputs: GenericGuardrailAPIInputs,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"],
+        is_unreachable: bool = True,
+    ) -> GenericGuardrailAPIInputs:
+        if is_unreachable and self.unreachable_fallback == "fail_open":
+            http_status_code = getattr(
+                getattr(error, "response", None), "status_code", None
+            )
+            return self._fail_open_passthrough(
+                inputs=inputs,
+                input_type=input_type,
+                logging_obj=logging_obj,
+                error=error,
+                **({"http_status_code": http_status_code} if http_status_code else {}),
+            )
+        verbose_proxy_logger.error(
+            "Generic Guardrail API: failed to make request: %s", str(error)
+        )
+        raise Exception(f"Generic Guardrail API failed: {str(error)}")
+
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -177,6 +401,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         tools = inputs.get("tools")
         structured_messages = inputs.get("structured_messages")
         tool_calls = inputs.get("tool_calls")
+        model = inputs.get("model")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
@@ -194,6 +419,16 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         # Extract user API key metadata
         user_metadata = self._extract_user_api_key_metadata(request_data)
+        extra_allowlist = (
+            {h.lower() for h in self.extra_headers if isinstance(h, str)}
+            if self.extra_headers
+            else None
+        )
+        inbound_headers = _extract_inbound_headers(
+            request_data=request_data,
+            logging_obj=logging_obj,
+            extra_allowlist=extra_allowlist,
+        )
 
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(
@@ -201,24 +436,25 @@ class GenericGuardrailAPI(CustomGuardrail):
             litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
             texts=texts,
             request_data=user_metadata,
+            request_headers=inbound_headers,
+            litellm_version=litellm_version,
             images=images,
             tools=tools,
             structured_messages=structured_messages,
             tool_calls=tool_calls,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
+            model=model,
         )
 
-        # Prepare headers
-        headers = {"Content-Type": "application/json"}
-        if self.headers:
-            headers.update(self.headers)
+        headers = self._build_request_headers()
 
         try:
             # Make the API request
+            # Use mode="json" to ensure all iterables are converted to lists
             response = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.model_dump(),
+                json=guardrail_request.model_dump(mode="json"),
                 headers=headers,
             )
 
@@ -240,27 +476,38 @@ class GenericGuardrailAPI(CustomGuardrail):
                 verbose_proxy_logger.warning(
                     "Generic Guardrail API blocked request: %s", error_message
                 )
-                raise Exception(f"Content blocked by guardrail: {error_message}")
+                raise GuardrailRaisedException(
+                    guardrail_name=GUARDRAIL_NAME,
+                    message=error_message,
+                    should_wrap_with_default_message=False,
+                )
 
-            # Action is NONE or no modifications needed
-            return_inputs = GenericGuardrailAPIInputs(texts=texts)
-            if guardrail_response.texts:
-                return_inputs["texts"] = guardrail_response.texts
-            if guardrail_response.images:
-                return_inputs["images"] = guardrail_response.images
-            elif images:
-                return_inputs["images"] = images
-            if guardrail_response.tools:
-                return_inputs["tools"] = guardrail_response.tools
-            elif tools:
-                return_inputs["tools"] = tools
-            return return_inputs
-
-        except Exception as e:
-            # Check if it's already an exception we raised
-            if "Content blocked by guardrail" in str(e):
-                raise
-            verbose_proxy_logger.error(
-                "Generic Guardrail API: failed to make request: %s", str(e)
+            return self._build_guardrail_return_inputs(
+                texts=texts,
+                images=images,
+                tools=tools,
+                guardrail_response=guardrail_response,
             )
-            raise Exception(f"Generic Guardrail API failed: {str(e)}")
+
+        except GuardrailRaisedException:
+            raise
+        except Timeout as e:
+            return self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj
+            )
+        except httpx.HTTPStatusError as e:
+            status_code = getattr(
+                getattr(e, "response", None), "status_code", None
+            )
+            is_unreachable = status_code in (502, 503, 504)
+            return self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj, is_unreachable=is_unreachable
+            )
+        except httpx.RequestError as e:
+            return self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj
+            )
+        except Exception as e:
+            return self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj, is_unreachable=False
+            )

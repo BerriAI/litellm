@@ -9,6 +9,7 @@
 
 import asyncio
 import copy
+import inspect
 from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
@@ -72,6 +73,53 @@ def _redact_responses_api_output(output_items):
                         summary_item.text = "redacted-by-litellm"
 
 
+def _redact_standard_logging_object(model_call_details: dict):
+    """Redact messages and response inside standard_logging_object if present."""
+    standard_logging_object = model_call_details.get("standard_logging_object")
+    if standard_logging_object is None:
+        return
+
+    redacted_str = "redacted-by-litellm"
+
+    if standard_logging_object.get("messages") is not None:
+        standard_logging_object["messages"] = [
+            {"role": "user", "content": redacted_str}
+        ]
+
+    response = standard_logging_object.get("response")
+    if response is not None:
+        if isinstance(response, dict) and "output" in response:
+            # ResponsesAPIResponse format - redact content in output items
+            if isinstance(response.get("output"), list):
+                for output_item in response["output"]:
+                    if isinstance(output_item, dict) and "content" in output_item:
+                        if isinstance(output_item["content"], list):
+                            for content_item in output_item["content"]:
+                                if (
+                                    isinstance(content_item, dict)
+                                    and "text" in content_item
+                                ):
+                                    content_item["text"] = redacted_str
+        elif isinstance(response, dict) and "choices" in response:
+            # ModelResponse dict format - redact content in choices
+            if isinstance(response.get("choices"), list):
+                for choice in response["choices"]:
+                    if isinstance(choice, dict):
+                        if "message" in choice and isinstance(choice["message"], dict):
+                            choice["message"]["content"] = redacted_str
+                            if "audio" in choice["message"]:
+                                choice["message"]["audio"] = None
+                        elif "delta" in choice and isinstance(choice["delta"], dict):
+                            choice["delta"]["content"] = redacted_str
+                            if "audio" in choice["delta"]:
+                                choice["delta"]["audio"] = None
+        elif isinstance(response, str):
+            standard_logging_object["response"] = redacted_str
+        else:
+            # For other formats (empty dict, None, etc.), use simple text format
+            standard_logging_object["response"] = {"text": redacted_str}
+
+
 def perform_redaction(model_call_details: dict, result):
     """
     Performs the actual redaction on the logging object and result.
@@ -101,8 +149,8 @@ def perform_redaction(model_call_details: dict, result):
     # Redact result
     if result is not None:
         # Check if result is a coroutine, async generator, or other async object - these cannot be deepcopied
-        if (asyncio.iscoroutine(result) or 
-            asyncio.iscoroutinefunction(result) or
+        if (asyncio.iscoroutine(result) or
+            inspect.iscoroutinefunction(result) or
             hasattr(result, '__aiter__') or  # async generator
             hasattr(result, '__anext__')):   # async iterator
             # For async objects, return a simple redacted response without deepcopy
@@ -113,6 +161,29 @@ def perform_redaction(model_call_details: dict, result):
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
                     _redact_choice_content(choice)
+        elif isinstance(_result, dict) and "choices" in _result:
+            # Handle dict representation of ModelResponse (e.g., from model_dump())
+            if _result.get("choices") is not None:
+                for choice in _result["choices"]:
+                    if isinstance(choice, dict):
+                        if "message" in choice and isinstance(choice["message"], dict):
+                            choice["message"]["content"] = "redacted-by-litellm"
+                            if "reasoning_content" in choice["message"]:
+                                choice["message"]["reasoning_content"] = "redacted-by-litellm"
+                            if "thinking_blocks" in choice["message"]:
+                                choice["message"]["thinking_blocks"] = None
+                            if "audio" in choice["message"]:
+                                choice["message"]["audio"] = None
+                        elif "delta" in choice and isinstance(choice["delta"], dict):
+                            choice["delta"]["content"] = "redacted-by-litellm"
+                            if "reasoning_content" in choice["delta"]:
+                                choice["delta"]["reasoning_content"] = "redacted-by-litellm"
+                            if "thinking_blocks" in choice["delta"]:
+                                choice["delta"]["thinking_blocks"] = None
+                            if "audio" in choice["delta"]:
+                                choice["delta"]["audio"] = None
+                    else:
+                        _redact_choice_content(choice)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
                 _redact_responses_api_output(_result.output)
@@ -130,45 +201,55 @@ def perform_redaction(model_call_details: dict, result):
 def should_redact_message_logging(model_call_details: dict) -> bool:
     """
     Determine if message logging should be redacted.
+    
+    Priority order:
+    1. Dynamic parameter (turn_off_message_logging in request)
+    2. Headers (litellm-disable-message-redaction / litellm-enable-message-redaction)
+    3. Global setting (litellm.turn_off_message_logging)
     """
     litellm_params = model_call_details.get("litellm_params", {})
     
     metadata_field = get_metadata_variable_name_from_kwargs(litellm_params)
     metadata = litellm_params.get(metadata_field, {})
-    
-    # Get headers from the metadata
-    request_headers = metadata.get("headers", {}) if isinstance(metadata, dict) else {}
+    if not isinstance(metadata, dict):
+        # Fall back: litellm_metadata was None, try metadata
+        metadata = litellm_params.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
 
-    possible_request_headers = [
+    # Get headers from the metadata
+    request_headers = metadata.get("headers", {})
+
+    # Check for headers that explicitly control redaction
+    if request_headers and bool(
+        request_headers.get("litellm-disable-message-redaction", False)
+    ):
+        # User explicitly disabled redaction via header
+        return False
+
+    possible_enable_headers = [
         "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
         "x-litellm-enable-message-redaction",  # new header
     ]
 
     is_redaction_enabled_via_header = False
-    for header in possible_request_headers:
+    for header in possible_enable_headers:
         if bool(request_headers.get(header, False)):
             is_redaction_enabled_via_header = True
             break
 
-    # check if user opted out of logging message/response to callbacks
-    if (
-        litellm.turn_off_message_logging is not True
-        and is_redaction_enabled_via_header is not True
-        and _get_turn_off_message_logging_from_dynamic_params(model_call_details)
-        is not True
-    ):
-        return False
-
-    if request_headers and bool(
-        request_headers.get("litellm-disable-message-redaction", False)
-    ):
-        return False
-
-    # user has OPTED OUT of message redaction
-    if _get_turn_off_message_logging_from_dynamic_params(model_call_details) is False:
-        return False
-
-    return True
+    # Priority 1: Check dynamic parameter first (if explicitly set)
+    dynamic_turn_off = _get_turn_off_message_logging_from_dynamic_params(model_call_details)
+    if dynamic_turn_off is not None:
+        # Dynamic parameter is explicitly set, use it
+        return dynamic_turn_off
+    
+    # Priority 2: Check if header explicitly enables redaction
+    if is_redaction_enabled_via_header:
+        return True
+    
+    # Priority 3: Fall back to global setting
+    return litellm.turn_off_message_logging is True
 
 
 def redact_message_input_output_from_logging(

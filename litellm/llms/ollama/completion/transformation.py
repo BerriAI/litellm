@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 from httpx._models import Headers, Response
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -223,7 +223,9 @@ class OllamaConfig(BaseConfig):
             or get_secret_str("OLLAMA_API_KEY")
         )
 
-    def get_model_info(self, model: str) -> ModelInfoBase:
+    def get_model_info(
+        self, model: str, api_base: Optional[str] = None
+    ) -> ModelInfoBase:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"
@@ -231,7 +233,11 @@ class OllamaConfig(BaseConfig):
         """
         if model.startswith("ollama/") or model.startswith("ollama_chat/"):
             model = model.split("/", 1)[1]
-        api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
+        api_base = (
+            api_base
+            or get_secret_str("OLLAMA_API_BASE")
+            or "http://localhost:11434"
+        )
         api_key = self.get_api_key()
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
@@ -242,8 +248,21 @@ class OllamaConfig(BaseConfig):
                 headers=headers,
             )
         except Exception as e:
-            raise Exception(
-                f"OllamaError: Error getting model info for {model}. Set Ollama API Base via `OLLAMA_API_BASE` environment variable. Error: {e}"
+            verbose_logger.debug(
+                "OllamaError: Could not get model info for %s from %s. Error: %s",
+                model,
+                api_base,
+                e,
+            )
+            return ModelInfoBase(
+                key=model,
+                litellm_provider="ollama",
+                mode="chat",
+                input_cost_per_token=0.0,
+                output_cost_per_token=0.0,
+                max_tokens=None,
+                max_input_tokens=None,
+                max_output_tokens=None,
             )
 
         model_info = response.json()

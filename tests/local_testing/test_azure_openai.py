@@ -41,6 +41,11 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
     PROD Test
     """
     litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
+    
+    # Clear the HTTP client cache to ensure respx mocking works
+    # This is critical because respx only intercepts clients created AFTER mocking is active
+    if hasattr(litellm, 'in_memory_llm_clients_cache'):
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
     router = Router(
         model_list=[

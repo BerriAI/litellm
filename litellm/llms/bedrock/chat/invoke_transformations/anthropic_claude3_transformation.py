@@ -6,7 +6,10 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.llms.bedrock.common_utils import (
+    get_anthropic_beta_from_headers,
+    remove_custom_field_from_tools,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -53,13 +56,26 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return AnthropicConfig.map_openai_params(
+        # Force tool-based structured outputs for Bedrock Invoke
+        # (similar to VertexAI fix in #19201)
+        # Bedrock Invoke doesn't support output_format parameter
+        original_model = model
+        if "response_format" in non_default_params:
+            # Use a model name that forces tool-based approach
+            model = "claude-3-sonnet-20240229"
+        
+        optional_params = AnthropicConfig.map_openai_params(
             self,
             non_default_params,
             optional_params,
             model,
             drop_params,
         )
+        
+        # Restore original model name
+        model = original_model
+        
+        return optional_params
 
 
     def transform_request(
@@ -90,8 +106,19 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         _anthropic_request.pop("model", None)
         _anthropic_request.pop("stream", None)
+        # Bedrock Invoke doesn't support output_format parameter
+        _anthropic_request.pop("output_format", None)
+        # Bedrock Invoke doesn't support output_config parameter
+        # Fixes: https://github.com/BerriAI/litellm/issues/22797
+        _anthropic_request.pop("output_config", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
+
+        # Remove `custom` field from tools (Bedrock doesn't support it)
+        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
+        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # Ref: https://github.com/BerriAI/litellm/issues/22847
+        remove_custom_field_from_tools(_anthropic_request)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
@@ -117,8 +144,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
 
-        if beta_set:
-            _anthropic_request["anthropic_beta"] = list(beta_set)
+        # Filter out beta headers that Bedrock Invoke doesn't support
+        # Uses centralized configuration from anthropic_beta_headers_config.json
+        beta_list = list(beta_set)
+        _anthropic_request["anthropic_beta"] = beta_list
 
         return _anthropic_request
 

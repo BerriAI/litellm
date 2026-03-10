@@ -12,7 +12,7 @@ from typing import Literal, Optional, cast
 from fastapi import HTTPException
 
 import litellm
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -85,7 +85,7 @@ class LoginResult:
         self.login_method = login_method
 
 
-async def authenticate_user(
+async def authenticate_user(  # noqa: PLR0915
     username: str,
     password: str,
     master_key: Optional[str],
@@ -135,7 +135,7 @@ async def authenticate_user(
         _user_row = cast(
             Optional[LiteLLM_UserTable],
             await prisma_client.db.litellm_usertable.find_first(
-                where={"user_email": {"equals": username}}
+                where={"user_email": {"equals": username, "mode": "insensitive"}}
             ),
         )
 
@@ -144,9 +144,9 @@ async def authenticate_user(
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(username, ui_username) and secrets.compare_digest(
-        password, ui_password
-    ):
+    if secrets.compare_digest(
+        username.encode("utf-8"), ui_username.encode("utf-8")
+    ) and secrets.compare_digest(password.encode("utf-8"), ui_password.encode("utf-8")):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = LITELLM_PROXY_ADMIN_NAME
@@ -178,7 +178,7 @@ async def authenticate_user(
                 request_type="key",
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
-                    "duration": "24hr",
+                    "duration": LITELLM_UI_SESSION_DURATION,
                     "key_max_budget": litellm.max_ui_session_budget,
                     "models": [],
                     "aliases": {},
@@ -256,15 +256,15 @@ async def authenticate_user(
 
         # check if password == _user_row.password
         hash_password = hash_token(token=password)
-        if secrets.compare_digest(password, _password) or secrets.compare_digest(
-            hash_password, _password
-        ):
+        if secrets.compare_digest(
+            password.encode("utf-8"), _password.encode("utf-8")
+        ) or secrets.compare_digest(hash_password.encode("utf-8"), _password.encode("utf-8")):
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
                     **{  # type: ignore
                         "user_role": user_role,
-                        "duration": "24hr",
+                        "duration": LITELLM_UI_SESSION_DURATION,
                         "key_max_budget": litellm.max_ui_session_budget,
                         "models": [],
                         "aliases": {},

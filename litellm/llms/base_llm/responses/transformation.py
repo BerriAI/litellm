@@ -218,6 +218,18 @@ class BaseResponsesAPIConfig(ABC):
         """Returns True if litellm should fake a stream for the given model and stream value"""
         return False
 
+    def supports_native_websocket(self) -> bool:
+        """
+        Returns True if the provider has a native WebSocket endpoint for Responses API.
+        
+        Providers with native websocket support can connect directly to wss:// endpoints.
+        Providers without native support will use the ManagedResponsesWebSocketHandler
+        which makes HTTP streaming calls and forwards events over the websocket.
+        
+        Default: False (use managed websocket handler)
+        """
+        return False
+
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
     #########################################################
@@ -241,4 +253,31 @@ class BaseResponsesAPIConfig(ABC):
 
     #########################################################
     ########## END CANCEL RESPONSE API TRANSFORMATION #######
+    #########################################################
+
+    #########################################################
+    ########## COMPACT RESPONSE API TRANSFORMATION ##########
+    #########################################################
+    @abstractmethod
+    def transform_compact_response_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        pass
+
+    @abstractmethod
+    def transform_compact_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        pass
+
+    #########################################################
+    ########## END COMPACT RESPONSE API TRANSFORMATION ######
     #########################################################

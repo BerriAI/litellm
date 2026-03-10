@@ -39,7 +39,7 @@ Instead of `apt-get` use `apk`, the base litellm image will no longer have `apt-
 **You are only impacted if you use `apt-get` in your Dockerfile**
 ```shell
 # Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
+FROM docker.litellm.ai/berriai/litellm:main-latest
 
 # Set the working directory
 WORKDIR /app

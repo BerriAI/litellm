@@ -17,7 +17,7 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -241,6 +241,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         file_id: str,
         custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     ) -> BatchFileUsage:
         """
         Count number of requests and tokens in a batch input file.
@@ -248,16 +249,31 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         Args:
             file_id: The file ID to read
             custom_llm_provider: The custom LLM provider to use for token encoding
+            user_api_key_dict: User authentication information for file access (required for managed files)
             
         Returns:
             BatchFileUsage with total_tokens and request_count
         """
         try:
-            # Read file content
-            file_content = await litellm.afile_content(
-                file_id=file_id,
-                custom_llm_provider=custom_llm_provider,
+            # Check if this is a managed file (base64 encoded unified file ID)
+            from litellm.proxy.openai_files_endpoints.common_utils import (
+                _is_base64_encoded_unified_file_id,
             )
+            # Managed files require bypassing the HTTP endpoint (which runs access-check hooks)
+            # and calling the managed files hook directly with the user's credentials.
+            is_managed_file = _is_base64_encoded_unified_file_id(file_id)
+            if is_managed_file and user_api_key_dict is not None:
+                file_content = await self._fetch_managed_file_content(
+                    file_id=file_id,
+                    user_api_key_dict=user_api_key_dict,
+                )
+            else:
+                # For non-managed files, use the standard litellm.afile_content
+                file_content = await litellm.afile_content(
+                    file_id=file_id,
+                    custom_llm_provider=custom_llm_provider,
+                    user_api_key_dict=user_api_key_dict,
+                )
 
             file_content_as_dict = _get_file_content_as_dictionary(
                 file_content.content
@@ -278,6 +294,67 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 f"Error counting input file usage for {file_id}: {str(e)}"
             )
             raise
+
+    async def _fetch_managed_file_content(
+        self,
+        file_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Any:
+        """
+        Fetch file content from managed files hook.
+        
+        This is needed for managed files because they require proper user context
+        to verify file ownership and access permissions.
+        
+        Args:
+            file_id: The managed file ID (base64 encoded)
+            user_api_key_dict: User authentication information
+            
+        Returns:
+            HttpxBinaryResponseContent with the file content
+        """
+        from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+
+        # Import proxy_server dependencies at runtime to avoid circular imports
+        try:
+            from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
+        except ImportError as e:
+            raise ValueError(
+                f"Cannot import proxy_server dependencies: {str(e)}. "
+                "Managed files require proxy_server to be initialized."
+            )
+        
+        # Get the managed files hook
+        if proxy_logging_obj is None:
+            raise ValueError(
+                "proxy_logging_obj not available. Cannot access managed files hook."
+            )
+        
+        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        if managed_files_obj is None:
+            raise ValueError(
+                "Managed files hook not found. Cannot access managed file."
+            )
+        
+        if not isinstance(managed_files_obj, BaseFileEndpoints):
+            raise ValueError(
+                "Managed files hook is not a BaseFileEndpoints instance."
+            )
+        
+        if llm_router is None:
+            raise ValueError(
+                "llm_router not available. Cannot access managed files."
+            )
+        
+        # Use the managed files hook to get file content
+        # This properly handles user permissions and file ownership
+        file_content = await managed_files_obj.afile_content(
+            file_id=file_id,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            llm_router=llm_router,
+        )
+        
+        return file_content
 
     async def async_pre_call_hook(
         self,
@@ -336,6 +413,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             batch_usage = await self.count_input_file_usage(
                 file_id=input_file_id,
                 custom_llm_provider=custom_llm_provider,
+                user_api_key_dict=user_api_key_dict,
             )
 
             verbose_proxy_logger.debug(

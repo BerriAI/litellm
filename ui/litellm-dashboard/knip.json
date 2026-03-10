@@ -1,0 +1,18 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["scripts/**/*.ts"],
+  "project": [
+    "src/**/*.{ts,tsx}",
+    "tests/**/*.{ts,tsx}",
+    "scripts/**/*.ts",
+    "e2e_tests/**/*.ts"
+  ],
+  "playwright": {
+    "config": "e2e_tests/playwright.config.ts",
+    "entry": [
+      "e2e_tests/**/*.spec.ts",
+      "e2e_tests/**/*.setup.ts",
+      "e2e_tests/globalSetup.ts"
+    ]
+  }
+}

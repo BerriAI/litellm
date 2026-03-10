@@ -10,6 +10,8 @@ import TabItem from '@theme/TabItem';
 
 **Team member budgets**: Set individual spending limits within the team's shared budget
 
+**Agent budgets**: Set rate limits (tpm/rpm) and session-level caps (iterations, dollar budget) on agents [**Jump**](#agents)
+
 ***If a key belongs to a team, the team budget is applied, not the user's personal budget.***
 :::
 
@@ -67,13 +69,6 @@ You can:
 :::info
 
 **Step-by step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
-
-> **Prerequisite:**
-> To enable team member rate limits, you must set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` before starting the proxy server. Without this, team member rate limits will not be enforced.
-
-👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
-
-:::
 
 
 #### **Add budgets to teams**
@@ -427,6 +422,109 @@ Expected response on failure
 </Tabs>
 
 
+### Agents
+
+Set budgets and rate limits on agents registered with LiteLLM's [Agent Gateway](../a2a.md). You can control:
+- **Per-agent rate limits**: `tpm_limit` and `rpm_limit` on the agent itself
+- **Per-session rate limits**: `session_tpm_limit` and `session_rpm_limit` applied per session
+- **Per-session iteration cap**: `max_iterations` in agent `litellm_params`
+- **Per-session budget cap**: `max_budget_per_session` in agent `litellm_params`
+
+<Tabs>
+<TabItem value="agent-rate-limits" label="Agent Rate Limits">
+
+Set `tpm_limit` and `rpm_limit` on the agent to cap total throughput across all sessions.
+
+```bash
+curl -X POST 'http://localhost:4000/v1/agents' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent_name": "my-research-agent",
+    "agent_card_params": {
+      "name": "my-research-agent",
+      "description": "A research agent",
+      "url": "http://my-agent:8080",
+      "version": "1.0.0"
+    },
+    "tpm_limit": 100000,
+    "rpm_limit": 100
+  }'
+```
+
+</TabItem>
+<TabItem value="session-rate-limits" label="Session Rate Limits">
+
+Set `session_tpm_limit` and `session_rpm_limit` to cap throughput per individual session.
+
+```bash
+curl -X POST 'http://localhost:4000/v1/agents' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent_name": "my-research-agent",
+    "agent_card_params": {
+      "name": "my-research-agent",
+      "description": "A research agent",
+      "url": "http://my-agent:8080",
+      "version": "1.0.0"
+    },
+    "session_tpm_limit": 50000,
+    "session_rpm_limit": 50
+  }'
+```
+
+</TabItem>
+<TabItem value="session-budgets" label="Session Budgets">
+
+Set `max_iterations` and `max_budget_per_session` in agent `litellm_params` to cap individual sessions. Requires `require_trace_id_on_calls_by_agent` so LiteLLM can track calls per session.
+
+```bash
+curl -X POST 'http://localhost:4000/v1/agents' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent_name": "my-research-agent",
+    "agent_card_params": {
+      "name": "my-research-agent",
+      "description": "A research agent",
+      "url": "http://my-agent:8080",
+      "version": "1.0.0"
+    },
+    "litellm_params": {
+      "require_trace_id_on_calls_by_agent": true,
+      "max_iterations": 25,
+      "max_budget_per_session": 5.00
+    }
+  }'
+```
+
+When a session exceeds the limit, requests receive a **429 Too Many Requests** response.
+
+See the [Agent Iteration Budgets](../a2a_iteration_budgets) guide for full details.
+
+</TabItem>
+</Tabs>
+
+:::info
+
+You can also update rate limits on existing agents using `PATCH /v1/agents/{agent_id}`:
+
+```bash
+curl -X PATCH 'http://localhost:4000/v1/agents/<agent_id>' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tpm_limit": 200000,
+    "rpm_limit": 200,
+    "session_tpm_limit": 50000,
+    "session_rpm_limit": 50
+  }'
+```
+
+:::
+
+
 ### Customers
 
 Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
@@ -545,6 +643,26 @@ You can set:
 - max parallel requests
 - rpm / tpm limits per model for a given key
 - rpm / tpm limits per model for a given team model
+
+### TPM Rate Limit Type (Input/Output/Total)
+
+By default, TPM (tokens per minute) rate limits count **total tokens** (input + output). You can configure this to count only input tokens or only output tokens instead.
+
+Set `token_rate_limit_type` in your `config.yaml`:
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  token_rate_limit_type: "output"  # Options: "input", "output", "total" (default)
+```
+
+| Value | Description |
+|-------|-------------|
+| `total` | Count total tokens (prompt + completion). **Default behavior.** |
+| `input` | Count only prompt/input tokens |
+| `output` | Count only completion/output tokens |
+
+This setting applies globally to all TPM rate limit checks (keys, users, teams, etc.).
 
 
 <Tabs>
@@ -705,6 +823,32 @@ All usage for this model is aggregated across team members in one `{team_id}:{mo
 See [Allow Teams to Add Models](./team_model_add.md) for full setup and examples.
 
 </TabItem>
+
+<TabItem value="per-agent" label="Per Agent">
+
+Set rate limits on agents registered with the [Agent Gateway](../a2a.md).
+
+**Agent-level limits** cap total throughput across all sessions:
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/v1/agents' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"agent_name": "my-agent", "agent_card_params": {"name": "my-agent", "description": "My agent", "url": "http://my-agent:8080", "version": "1.0.0"}, "tpm_limit": 100000, "rpm_limit": 100}'
+```
+
+**Session-level limits** cap throughput per individual session:
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/v1/agents' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"agent_name": "my-agent", "agent_card_params": {"name": "my-agent", "description": "My agent", "url": "http://my-agent:8080", "version": "1.0.0"}, "session_tpm_limit": 50000, "session_rpm_limit": 50}'
+```
+
+You can also set **max_iterations** (call count cap) and **max_budget_per_session** (dollar cap) per session via `litellm_params`. See [Agent Iteration Budgets](../a2a_iteration_budgets) for details.
+
+</TabItem>
 <TabItem value="per-end-user" label="For customers">
 
 :::info 
@@ -834,12 +978,10 @@ Expected Response:
 }
 ```
 
-### [BETA] Multi-instance rate limiting
+### Multi-instance rate limiting
 
-Enable multi-instance rate limiting with the env var `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"`
 
 **Important Notes:**
-- Setting `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"` is required for team member rate limits to function, not just for multi-instance scenarios.
 - **Rate limits do not apply to proxy admin users.** 
 - When testing rate limits, use internal user roles (non-admin) to ensure limits are enforced as expected.
 

@@ -117,6 +117,56 @@ response = litellm.completion(
 
 **additional_drop_params**: List or null - Is a list of openai params you want to drop when making a call to the model.
 
+### Nested Field Removal
+
+Drop nested fields within complex objects using JSONPath-like notation:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    messages=[{"role": "user", "content": "Hello"}],
+    tools=[{
+        "name": "search",
+        "description": "Search files",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+        "input_examples": [{"query": "test"}]  # Will be removed
+    }],
+    additional_drop_params=["tools[*].input_examples"]  # Remove from all tools
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: my-bedrock-model
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      additional_drop_params: ["tools[*].input_examples"]  # Remove from all tools
+```
+
+</TabItem>
+</Tabs>
+
+**Supported syntax:**
+- `field` - Top-level field
+- `parent.child` - Nested object field
+- `array[*]` - All array elements
+- `array[0]` - Specific array index
+- `tools[*].input_examples` - Field in all array elements
+- `tools[0].metadata.field` - Specific index + nested field
+
+**Example use cases:**
+- Remove `input_examples` from tool definitions (Claude Code + AWS Bedrock)
+- Drop provider-specific fields from nested structures
+- Clean up nested parameters before sending to LLM
+
 ## Specify allowed openai params in a request
 
 Tell litellm to allow specific openai params in a request. Use this if you get a `litellm.UnsupportedParamsError` and want to allow a param. LiteLLM will pass the param as is to the model.

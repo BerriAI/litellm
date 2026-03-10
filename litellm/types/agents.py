@@ -167,16 +167,37 @@ class AugmentedAgentCard(AgentCard):
     is_public: bool
 
 
+# Object permission shape for agent MCP tool access (mirrors LiteLLM_ObjectPermissionBase)
+class AgentObjectPermission(TypedDict, total=False):
+    mcp_servers: Optional[List[str]]
+    mcp_access_groups: Optional[List[str]]
+    mcp_tool_permissions: Optional[Dict[str, List[str]]]
+
+
 class AgentConfig(TypedDict, total=False):
     agent_name: Required[str]
     agent_card_params: Required[AgentCard]
     litellm_params: Dict[str, Any]  # allow for any future litellm params
+    object_permission: AgentObjectPermission
+    tpm_limit: Optional[int]
+    rpm_limit: Optional[int]
+    session_tpm_limit: Optional[int]
+    session_rpm_limit: Optional[int]
+    static_headers: Optional[Dict[str, str]]
+    extra_headers: Optional[List[str]]
 
 
 class PatchAgentRequest(TypedDict, total=False):
     agent_name: str
     agent_card_params: AgentCard
     litellm_params: Dict[str, Any]
+    object_permission: AgentObjectPermission
+    tpm_limit: Optional[int]
+    rpm_limit: Optional[int]
+    session_tpm_limit: Optional[int]
+    session_rpm_limit: Optional[int]
+    static_headers: Optional[Dict[str, str]]
+    extra_headers: Optional[List[str]]
 
 
 # Request/Response models for CRUD endpoints
@@ -187,6 +208,14 @@ class AgentResponse(BaseModel):
     agent_name: str
     litellm_params: Optional[Dict[str, Any]] = None
     agent_card_params: Dict[str, Any]
+    object_permission: Optional[Dict[str, Any]] = None
+    spend: Optional[float] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    session_tpm_limit: Optional[int] = None
+    session_rpm_limit: Optional[int] = None
+    static_headers: Optional[Dict[str, str]] = None
+    extra_headers: Optional[List[str]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None
@@ -221,6 +250,9 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     result: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
 
+    # LiteLLM usage tracking
+    usage: Optional[Dict[str, Any]] = None
+
     model_config = {"extra": "allow"}
 
     # LiteLLM private attributes for logging/cost tracking
@@ -242,4 +274,17 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         # Convert the a2a response to a dict
         response_dict = response.model_dump(mode="json", exclude_none=True)
 
+        return cls(**response_dict)
+
+    @classmethod
+    def from_dict(cls, response_dict: Dict[str, Any]) -> "LiteLLMSendMessageResponse":
+        """
+        Create a LiteLLMSendMessageResponse from a dict.
+
+        Args:
+            response_dict: Dict with A2A response structure
+
+        Returns:
+            LiteLLMSendMessageResponse with _hidden_params support
+        """
         return cls(**response_dict)

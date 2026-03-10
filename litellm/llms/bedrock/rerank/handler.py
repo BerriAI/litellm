@@ -29,12 +29,13 @@ class BedrockRerankHandler(BaseAWSLLM):
     async def arerank(
         self,
         prepared_request: BedrockPreparedRequest,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ):
         if client is None:
             client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
         try:
-            response = await client.post(url=prepared_request["endpoint_url"], headers=prepared_request["prepped"].headers, data=prepared_request["body"])  # type: ignore
+            response = await client.post(url=prepared_request["endpoint_url"], headers=dict(prepared_request["prepped"].headers), data=prepared_request["body"], timeout=timeout)
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -56,6 +57,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         _is_async: Optional[bool] = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         api_base: Optional[str] = None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
@@ -84,17 +86,17 @@ class BedrockRerankHandler(BaseAWSLLM):
             additional_args={
                 "complete_input_dict": data,
                 "api_base": prepared_request["endpoint_url"],
-                "headers": prepared_request["prepped"].headers,
+                "headers": dict(prepared_request["prepped"].headers),
             },
         )
 
         if _is_async:
-            return self.arerank(prepared_request, client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None)  # type: ignore
+            return self.arerank(prepared_request, timeout=timeout, client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None)  # type: ignore
 
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
         try:
-            response = client.post(url=prepared_request["endpoint_url"], headers=prepared_request["prepped"].headers, data=prepared_request["body"])  # type: ignore
+            response = client.post(url=prepared_request["endpoint_url"], headers=dict(prepared_request["prepped"].headers), data=prepared_request["body"], timeout=timeout)
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code

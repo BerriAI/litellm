@@ -207,12 +207,11 @@ def test_watsonx_completion_regular_model_includes_model_id(
     assert "project_id" in json_data
 
 
-@pytest.mark.asyncio
-async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
+def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     """
     Test that gpt-oss-120b model transforms messages to proper format instead of simple concatenation.
 
-    This test starts from litellm.acompletion and verifies what gets sent in the final POST request body.
+    This test calls litellm.completion (sync) and verifies what gets sent in the final POST request body.
     Input messages should be transformed using the HuggingFace chat template from openai/gpt-oss-120b,
     not just concatenated as "You are chatgpt Hi there".
     """
@@ -228,38 +227,12 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
         {"role": "user", "content": "Hi there"},
     ]
 
-    # Mock the HTTP client
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    client = AsyncHTTPHandler()
-
-    # Mock the token call
-    mock_token_response = Mock()
-    mock_token_response.json.return_value = {
-        "access_token": "mock_access_token",
-        "expires_in": 3600,
-    }
-    mock_token_response.raise_for_status = Mock()
-
-    # Mock the completion call
-    mock_completion_response = Mock()
-    mock_completion_response.status_code = 200
-    mock_completion_response.json.return_value = {
-        "results": [
-            {
-                "generated_text": "Hello! How can I help you?",
-                "generated_token_count": 10,
-                "input_token_count": 5,
-            }
-        ],
-        "model_id": "openai/gpt-oss-120b",
-    }
+    client = HTTPHandler()
 
     # Mock HuggingFace template fetch to make test deterministic and avoid network flakiness.
     # The test verifies that prompt transformation occurs (not simple concatenation), not the exact
     # HuggingFace template format. Using a mock template that produces the correct format is sufficient.
-    from unittest.mock import patch
-
+    #
     # Mock template that produces gpt-oss-120b-like format.
     # Note: This is a simplified version of the actual template. The real template is more complex
     # (adds metadata, handles tools, thinking messages, etc.), but this captures the key aspects:
@@ -275,70 +248,45 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
         },
     }
 
-    async def mock_aget_tokenizer_config(hf_model_name: str):
-        return mock_tokenizer_config
+    # Isolate known_tokenizer_config so parallel tests don't interfere.
+    # monkeypatch.setitem restores the original value on teardown.
+    hf_model = "openai/gpt-oss-120b"
+    monkeypatch.setitem(litellm.known_tokenizer_config, hf_model, mock_tokenizer_config)
 
-    async def mock_aget_chat_template_file(hf_model_name: str):
-        # Return failure to use tokenizer_config instead
-        return {"status": "failure"}
+    # Mock IAM token generation to avoid real HTTP calls.
+    mock_token_response = Mock()
+    mock_token_response.json.return_value = {
+        "access_token": "mock_access_token",
+        "expires_in": 3600,
+    }
+    mock_token_response.raise_for_status = Mock()
 
     with patch.object(client, "post") as mock_post, patch.object(
         litellm.module_level_client, "post", return_value=mock_token_response
-    ), patch(
-        "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._aget_tokenizer_config",
-        side_effect=mock_aget_tokenizer_config,
-    ), patch(
-        "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._aget_chat_template_file",
-        side_effect=mock_aget_chat_template_file,
     ):
-        # Set the mock to return the completion response
-        mock_post.return_value = mock_completion_response
-
         try:
-            # Call acompletion with messages
-            await litellm.acompletion(
+            completion(
                 model=model,
                 messages=messages,
                 api_key="test_api_key",
                 client=client,
             )
         except Exception as e:
-            # May fail due to incomplete mocking, but we should have captured the request
-            print(f"Exception (may be expected): {e}")
+            print(f"Caught expected exception: {e}")
 
     # Verify the POST was called
     assert (
-        mock_post.call_count >= 1
-    ), f"POST should have been called at least once, got {mock_post.call_count}"
+        mock_post.call_count == 1
+    ), f"POST should have been called exactly once, got {mock_post.call_count}"
 
-    # Get the request body from the first call
-    # Use call_args_list to be more robust - get the first call's arguments
-    assert len(mock_post.call_args_list) > 0, "mock_post should have at least one call"
-    call_args = mock_post.call_args_list[0]
-    assert call_args is not None, "call_args should not be None"
+    # Get the request body
+    call_args = mock_post.call_args
     assert "data" in call_args.kwargs, "call_args.kwargs should contain 'data'"
     json_data = json.loads(call_args.kwargs["data"])
-
-    print(f"\n{'='*80}")
-    print(f"Input messages to litellm.acompletion:")
-    print(json.dumps(messages, indent=2))
-    print(f"\n{'='*80}")
-    print(f"Final POST request body:")
-    print(json.dumps(json_data, indent=2))
-    print(f"{'='*80}\n")
 
     # Verify the transformed input is in the request
     assert "input" in json_data, "Request should have 'input' field"
     transformed_prompt = json_data["input"]
-
-    # Verify transformation occurred
-    assert transformed_prompt is not None, (
-        "Prompt transformation failed - the template should have been applied to transform "
-        "messages into the correct format for gpt-oss-120b."
-    )
-
-    print(f"Transformed prompt: {repr(transformed_prompt)}")
-    print(f"Prompt length: {len(transformed_prompt)}")
 
     # Verify it's NOT simple concatenation
     simple_concat = "You are chatgpt Hi there"
@@ -361,6 +309,7 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.xdist_group("watsonx_heavy")
 async def test_watsonx_gpt_oss_uses_async_http_handler():
     """
     Test that verifies async HTTP client is used when fetching HuggingFace templates.

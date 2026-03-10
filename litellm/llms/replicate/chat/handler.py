@@ -83,19 +83,27 @@ async def async_handle_prediction_response_streaming(
         await asyncio.sleep(
             REPLICATE_POLLING_DELAY_SECONDS
         )  # prevent being rate limited by replicate
-        print_verbose(f"replicate: polling endpoint: {prediction_url}")
         response = await http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()
-            status = response_data["status"]
-            if "output" in response_data:
+            status = response_data.get("status", "")
+            # Check that "output" exists and is not None or empty
+            output_present = "output" in response_data and response_data["output"] is not None
+            if output_present:
                 try:
-                    output_string = "".join(response_data["output"])
+                    # If output is None or not a list, treat as empty string
+                    if isinstance(response_data["output"], list):
+                        output_string = "".join(response_data["output"])
+                    elif response_data["output"] is None:
+                        output_string = ""
+                    else:
+                        # fallback for other types; convert to string safely
+                        output_string = str(response_data["output"])
                 except Exception:
                     raise ReplicateError(
                         status_code=422,
                         message="Unable to parse response. Got={}".format(
-                            response_data["output"]
+                            response_data.get("output", None)
                         ),
                         headers=response.headers,
                     )
@@ -103,7 +111,7 @@ async def async_handle_prediction_response_streaming(
                 print_verbose(f"New chunk: {new_output}")
                 yield {"output": new_output, "status": status}
                 previous_output = output_string
-            status = response_data["status"]
+            status = response_data.get("status", "")
             if status == "failed":
                 replicate_error = response_data.get("error", "")
                 raise ReplicateError(
@@ -213,7 +221,7 @@ def completion(
             response = httpx_client.get(url=prediction_url, headers=headers)
             if (
                 response.status_code == 200
-                and response.json().get("status") == "processing"
+                and response.json().get("status") in ["processing", "starting"]
             ):
                 continue
             return litellm.ReplicateConfig().transform_response(
@@ -284,7 +292,7 @@ async def async_completion(
         response = await async_handler.get(url=prediction_url, headers=headers)
         if (
             response.status_code == 200
-            and response.json().get("status") == "processing"
+            and response.json().get("status") in ["processing", "starting"]
         ):
             continue
         return litellm.ReplicateConfig().transform_response(

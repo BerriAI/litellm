@@ -1,9 +1,13 @@
-import json
+import ast
 import logging
 import os
 import sys
 from datetime import datetime
 from logging import Formatter
+from typing import Any, Dict, Optional
+
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 set_verbose = False
 
@@ -19,6 +23,67 @@ handler = logging.StreamHandler()
 handler.setLevel(numeric_level)
 
 
+def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
+    """
+    Try to parse a log message as JSON. Returns parsed dict if valid, else None.
+    Handles messages that are entirely valid JSON (e.g. json.dumps output).
+    Uses shared safe_json_loads for consistent error handling.
+    """
+    if not message or not isinstance(message, str):
+        return None
+    msg_stripped = message.strip()
+    if not (msg_stripped.startswith("{") or msg_stripped.startswith("[")):
+        return None
+    parsed = safe_json_loads(message, default=None)
+    if parsed is None or not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _try_parse_embedded_python_dict(message: str) -> Optional[Dict[str, Any]]:
+    """
+    Try to find and parse a Python dict repr (e.g. str(d) or repr(d)) embedded in
+    the message. Handles patterns like:
+    "get_available_deployment for model: X, Selected deployment: {'model_name': '...', ...} for model: X"
+    Uses ast.literal_eval for safe parsing. Returns the parsed dict or None.
+    """
+    if not message or not isinstance(message, str) or "{" not in message:
+        return None
+    i = 0
+    while i < len(message):
+        start = message.find("{", i)
+        if start == -1:
+            break
+        depth = 0
+        for j in range(start, len(message)):
+            c = message[j]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    substr = message[start : j + 1]
+                    try:
+                        result = ast.literal_eval(substr)
+                        if isinstance(result, dict) and len(result) > 0:
+                            return result
+                    except (ValueError, SyntaxError, TypeError):
+                        pass
+                    break
+        i = start + 1
+    return None
+
+
+# Standard LogRecord attribute names - used to identify 'extra' fields.
+# Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
+def _get_standard_record_attrs() -> frozenset:
+    """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
+    return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
+
+
+_STANDARD_RECORD_ATTRS = _get_standard_record_attrs()
+
+
 class JsonFormatter(Formatter):
     def __init__(self):
         super(JsonFormatter, self).__init__()
@@ -29,16 +94,31 @@ class JsonFormatter(Formatter):
         return dt.isoformat()
 
     def format(self, record):
-        json_record = {
-            "message": record.getMessage(),
+        message_str = record.getMessage()
+        json_record: Dict[str, Any] = {
+            "message": message_str,
             "level": record.levelname,
             "timestamp": self.formatTime(record),
         }
 
+        # Parse embedded JSON or Python dict repr in message so sub-fields become first-class properties
+        parsed = _try_parse_json_message(message_str)
+        if parsed is None:
+            parsed = _try_parse_embedded_python_dict(message_str)
+        if parsed is not None:
+            for key, value in parsed.items():
+                if key not in json_record:
+                    json_record[key] = value
+
+        # Include extra attributes passed via logger.debug("msg", extra={...})
+        for key, value in record.__dict__.items():
+            if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
+                json_record[key] = value
+
         if record.exc_info:
             json_record["stacktrace"] = self.formatException(record.exc_info)
 
-        return json.dumps(json_record)
+        return safe_dumps(json_record)
 
 
 # Function to set up exception handlers for JSON logging
@@ -133,6 +213,26 @@ ALL_LOGGERS = [
 ]
 
 
+def _get_loggers_to_initialize():
+    """
+    Get all loggers that should be initialized with the JSON handler.
+
+    Includes third-party integration loggers (like langfuse) if they are
+    configured as callbacks.
+    """
+    import litellm
+
+    loggers = list(ALL_LOGGERS)
+
+    # Add langfuse logger if langfuse is being used as a callback
+    langfuse_callbacks = {"langfuse", "langfuse_otel"}
+    all_callbacks = set(litellm.success_callback + litellm.failure_callback)
+    if langfuse_callbacks & all_callbacks:
+        loggers.append(logging.getLogger("langfuse"))
+
+    return loggers
+
+
 def _initialize_loggers_with_handler(handler: logging.Handler):
     """
     Initialize all loggers with a handler
@@ -140,10 +240,70 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Adds a handler to each logger
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
-    for lg in ALL_LOGGERS:
+    for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
         lg.propagate = False  # prevent bubbling to parent/root
+
+
+def _get_uvicorn_json_log_config():
+    """
+    Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
+
+    This ensures that uvicorn's access logs, error logs, and all application logs
+    are formatted as JSON when json_logs is enabled.
+    """
+    json_formatter_class = "litellm._logging.JsonFormatter"
+
+    # Use the module-level log_level variable for consistency
+    uvicorn_log_level = log_level.upper()
+
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "json": {
+                "()": json_formatter_class,
+            },
+            "default": {
+                "()": json_formatter_class,
+            },
+            "access": {
+                "()": json_formatter_class,
+            },
+        },
+        "handlers": {
+            "default": {
+                "formatter": "json",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+            "access": {
+                "formatter": "access",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+        },
+        "loggers": {
+            "uvicorn": {
+                "handlers": ["default"],
+                "level": uvicorn_log_level,
+                "propagate": False,
+            },
+            "uvicorn.error": {
+                "handlers": ["default"],
+                "level": uvicorn_log_level,
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["access"],
+                "level": uvicorn_log_level,
+                "propagate": False,
+            },
+        },
+    }
+
+    return log_config
 
 
 def _turn_on_json():
