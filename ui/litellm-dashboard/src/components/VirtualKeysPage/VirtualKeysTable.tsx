@@ -24,9 +24,9 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Popover, Skeleton, Tooltip } from "antd";
-import React, { useEffect, useMemo, useState } from "react";
+import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button as AntButton, Popover, Skeleton, Tooltip } from "antd";
+import React, { useEffect, useDeferredValue, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
@@ -81,6 +81,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     data: keys,
     isPending: isLoading,
     isFetching,
+    isError,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, {
     sortBy: sortBy || undefined,
@@ -96,6 +97,15 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       teams,
       organizations,
     });
+
+  // Defer the transition so the button stays in loading state until the table
+  // has rendered with the new data (mirrors the spend-logs pattern)
+  const isFetchingDeferred = useDeferredValue(isFetching);
+  const isButtonLoading = (isFetching || isFetchingDeferred) && !isError;
+
+  const handleRefresh = () => {
+    refetch();
+  };
 
   const totalCount = filteredTotalCount ?? keys?.total_count ?? 0;
 
@@ -210,7 +220,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     },
     {
       id: "organization_id",
-      accessorKey: "organization_id",
+      accessorKey: "org_id",
       header: "Organization ID",
       size: 140,
       enableSorting: false,
@@ -606,16 +616,28 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
           </div>
 
           <div className="flex items-center justify-between w-full mb-4">
-            {isLoading || isFetching ? (
-              <Skeleton.Node active style={{ width: 200, height: 20 }} />
-            ) : (
-              <span className="inline-flex text-sm text-gray-700">
-                Showing {rangeLabel} of {totalCount} results
-              </span>
-            )}
+            <div className="inline-flex items-center gap-2">
+              {isLoading ? (
+                <Skeleton.Node active style={{ width: 200, height: 20 }} />
+              ) : (
+                <span className="inline-flex text-sm text-gray-700">
+                  Showing {rangeLabel} of {totalCount} results
+                </span>
+              )}
+
+              <AntButton
+                type="default"
+                icon={<SyncOutlined spin={isButtonLoading} />}
+                onClick={handleRefresh}
+                disabled={isButtonLoading}
+                title="Fetch data"
+              >
+                {isButtonLoading ? "Fetching" : "Fetch"}
+              </AntButton>
+            </div>
 
             <div className="inline-flex items-center gap-2">
-              {isLoading || isFetching ? (
+              {isLoading ? (
                 <Skeleton.Node active style={{ width: 74, height: 20 }} />
               ) : (
                 <span className="text-sm text-gray-700">
@@ -623,24 +645,24 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                 </span>
               )}
 
-              {isLoading || isFetching ? (
+              {isLoading ? (
                 <Skeleton.Button active size="small" style={{ width: 84, height: 30 }} />
               ) : (
                 <button
                   onClick={() => table.previousPage()}
-                  disabled={isLoading || isFetching || !table.getCanPreviousPage()}
+                  disabled={isLoading || !table.getCanPreviousPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Previous
                 </button>
               )}
 
-              {isLoading || isFetching ? (
+              {isLoading ? (
                 <Skeleton.Button active size="small" style={{ width: 58, height: 30 }} />
               ) : (
                 <button
                   onClick={() => table.nextPage()}
-                  disabled={isLoading || isFetching || !table.getCanNextPage()}
+                  disabled={isLoading || !table.getCanNextPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Next
@@ -725,7 +747,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                     ))}
                   </TableHead>
                   <TableBody>
-                    {isLoading || isFetching ? (
+                    {isLoading ? (
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
                           <div className="text-center text-gray-500">

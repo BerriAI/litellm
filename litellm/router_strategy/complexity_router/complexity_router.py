@@ -326,7 +326,7 @@ class ComplexityRouter(CustomLogger):
         self,
         model: str,
         request_kwargs: Dict,
-        messages: Optional[List[Dict[str, str]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
     ) -> Optional["PreRoutingHookResponse"]:
@@ -359,7 +359,15 @@ class ComplexityRouter(CustomLogger):
         
         for msg in reversed(messages):
             role = msg.get("role", "")
-            content = msg.get("content", "")
+            content = msg.get("content") or ""
+            # content may be a list of content parts (e.g. [{"type": "text", "text": "..."}])
+            if isinstance(content, list):
+                text_parts = [
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                ]
+                content = " ".join(text_parts).strip()
             if isinstance(content, str) and content:
                 if role == "user" and user_message is None:
                     user_message = content
@@ -368,9 +376,12 @@ class ComplexityRouter(CustomLogger):
         
         if user_message is None:
             verbose_router_logger.debug(
-                "ComplexityRouter: No user message found, skipping routing"
+                "ComplexityRouter: No user message found, routing to default model"
             )
-            return None
+            return PreRoutingHookResponse(
+                model=self.config.default_model or self.get_model_for_tier(ComplexityTier.MEDIUM),
+                messages=messages,
+            )
         
         # Classify the request
         tier, score, signals = self.classify(user_message, system_prompt)

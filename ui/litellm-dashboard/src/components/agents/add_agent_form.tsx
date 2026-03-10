@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Form, message, Select, Input, Steps, Radio, Tag, Divider } from "antd";
+import { Modal, Form, message, Select, Input, Steps, Radio, Tag, Divider, Switch, InputNumber, Collapse } from "antd";
 import { Button } from "@tremor/react";
 import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
@@ -59,6 +59,12 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const [createdAgentName, setCreatedAgentName] = useState<string>("");
   const [createdKeyValue, setCreatedKeyValue] = useState<string | null>(null);
   const [assignedKeyAlias, setAssignedKeyAlias] = useState<string | null>(null);
+
+  // Tracing & guardrails state
+  const [requireTraceIdInbound, setRequireTraceIdInbound] = useState(false);
+  const [requireTraceIdOutbound, setRequireTraceIdOutbound] = useState(false);
+  const [maxIterations, setMaxIterations] = useState<number | null>(null);
+  const [maxBudgetPerSession, setMaxBudgetPerSession] = useState<number | null>(null);
 
   // Fetch agent type metadata on mount
   useEffect(() => {
@@ -218,6 +224,19 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         }
       }
 
+      // Wire trace-id flags and budget controls into agent litellm_params (before create call)
+      if (requireTraceIdInbound || requireTraceIdOutbound) {
+        if (!agentData.litellm_params) agentData.litellm_params = {};
+        if (requireTraceIdInbound) {
+          agentData.litellm_params.require_trace_id_on_calls_to_agent = true;
+        }
+        if (requireTraceIdOutbound) {
+          agentData.litellm_params.require_trace_id_on_calls_by_agent = true;
+          if (maxIterations) agentData.litellm_params.max_iterations = maxIterations;
+          if (maxBudgetPerSession) agentData.litellm_params.max_budget_per_session = maxBudgetPerSession;
+        }
+      }
+
       const agentResponse = await createAgentCall(accessToken, agentData);
       const agentId: string = agentResponse.agent_id;
       const agentName: string = agentResponse.agent_name || values.agent_name || agentId;
@@ -267,6 +286,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     setCreatedAgentName("");
     setCreatedKeyValue(null);
     setAssignedKeyAlias(null);
+    setRequireTraceIdInbound(false);
+    setRequireTraceIdOutbound(false);
+    setMaxIterations(null);
+    setMaxBudgetPerSession(null);
     onClose();
   };
 
@@ -315,6 +338,122 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           </div>
         )}
       </Form.Item>
+
+      <Collapse ghost className="mt-6" items={[
+        {
+          key: "tracing",
+          label: <span className="text-sm font-medium text-gray-700">Tracing</span>,
+          children: (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium text-gray-700">
+                    Require x-litellm-trace-id on calls TO this agent
+                  </span>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Only accept this agent being invoked with a trace-id (e.g. when used as a sub-agent).
+                  </p>
+                </div>
+                <Switch
+                  checked={requireTraceIdInbound}
+                  onChange={setRequireTraceIdInbound}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium text-gray-700">
+                    Require x-litellm-trace-id on calls BY this agent
+                  </span>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Requires LLM/MCP calls made by this agent to include x-litellm-trace-id for session tracking.
+                  </p>
+                </div>
+                <Switch
+                  checked={requireTraceIdOutbound}
+                  onChange={(checked) => {
+                    setRequireTraceIdOutbound(checked);
+                    if (!checked) {
+                      setMaxIterations(null);
+                      setMaxBudgetPerSession(null);
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          ),
+        },
+        {
+          key: "budgets_and_rate_limits",
+          label: <span className="text-sm font-medium text-gray-700">Budgets &amp; Rate Limits</span>,
+          children: (
+            <div className="space-y-4">
+              {!requireTraceIdOutbound && (
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+                  Enable &quot;Require x-litellm-trace-id on calls BY this agent&quot; in Tracing to configure budgets and rate limits.
+                </div>
+              )}
+
+              <div className="text-sm font-medium text-gray-700">Session Budgets</div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-gray-600 block mb-1">Max Iterations</label>
+                  <InputNumber
+                    className="w-full"
+                    min={1}
+                    placeholder="e.g. 25"
+                    disabled={!requireTraceIdOutbound}
+                    value={maxIterations}
+                    onChange={(val) => setMaxIterations(val)}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Hard cap on LLM calls per session</p>
+                </div>
+                <div>
+                  <label className="text-sm text-gray-600 block mb-1">Max Budget Per Session ($)</label>
+                  <InputNumber
+                    className="w-full"
+                    min={0.01}
+                    step={0.5}
+                    placeholder="e.g. 5.00"
+                    disabled={!requireTraceIdOutbound}
+                    value={maxBudgetPerSession}
+                    onChange={(val) => setMaxBudgetPerSession(val)}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Max spend per trace before returning 429</p>
+                </div>
+              </div>
+
+              <Divider className="my-2" />
+
+              <div className="text-sm font-medium text-gray-700">Agent Rate Limits</div>
+              <p className="text-xs text-gray-500">
+                Global rate limits applied across all callers of this agent.
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <Form.Item label="TPM Limit" name="tpm_limit" className="mb-0">
+                  <InputNumber className="w-full" min={0} placeholder="e.g. 100000" disabled={!requireTraceIdOutbound} />
+                </Form.Item>
+                <Form.Item label="RPM Limit" name="rpm_limit" className="mb-0">
+                  <InputNumber className="w-full" min={0} placeholder="e.g. 100" disabled={!requireTraceIdOutbound} />
+                </Form.Item>
+              </div>
+
+              <div className="text-sm font-medium text-gray-700 mt-4">Per-Session Rate Limits</div>
+              <p className="text-xs text-gray-500">
+                Rate limits per session (x-litellm-trace-id). Each session gets its own counters.
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <Form.Item label="Session TPM Limit" name="session_tpm_limit" className="mb-0">
+                  <InputNumber className="w-full" min={0} placeholder="e.g. 10000" disabled={!requireTraceIdOutbound} />
+                </Form.Item>
+                <Form.Item label="Session RPM Limit" name="session_rpm_limit" className="mb-0">
+                  <InputNumber className="w-full" min={0} placeholder="e.g. 20" disabled={!requireTraceIdOutbound} />
+                </Form.Item>
+              </div>
+            </div>
+          ),
+        },
+      ]} />
     </div>
   );
 
@@ -456,6 +595,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
         ) : null}
       </div>
+
     </>
   );
 
@@ -643,7 +783,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         {/* Step indicator */}
         <Steps current={currentStep} size="small" className="mb-8">
           <Step title="Configure" />
-          <Step title="MCP Tools" />
+          <Step title="Agent Settings" />
           <Step title="Assign Key" />
           <Step title="Ready" />
         </Steps>

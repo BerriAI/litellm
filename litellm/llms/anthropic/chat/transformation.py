@@ -169,21 +169,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return tool_call
 
     @staticmethod
-    def _is_claude_4_6_model(model: str) -> bool:
-        """Check if the model is a Claude 4.6 model that uses adaptive thinking."""
+    def _is_opus_4_6_model(model: str) -> bool:
+        """Check if the model is specifically Claude Opus 4.6."""
         model_lower = model.lower()
         return any(
-            model_variant in model_lower
-            for model_variant in (
-                "opus-4-6",
-                "opus_4_6",
-                "opus-4.6",
-                "opus_4.6",
-                "sonnet-4-6",
-                "sonnet_4_6",
-                "sonnet-4.6",
-                "sonnet_4.6",
-            )
+            v in model_lower
+            for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")
         )
 
     def get_supported_openai_params(self, model: str):
@@ -203,6 +194,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "web_search_options",
             "speed",
             "context_management",
+            "cache_control",
         ]
 
         if (
@@ -324,6 +316,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ]
             else:
                 result[key] = value
+
+        # Anthropic requires additionalProperties=false for object schemas
+        # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
+        if result.get("type") == "object" and "additionalProperties" not in result:
+            result["additionalProperties"] = False
 
         return result
 
@@ -778,6 +775,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if json_schema is None:
             return None
 
+        # Resolve $ref/$defs before filtering — Anthropic doesn't support
+        # external schema references (e.g., /$defs/CalendarEvent).
+        import copy
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        json_schema = copy.deepcopy(json_schema)
+        defs = json_schema.pop("$defs", json_schema.pop("definitions", {}))
+        if defs:
+            unpack_defs(json_schema, defs)
+
         # Filter out unsupported fields for Anthropic's output_format API
         filtered_schema = self.filter_anthropic_output_schema(json_schema)
 
@@ -1040,6 +1050,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
+            elif param == "cache_control" and isinstance(value, dict):
+                # Pass through top-level cache_control for automatic prompt caching
+                optional_params["cache_control"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
@@ -1404,9 +1417,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     raise ValueError(
                         f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
                     )
-                if effort == "max" and not self._is_claude_4_6_model(model):
+                if effort == "max" and not self._is_opus_4_6_model(model):
                     raise ValueError(
-                        f"effort='max' is only supported by Claude 4.6 models (Opus 4.6, Sonnet 4.6). Got model: {model}"
+                        f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
                     )
                 data["output_config"] = output_config
 

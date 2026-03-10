@@ -1,3 +1,13 @@
+"""
+Tests for LLMClientCache.
+
+The cache intentionally does NOT close clients on eviction because evicted
+clients may still be referenced by in-flight requests.  Closing them eagerly
+causes ``RuntimeError: Cannot send a request, as the client has been closed.``
+
+See: https://github.com/BerriAI/litellm/pull/22247
+"""
+
 import asyncio
 import os
 import sys
@@ -33,12 +43,12 @@ class MockSyncClient:
 
 
 @pytest.mark.asyncio
-async def test_remove_key_no_unawaited_coroutine_warning():
+async def test_remove_key_does_not_close_async_client():
     """
-    Test that evicting an async client from LLMClientCache does not produce
-    'coroutine was never awaited' warnings.
+    Evicting an async client from LLMClientCache must NOT close it because
+    an in-flight request may still hold a reference to the client.
 
-    Regression test for https://github.com/BerriAI/litellm/issues/22128
+    Regression test for production 'client has been closed' crashes.
     """
     cache = LLMClientCache(max_size_in_memory=2)
 
@@ -46,43 +56,19 @@ async def test_remove_key_no_unawaited_coroutine_warning():
     cache.cache_dict["test-key"] = mock_client
     cache.ttl_dict["test-key"] = 0  # expired
 
-    with warnings.catch_warnings(record=True) as caught_warnings:
-        warnings.simplefilter("always")
-        cache._remove_key("test-key")
-        # Let the event loop process the close task
-        await asyncio.sleep(0.1)
-
-    coroutine_warnings = [
-        w for w in caught_warnings if "coroutine" in str(w.message).lower()
-    ]
-    assert (
-        len(coroutine_warnings) == 0
-    ), f"Got unawaited coroutine warnings: {coroutine_warnings}"
-
-
-@pytest.mark.asyncio
-async def test_remove_key_closes_async_client():
-    """
-    Test that evicting an async client from the cache properly closes it.
-    """
-    cache = LLMClientCache(max_size_in_memory=2)
-
-    mock_client = MockAsyncClient()
-    cache.cache_dict["test-key"] = mock_client
-    cache.ttl_dict["test-key"] = 0
-
     cache._remove_key("test-key")
-    # Let the event loop process the close task
+    # Give the event loop a chance to run any background tasks
     await asyncio.sleep(0.1)
 
-    assert mock_client.closed is True
+    # Client must NOT be closed — it may still be in use
+    assert mock_client.closed is False
     assert "test-key" not in cache.cache_dict
     assert "test-key" not in cache.ttl_dict
 
 
-def test_remove_key_closes_sync_client():
+def test_remove_key_does_not_close_sync_client():
     """
-    Test that evicting a sync client from the cache properly closes it.
+    Evicting a sync client from the cache must NOT close it.
     """
     cache = LLMClientCache(max_size_in_memory=2)
 
@@ -92,15 +78,15 @@ def test_remove_key_closes_sync_client():
 
     cache._remove_key("test-key")
 
-    assert mock_client.closed is True
+    assert mock_client.closed is False
     assert "test-key" not in cache.cache_dict
 
 
 @pytest.mark.asyncio
-async def test_eviction_closes_async_clients():
+async def test_eviction_does_not_close_async_clients():
     """
-    Test that cache eviction (when cache is full) properly closes async clients
-    without producing warnings.
+    When the cache is full and an entry is evicted, the evicted async client
+    must remain open and must not produce 'coroutine was never awaited' warnings.
     """
     cache = LLMClientCache(max_size_in_memory=2, default_ttl=1)
 
@@ -123,11 +109,41 @@ async def test_eviction_closes_async_clients():
         len(coroutine_warnings) == 0
     ), f"Got unawaited coroutine warnings: {coroutine_warnings}"
 
+    # Evicted clients must NOT be closed
+    for client in clients:
+        assert client.closed is False
+
+
+@pytest.mark.asyncio
+async def test_eviction_no_unawaited_coroutine_warning():
+    """
+    Evicting an async client from LLMClientCache must not produce
+    'coroutine was never awaited' warnings.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22128
+    """
+    cache = LLMClientCache(max_size_in_memory=2)
+
+    mock_client = MockAsyncClient()
+    cache.cache_dict["test-key"] = mock_client
+    cache.ttl_dict["test-key"] = 0  # expired
+
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        cache._remove_key("test-key")
+        await asyncio.sleep(0.1)
+
+    coroutine_warnings = [
+        w for w in caught_warnings if "coroutine" in str(w.message).lower()
+    ]
+    assert (
+        len(coroutine_warnings) == 0
+    ), f"Got unawaited coroutine warnings: {coroutine_warnings}"
+
 
 def test_remove_key_no_event_loop():
     """
-    Test that _remove_key doesn't raise when there's no running event loop
-    (falls through to the RuntimeError except branch).
+    _remove_key works correctly even when there's no running event loop.
     """
     cache = LLMClientCache(max_size_in_memory=2)
 
@@ -140,19 +156,19 @@ def test_remove_key_no_event_loop():
     assert "test-key" not in cache.cache_dict
 
 
-@pytest.mark.asyncio
-async def test_background_tasks_cleaned_up_after_completion():
+def test_remove_key_removes_plain_values():
     """
-    Test that completed close tasks are removed from the _background_tasks set.
+    _remove_key correctly removes non-client values (strings, dicts, etc.).
     """
-    cache = LLMClientCache(max_size_in_memory=2)
+    cache = LLMClientCache(max_size_in_memory=5)
 
-    mock_client = MockAsyncClient()
-    cache.cache_dict["test-key"] = mock_client
-    cache.ttl_dict["test-key"] = 0
+    cache.cache_dict["str-key"] = "hello"
+    cache.ttl_dict["str-key"] = 0
+    cache.cache_dict["dict-key"] = {"foo": "bar"}
+    cache.ttl_dict["dict-key"] = 0
 
-    cache._remove_key("test-key")
-    # Let the task complete
-    await asyncio.sleep(0.1)
+    cache._remove_key("str-key")
+    cache._remove_key("dict-key")
 
-    assert len(cache._background_tasks) == 0
+    assert "str-key" not in cache.cache_dict
+    assert "dict-key" not in cache.cache_dict

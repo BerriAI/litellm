@@ -29,6 +29,7 @@ verbose_logger.setLevel(logging.DEBUG)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 import random
+import httpx
 from unittest.mock import patch, MagicMock
 
 
@@ -577,6 +578,48 @@ async def test_vertex_list_batches(monkeypatch):
         assert len(list_response["data"]) == 2
         assert list_response["data"][0].id == "test-batch-id-456"
         assert list_response["data"][1].id == "test-batch-id-789"
+
+
+@pytest.mark.asyncio
+async def test_vertex_async_create_batch_logs_error_body_on_http_error():
+    """
+    When Vertex AI returns an HTTP error (e.g. 400), _async_create_batch should
+    re-raise httpx.HTTPStatusError (not swallow it) and log the response body.
+
+    Before the fix the error body was lost because AsyncHTTPHandler.post()
+    calls raise_for_status() internally, raising before the handler's own
+    status-code check could log the body.
+    """
+    from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
+
+    handler = VertexAIBatchPrediction(gcs_bucket_name="test-bucket")
+
+    error_body = '{"error": {"code": 400, "message": "Do not support publisher model gemini-2.0-flash"}}'
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 400
+    mock_response.text = error_body
+    mock_response.headers = {}
+
+    http_error = httpx.HTTPStatusError(
+        message="Bad Request",
+        request=httpx.Request("POST", "https://fake-vertex-url"),
+        response=mock_response,
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=http_error,
+    ):
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await handler._async_create_batch(
+                vertex_batch_request={},
+                api_base="https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/batchPredictionJobs",
+                headers={"Authorization": "Bearer fake-token"},
+            )
+
+        assert exc_info.value.response.status_code == 400
+        assert "gemini-2.0-flash" in exc_info.value.response.text
 
 
 @pytest.mark.asyncio
