@@ -389,7 +389,7 @@ class AktoGuardrail(CustomGuardrail):
         start_time: datetime,
         guardrail_status: GuardrailStatus,
         guardrail_json_response: Any,
-        event_type: "GuardrailEventHooks" = None,
+        event_type: Optional["GuardrailEventHooks"] = None,
     ) -> None:
         """Log guardrail timing and status for observability."""
         end_time = datetime.now()

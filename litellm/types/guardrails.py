@@ -507,7 +507,7 @@ class AktoConfigModel(BaseModel):
         default="block",
         description="'block' = pre-call validation, 'monitor' = post-call log only. Env: AKTO_ON_FLAGGED.",
     )
-    unreachable_fallback: Optional[Literal["fail_closed", "fail_open"]] = Field(
+    unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
         default="fail_closed",
         description="'fail_open' = allow, 'fail_closed' = block when Akto is down.",
     )
