@@ -10,10 +10,12 @@ import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
+import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
+import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -52,13 +54,22 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     transport?: string;
   } | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
-  const [tools, setTools] = useState<any[]>([]);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
   const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [transportType, setTransportType] = useState<string>("");
+  const [keyTools, setKeyTools] = useState<OpenAPIKeyTool[]>([]);
   const [searchValue, setSearchValue] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
+
+  // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
+  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
+    accessToken,
+    oauthAccessToken,
+    formValues,
+    enabled: true,
+  });
+
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
@@ -384,7 +395,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         );
         form.resetFields();
         setCostConfig({});
-        setTools([]);
+        clearTools();
         setAllowedTools([]);
         setAliasManuallyEdited(false);
         setModalVisible(false);
@@ -505,6 +516,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       width={1000}
       onCancel={handleCancel}
       footer={null}
+      forceRender
       className="top-8"
       styles={{
         body: { padding: "24px" },
@@ -628,25 +640,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {/* OpenAPI Spec URL - only show for OpenAPI transport */}
+            {/* OpenAPI: logo picker + spec URL input */}
             {transportType === TRANSPORT.OPENAPI && (
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    OpenAPI Spec URL
-                    <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                    </Tooltip>
-                  </span>
+              <OpenAPIFormSection
+                form={form}
+                accessToken={isModalVisible ? accessToken : null}
+                onValuesChange={(updates) =>
+                  setFormValues((prev) => ({ ...prev, ...updates }))
                 }
-                name="spec_path"
-                rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
-              >
-                <Input
-                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
+                onKeyToolsChange={setKeyTools}
+              />
             )}
 
             {/* BYOK toggle - only for OpenAPI */}
@@ -810,10 +813,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           {/* Connection Status Section */}
           <div className="mt-8 pt-6 border-t border-gray-200">
             <MCPConnectionStatus
-              accessToken={accessToken}
-              oauthAccessToken={oauthAccessToken}
               formValues={formValues}
-              onToolsLoaded={setTools}
+              tools={tools}
+              isLoadingTools={isLoadingTools}
+              toolsError={toolsError}
+              toolsErrorStackTrace={toolsErrorStackTrace}
+              canFetchTools={canFetchTools}
+              fetchTools={fetchTools}
             />
           </div>
 
@@ -830,6 +836,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               toolNameToDescription={toolNameToDescription}
               onToolNameToDisplayNameChange={setToolNameToDisplayName}
               onToolNameToDescriptionChange={setToolNameToDescription}
+              keyTools={keyTools}
+              externalTools={tools}
+              externalIsLoading={isLoadingTools}
+              externalError={toolsError}
+              externalCanFetch={canFetchTools}
             />
           </div>
 
