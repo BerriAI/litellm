@@ -379,6 +379,65 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["user_role"] == "internal_user"
 
 
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_includes_user_email():
+    """Test that user_email is included when creating a new user via get_user_object upsert"""
+    # Mock the necessary dependencies
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+
+    # Set up the user creation mock
+    mock_user = MagicMock()
+    mock_user.user_id = "new_test_user"
+    mock_user.user_email = "test@example.com"
+    mock_user.models = []
+    mock_user.max_budget = None
+    mock_user.user_role = None
+    mock_user.organization_memberships = []
+
+    mock_user.dict = lambda: {
+        "user_id": "new_test_user",
+        "user_email": "test@example.com",
+        "models": [],
+        "max_budget": None,
+        "user_role": None,
+        "organization_memberships": [],
+    }
+
+    # Setup the mock returns - user does not exist
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
+
+    # Create a mock cache
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    # Call get_user_object with user_id_upsert=True and user_email
+    try:
+        await get_user_object(
+            user_id="new_test_user",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+            user_email="test@example.com",
+        )
+    except Exception as e:
+        # May fail since mock object is not a real LiteLLM_UserTable
+        print(e)
+
+    # Verify the user was created with user_email included
+    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
+    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
+
+    assert "user_email" in creation_args, "user_email should be included when upserting a new user"
+    assert creation_args["user_email"] == "test@example.com"
+    assert creation_args["user_id"] == "new_test_user"
+
+
 def test_log_budget_lookup_failure_dry_run():
     """Dry run: verify _log_budget_lookup_failure logs for schema/DB errors."""
     with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
@@ -1522,52 +1581,51 @@ async def test_get_fuzzy_user_object_case_insensitive_email():
 
 
 @pytest.mark.asyncio
-async def test_common_checks_skip_route_check_for_custom_auth():
+async def test_custom_auth_common_checks_opt_in():
     """
-    Test that custom routes (e.g. /ldap/ngs/ready) pass common_checks when
-    skip_route_check=True, which is the case for custom auth flows.
+    Test that _run_post_custom_auth_checks only runs common_checks when
+    custom_auth_run_common_checks is explicitly set to True in general_settings.
 
-    Regression test for: custom user-added routes being rejected as admin-only
-    after _run_post_custom_auth_checks was introduced.
+    By default (False), common_checks is skipped for backwards compatibility
+    with custom auth flows that existed before PR #22164.
     """
-    from fastapi import Request
+    from litellm.proxy.auth.user_api_key_auth import _run_post_custom_auth_checks
 
-    from litellm.proxy.auth.auth_checks import common_checks
-
-    mock_request = MagicMock(spec=Request)
     valid_token = UserAPIKeyAuth(token="test-token")
+    mock_request = MagicMock()
 
-    # Without skip_route_check, a custom route with unknown user should fail
-    with pytest.raises(Exception):
-        await common_checks(
-            request_body={},
-            team_object=None,
-            user_object=None,
-            end_user_object=None,
-            global_proxy_spend=None,
-            general_settings={},
-            route="/ldap/ngs/ready",
-            llm_router=None,
-            proxy_logging_obj=MagicMock(),
+    # Default (no flag) — common_checks should NOT be called
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks",
+        new_callable=AsyncMock,
+    ) as mock_common, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    ):
+        mock_common.return_value = True
+        result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
             request=mock_request,
-            skip_route_check=False,
+            request_data={},
+            route="/ldap/ngs/ready",
+            parent_otel_span=None,
         )
+        mock_common.assert_not_called()
 
-    # With skip_route_check=True (custom auth path), the same route should pass
-    result = await common_checks(
-        request_body={},
-        team_object=None,
-        user_object=None,
-        end_user_object=None,
-        global_proxy_spend=None,
-        general_settings={},
-        route="/ldap/ngs/ready",
-        llm_router=None,
-        proxy_logging_obj=MagicMock(),
-        valid_token=valid_token,
-        request=mock_request,
-        skip_route_check=True,
-    )
-
-    assert result is True
+    # With flag=True — common_checks SHOULD be called
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks",
+        new_callable=AsyncMock,
+    ) as mock_common, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"custom_auth_run_common_checks": True},
+    ):
+        mock_common.return_value = True
+        result = await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=mock_request,
+            request_data={},
+            route="/chat/completions",
+            parent_otel_span=None,
+        )
+        mock_common.assert_called_once()

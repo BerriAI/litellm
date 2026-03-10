@@ -1,4 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
   getGuardrailsList,
@@ -48,6 +49,7 @@ import {
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
+import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 
 export interface TeamMembership {
   user_id: string;
@@ -121,6 +123,7 @@ export interface TeamInfoProps {
   accessToken: string | null;
   is_team_admin: boolean;
   is_proxy_admin: boolean;
+  is_org_admin?: boolean;
   userModels: string[];
   editTeam: boolean;
   premiumUser?: boolean;
@@ -155,6 +158,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   accessToken,
   is_team_admin,
   is_proxy_admin,
+  is_org_admin = false,
   userModels,
   editTeam,
   premiumUser = false,
@@ -179,9 +183,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [organization, setOrganization] = useState<Organization | null>(null);
-  const { userRole } = useAuthorized();
+  const { userRole, userId } = useAuthorized();
+  const { data: userOrganizations = [] } = useOrganizations();
 
-  const canEditTeam = is_team_admin || is_proxy_admin;
+  // Check if user is org admin for this team's organization
+  const isOrgAdminForTeam = useMemo(() => {
+    const teamOrgId = teamData?.team_info?.organization_id;
+    if (!teamOrgId || !userId) return false;
+    const org = userOrganizations.find((o) => o.organization_id === teamOrgId);
+    return org?.members?.some((m: any) => m.user_id === userId && m.user_role === "org_admin") ?? false;
+  }, [teamData, userOrganizations, userId]);
+
+  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(
     () => getTeamInfoDefaultTab(editTeam, canEditTeam),
@@ -724,6 +737,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   variant="card"
                 />
               </Grid>
+            ),
+          },
+          {
+            key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
+            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS],
+            children: (
+              <TeamVirtualKeysTable
+                teamId={teamId}
+                teamAlias={info.team_alias}
+                organization={organization}
+              />
             ),
           },
           {
@@ -1291,6 +1315,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onCancel={() => setIsAddMemberModalVisible(false)}
         onSubmit={handleMemberCreate}
         accessToken={accessToken}
+        teamId={teamId}
       />
 
       {/* Delete Member Confirmation Modal */}

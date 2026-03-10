@@ -22,8 +22,8 @@ from litellm.types.utils import LlmProviders
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    GetAPIKeyError,
     GITHUB_COPILOT_API_BASE,
+    GetAPIKeyError,
     get_copilot_default_headers,
 )
 
@@ -328,4 +328,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 for item in value["content"]
             )
 
+        return False
+
+    def supports_native_websocket(self) -> bool:
+        """GitHub Copilot does not support native WebSocket for Responses API"""
         return False

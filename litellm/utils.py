@@ -1319,7 +1319,18 @@ def post_call_processing(
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
                             ### JSON SCHEMA VALIDATION ###
-                            if litellm.enable_json_schema_validation is True:
+                            # Per-request flag takes priority over global flag
+                            _per_request_validation = (
+                                optional_params.get("enable_json_schema_validation")
+                                if optional_params is not None
+                                else None
+                            )
+                            _enable_json_schema_validation = (
+                                _per_request_validation
+                                if _per_request_validation is not None
+                                else litellm.enable_json_schema_validation
+                            )
+                            if _enable_json_schema_validation is True:
                                 try:
                                     if (
                                         optional_params is not None
@@ -4468,8 +4479,19 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider == "bedrock_mantle":
+        optional_params = litellm.BedrockMantleChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "deepseek":
-        optional_params = litellm.OpenAIConfig().map_openai_params(
+        optional_params = litellm.DeepSeekChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -5617,6 +5639,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
                 ),
+                cache_read_input_token_cost_above_272k_tokens=_model_info.get(
+                    "cache_read_input_token_cost_above_272k_tokens", None
+                ),
                 cache_read_input_token_cost_flex=_model_info.get(
                     "cache_read_input_token_cost_flex", None
                 ),
@@ -5634,6 +5659,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 input_cost_per_token_above_200k_tokens=_model_info.get(
                     "input_cost_per_token_above_200k_tokens", None
+                ),
+                input_cost_per_token_above_272k_tokens=_model_info.get(
+                    "input_cost_per_token_above_272k_tokens", None
                 ),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
@@ -5680,6 +5708,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 output_cost_per_token_above_200k_tokens=_model_info.get(
                     "output_cost_per_token_above_200k_tokens", None
+                ),
+                output_cost_per_token_above_272k_tokens=_model_info.get(
+                    "output_cost_per_token_above_272k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_video_per_second=_model_info.get(
@@ -7879,6 +7910,7 @@ class ProviderConfigManager:
             # Simple provider mappings (no model parameter needed)
             LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
             LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
+            LlmProviders.BEDROCK_MANTLE: (lambda: litellm.BedrockMantleChatConfig(), False),
             LlmProviders.A2A: (lambda: litellm.A2AConfig(), False),
             LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
@@ -8821,6 +8853,12 @@ class ProviderConfigManager:
             )
 
             return BedrockStabilityImageEditConfig()
+        elif LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.image_edit import (
+                get_openrouter_image_edit_config,
+            )
+
+            return get_openrouter_image_edit_config(model)
         return None
 
     @staticmethod
@@ -8871,7 +8909,9 @@ class ProviderConfigManager:
             ParallelAISearchConfig,
         )
         from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
+        from litellm.llms.searchapi.search.transformation import SearchAPIConfig
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
+        from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
@@ -8886,6 +8926,8 @@ class ProviderConfigManager:
             SearchProviders.SEARXNG: SearXNGSearchConfig,
             SearchProviders.LINKUP: LinkupSearchConfig,
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
+            SearchProviders.SEARCHAPI: SearchAPIConfig,
+            SearchProviders.SERPER: SerperSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

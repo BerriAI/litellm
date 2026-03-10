@@ -1,14 +1,21 @@
 import asyncio
+import json
 import time
-from typing import Any, AsyncIterator, Optional, cast
+from typing import Any, AsyncIterator, Dict, Optional, cast
 from uuid import uuid4
 
+import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.websockets import WebSocket
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    UserAPIKeyAuth,
+    user_api_key_auth,
+    user_api_key_auth_websocket,
+)
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
@@ -397,142 +404,6 @@ async def cursor_chat_completions(
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             version=version,
-        )
-
-
-@router.post(
-    "/v1/responses/input_tokens",
-    tags=["responses"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-@router.post(
-    "/responses/input_tokens",
-    tags=["responses"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-@router.post(
-    "/openai/v1/responses/input_tokens",
-    tags=["responses"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def count_response_input_tokens(
-    request: Request,
-):
-    """
-    Count input tokens for OpenAI Responses API format.
-
-    This endpoint follows the OpenAI Responses API token counting specification.
-    It accepts the same parameters as the /v1/responses endpoint but returns
-    token counts instead of generating a response.
-
-    Example usage:
-    ```
-    curl -X POST "http://localhost:4000/v1/responses/input_tokens" \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer your-key" \
-      -d '{
-        "model": "gpt-4o",
-        "input": "Hello, how are you?"
-      }'
-    ```
-
-    Returns: {"input_tokens": <number>}
-    """
-    from litellm.proxy.proxy_server import (
-        _read_request_body,
-        token_counter as internal_token_counter,
-    )
-
-    try:
-        request_data = await _read_request_body(request=request)
-        data: dict = {**request_data}
-
-        model_name = data.get("model")
-        input_data = data.get("input")
-
-        if not model_name:
-            raise HTTPException(
-                status_code=400, detail={"error": "model parameter is required"}
-            )
-
-        if input_data is None:
-            raise HTTPException(
-                status_code=400, detail={"error": "input parameter is required"}
-            )
-
-        # Convert Responses API `input` to chat messages format for the internal token counter
-        messages: list = []
-        instructions = data.get("instructions")
-
-        if isinstance(input_data, str):
-            messages.append({"role": "user", "content": input_data})
-        elif isinstance(input_data, list):
-            for item in input_data:
-                if isinstance(item, dict):
-                    role = item.get("role", "user")
-                    content = item.get("content", "")
-                    if item.get("type") == "function_call_output":
-                        messages.append({
-                            "role": "tool",
-                            "content": item.get("output", ""),
-                            "tool_call_id": item.get("call_id", ""),
-                        })
-                    elif item.get("type") == "function_call":
-                        messages.append({
-                            "role": "assistant",
-                            "tool_calls": [{
-                                "id": item.get("call_id", ""),
-                                "type": "function",
-                                "function": {
-                                    "name": item.get("name", ""),
-                                    "arguments": item.get("arguments", ""),
-                                },
-                            }],
-                        })
-                    else:
-                        messages.append({"role": role, "content": content})
-                elif isinstance(item, str):
-                    messages.append({"role": "user", "content": item})
-
-        from litellm.proxy._types import TokenCountRequest
-        from litellm.types.utils import TokenCountResponse
-
-        token_request = TokenCountRequest(
-            model=model_name,
-            messages=messages,
-            tools=data.get("tools"),
-            system=instructions,
-        )
-
-        token_response = await internal_token_counter(
-            request=token_request,
-            call_endpoint=True,
-        )
-
-        _token_response_dict: dict = {}
-        if isinstance(token_response, TokenCountResponse):
-            _token_response_dict = token_response.model_dump()
-        elif isinstance(token_response, dict):
-            _token_response_dict = token_response
-
-        return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
-
-    except HTTPException:
-        raise
-    except ProxyException as e:
-        status_code = int(e.code) if e.code and e.code.isdigit() else 500
-        raise HTTPException(
-            status_code=status_code,
-            detail={"error": e.message},
-        )
-    except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.response_api_endpoints.count_response_input_tokens(): Exception occurred - {}".format(
-                str(e)
-            )
-        )
-        raise HTTPException(
-            status_code=500, detail={"error": "Internal server error"}
         )
 
 
@@ -1042,3 +913,119 @@ async def cancel_response(
         )
 
 
+@router.websocket("/v1/responses")
+@router.websocket("/responses")
+async def responses_websocket_endpoint(
+    websocket: WebSocket,
+    model: str = fastapi.Query(
+        ..., description="The model to use for the responses WebSocket session."
+    ),
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
+    """
+    Responses API WebSocket mode endpoint.
+
+    Keeps a persistent WebSocket connection for response.create events,
+    enabling lower-latency agentic workflows with many tool-call round trips.
+
+    See: https://developers.openai.com/api/docs/guides/websocket-mode/
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+    from litellm.proxy.route_llm_request import route_request
+
+    # Accept the WebSocket handshake
+    requested_protocols = [
+        p.strip()
+        for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if p.strip()
+    ]
+    accept_kwargs: dict = {}
+    if requested_protocols:
+        accept_kwargs["subprotocol"] = requested_protocols[0]
+    await websocket.accept(**accept_kwargs)
+
+    data: Dict[str, Any] = {
+        "model": model,
+        "websocket": websocket,
+    }
+
+    # Construct a synthetic Request for pre-call processing
+    headers_list = list(websocket.scope.get("headers") or [])
+    scope: Dict[str, Any] = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/responses",
+        "headers": headers_list,
+    }
+    request = Request(scope=scope)
+    request._url = websocket.url
+
+    async def return_body():
+        return f'{{"model": "{model}"}}'.encode()
+
+    request.body = return_body  # type: ignore
+
+    # Phase 1: pre-call processing (auth, guardrails, rate limits)
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            model=model,
+            route_type="_aresponses_websocket",
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception("Responses WebSocket pre-call error")
+        try:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "pre_call_error",
+                            "message": str(e),
+                        },
+                    }
+                )
+            )
+        except Exception:
+            pass
+        await websocket.close(code=1011, reason="Pre-call error")
+        return
+
+    # Phase 2: route to upstream provider
+    try:
+        data["user_api_key_dict"] = user_api_key_dict
+        llm_call = await route_request(
+            data=data,
+            route_type="_aresponses_websocket",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        await llm_call
+    except Exception:
+        verbose_proxy_logger.exception("Responses WebSocket error")
+        await websocket.close(code=1011, reason="Internal server error")

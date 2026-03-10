@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "LiteLLM_AgentsTable" ADD COLUMN     "spend" DOUBLE PRECISION NOT NULL DEFAULT 0.0;
+

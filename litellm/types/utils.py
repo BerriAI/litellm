@@ -136,6 +136,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
     supports_url_context: Optional[bool]
+    supports_none_reasoning_effort: Optional[bool]
+    supports_xhigh_reasoning_effort: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -181,12 +183,16 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # OpenAI priority service tier pricing
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
+    cache_read_input_token_cost_above_272k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    input_cost_per_token_above_272k_tokens: Optional[
+        float
+    ]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -211,6 +217,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    output_cost_per_token_above_272k_tokens: Optional[
+        float
+    ]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -291,6 +300,7 @@ class CallTypes(str, Enum):
     search = "search"
     asearch = "asearch"
     arealtime = "_arealtime"
+    aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
@@ -2622,8 +2632,8 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
 
 
 class GuardrailMode(TypedDict, total=False):
-    tags: Optional[Dict[str, str]]
-    default: Optional[str]
+    tags: Optional[Dict[str, Union[str, List[str]]]]
+    default: Optional[Union[str, List[str]]]
 
 
 GuardrailStatus = Literal[
@@ -3033,6 +3043,7 @@ all_litellm_params = (
         "shared_session",
         "search_tool_name",
         "order",
+        "enable_json_schema_validation",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -3174,6 +3185,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
     GRADIENT_AI = "gradient_ai"
@@ -3209,6 +3221,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
+    BEDROCK_MANTLE = "bedrock_mantle"
 
 
 # Create a set of all provider values for quick lookup
@@ -3244,6 +3257,8 @@ class SearchProviders(str, Enum):
     SEARXNG = "searxng"
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
+    SEARCHAPI = "searchapi"
+    SERPER = "serper"
 
 
 # Create a set of all search provider values for quick lookup

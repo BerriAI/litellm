@@ -75,3 +75,7 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/responses"
+
+    def supports_native_websocket(self) -> bool:
+        """OpenRouter does not support native WebSocket for Responses API"""
+        return False

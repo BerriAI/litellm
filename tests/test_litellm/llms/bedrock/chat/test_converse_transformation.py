@@ -43,6 +43,29 @@ def test_transform_usage():
     )
     assert openai_usage._cache_creation_input_tokens == usage["cacheWriteInputTokens"]
     assert openai_usage._cache_read_input_tokens == usage["cacheReadInputTokens"]
+    # completion_tokens_details should always be populated
+    assert openai_usage.completion_tokens_details is not None
+    assert openai_usage.completion_tokens_details.reasoning_tokens == 0
+    assert openai_usage.completion_tokens_details.text_tokens == usage["outputTokens"]
+
+
+def test_transform_usage_with_reasoning_content():
+    """Test that completion_tokens_details correctly tracks reasoning vs text tokens."""
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 10,
+            "outputTokens": 100,
+            "totalTokens": 110,
+        }
+    )
+    config = AmazonConverseConfig()
+    reasoning_text = "Let me think about this step by step."
+    openai_usage = config._transform_usage(usage, reasoning_content=reasoning_text)
+    assert openai_usage.completion_tokens_details is not None
+    assert openai_usage.completion_tokens_details.reasoning_tokens > 0
+    assert openai_usage.completion_tokens_details.text_tokens == (
+        usage["outputTokens"] - openai_usage.completion_tokens_details.reasoning_tokens
+    )
 
 
 def test_transform_system_message():
@@ -3168,6 +3191,33 @@ def test_transform_request_with_output_config():
     assert "outputConfig" in result
     assert result["outputConfig"]["textFormat"]["type"] == "json_schema"
     assert result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "TestSchema"
+
+
+def test_output_config_snake_case_stripped_from_bedrock_converse_request():
+    """Test that output_config (snake_case) is stripped from Bedrock Converse requests.
+
+    Bedrock Converse API doesn't support the output_config parameter (Anthropic-only).
+    Nova and other Converse models reject requests with extraneous output_config.
+    """
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "output_config": {"effort": "high"},
+    }
+
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # output_config must not appear in additionalModelRequestFields
+    additional = result.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional, (
+        f"output_config should be stripped for Bedrock Converse, got: {list(additional.keys())}"
+    )
 
 
 def test_transform_response_native_structured_output():
