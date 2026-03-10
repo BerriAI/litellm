@@ -199,9 +199,11 @@ def _expand_model_aliases(model_cost: dict) -> dict:
 
     for model_name, model_info in model_cost.items():
         aliases: Optional[list] = model_info.get("aliases")
-        if not aliases:
+        if aliases is None:
             continue
         keys_with_aliases.append(model_name)
+        if not aliases:
+            continue
         for alias in aliases:
             if alias in model_cost:
                 verbose_logger.warning(

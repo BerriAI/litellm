@@ -148,7 +148,7 @@ class TestAliasConflicts:
 
         # The canonical "model-dated" entry is preserved, not overwritten
         assert "model-dated" in result
-        assert "alias conflict" in caplog.text.lower() or len(result) == 2
+        assert "alias conflict" in caplog.text.lower()
 
     def test_duplicate_alias_across_entries(self, caplog):
         """Same alias claimed by two different entries: second one is skipped."""
