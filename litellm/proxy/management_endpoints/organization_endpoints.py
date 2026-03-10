@@ -649,8 +649,8 @@ async def list_organization(
             "mode": "insensitive",  # Case-insensitive search
         }
 
-    # if proxy admin - get all orgs (with optional filters)
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+    # if proxy admin or admin viewer - get all orgs (with optional filters)
+    if _user_has_admin_view(user_api_key_dict):
         response = await prisma_client.db.litellm_organizationtable.find_many(
             where=where_conditions if where_conditions else None,
             include={"litellm_budget_table": True, "members": True, "teams": True},
@@ -721,7 +721,11 @@ async def info_organization(organization_id: str):
             where={"organization_id": organization_id},
             include={
                 "litellm_budget_table": True,
-                "members": True,
+                "members": {
+                    "include": {
+                        "user": True,
+                    }
+                },
                 "teams": True,
                 "object_permission": True,
             },

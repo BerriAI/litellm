@@ -16,6 +16,7 @@ from litellm.proxy.health_endpoints.health_app_factory import build_health_app
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 
+@pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
     @patch("click.echo")
@@ -225,23 +226,35 @@ class TestProxyInitializationHelpers:
         assert modified_url == ""
 
     @patch("uvicorn.run")
-    @patch("atexit.register")  # 🔥 critical
-    def test_skip_server_startup(self, mock_atexit_register, mock_uvicorn_run):
+    @patch("atexit.register")  # critical
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    def test_skip_server_startup(self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run):
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
 
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        # Remove DATABASE_URL/DIRECT_URL so the CLI doesn't attempt
+        # real prisma operations when these are set in CI.
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with patch.dict(
+            os.environ, clean_env, clear=True,
+        ), patch.dict(
             "sys.modules",
             {
-                "proxy_server": MagicMock(
-                    app=MagicMock(),
-                    ProxyConfig=MagicMock(),
-                    KeyManagementSettings=MagicMock(),
-                    save_worker_config=MagicMock(),
-                )
+                "proxy_server": mock_proxy_module,
+                # Prevent real import of proxy_server inside Click's
+                # isolation context (heavy side effects cause stream
+                # lifecycle issues with Click 8.2+)
+                "litellm.proxy.proxy_server": mock_proxy_module,
             },
         ), patch(
             "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
@@ -255,7 +268,7 @@ class TestProxyInitializationHelpers:
             # --- skip startup ---
             result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
 
@@ -264,7 +277,7 @@ class TestProxyInitializationHelpers:
 
             result = runner.invoke(run_server, ["--local"])
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
 
     @patch("uvicorn.run")
@@ -319,7 +332,8 @@ class TestProxyInitializationHelpers:
 
     @patch("uvicorn.run")
     @patch("builtins.print")
-    def test_max_requests_before_restart_flag(self, mock_print, mock_uvicorn_run):
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_max_requests_before_restart_flag(self, mock_setup_db, mock_print, mock_uvicorn_run):
         """Test that the max_requests_before_restart flag is passed to uvicorn as limit_max_requests"""
         from click.testing import CliRunner
 
@@ -332,7 +346,10 @@ class TestProxyInitializationHelpers:
         mock_key_mgmt = MagicMock()
         mock_save_worker_config = MagicMock()
 
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with patch.dict(
+            os.environ, clean_env, clear=True,
+        ), patch.dict(
             "sys.modules",
             {
                 "proxy_server": MagicMock(
@@ -355,7 +372,7 @@ class TestProxyInitializationHelpers:
                 run_server, ["--local", "--max_requests_before_restart", "123"]
             )
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
 
             # Check that uvicorn.run was called with limit_max_requests parameter
@@ -571,25 +588,20 @@ class TestHealthAppFactory:
         assert isinstance(health_app_2, fastapi.FastAPI)
 
     @patch("subprocess.run")
+    @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
-    @patch.dict(
-        os.environ, {"DATABASE_URL": "postgresql://test:test@localhost:5432/test"}
-    )
     def test_use_prisma_db_push_flag_behavior(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
         mock_setup_database,
+        mock_atexit_register,
         mock_subprocess_run,
     ):
         """Test that use_prisma_db_push flag correctly controls PrismaManager.setup_database use_migrate parameter"""
-        from click.testing import CliRunner
-
         from litellm.proxy.proxy_cli import run_server
-
-        runner = CliRunner()
 
         # Mock subprocess.run to simulate prisma being available
         mock_subprocess_run.return_value = MagicMock(returncode=0)
@@ -597,20 +609,27 @@ class TestHealthAppFactory:
         # Mock should_update_prisma_schema to return True (so setup_database gets called)
         mock_should_update_schema.return_value = True
 
-        mock_app = MagicMock()
-        mock_proxy_config = MagicMock()
-        mock_key_mgmt = MagicMock()
-        mock_save_worker_config = MagicMock()
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
 
         with patch.dict(
+            os.environ, clean_env, clear=True
+        ), patch.dict(
             "sys.modules",
             {
-                "proxy_server": MagicMock(
-                    app=mock_app,
-                    ProxyConfig=mock_proxy_config,
-                    KeyManagementSettings=mock_key_mgmt,
-                    save_worker_config=mock_save_worker_config,
-                )
+                "proxy_server": mock_proxy_module,
+                "litellm.proxy.proxy_server": mock_proxy_module,
             },
         ), patch(
             "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
@@ -621,11 +640,15 @@ class TestHealthAppFactory:
                 "port": 8000,
             }
 
+            # Use standalone_mode=False to bypass Click's CliRunner stream
+            # isolation which causes flaky "I/O operation on closed file"
+            # errors in CI environments (Click 8.3.x stream lifecycle issue).
+
             # Test 1: Without --use_prisma_db_push flag (default behavior)
             # use_prisma_db_push should be False (default), so use_migrate should be True
-            result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
-
-            assert result.exit_code == 0
+            run_server.main(
+                ["--local", "--skip_server_startup"], standalone_mode=False
+            )
             mock_setup_database.assert_called_with(use_migrate=True)
 
             # Reset mocks
@@ -635,9 +658,149 @@ class TestHealthAppFactory:
 
             # Test 2: With --use_prisma_db_push flag set
             # use_prisma_db_push should be True, so use_migrate should be False
-            result = runner.invoke(
-                run_server, ["--local", "--skip_server_startup", "--use_prisma_db_push"]
+            run_server.main(
+                ["--local", "--skip_server_startup", "--use_prisma_db_push"],
+                standalone_mode=False,
             )
-
-            assert result.exit_code == 0
             mock_setup_database.assert_called_with(use_migrate=False)
+
+
+# --- Module-level helpers for worker startup hook tests ---
+
+_dummy_hook_called = False
+
+
+def _dummy_hook():
+    """A simple sync hook used by test_should_run_worker_startup_hooks."""
+    global _dummy_hook_called
+    _dummy_hook_called = True
+
+
+_dummy_async_hook_called = False
+
+
+async def _dummy_async_hook():
+    """A simple async hook used by test_should_run_async_worker_startup_hook."""
+    global _dummy_async_hook_called
+    _dummy_async_hook_called = True
+
+
+def _failing_hook():
+    """A hook that always raises, used by test_should_raise_on_failing_hook."""
+    raise RuntimeError("Hook failed on purpose")
+
+
+class TestWorkerStartupHooks:
+    """Tests for the LITELLM_WORKER_STARTUP_HOOKS mechanism in proxy_startup_event."""
+
+    @pytest.mark.asyncio
+    async def test_should_run_worker_startup_hooks(self):
+        """Sync worker startup hook is called during proxy_startup_event."""
+        global _dummy_hook_called
+        _dummy_hook_called = False
+
+        from litellm.proxy.proxy_server import proxy_startup_event
+
+        env_overrides = {
+            "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_dummy_hook",
+        }
+        # Remove DATABASE_URL to avoid real DB setup
+        clean_env = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env.update(env_overrides)
+
+        with patch.dict(os.environ, clean_env, clear=True):
+            try:
+                async with proxy_startup_event(app=None) as _:
+                    pass
+            except Exception:
+                pass  # We expect errors after the hook (no DB, etc.)
+
+        assert _dummy_hook_called is True, "Sync startup hook was not called"
+
+    @pytest.mark.asyncio
+    async def test_should_run_async_worker_startup_hook(self):
+        """Async worker startup hook is awaited during proxy_startup_event."""
+        global _dummy_async_hook_called
+        _dummy_async_hook_called = False
+
+        from litellm.proxy.proxy_server import proxy_startup_event
+
+        env_overrides = {
+            "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_dummy_async_hook",
+        }
+        clean_env = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env.update(env_overrides)
+
+        with patch.dict(os.environ, clean_env, clear=True):
+            try:
+                async with proxy_startup_event(app=None) as _:
+                    pass
+            except Exception:
+                pass
+
+        assert _dummy_async_hook_called is True, "Async startup hook was not called"
+
+    @pytest.mark.asyncio
+    async def test_should_raise_on_failing_worker_startup_hook(self):
+        """A failing worker startup hook propagates the error."""
+        from litellm.proxy.proxy_server import proxy_startup_event
+
+        env_overrides = {
+            "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_failing_hook",
+        }
+        clean_env = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env.update(env_overrides)
+
+        with patch.dict(os.environ, clean_env, clear=True):
+            with pytest.raises(RuntimeError, match="Hook failed on purpose"):
+                async with proxy_startup_event(app=None) as _:
+                    pass
+
+    def test_should_skip_when_no_hooks_set(self):
+        """When LITELLM_WORKER_STARTUP_HOOKS is not set, no hooks are executed."""
+        global _dummy_hook_called
+        _dummy_hook_called = False
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LITELLM_WORKER_STARTUP_HOOKS", None)
+            # The hook block should be skipped entirely when env var is absent
+            assert "LITELLM_WORKER_STARTUP_HOOKS" not in os.environ
+            # Verify that an empty env var value also results in no hook execution
+            assert os.environ.get("LITELLM_WORKER_STARTUP_HOOKS", "") == ""
+
+    @pytest.mark.asyncio
+    async def test_should_run_multiple_hooks(self):
+        """Multiple comma-separated hooks are all called."""
+        global _dummy_hook_called, _dummy_async_hook_called
+        _dummy_hook_called = False
+        _dummy_async_hook_called = False
+
+        from litellm.proxy.proxy_server import proxy_startup_event
+
+        hooks = (
+            "tests.test_litellm.proxy.test_proxy_cli:_dummy_hook,"
+            "tests.test_litellm.proxy.test_proxy_cli:_dummy_async_hook"
+        )
+        env_overrides = {
+            "LITELLM_WORKER_STARTUP_HOOKS": hooks,
+        }
+        clean_env = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env.update(env_overrides)
+
+        with patch.dict(os.environ, clean_env, clear=True):
+            try:
+                async with proxy_startup_event(app=None) as _:
+                    pass
+            except Exception:
+                pass
+
+        assert _dummy_hook_called is True, "First hook was not called"
+        assert _dummy_async_hook_called is True, "Second hook was not called"

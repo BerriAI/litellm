@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Mapping, Optional, Union
 from urllib.parse import parse_qs
 
 import httpx
@@ -9,7 +9,9 @@ from litellm.constants import PASS_THROUGH_HEADER_PREFIX
 class BasePassthroughUtils:
     @staticmethod
     def get_merged_query_parameters(
-        existing_url: httpx.URL, request_query_params: Dict[str, Union[str, list]]
+        existing_url: httpx.URL,
+        request_query_params: Mapping[str, Union[str, list]],
+        default_query_params: Optional[Dict[str, Union[str, list]]] = None
     ) -> Dict[str, Union[str, List[str]]]:
         # Get the existing query params from the target URL
         existing_query_string = existing_url.query.decode("utf-8")
@@ -19,8 +21,19 @@ class BasePassthroughUtils:
         updated_existing_query_params = {
             k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()
         }
-        # Merge the query params, giving priority to the existing ones
-        return {**request_query_params, **updated_existing_query_params}
+
+        # Start with default query params (lowest priority)
+        merged_params = {}
+        if default_query_params:
+            merged_params.update(default_query_params)
+
+        # Override with existing URL query params (medium priority)
+        merged_params.update(updated_existing_query_params)
+
+        # Override with request query params (highest priority - client can override anything)
+        merged_params.update(request_query_params)
+
+        return merged_params
 
     @staticmethod
     def forward_headers_from_request(

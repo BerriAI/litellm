@@ -2348,7 +2348,7 @@ def test_get_valid_models_from_dynamic_api_key():
         check_provider_endpoint=True,
     )
     assert len(valid_models) > 0
-    assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
+    assert "anthropic/claude-sonnet-4-6" in valid_models
 
 
 def test_get_whitelisted_models():
