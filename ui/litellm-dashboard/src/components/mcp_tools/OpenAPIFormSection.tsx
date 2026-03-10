@@ -30,14 +30,16 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
   const handlePresetSelect = (entry: OpenAPIRegistryEntry) => {
     setSelectedPreset(entry.name);
     onKeyToolsChange?.(entry.key_tools ?? []);
-    const updates = {
+    const updates: Record<string, any> = {
       spec_path: entry.spec_url,
-      auth_type: AUTH_TYPE.OAUTH2,
-      credentials: {
+    };
+    if (entry.oauth) {
+      updates.auth_type = AUTH_TYPE.OAUTH2;
+      updates.credentials = {
         authorization_url: entry.oauth.authorization_url,
         token_url: entry.oauth.token_url,
-      },
-    };
+      };
+    }
     form.setFieldsValue(updates);
     onValuesChange(updates);
   };
