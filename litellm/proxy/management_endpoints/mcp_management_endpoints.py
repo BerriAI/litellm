@@ -517,15 +517,32 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
     )
     async def get_mcp_access_groups(
+        team_id: Optional[str] = Query(
+            None,
+            description="When provided, return only access groups the team is permitted to use.",
+        ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
-        Get all available MCP access groups from the database AND config
+        Get MCP access groups available to the user. When team_id is provided, returns only
+        the access groups the team is configured to use. Non-admins without a team_id only
+        see groups accessible via their own teams.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.management_helpers.object_permission_utils import (
+            get_allowed_mcp_access_groups_for_user,
+            get_team_mcp_permissions,
+        )
         from litellm.proxy.proxy_server import prisma_client
+
+        # When a specific team is requested, return only that team's configured groups
+        if team_id is not None:
+            team_perms = await get_team_mcp_permissions(team_id, prisma_client)
+            if team_perms is not None:
+                return {"access_groups": sorted(team_perms["mcp_access_groups"])}
+            # Team has no restrictions — fall through to return all groups below
 
         access_groups = set()
 
@@ -546,6 +563,14 @@ if MCP_AVAILABLE:
                         access_groups.update(server.mcp_access_groups)
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
+
+        # Filter for non-admins: only return groups the user has access to
+        allowed_groups = await get_allowed_mcp_access_groups_for_user(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+        if allowed_groups is not None:
+            access_groups = access_groups & allowed_groups
 
         # Convert to sorted list
         access_groups_list = sorted(list(access_groups))
@@ -622,6 +647,10 @@ if MCP_AVAILABLE:
         response_model=List[LiteLLM_MCPServerTable],
     )
     async def fetch_all_mcp_servers(
+        team_id: Optional[str] = Query(
+            None,
+            description="When provided, return only MCP servers the team is permitted to use.",
+        ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
@@ -631,6 +660,29 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
+        from litellm.proxy.proxy_server import prisma_client
+
+        # When a specific team is requested, filter to that team's allowed servers
+        if team_id is not None:
+            from litellm.proxy.management_helpers.object_permission_utils import (
+                get_team_mcp_permissions,
+            )
+
+            team_perms = await get_team_mcp_permissions(team_id, prisma_client)
+            if team_perms is not None:
+                # Team has explicit restrictions — return only its allowed servers
+                allowed_ids = set(team_perms["mcp_servers"])
+                allow_all_ids = set(global_mcp_server_manager.get_allow_all_keys_server_ids())
+                all_servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+                filtered = [
+                    s for s in all_servers
+                    if s.server_id in allowed_ids or s.server_id in allow_all_ids
+                ]
+                return _redact_mcp_credentials_list(filtered)
+            else:
+                # Team has no MCP restrictions — return all servers
+                all_servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+                return _redact_mcp_credentials_list(all_servers)
 
         user_mcp_management_mode = _get_user_mcp_management_mode()
         is_restricted_virtual_key = _is_restricted_virtual_key_request(
