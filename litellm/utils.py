@@ -1149,8 +1149,8 @@ def function_setup(  # noqa: PLR0915
             # of "metadata" (to avoid conflicting with provider API metadata fields),
             # populate litellm_params["metadata"] so callbacks (e.g. Langfuse) that
             # read API key info from litellm_params["metadata"] see the fields.
-            if litellm_params.get("metadata") is None:
-                litellm_params["metadata"] = kwargs["litellm_metadata"]
+            if not litellm_params.get("metadata"):
+                litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
 
         logging_obj.update_environment_variables(
             model=model,
