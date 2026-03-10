@@ -1837,3 +1837,20 @@ class TestValidateMCPRequiredFields:
         with patch_proxy_general_settings({}):
             # Should not raise when no required fields are configured
             _validate_mcp_required_fields(payload)
+
+    def test_unknown_field_name_in_config_raises_500(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _validate_mcp_required_fields,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="My Server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.sse,
+        )
+        # "source_Url" is a typo — not a real field on NewMCPServerRequest
+        with patch_proxy_general_settings({"mcp_required_fields": ["source_Url"]}):
+            with pytest.raises(HTTPException) as exc_info:
+                _validate_mcp_required_fields(payload)
+        assert exc_info.value.status_code == 500
+        assert "source_Url" in str(exc_info.value.detail)

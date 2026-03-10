@@ -161,6 +161,10 @@ if MCP_AVAILABLE:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
 
+    _VALID_MCP_REQUIRED_FIELDS: frozenset = frozenset(
+        NewMCPServerRequest.model_fields
+    )
+
     def _validate_mcp_required_fields(payload: Any) -> None:
         """Validate submission payload against admin-configured mcp_required_fields."""
         from litellm.proxy.proxy_server import (
@@ -172,6 +176,18 @@ if MCP_AVAILABLE:
         )
         if not required_fields:
             return
+
+        # Fail fast on unknown field names — a typo in the config would silently
+        # block every submission with a confusing "missing fields" error.
+        unknown = [f for f in required_fields if f not in _VALID_MCP_REQUIRED_FIELDS]
+        if unknown:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": f"mcp_required_fields contains unknown field names: {unknown}. "
+                    "Check general_settings.mcp_required_fields in your proxy config."
+                },
+            )
 
         # Mirror the UI's compliance checks (MCPStandardsSettings.tsx FIELD_GROUPS):
         # auth_type requires a real value — "none" is treated as absent.
@@ -750,7 +766,7 @@ if MCP_AVAILABLE:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
-                    "error": "Admin users should use POST /v1/mcp/server to create servers directly instead of the submission workflow."
+                    "error": "PROXY_ADMIN users should use POST /v1/mcp/server to create servers directly instead of the submission workflow."
                 },
             )
 
