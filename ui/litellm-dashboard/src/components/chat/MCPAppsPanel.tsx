@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { Spin, Input, Button, Skeleton } from "antd";
 import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined } from "@ant-design/icons";
 import { fetchMCPServers, listMCPTools } from "../networking";
-import { MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
+import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
 import { message } from "antd";
 
 interface Props {
@@ -269,7 +269,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>
-              Connect tools to your chat.
+              Browse tools, authenticate once, use in chat — no setup needed.
             </p>
             {loadingCounts ? (
               <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#9ca3af" }}>
@@ -379,6 +379,15 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                 </div>
                 {isConnected && (
                   <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#1677ff", flexShrink: 0 }} />
+                )}
+                {server.auth_type === AUTH_TYPE.OAUTH2 && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 600, color: "#7c3aed",
+                    background: "#f3e8ff", borderRadius: 4, padding: "1px 5px",
+                    letterSpacing: "0.03em", flexShrink: 0, whiteSpace: "nowrap",
+                  }}>
+                    OAuth2
+                  </span>
                 )}
                 <RightOutlined style={{ fontSize: 11, color: "#d1d5db", flexShrink: 0 }} />
               </div>
