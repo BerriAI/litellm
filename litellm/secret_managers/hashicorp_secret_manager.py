@@ -44,6 +44,11 @@ class HashicorpSecretManager(BaseSecretManager):
 
         self._verify_required_credentials_exist()
 
+        if premium_user is not True:
+            raise ValueError(
+                f"Hashicorp secret manager is only available for premium users. {CommonProxyErrors.not_premium_user.value}"
+            )
+
         litellm.secret_manager_client = self
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
         _refresh_interval = os.environ.get(
@@ -58,11 +63,6 @@ class HashicorpSecretManager(BaseSecretManager):
             default_ttl=_refresh_interval
         )  # store in memory for 1 day
 
-        if premium_user is not True:
-            raise ValueError(
-                f"Hashicorp secret manager is only available for premium users. {CommonProxyErrors.not_premium_user.value}"
-            )
-
     def _verify_required_credentials_exist(self) -> None:
         """
         Validate that at least one authentication method is configured.
@@ -70,13 +70,16 @@ class HashicorpSecretManager(BaseSecretManager):
         Raises:
             ValueError: If no valid authentication credentials are provided
         """
-        if not self.vault_token and not (
-            self.approle_role_id and self.approle_secret_id
-        ):
+        has_token = bool(self.vault_token)
+        has_approle = bool(self.approle_role_id and self.approle_secret_id)
+        has_tls_cert = bool(self.tls_cert_path and self.tls_key_path)
+
+        if not has_token and not has_approle and not has_tls_cert:
             raise ValueError(
                 "Missing Vault authentication credentials. Please set either:\n"
                 "  - HCP_VAULT_TOKEN for token-based auth, or\n"
-                "  - HCP_VAULT_APPROLE_ROLE_ID and HCP_VAULT_APPROLE_SECRET_ID for AppRole auth"
+                "  - HCP_VAULT_APPROLE_ROLE_ID and HCP_VAULT_APPROLE_SECRET_ID for AppRole auth, or\n"
+                "  - HCP_VAULT_CLIENT_CERT and HCP_VAULT_CLIENT_KEY for TLS certificate auth"
             )
 
     def _auth_via_approle(self) -> str:

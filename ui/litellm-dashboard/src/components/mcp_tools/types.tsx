@@ -9,6 +9,7 @@ export const AUTH_TYPE = {
   NONE: "none",
   API_KEY: "api_key",
   BEARER_TOKEN: "bearer_token",
+  TOKEN: "token",
   BASIC: "basic",
   OAUTH2: "oauth2",
 };
@@ -169,6 +170,8 @@ export interface MCPServer {
   teams?: Team[];
   mcp_access_groups?: string[];
   allowed_tools?: string[];
+  tool_name_to_display_name?: Record<string, string>;
+  tool_name_to_description?: Record<string, string>;
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
 
@@ -176,6 +179,12 @@ export interface MCPServer {
   command?: string | null;
   args?: string[] | null;
   env?: Record<string, string> | null;
+
+  /** BYOK (Bring Your Own Key) fields */
+  is_byok?: boolean | null;
+  byok_description?: string[] | null;
+  byok_api_key_help_url?: string | null;
+  has_user_credential?: boolean | null;
 }
 
 export interface MCPServerProps {

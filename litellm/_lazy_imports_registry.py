@@ -214,6 +214,7 @@ LLM_CONFIG_NAMES = (
     "TopazImageVariationConfig",
     "OpenAITextCompletionConfig",
     "GroqChatConfig",
+    "BedrockMantleChatConfig",
     "A2AConfig",
     "GenAIHubOrchestrationConfig",
     "VoyageEmbeddingConfig",
@@ -858,6 +859,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "OpenAITextCompletionConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "BedrockMantleChatConfig": (".llms.bedrock_mantle.chat.transformation", "BedrockMantleChatConfig"),
     "A2AConfig": (".llms.a2a.chat.transformation", "A2AConfig"),
     "GenAIHubOrchestrationConfig": (
         ".llms.sap.chat.transformation",

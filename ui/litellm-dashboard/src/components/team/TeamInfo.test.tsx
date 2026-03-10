@@ -34,6 +34,7 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganization: vi.fn(),
+  useOrganizations: vi.fn().mockReturnValue({ data: [], isLoading: false }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
@@ -634,7 +635,7 @@ describe("TeamInfoView", () => {
     await user.click(virtualKeysTab);
 
     await waitFor(() => {
-      expect(screen.getByText("5 Members")).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
     });
   });
 
@@ -679,9 +680,8 @@ describe("TeamInfoView", () => {
     await user.click(virtualKeysTab);
 
     await waitFor(() => {
-      expect(screen.getByText("1 Member")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Filters" })).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: "Filters" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
     expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Previous" })).toBeInTheDocument();

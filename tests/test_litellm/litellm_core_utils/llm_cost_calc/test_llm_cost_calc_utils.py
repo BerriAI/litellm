@@ -295,6 +295,32 @@ def test_generic_cost_per_token_above_200k_tokens():
     )
 
 
+def test_generic_cost_per_token_gpt54_above_272k_tokens():
+    """GPT-5.4/5.4-pro: prompts >272K input tokens priced at 2x input, 1.5x output."""
+    model = "gpt-5.4"
+    custom_llm_provider = "openai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    prompt_tokens = 273000  # Above 272K threshold
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    expected_prompt = model_cost_map["input_cost_per_token_above_272k_tokens"] * prompt_tokens
+    expected_completion = model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens
+    assert round(prompt_cost, 10) == round(expected_prompt, 10)
+    assert round(completion_cost, 10) == round(expected_completion, 10)
+
+
 def test_generic_cost_per_token_anthropic_prompt_caching():
     model = "claude-sonnet-4@20250514"
     usage = Usage(

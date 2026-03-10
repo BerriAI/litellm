@@ -1000,6 +1000,7 @@ async def test_validate_team_member_add_permissions_non_admin():
     team = MagicMock(spec=LiteLLM_TeamTable)
     team.team_id = "test-team-123"
     team.members_with_roles = []
+    team.organization_id = None
 
     # Mock the helper functions to return False
     with patch(

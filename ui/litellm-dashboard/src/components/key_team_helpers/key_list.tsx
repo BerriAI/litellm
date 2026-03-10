@@ -47,6 +47,7 @@ export interface KeyResponse {
   blocked: boolean;
   litellm_budget_table: Record<string, unknown>;
   organization_id: string | null;
+  org_id?: string | null;
   created_at: string;
   updated_at: string;
   last_active: string | null;
