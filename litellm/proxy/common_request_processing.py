@@ -41,6 +41,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -498,6 +499,7 @@ class ProxyBaseLLMRequestProcessing:
             "aembedding",
             "aresponses",
             "_arealtime",
+            "_aresponses_websocket",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
@@ -642,6 +644,11 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
+        DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
+        DDSpanTagger.tag_request(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=self.data.get("model"),
+        )
 
         ### AUTO STREAM USAGE TRACKING ###
         # If always_include_stream_usage is enabled and this is a streaming request
@@ -658,7 +665,6 @@ class ProxyBaseLLMRequestProcessing:
                 and "include_usage" not in self.data["stream_options"]
             ):
                 self.data["stream_options"]["include_usage"] = True
-
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call

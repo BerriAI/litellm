@@ -2316,5 +2316,3 @@ async def test_prometheus_token_metrics_with_prometheus_config():
                 raise AssertionError(f"Metric {metric_name} not found in registry")
 
         print("✓ All token metrics validated successfully!")
-
-        # check final value of metrics in registry

@@ -1,7 +1,7 @@
 import copy
 import datetime
 from typing import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request, status
@@ -19,6 +19,7 @@ from litellm.proxy.common_request_processing import (
     _parse_event_data_for_error,
     create_response,
 )
+from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -78,6 +79,22 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
+
+    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
+        mock_set_active_span_tag = MagicMock(return_value=True)
+        import litellm.proxy.dd_span_tagger
+
+        monkeypatch.setattr(
+            litellm.proxy.dd_span_tagger,
+            "set_active_span_tag",
+            mock_set_active_span_tag,
+        )
+
+        DDSpanTagger.tag_call_id("test-call-id")
+
+        mock_set_active_span_tag.assert_called_once_with(
+            "litellm.call_id", "test-call-id"
+        )
 
     @pytest.mark.asyncio
     async def test_should_apply_hierarchical_router_settings_as_override(
@@ -1549,3 +1566,59 @@ class TestStreamingOverheadHeader:
             "It was missing — this is the streaming overhead header regression."
         )
         assert custom_headers["x-litellm-overhead-duration-ms"] == "55.3"
+
+
+class TestDDSpanTaggerTagRequest:
+    """Tests for DDSpanTagger.tag_request - key/model DD span tagging."""
+
+    def _make_user_api_key_dict(self, key_alias=None, token=None):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        d = UserAPIKeyAuth()
+        d.key_alias = key_alias
+        d.token = token
+        return d
+
+    def test_tags_key_alias_and_model(self):
+        """key_alias and requested_model are set on the span when present."""
+        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", token="hashed123")
+
+        with patch(
+            "litellm.proxy.dd_span_tagger.set_active_span_tag"
+        ) as mock_set_tag:
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model="gpt-4o",
+            )
+
+        mock_set_tag.assert_any_call("litellm.key_alias", "my-prod-key")
+        mock_set_tag.assert_any_call("litellm.key_hash", "hashed123")
+        mock_set_tag.assert_any_call("litellm.requested_model", "gpt-4o")
+
+    def test_no_tags_when_key_absent(self):
+        """No key tags are set when key_alias and token are None (e.g. 401 path)."""
+        user_key = self._make_user_api_key_dict(key_alias=None, token=None)
+
+        with patch(
+            "litellm.proxy.dd_span_tagger.set_active_span_tag"
+        ) as mock_set_tag:
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model=None,
+            )
+
+        mock_set_tag.assert_not_called()
+
+    def test_only_model_tagged_when_no_key_info(self):
+        """requested_model is tagged even when there's no key info."""
+        user_key = self._make_user_api_key_dict(key_alias=None, token=None)
+
+        with patch(
+            "litellm.proxy.dd_span_tagger.set_active_span_tag"
+        ) as mock_set_tag:
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model="claude-3-5-sonnet",
+            )
+
+        mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")

@@ -33,6 +33,8 @@ class MCPServer(BaseModel):
     ] = None  # allow admin to specify which headers to forward from client to the MCP server
     allowed_tools: Optional[List[str]] = None
     disallowed_tools: Optional[List[str]] = None
+    tool_name_to_display_name: Optional[Dict[str, str]] = None
+    tool_name_to_description: Optional[Dict[str, str]] = None
     allowed_params: Optional[
         Dict[str, List[str]]
     ] = None  # map of tool names to allowed parameter lists
@@ -52,7 +54,11 @@ class MCPServer(BaseModel):
     env: Optional[Dict[str, str]] = None
     access_groups: Optional[List[str]] = None
     allow_all_keys: bool = False
-    available_on_public_internet: bool = False
+    available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = []
+    byok_api_key_help_url: Optional[str] = None
+    created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

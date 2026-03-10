@@ -210,6 +210,72 @@ def test_vertex_ai_response_schema_defs():
     }
 
 
+def test_vertex_ai_response_json_schema_preserves_refs_for_gemini_2():
+    """
+    Test that $defs and $ref are preserved for Gemini 2.0+ models using responseJsonSchema.
+
+    Gemini 2.0+ supports standard JSON Schema with $ref/$defs natively.
+    Unpacking them inflates nesting depth and can exceed Gemini's limit.
+    """
+    v = VertexGeminiConfig()
+
+    schema = cast(dict, v.get_json_schema_from_pydantic_object(MathReasoning))
+
+    # Pydantic generates $defs with $ref — verify our test input has them
+    assert "$defs" in schema["json_schema"]["schema"]
+
+    transformed_request = v.map_openai_params(
+        non_default_params={
+            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "response_format": schema,
+        },
+        optional_params={},
+        model="gemini-2.5-flash",  # Gemini 2.0+ uses responseJsonSchema
+        drop_params=False,
+    )
+
+    # $defs and $ref should be preserved (not unpacked)
+    assert "response_json_schema" in transformed_request
+    result_schema = transformed_request["response_json_schema"]
+    assert "$defs" in result_schema, "responseJsonSchema should preserve $defs for Gemini 2.0+"
+
+
+def test_vertex_ai_get_json_schema_preserves_refs_for_nested_pydantic():
+    """
+    Test that get_json_schema_from_pydantic_object uses model_json_schema()
+    (which preserves $ref/$defs) instead of OpenAI's to_strict_json_schema()
+    (which inlines all $ref, inflating nesting depth).
+
+    This is the root cause fix for https://github.com/BerriAI/litellm/issues/21014
+    """
+    from pydantic import Field
+
+    class Inner(BaseModel):
+        value: str = Field(description="A value")
+
+    class Outer(BaseModel):
+        first: Inner = Field(description="First inner")
+        second: Inner = Field(description="Second inner")
+
+    # VertexGeminiConfig override should preserve $ref
+    config = VertexGeminiConfig()
+    result = config.get_json_schema_from_pydantic_object(Outer)
+
+    assert result is not None
+    schema = result["json_schema"]["schema"]
+    schema_str = json.dumps(schema)
+
+    # model_json_schema() produces $ref/$defs; to_strict_json_schema() inlines them
+    assert "$defs" in schema, "Schema should have $defs (not inlined)"
+    assert "$ref" in schema_str, "Schema should have $ref references (not inlined)"
+
+    # GoogleAIStudioGeminiConfig inherits the same behavior
+    gemini_config = GoogleAIStudioGeminiConfig()
+    result2 = gemini_config.get_json_schema_from_pydantic_object(Outer)
+    schema2 = result2["json_schema"]["schema"]
+    assert "$defs" in schema2, "GoogleAIStudioGeminiConfig should also preserve $defs"
+
+
 def test_vertex_ai_response_json_schema_for_gemini_2():
     """
     Test that Gemini 2.0+ models automatically use responseJsonSchema.
@@ -2064,7 +2130,7 @@ def test_reasoning_effort_dict_format_gemini_3():
     assert result["thinkingConfig"]["thinkingLevel"] == "high"
     assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test dict format without effort key - should fall back to Gemini 3 default (low)
+    # Test dict format without effort key - no thinkingConfig should be set
     optional_params = {}
     non_default_params = {"reasoning_effort": {"summary": "auto"}}
     result = v.map_openai_params(
@@ -2073,8 +2139,8 @@ def test_reasoning_effort_dict_format_gemini_3():
         model=model,
         drop_params=False,
     )
-    # Gemini 3 defaults to thinkingLevel="low" when no explicit effort is set
-    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    # No effort key in dict → no thinkingConfig set
+    assert "thinkingConfig" not in result
 
 
 def test_temperature_default_for_gemini_3():
@@ -2387,8 +2453,8 @@ def test_gemini_3_image_models_no_thinking_config():
 
 def test_gemini_3_text_models_get_thinking_config():
     """
-    Test that Gemini 3 text models DO receive automatic thinkingConfig.
-    This ensures we didn't break the existing behavior for non-image models.
+    Test that Gemini 3 text models do NOT receive automatic thinkingConfig
+    when no reasoning_effort or thinking param is provided.
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
@@ -2396,7 +2462,7 @@ def test_gemini_3_text_models_get_thinking_config():
 
     v = VertexGeminiConfig()
 
-    # Test gemini-3-pro-preview (text model, should get thinking)
+    # Test gemini-3-pro-preview (text model, no explicit thinking params)
     model = "gemini-3-pro-preview"
     optional_params = {}
     non_default_params = {}
@@ -2408,9 +2474,8 @@ def test_gemini_3_text_models_get_thinking_config():
         drop_params=False,
     )
 
-    # Should have thinkingConfig automatically added
-    assert "thinkingConfig" in result
-    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    # Should NOT have thinkingConfig automatically added when user provides no reasoning_effort
+    assert "thinkingConfig" not in result
     assert result["temperature"] == 1.0
 
 
@@ -3508,4 +3573,154 @@ def test_vertex_ai_web_search_options_in_map_openai_params():
     assert "googleSearch" in optional_params["tools"][0], "Tool should be googleSearch"
     assert optional_params["tools"][0]["googleSearch"] == {}, "googleSearch should be empty config"
     assert "web_search_options" not in optional_params, "web_search_options should be removed after transformation"
+
+
+def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():
+    """Test promptTokensDetails with VIDEO modality for video inputs.
+
+    This test verifies that video tokens from promptTokensDetails are correctly
+    parsed and surfaced in prompt_tokens_details.video_tokens.
+
+    Based on a real Gemini response where a video file is sent as input:
+        promptTokensDetails: [VIDEO: 10240, TEXT: 9, AUDIO: 200]
+        candidatesTokensDetails: [TEXT: 79]
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 10449,
+        "candidatesTokenCount": 79,
+        "totalTokenCount": 10528,
+        "trafficType": "ON_DEMAND",
+        "promptTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 10240},
+            {"modality": "TEXT", "tokenCount": 9},
+            {"modality": "AUDIO", "tokenCount": 200},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 79},
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    # Verify basic token counts
+    assert result.prompt_tokens == 10449
+    assert result.completion_tokens == 79
+    assert result.total_tokens == 10528
+
+    # Verify prompt token details include video tokens
+    assert result.prompt_tokens_details is not None
+    assert result.prompt_tokens_details.video_tokens == 10240, \
+        "Prompt video tokens should be 10240"
+    assert result.prompt_tokens_details.text_tokens == 9, \
+        "Prompt text tokens should be 9"
+    assert result.prompt_tokens_details.audio_tokens == 200, \
+        "Prompt audio tokens should be 200"
+
+    # Verify completion token details
+    assert result.completion_tokens_details is not None
+    assert result.completion_tokens_details.text_tokens == 79, \
+        "Completion text tokens should be 79"
+    assert result.completion_tokens_details.video_tokens is None, \
+        "Completion video tokens should be None (text-only response)"
+
+
+def test_vertex_ai_usage_metadata_with_video_tokens_in_candidates():
+    """Test candidatesTokensDetails with VIDEO modality.
+
+    Verifies that video tokens in the response (candidatesTokensDetails) are
+    correctly parsed and reflected in completion_tokens_details.video_tokens,
+    and that text_tokens is auto-calculated by subtracting video tokens.
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 10,
+        "candidatesTokenCount": 10330,
+        "totalTokenCount": 10340,
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 10},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 10240},
+            {"modality": "TEXT", "tokenCount": 90},
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens == 10330
+    assert result.completion_tokens_details is not None
+    assert result.completion_tokens_details.video_tokens == 10240, \
+        "Completion video tokens should be 10240"
+    assert result.completion_tokens_details.text_tokens == 90, \
+        "Completion text tokens should be 90"
+
+    # Verify prompt side has no video tokens
+    assert result.prompt_tokens_details.video_tokens is None, \
+        "Prompt video tokens should be None (text-only input)"
+
+
+def test_vertex_ai_usage_metadata_video_tokens_auto_calculated_text():
+    """Test that text_tokens is auto-calculated correctly when VIDEO modality
+    is present in candidatesTokensDetails but TEXT is omitted.
+
+    text = candidatesTokenCount - video_tokens - image_tokens - audio_tokens
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 10,
+        "candidatesTokenCount": 10330,
+        "totalTokenCount": 10340,
+        "candidatesTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 10240},
+            # TEXT intentionally omitted — should be auto-calculated
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens_details.video_tokens == 10240
+    # text = 10330 - 10240 = 90
+    assert result.completion_tokens_details.text_tokens == 90, \
+        "text_tokens should be auto-calculated as candidatesTokenCount - video_tokens"
+
+
+def test_vertex_ai_usage_metadata_video_tokens_with_caching():
+    """Test that cached video tokens are correctly subtracted from prompt video tokens
+    when cacheTokensDetails includes VIDEO modality.
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 10449,
+        "candidatesTokenCount": 79,
+        "totalTokenCount": 10528,
+        "cachedContentTokenCount": 5120,
+        "promptTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 10240},
+            {"modality": "TEXT", "tokenCount": 9},
+            {"modality": "AUDIO", "tokenCount": 200},
+        ],
+        "cacheTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 5120},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 79},
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    # video tokens should be reduced by cached amount: 10240 - 5120 = 5120
+    assert result.prompt_tokens_details.video_tokens == 5120, \
+        "Prompt video tokens should be 10240 - 5120 (cached) = 5120"
+    assert result.prompt_tokens_details.text_tokens == 9
+    assert result.prompt_tokens_details.audio_tokens == 200
 
