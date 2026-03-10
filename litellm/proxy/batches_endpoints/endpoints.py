@@ -27,6 +27,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
     get_batch_from_database,
     get_credentials_for_model,
+    get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
@@ -487,6 +488,10 @@ async def retrieve_batch( # noqa: PLR0915
 
             response = await llm_router.aretrieve_batch(**data)  # type: ignore
             response._hidden_params["unified_batch_id"] = unified_batch_id
+            if unified_batch_id:
+                model_id_from_batch = get_model_id_from_unified_batch_id(unified_batch_id)
+                if model_id_from_batch:
+                    response._hidden_params["model_id"] = model_id_from_batch
         
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
