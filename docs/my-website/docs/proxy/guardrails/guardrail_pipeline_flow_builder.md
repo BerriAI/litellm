@@ -221,8 +221,8 @@ steps:
 ```mermaid
 flowchart TD
     subgraph Simple["Simple Policy"]
-        S1[Guardrail A] --> S2[Guardrail B]
-        S1 & S2
+        S1[Guardrail A] --> R[Result: block if any fail]
+        S2[Guardrail B] --> R
     end
 
     subgraph Pipeline["Pipeline Policy"]
@@ -231,7 +231,6 @@ flowchart TD
         P2 -->|on_fail: block| Block
         P2 -->|on_pass: allow| Allow
     end
-```
 
 ## Testing the pipeline
 
