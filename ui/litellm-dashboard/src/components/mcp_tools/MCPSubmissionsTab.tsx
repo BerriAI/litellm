@@ -78,13 +78,17 @@ function StatCard({
 type ConfirmDialogProps = {
   action: "approve" | "reject";
   serverName: string;
+  isCurrentlyActive?: boolean;
   onConfirm: (reviewNotes?: string) => void;
   onCancel: () => void;
 };
 
-function ConfirmDialog({ action, serverName, onConfirm, onCancel }: ConfirmDialogProps) {
+function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCancel }: ConfirmDialogProps) {
   const [reviewNotes, setReviewNotes] = useState("");
   const isApprove = action === "approve";
+  const rejectBody = isCurrentlyActive
+    ? "This server is currently live. Rejecting it will immediately remove it from the proxy runtime."
+    : "This will mark the submission as rejected.";
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
@@ -107,7 +111,7 @@ function ConfirmDialog({ action, serverName, onConfirm, onCancel }: ConfirmDialo
           <span className="font-medium text-gray-700">&quot;{serverName}&quot;</span>?{" "}
           {isApprove
             ? "This will make it active and available for use."
-            : "This will mark it as rejected."}
+            : rejectBody}
         </p>
         {!isApprove && (
           <textarea
@@ -468,6 +472,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     serverId: string;
     serverName: string;
     action: "approve" | "reject";
+    isCurrentlyActive?: boolean;
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -484,7 +489,10 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     try {
       const [res, settings] = await Promise.all([
         fetchMCPSubmissions(accessToken),
-        getGeneralSettingsCall(accessToken).catch(() => null),
+        getGeneralSettingsCall(accessToken).catch((err) => {
+          console.warn("MCPSubmissionsTab: failed to load general settings, compliance rules will be empty:", err);
+          return null;
+        }),
       ]);
       setSummary(res);
       if (settings?.data && Array.isArray(settings.data)) {
@@ -625,6 +633,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
                   serverId: server.server_id,
                   serverName: server.alias ?? server.server_name ?? server.server_id,
                   action: "reject",
+                  isCurrentlyActive: server.approval_status === "active",
                 })
               }
             />
@@ -635,6 +644,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
         <ConfirmDialog
           action={confirmAction.action}
           serverName={confirmAction.serverName}
+          isCurrentlyActive={confirmAction.isCurrentlyActive}
           onConfirm={(reviewNotes) =>
             confirmAction.action === "approve"
               ? handleApprove(confirmAction.serverId, confirmAction.serverName)
