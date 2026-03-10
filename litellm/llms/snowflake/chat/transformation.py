@@ -174,13 +174,16 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         Snowflake transformation is synchronous and doesn't require async operations
         like image URL downloads that the parent class handles.
         """
-        # Build a map of tool_call_id -> tool_call for looking up function names
+        # Build a map of tool_call_id -> tool_call for looking up function names.
+        # Must handle both dict and Pydantic BaseModel messages/tool_calls.
         tool_calls_map: Dict[str, Dict[str, Any]] = {}
         for message in messages:
-            if isinstance(message, dict) and message.get("role") == "assistant":
-                for tc in message.get("tool_calls") or []:
-                    if isinstance(tc, dict):
-                        tool_calls_map[tc.get("id", "")] = tc
+            msg = message.model_dump() if isinstance(message, BaseModel) else message
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls") or []:
+                    tc_dict = tc.model_dump() if isinstance(tc, BaseModel) else tc
+                    if isinstance(tc_dict, dict):
+                        tool_calls_map[tc_dict.get("id", "")] = tc_dict
 
         transformed: List[Dict[str, Any]] = []
         pending_tool_messages: List[Dict[str, Any]] = []
@@ -249,18 +252,23 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         """
         content_list: List[Dict[str, Any]] = []
 
-        # Add text content if present
+        # Add text content if present.
+        # Note: Non-text parts (e.g., images) are intentionally dropped because
+        # Snowflake's content_list text blocks only support plain strings.
         text_content = message.get("content")
         if isinstance(text_content, list):
-            # Flatten multipart content to a single string
+            # Flatten to text only; filter out empty strings from non-text parts
             text_content = " ".join(
-                part.get("text", "") for part in text_content if isinstance(part, dict)
+                part.get("text", "")
+                for part in text_content
+                if isinstance(part, dict) and part.get("text")
             )
         if text_content:
             content_list.append({"type": "text", "text": text_content})
 
-        # Add tool_use blocks
-        for tool_call in message.get("tool_calls") or []:
+        # Add tool_use blocks. Handle both dict and Pydantic BaseModel tool_calls.
+        for raw_tc in message.get("tool_calls") or []:
+            tool_call = raw_tc.model_dump() if isinstance(raw_tc, BaseModel) else raw_tc
             if isinstance(tool_call, dict):
                 function = tool_call.get("function", {})
                 # Parse arguments from JSON string to dict
@@ -311,11 +319,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             tool_call_id = tool_msg.get("tool_call_id", "")
             tool_call = tool_calls_map.get(tool_call_id)
             if tool_call is None:
-                litellm.utils.verbose_logger.warning(
-                    f"Snowflake: tool_call_id '{tool_call_id}' not found in prior "
-                    "assistant messages; function name will be empty."
-                )
-                function_name = ""
+                # Fall back to 'name' field on the tool message itself (OpenAI format)
+                function_name = tool_msg.get("name", "")
+                if not function_name:
+                    litellm.utils.verbose_logger.warning(
+                        f"Snowflake: tool_call_id '{tool_call_id}' not found in prior "
+                        "assistant messages and no 'name' field; function name will be empty."
+                    )
             else:
                 function = tool_call.get("function", {})
                 function_name = function.get("name", "")
