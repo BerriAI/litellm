@@ -8946,11 +8946,16 @@ export const perUserAnalyticsCall = async (
 };
 
 export const deriveErrorMessage = (errorData: any): string => {
+  const detail = errorData?.detail;
+  const detailStr = Array.isArray(detail)
+    ? detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ")
+    : typeof detail === "string"
+      ? detail
+      : undefined;
   return (
-    (errorData?.error && (errorData.error.message || errorData.error)) ||
+    (errorData?.error && (errorData.error.message || (typeof errorData.error === "string" ? errorData.error : undefined))) ||
     errorData?.message ||
-    errorData?.detail ||
-    errorData?.error ||
+    detailStr ||
     JSON.stringify(errorData)
   );
 };
@@ -9554,5 +9559,97 @@ export const deleteToolPolicyOverride = async (
     const errorData = await response.text();
     throw new Error(errorData);
   }
+  return response.json();
+};
+
+// ── MCP OAuth user-credential helpers ────────────────────────────────────────
+
+export interface MCPOAuthUserCredentialStatus {
+  server_id: string;
+  has_credential: boolean;
+  expires_at?: string | null;
+  is_expired: boolean;
+  connected_at?: string | null;
+}
+
+export interface MCPUserCredentialListItem {
+  server_id: string;
+  server_name?: string | null;
+  alias?: string | null;
+  credential_type: string;
+  has_credential: boolean;
+  expires_at?: string | null;
+  connected_at?: string | null;
+}
+
+export const storeMCPOAuthUserCredential = async (
+  accessToken: string,
+  serverId: string,
+  tokenResponse: { access_token: string; refresh_token?: string; expires_in?: number; scopes?: string[] },
+): Promise<MCPOAuthUserCredentialStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth-user-credential`
+    : `/v1/mcp/server/${serverId}/oauth-user-credential`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(tokenResponse),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { detail?: { error?: string } })?.detail?.error || "Failed to store OAuth credential");
+  }
+  return response.json();
+};
+
+export const deleteMCPOAuthUserCredential = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPOAuthUserCredentialStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth-user-credential`
+    : `/v1/mcp/server/${serverId}/oauth-user-credential`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { detail?: { error?: string } })?.detail?.error || "Failed to revoke OAuth credential");
+  }
+  return response.json();
+};
+
+export const getMCPOAuthUserCredentialStatus = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPOAuthUserCredentialStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth-user-credential/status`
+    : `/v1/mcp/server/${serverId}/oauth-user-credential/status`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    return { server_id: serverId, has_credential: false, is_expired: false };
+  }
+  return response.json();
+};
+
+export const listMCPUserCredentials = async (
+  accessToken: string,
+): Promise<MCPUserCredentialListItem[]> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/user-credentials`
+    : `/v1/mcp/user-credentials`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return [];
   return response.json();
 };
