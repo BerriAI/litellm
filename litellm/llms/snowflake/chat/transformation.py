@@ -329,6 +329,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             else:
                 function = tool_call.get("function", {})
                 function_name = function.get("name", "")
+                if not function_name:
+                    litellm.utils.verbose_logger.warning(
+                        f"Snowflake: tool_call_id '{tool_call_id}' found but function name "
+                        "is empty; tool_results block will have name=''."
+                    )
 
             # Get content - could be string, list, or None
             content = tool_msg.get("content")

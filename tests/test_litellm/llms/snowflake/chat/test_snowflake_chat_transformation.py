@@ -439,6 +439,42 @@ class TestSnowflakeToolTransformation:
         assert tool_results[0]["tool_results"]["tool_use_id"] == "call_1"
         assert tool_results[1]["tool_results"]["tool_use_id"] == "call_2"
 
+    def test_transform_request_with_tool_messages(self):
+        """
+        Test that transform_request correctly wires _transform_messages for tool results.
+        """
+        config = SnowflakeConfig()
+
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"location": "Paris"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "72°F"},
+        ]
+
+        result = config.transform_request(
+            model="claude-3-5-sonnet",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed = result["messages"]
+        assert len(transformed) == 3
+        assert transformed[2]["role"] == "user"
+        assert "content_list" in transformed[2]
+        assert transformed[2]["content_list"][0]["type"] == "tool_results"
+
 
 class TestSnowFlakeCompletion:
     model_name = "mistral"
