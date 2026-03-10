@@ -846,9 +846,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         """Extract text from /v1/responses streaming events (object or dict)."""
 
         def _attr(c, key):
-            return getattr(c, key, None) or (
-                c.get(key) if isinstance(c, dict) else None
-            )
+            val = getattr(c, key, None)
+            if val is None and isinstance(c, dict):
+                val = c.get(key)
+            return val
 
         parts: List[str] = []
         for chunk in chunks:

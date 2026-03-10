@@ -5041,5 +5041,90 @@ class TestPanwAirsMcpMaskOnAllow:
             assert request_data["mcp_arguments"] == '{"query": "my SSN is ****"}'
 
 
+class TestPanwAirsAttrFalsyRegression:
+    """Regression: _attr must not discard falsy-but-meaningful attribute values."""
+
+    def test_attr_falsy_attribute_not_replaced_by_dict_fallback(self):
+        """_attr must return the falsy attribute value, not fall through to dict.get()."""
+
+        class AttrDictChunk(dict):
+            """dict subclass with separate attribute and mapping values.
+
+            _attr uses getattr first, then falls back to dict.get() when
+            isinstance(c, dict) is true.  By setting different values on the
+            attribute vs. the dict mapping, we can observe the or-chain bug.
+            """
+
+            def __init__(self, *, type_attr, delta_attr, delta_fallback):
+                super().__init__(delta=delta_fallback)
+                self.type = type_attr
+                self.delta = delta_attr
+
+        chunks = [
+            AttrDictChunk(
+                type_attr="response.output_text.delta",
+                delta_attr="Hello",
+                delta_fallback="WRONG1",
+            ),
+            AttrDictChunk(
+                type_attr="response.output_text.delta",
+                delta_attr="",
+                delta_fallback="WRONG_FALLBACK",
+            ),
+            AttrDictChunk(
+                type_attr="response.output_text.delta",
+                delta_attr=" world",
+                delta_fallback="WRONG2",
+            ),
+        ]
+        text = PanwPrismaAirsHandler._extract_text_from_streaming_events(chunks)
+        # Old _attr (or-chain): delta_attr="" is falsy → falls through to
+        #   dict.get("delta") → "WRONG_FALLBACK" → "HelloWRONG_FALLBACK world"
+        # Fixed _attr (is None): delta_attr="" is not None → kept →
+        #   appended as no-op → "Hello world"
+        assert text == "Hello world"
+
+
+class TestPanwAirsDualScanIndependence:
+    """Verify text scan and MCP tool_event scan are semantically independent."""
+
+    @pytest.mark.asyncio
+    async def test_text_and_mcp_scan_different_content(self):
+        """When both texts and mcp_tool_name are present, each scan targets different data."""
+        handler = make_handler()
+        inputs: GenericGuardrailAPIInputs = {"texts": ["user prompt"]}
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gpt-4",
+            "mcp_tool_name": "file_reader",
+            "mcp_arguments": {"path": "/etc/shadow"},
+        }
+
+        with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="srv"
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+            assert mock_api.call_count == 2
+
+            # Call 1: text scan — content is user prompt, no tool_event
+            text_call = mock_api.call_args_list[0].kwargs
+            assert text_call["content"] == "user prompt"
+            assert text_call.get("tool_event") is None
+
+            # Call 2: MCP tool_event — tool metadata, no content overlap
+            mcp_call = mock_api.call_args_list[1].kwargs
+            te = mcp_call["tool_event"]
+            assert te["metadata"]["tool_invoked"] == "file_reader"
+            assert te["input"] == '{"path": "/etc/shadow"}'
+            assert mcp_call.get("content") is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
