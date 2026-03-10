@@ -1211,6 +1211,54 @@ class TestMCPServerManager:
         assert server.has_client_credentials is True
 
     @pytest.mark.asyncio
+    async def test_pkce_creds_without_explicit_token_url_stays_3lo(self):
+        """
+        Regression test for: MCP OAuth 3LO fails when token_url is auto-discovered.
+
+        When client_id + client_secret are configured but token_url is absent (3LO intent),
+        auto-discovered token_url must NOT be stored on the server — otherwise
+        has_client_credentials returns True and incorrectly triggers the
+        client_credentials (2LO) grant, leaving the tool set empty.
+        """
+        manager = MCPServerManager()
+
+        discovered_metadata = MCPOAuthMetadata(
+            scopes=["read"],
+            authorization_url="https://discovered.example.com/auth",
+            token_url="https://discovered.example.com/token",
+        )
+
+        async def fake_discovery(server_url: str):
+            return discovered_metadata
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        config = {
+            "github": {
+                "url": "https://github.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "client_id": "my-client-id",
+                "client_secret": "my-client-secret",
+                # Intentionally no token_url — signals 3LO (user-authorised) flow
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        # token_url must NOT be populated from discovery when PKCE creds are present
+        assert server.token_url is None, (
+            "Auto-discovered token_url should not be set when client_id+client_secret "
+            "are configured without an explicit token_url (3LO intent)"
+        )
+        assert server.has_client_credentials is False, (
+            "has_client_credentials must be False for 3LO servers so the "
+            "client_credentials grant is not triggered"
+        )
+        assert server.needs_user_oauth_token is True
+
+    @pytest.mark.asyncio
     async def test_requires_per_user_auth_property_passthrough_auth(self):
         """Test that requires_per_user_auth returns True for passthrough auth (auth_type=none + Authorization header)"""
         # Passthrough auth with Authorization header
