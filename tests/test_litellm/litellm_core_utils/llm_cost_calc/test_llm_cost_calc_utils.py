@@ -126,7 +126,40 @@ def test_reasoning_tokens_gemini():
         10,
     )
 
+def test_inline_pdf_tokens_costed_when_text_tokens_less_than_prompt_tokens():
+    usage = Usage(
+        completion_tokens=100,
+        prompt_tokens=5200,
+        total_tokens=5300,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None, cached_tokens=None, text_tokens=12, image_tokens=None
+        ),
+    )
+    response = ModelResponse(
+        usage= usage,
+        model = "gemini-2.0-flash-001",
+    )
+    cost = response_cost_calculator(
+        reponse_object= response,
+        model = "gemini-2.0-flash-001",
+        custom_llm_provider = "vertex_ai",
+        call_type = "acompletion",
+        optional_params= {},
+    )
 
+    model_info = litellm.model_cost["gemini-2.0-flash-001"]
+    input_cost_per_token = model_info["input_cost_per_token"]
+    output_cost_per_token = model_info["output_cost_per_token"]
+
+    expected_cost = (
+        5200* input_cost_per_token + 100 * output_cost_per_token
+    )
+
+    assert cost == pytest.approx(expected_cost), (
+        f"Expected cost={expected_cost} (all 5200 prompt tokens costed), "
+        f"got cost={cost}. PDF tokens are likely not being costed."
+    )
+                         
 def test_reasoning_tokens_gemini_3_1_flash_lite():
     """Test cost calculation for gemini-3.1-flash-lite-preview with reasoning tokens"""
     model = "gemini-3.1-flash-lite-preview"
