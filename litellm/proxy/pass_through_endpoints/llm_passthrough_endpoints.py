@@ -599,12 +599,14 @@ async def anthropic_proxy_route(
     )
 
     request_body = await get_request_body(request)
-    is_router_model = is_passthrough_request_using_router_model(
-        request_body, llm_router
-    )
+    request_body = await get_request_body(request)
     normalized_endpoint = endpoint.lstrip("/")
     route_anthropic_passthrough_to_router = (
         general_settings.get("route_anthropic_passthrough_to_router", False) is True
+    )
+    is_router_model = (
+        route_anthropic_passthrough_to_router
+        and is_passthrough_request_using_router_model(request_body, llm_router)
     )
 
     # Route configured router models through LiteLLM's Anthropic-compatible
