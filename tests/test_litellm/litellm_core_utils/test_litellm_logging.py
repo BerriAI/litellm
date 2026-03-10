@@ -1,7 +1,8 @@
+import asyncio
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,6 +12,7 @@ sys.path.insert(
 
 import time
 
+import litellm
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
@@ -1680,3 +1682,137 @@ async def test_async_success_handler_preserves_response_cost_for_pass_through_en
     slo = logging_obj.model_call_details.get("standard_logging_object")
     assert slo is not None
     assert slo["response_cost"] > 0
+
+
+@pytest.mark.parametrize(
+    "handler_name",
+    ["success_handler", "async_success_handler", "failure_handler", "async_failure_handler"],
+)
+@pytest.mark.asyncio
+async def test_turn_off_message_logging_redacts_in_all_handlers(handler_name):
+    """
+    When turn_off_message_logging is True, all four logging handlers should redact
+    messages in model_call_details before invoking callbacks.
+
+    We mock get_standard_logging_object_payload to return None (simulating an
+    exception in the standard logging path), which disables the indirect redaction
+    via get_final_response_obj. This isolates the handler's own redaction call.
+
+    Regression: async_failure_handler previously did not call
+    redact_message_input_output_from_logging, so if get_standard_logging_object_payload
+    failed, error requests would leak unredacted messages to callbacks.
+    """
+    original = litellm.turn_off_message_logging
+    original_callbacks = {
+        "success": list(litellm.success_callback),
+        "failure": list(litellm.failure_callback),
+        "async_success": list(litellm._async_success_callback),
+        "async_failure": list(litellm._async_failure_callback),
+    }
+    try:
+        litellm.turn_off_message_logging = True
+
+        logging_obj = LitellmLogging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "secret prompt"}],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id=f"test-redact-{handler_name}",
+            function_id="test-fn",
+        )
+
+        logging_obj.model_call_details["messages"] = [
+            {"role": "user", "content": "secret prompt"}
+        ]
+        logging_obj.model_call_details["input"] = "secret prompt"
+        logging_obj.model_call_details["litellm_params"] = {
+            "metadata": {},
+            "litellm_metadata": None,
+        }
+
+        captured_kwargs = {}
+
+        class SpyLogger(litellm.integrations.custom_logger.CustomLogger):
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                captured_kwargs["messages"] = kwargs.get("messages")
+
+            def log_success_event(self, kwargs, response_obj, start_time, end_time):
+                captured_kwargs["messages"] = kwargs.get("messages")
+
+            async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+                captured_kwargs["messages"] = kwargs.get("messages")
+
+            def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+                captured_kwargs["messages"] = kwargs.get("messages")
+
+        spy = SpyLogger()
+
+        if handler_name == "success_handler":
+            litellm.success_callback = [spy]
+        elif handler_name == "async_success_handler":
+            litellm._async_success_callback = [spy]
+        elif handler_name == "failure_handler":
+            litellm.failure_callback = [spy]
+        elif handler_name == "async_failure_handler":
+            litellm._async_failure_callback = [spy]
+
+        now = time.time()
+
+        # Mock get_standard_logging_object_payload to return None, simulating the
+        # case where it throws internally (the whole function is wrapped in
+        # try/except -> return None). This disables the indirect redaction via
+        # get_final_response_obj, so only the handler's own redaction call works.
+        with patch(
+            "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload",
+            return_value=None,
+        ):
+            if handler_name == "success_handler":
+                result = ModelResponse(
+                    id="test",
+                    choices=[{"message": {"role": "assistant", "content": "response"}, "index": 0, "finish_reason": "stop"}],
+                    model="gpt-3.5-turbo",
+                )
+                logging_obj.success_handler(
+                    result=result, start_time=now, end_time=now, cache_hit=False,
+                )
+            elif handler_name == "async_success_handler":
+                result = ModelResponse(
+                    id="test",
+                    choices=[{"message": {"role": "assistant", "content": "response"}, "index": 0, "finish_reason": "stop"}],
+                    model="gpt-3.5-turbo",
+                )
+                await logging_obj.async_success_handler(
+                    result=result, start_time=now, end_time=now, cache_hit=False,
+                )
+            elif handler_name == "failure_handler":
+                logging_obj.failure_handler(
+                    exception=Exception("test error"),
+                    traceback_exception="traceback",
+                    start_time=now, end_time=now,
+                )
+            elif handler_name == "async_failure_handler":
+                await logging_obj.async_failure_handler(
+                    exception=Exception("test error"),
+                    traceback_exception="traceback",
+                    start_time=now, end_time=now,
+                )
+
+        # model_call_details should be redacted
+        assert logging_obj.model_call_details["messages"] == [
+            {"role": "user", "content": "redacted-by-litellm"}
+        ], f"{handler_name} did not redact model_call_details['messages']"
+        assert logging_obj.model_call_details["input"] == "", (
+            f"{handler_name} did not redact model_call_details['input']"
+        )
+
+        # The callback should have received redacted data
+        assert captured_kwargs.get("messages") == [
+            {"role": "user", "content": "redacted-by-litellm"}
+        ], f"{handler_name} callback received unredacted messages"
+    finally:
+        litellm.turn_off_message_logging = original
+        litellm.success_callback = original_callbacks["success"]
+        litellm.failure_callback = original_callbacks["failure"]
+        litellm._async_success_callback = original_callbacks["async_success"]
+        litellm._async_failure_callback = original_callbacks["async_failure"]
