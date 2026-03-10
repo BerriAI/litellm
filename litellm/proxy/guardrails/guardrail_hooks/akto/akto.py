@@ -397,6 +397,7 @@ class AktoGuardrail(CustomGuardrail):
         start_time: datetime,
         guardrail_status: GuardrailStatus,
         guardrail_json_response: Any,
+        event_type: "GuardrailEventHooks" = None,
     ) -> None:
         """Log guardrail timing and status for observability."""
         end_time = datetime.now()
@@ -409,9 +410,9 @@ class AktoGuardrail(CustomGuardrail):
             start_time=start_time.timestamp(),
             end_time=end_time.timestamp(),
             duration=duration,
+            event_type=event_type,
         )
 
-    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -512,11 +513,17 @@ class AktoGuardrail(CustomGuardrail):
             verbose_proxy_logger.error("Akto guardrail request error: %s", str(e))
             raise
         finally:
+            event_type = (
+                GuardrailEventHooks.pre_call
+                if input_type == "request"
+                else GuardrailEventHooks.post_call
+            )
             self.add_guardrail_observability(
                 request_data=request_data,
                 start_time=start_time,
                 guardrail_status=guardrail_status,
                 guardrail_json_response=guardrail_json_response,
+                event_type=event_type,
             )
 
     async def ingest_blocked_request(
