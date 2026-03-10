@@ -836,6 +836,7 @@ async def health_endpoint(
     from litellm.proxy.proxy_server import (
         health_check_concurrency,
         health_check_details,
+        health_check_mode,
         health_check_results,
         llm_model_list,
         llm_router,
@@ -843,6 +844,11 @@ async def health_endpoint(
         use_background_health_checks,
         user_model,
     )
+
+    # In simple mode, return minimal response without running model health checks.
+    # Useful for liveness probes that only need to verify the proxy is running.
+    if health_check_mode == "simple":
+        return {"status": "healthy"}
 
     start_time = time.time()
 
