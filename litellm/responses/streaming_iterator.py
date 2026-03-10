@@ -286,6 +286,14 @@ class BaseResponsesAPIStreamingIterator:
             except Exception:
                 request_payload["litellm_params"] = {}
 
+        # Propagate model_info from litellm_metadata so that
+        # set_hidden_params can find the deployment-specific model_id
+        # and _response_cost_calculator uses custom pricing.
+        if "model_info" not in request_payload and self.litellm_metadata:
+            _mi = self.litellm_metadata.get("model_info")
+            if _mi:
+                request_payload["model_info"] = _mi
+
         try:
             update_response_metadata(
                 result=self.completed_response,

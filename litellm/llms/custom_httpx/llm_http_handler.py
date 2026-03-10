@@ -1884,11 +1884,16 @@ class BaseLLMHTTPHandler:
             headers=headers, provider=custom_llm_provider
         )
 
+        merged_metadata = dict(kwargs.get("litellm_metadata") or {})
+        merged_metadata.update(kwargs.get("metadata") or {})
+        if "model_info" not in merged_metadata and kwargs.get("model_info"):
+            merged_metadata["model_info"] = kwargs["model_info"]
+
         logging_obj.update_environment_variables(
             model=model,
             optional_params=dict(anthropic_messages_optional_request_params),
             litellm_params={
-                "metadata": kwargs.get("metadata", {}),
+                "metadata": merged_metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
                 **anthropic_messages_optional_request_params,

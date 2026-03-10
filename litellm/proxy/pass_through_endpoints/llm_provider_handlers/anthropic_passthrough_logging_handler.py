@@ -7,6 +7,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
@@ -118,6 +119,14 @@ class AnthropicPassthroughLoggingHandler:
             custom_llm_provider = logging_obj.model_call_details.get(
                 "custom_llm_provider"
             )
+            litellm_params = logging_obj.model_call_details.get("litellm_params", {}) or {}
+            metadata = litellm_params.get("metadata", {}) or {}
+            model_info = (
+                metadata.get("model_info")
+                or litellm_params.get("model_info")
+                or (litellm_params.get("litellm_metadata", {}) or {}).get("model_info")
+                or {}
+            )
 
             # Prepend custom_llm_provider to model if not already present
             model_for_cost = model
@@ -128,10 +137,16 @@ class AnthropicPassthroughLoggingHandler:
                 completion_response=litellm_model_response,
                 model=model_for_cost,
                 custom_llm_provider=custom_llm_provider,
+                custom_pricing=use_custom_pricing_for_model(litellm_params),
+                router_model_id=model_info.get("id"),
+                litellm_logging_obj=logging_obj,
             )
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
+            kwargs.setdefault("litellm_params", {})
+            if litellm_params:
+                kwargs["litellm_params"].update(litellm_params)
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
             )

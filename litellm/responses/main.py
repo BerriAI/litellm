@@ -740,7 +740,10 @@ def responses(
 
         # Pre Call logging - preserve metadata for custom callbacks
         # When called from completion bridge (codex models), metadata is in litellm_metadata
-        metadata_for_callbacks = metadata or kwargs.get("litellm_metadata") or {}
+        metadata_for_callbacks = dict(kwargs.get("litellm_metadata") or {})
+        metadata_for_callbacks.update(metadata or {})
+        if "model_info" not in metadata_for_callbacks and kwargs.get("model_info"):
+            metadata_for_callbacks["model_info"] = kwargs["model_info"]
 
         litellm_logging_obj.update_environment_variables(
             model=model,
