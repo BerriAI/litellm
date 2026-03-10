@@ -312,3 +312,48 @@ class TestAzureAIStructuredOutput:
         tool_names = [t["function"]["name"] for t in result["tools"]]
         assert "get_weather" in tool_names
         assert RESPONSE_FORMAT_TOOL_NAME in tool_names
+
+    def test_should_append_to_existing_tools_regardless_of_param_order(self):
+        """
+        When response_format appears before tools in the params dict,
+        the schema tool should still be appended to the caller-supplied
+        tools list. This verifies there is no ordering-dependent bug
+        where tools would overwrite the injected schema tool.
+        """
+        config = AzureAIStudioConfig()
+
+        existing_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            }
+        ]
+
+        # Use a list of tuples to guarantee response_format comes before tools
+        from collections import OrderedDict
+
+        params = OrderedDict(
+            [
+                ("response_format", self.SAMPLE_JSON_SCHEMA),
+                ("tools", existing_tools),
+            ]
+        )
+
+        with patch(
+            "litellm.llms.azure_ai.chat.transformation.supports_response_schema",
+            return_value=False,
+        ):
+            result = config.map_openai_params(
+                non_default_params=params,
+                optional_params={},
+                model="Mistral-7B",
+                drop_params=False,
+            )
+
+        assert len(result["tools"]) == 2, "Should have both the user's tool and the schema tool"
+        tool_names = [t["function"]["name"] for t in result["tools"]]
+        assert "get_weather" in tool_names
+        assert RESPONSE_FORMAT_TOOL_NAME in tool_names

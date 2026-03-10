@@ -96,23 +96,32 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         supported_openai_params = self.get_supported_openai_params(model)
 
+        # Defer response_format processing until after all other params
+        # (especially tools) have been set, so that _add_response_format_to_tools
+        # can safely append the schema tool to the caller-supplied tools list
+        # without a later iteration overwriting it.
+        deferred_response_format: Optional[dict] = None
+
         for param, value in non_default_params.items():
             if param not in supported_openai_params:
                 continue
 
             if param == "response_format" and isinstance(value, dict):
-                if self._has_json_schema(value):
-                    is_supported = self._is_response_format_supported(model)
-                    optional_params = self._add_response_format_to_tools(
-                        optional_params=optional_params,
-                        value=value,
-                        is_response_format_supported=is_supported,
-                    )
-                else:
-                    # Plain json_object mode — pass through as-is
-                    optional_params["response_format"] = value
+                deferred_response_format = value
             else:
                 optional_params[param] = value
+
+        if deferred_response_format is not None:
+            if self._has_json_schema(deferred_response_format):
+                is_supported = self._is_response_format_supported(model)
+                optional_params = self._add_response_format_to_tools(
+                    optional_params=optional_params,
+                    value=deferred_response_format,
+                    is_response_format_supported=is_supported,
+                )
+            else:
+                # Plain json_object mode — pass through as-is
+                optional_params["response_format"] = deferred_response_format
 
         return optional_params
 
