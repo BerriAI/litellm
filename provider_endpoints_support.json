@@ -458,6 +458,24 @@
         "interactions": true
       }
     },
+    "charity_engine": {
+      "display_name": "Charity Engine (`charity_engine`)",
+      "url": "https://docs.litellm.ai/docs/providers/charity_engine",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "chutes": {
       "display_name": "Chutes (`chutes`)",
       "endpoints": {
@@ -2057,6 +2075,13 @@
     "tavily": {
       "display_name": "Tavily (`tavily`)",
       "url": "https://docs.litellm.ai/docs/search/tavily",
+      "endpoints": {
+        "search": true
+      }
+    },
+    "serper": {
+      "display_name": "Serper (`serper`)",
+      "url": "https://docs.litellm.ai/docs/search/serper",
       "endpoints": {
         "search": true
       }

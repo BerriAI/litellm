@@ -295,6 +295,9 @@ class TestAgentRBACInternalUser:
             return_value=_sample_agent_response()
         )
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+                return_value=None
+            )
             resp = self.internal_client.get(
                 "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
             )

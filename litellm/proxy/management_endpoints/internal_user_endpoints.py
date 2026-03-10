@@ -1844,7 +1844,13 @@ async def delete_user(
 
     ## DELETE ASSOCIATED INVITATION LINKS
     await prisma_client.db.litellm_invitationlink.delete_many(
-        where={"user_id": {"in": data.user_ids}}
+        where={
+            "OR": [
+                {"user_id": {"in": data.user_ids}},
+                {"created_by": {"in": data.user_ids}},
+                {"updated_by": {"in": data.user_ids}},
+            ]
+        }
     )
 
     ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS

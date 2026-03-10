@@ -3177,6 +3177,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
     GRADIENT_AI = "gradient_ai"
@@ -3249,6 +3250,7 @@ class SearchProviders(str, Enum):
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
     SEARCHAPI = "searchapi"
+    SERPER = "serper"
 
 
 # Create a set of all search provider values for quick lookup

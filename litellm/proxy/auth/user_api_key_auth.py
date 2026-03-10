@@ -615,17 +615,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             # This allows UI SSO to work separately from API M2M authentication
             # Note: Info routes are already scoped to the user
             if RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route):
-                # return UserAPIKeyAuth object
-                # helper to check if the api_key is a valid oauth2 token
-                from litellm.proxy.proxy_server import premium_user
+                # When both OAuth2 and JWT auth are enabled, use token format to decide:
+                # - JWT tokens (3 dot-separated parts) -> skip OAuth2, fall through to JWT handler
+                # - Opaque tokens -> use OAuth2 handler
+                # This allows JWT for users and OAuth2 for M2M on the same instance
+                is_jwt_token = jwt_handler.is_jwt(token=api_key) if general_settings.get("enable_jwt_auth", False) is True else False
+                if not is_jwt_token:
+                    # return UserAPIKeyAuth object
+                    # helper to check if the api_key is a valid oauth2 token
+                    from litellm.proxy.proxy_server import premium_user
 
-                if premium_user is not True:
-                    raise ValueError(
-                        "Oauth2 token validation is only available for premium users"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                    if premium_user is not True:
+                        raise ValueError(
+                            "Oauth2 token validation is only available for premium users"
+                            + CommonProxyErrors.not_premium_user.value
+                        )
 
-                return await Oauth2Handler.check_oauth2_token(token=api_key)
+                    return await Oauth2Handler.check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
             return await handle_oauth2_proxy_request(request=request)
