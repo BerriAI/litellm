@@ -8,7 +8,7 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReasoningContent from "../playground/chat_ui/ReasoningContent";
-import MCPEventsDisplay, { MCPEvent } from "../playground/chat_ui/MCPEventsDisplay";
+import MCPEventsDisplay from "../playground/chat_ui/MCPEventsDisplay";
 import { ChatMessage } from "./types";
 
 const { Panel } = Collapse;
@@ -327,7 +327,7 @@ function AssistantBubble({
       <CopyButton text={mainContent} />
       {mcpEvents && mcpEvents.length > 0 && (
         <div style={{ marginTop: 8, maxWidth: "100%" }}>
-          <MCPEventsDisplay events={mcpEvents as MCPEvent[]} />
+          <MCPEventsDisplay events={mcpEvents} />
         </div>
       )}
     </div>

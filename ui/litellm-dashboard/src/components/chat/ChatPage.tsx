@@ -27,7 +27,7 @@ import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
 import { makeOpenAIResponsesRequest } from "../playground/llm_calls/responses_api";
-import { MCPEvent } from "../playground/chat_ui/MCPEventsDisplay";
+import type { MCPEvent } from "./types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
@@ -250,16 +250,22 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       setIsStreaming(true);
       abortControllerRef.current = new AbortController();
 
-      // When responsesSessionId is set, the Responses API already holds the
-      // prior context server-side via session chaining.  Sending the full
-      // history alongside previous_response_id would double-count it, so we
-      // only pass the new message for subsequent turns.
-      // On the first turn (no session yet) we send the full history so the
-      // model has the context it needs.
+      // When historyOverride is set (edit / retry), the existing server-side
+      // session chain covers messages that were just truncated and is no longer
+      // valid for the rewritten history.  Always start a fresh session in that
+      // case so the model only sees the explicitly supplied history.
+      //
+      // On a normal continuation turn with an active session, the Responses API
+      // already holds the prior context server-side, so we only pass the new
+      // user message (sending the full history would double-count it).
+      //
+      // On the very first turn (no session yet), we send the full history.
+      const previousResponseId = historyOverride ? null : responsesSessionId;
+
       const history: Array<{ role: "user" | "assistant"; content: string }> =
         historyOverride
           ? [...historyOverride, { role: "user" as const, content: trimmed }]
-          : responsesSessionId
+          : previousResponseId
           ? [{ role: "user" as const, content: trimmed }]
           : [
               // Explicitly filter to only user/assistant roles — tool messages
@@ -295,7 +301,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           },
           undefined, undefined, undefined, undefined, undefined, undefined,
           selectedMCPServers.length > 0 ? selectedMCPServers : undefined,
-          responsesSessionId,
+          previousResponseId,
           (id: string) => setResponsesSessionId(id),
           (event: MCPEvent) => {
             accumulatedMCPEvents.push(event);
