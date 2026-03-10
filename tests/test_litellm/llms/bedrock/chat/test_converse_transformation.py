@@ -3170,6 +3170,33 @@ def test_transform_request_with_output_config():
     assert result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "TestSchema"
 
 
+def test_output_config_snake_case_stripped_from_bedrock_converse_request():
+    """Test that output_config (snake_case) is stripped from Bedrock Converse requests.
+
+    Bedrock Converse API doesn't support the output_config parameter (Anthropic-only).
+    Nova and other Converse models reject requests with extraneous output_config.
+    """
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "output_config": {"effort": "high"},
+    }
+
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # output_config must not appear in additionalModelRequestFields
+    additional = result.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional, (
+        f"output_config should be stripped for Bedrock Converse, got: {list(additional.keys())}"
+    )
+
+
 def test_transform_response_native_structured_output():
     """Test response handling when model returns JSON as text content (native structured output)."""
     response_json = {
