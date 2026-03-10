@@ -1144,7 +1144,7 @@ def function_setup(  # noqa: PLR0915
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
         if "litellm_metadata" in kwargs and isinstance(kwargs["litellm_metadata"], dict):
-            litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
+            litellm_params["litellm_metadata"] = kwargs["litellm_metadata"].copy()
             # For endpoints like /v1/messages that use "litellm_metadata" instead
             # of "metadata" (to avoid conflicting with provider API metadata fields),
             # populate litellm_params["metadata"] so callbacks (e.g. Langfuse) that
