@@ -64,6 +64,7 @@ from litellm.utils import exception_type, get_litellm_params, get_optional_param
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import TokenCountResponse
+    from litellm.llms.custom_httpx.httpx_stream_handler import HttpxStreamHandler
 
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
@@ -6627,8 +6628,13 @@ def speech(  # noqa: PLR0915
     headers: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
     aspeech: Optional[bool] = None,
+    stream: Optional[bool] = None,
     **kwargs,
-) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+) -> Union[
+    HttpxBinaryResponseContent,
+    "HttpxStreamHandler",
+    Coroutine[Any, Any, Union[HttpxBinaryResponseContent, "HttpxStreamHandler"]],
+]:
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -6751,6 +6757,7 @@ def speech(  # noqa: PLR0915
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
+            stream=stream,
         )
     elif custom_llm_provider == "azure":
         # Check if this is Azure Speech Service (Cognitive Services TTS)
@@ -6783,6 +6790,7 @@ def speech(  # noqa: PLR0915
                 extra_headers=extra_headers,
                 base_llm_http_handler=base_llm_http_handler,
                 aspeech=aspeech or False,
+                stream=stream,
                 api_base=api_base,
                 api_key=api_key,
                 **kwargs,
@@ -6833,6 +6841,7 @@ def speech(  # noqa: PLR0915
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 aspeech=aspeech,
                 litellm_params=litellm_params_dict,
+                stream=stream,
             )
     elif custom_llm_provider == "elevenlabs":
         from litellm.llms.elevenlabs.text_to_speech.transformation import (
@@ -6885,6 +6894,7 @@ def speech(  # noqa: PLR0915
             extra_headers=extra_headers,
             client=client,
             _is_async=aspeech or False,
+            stream=stream,
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
@@ -6937,6 +6947,7 @@ def speech(  # noqa: PLR0915
             extra_headers=headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,
+            stream=stream,
             api_base=generic_optional_params.api_base,
             api_key=None,  # Vertex AI uses OAuth, not API key
             **kwargs,
@@ -6985,6 +6996,7 @@ def speech(  # noqa: PLR0915
             extra_headers=extra_headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,
+            stream=stream,
             api_base=api_base,
             api_key=api_key,
             **kwargs,
@@ -7026,6 +7038,7 @@ def speech(  # noqa: PLR0915
             extra_headers=extra_headers,
             client=client,
             _is_async=aspeech or False,
+            stream=stream,
         )
     elif custom_llm_provider == "aws_polly":
         from litellm.llms.aws_polly.text_to_speech.transformation import (
@@ -7052,6 +7065,7 @@ def speech(  # noqa: PLR0915
             extra_headers=extra_headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,
+            stream=stream,
             api_base=api_base,
             api_key=api_key,
             **kwargs,
