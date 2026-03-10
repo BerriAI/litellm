@@ -1462,6 +1462,113 @@ class TestPanwAirsFailOpenBehavior:
                 )
             assert exc_info.value.status_code == 500
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code", [400, 404, 405, 422])
+    async def test_http_4xx_permanent_errors_always_block(self, status_code):
+        """Test that permanent 4xx errors always block, even with fallback_on_error='allow'."""
+        handler = make_handler(fallback_on_error="allow")
+
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_call_id": "test-call-id",
+        }
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
+        ) as mock_client:
+            mock_async_client = AsyncMock()
+            mock_async_client.client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.status_code = status_code
+            mock_response.text = "Bad Request"
+            mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "Client Error", request=MagicMock(), response=mock_response
+            )
+            mock_async_client.client.post = AsyncMock(return_value=mock_response)
+            mock_client.return_value = mock_async_client
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+            assert exc_info.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code", [429, 500, 502, 503])
+    async def test_http_429_and_5xx_remain_transient(self, status_code):
+        """Test that 429 and 5xx errors remain transient and allow fail-open."""
+        handler = make_handler(fallback_on_error="allow")
+
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_call_id": "test-call-id",
+        }
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
+        ) as mock_client:
+            mock_async_client = AsyncMock()
+            mock_async_client.client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.status_code = status_code
+            mock_response.text = "Server Error"
+            mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "Server Error", request=MagicMock(), response=mock_response
+            )
+            mock_async_client.client.post = AsyncMock(return_value=mock_response)
+            mock_client.return_value = mock_async_client
+
+            # Should return None (pass-through) since fallback_on_error='allow'
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=None,
+                data=data,
+                call_type="completion",
+            )
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_always_block_non_config_has_distinct_error_type(self):
+        """Test that non-config _always_block errors have distinct error type/code."""
+        handler = make_handler(fallback_on_error="allow")
+
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_call_id": "test-call-id",
+        }
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
+        ) as mock_client:
+            mock_async_client = AsyncMock()
+            mock_async_client.client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.status_code = 400
+            mock_response.text = "Bad Request"
+            mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "Bad Request", request=MagicMock(), response=mock_response
+            )
+            mock_async_client.client.post = AsyncMock(return_value=mock_response)
+            mock_client.return_value = mock_async_client
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+            error_detail = exc_info.value.detail["error"]
+            assert error_detail["type"] == "guardrail_scan_error"
+            assert error_detail["code"] == "panw_prisma_airs_scan_failed"
+            assert error_detail["category"] == "http_400_error"
+
 
 class TestPanwAirsAppUserMetadata:
     """Test app_user metadata extraction and priority."""
@@ -2244,6 +2351,57 @@ class TestPanwAirsStreamingBytesScan:
                 assert error_data["error"]["code"] == 400
                 assert "guardrail_violation" in error_data["error"]["type"]
 
+    @pytest.mark.asyncio
+    async def test_bytes_streaming_success_adds_observability_header(self):
+        """Test that raw-streaming success path calls both observability functions."""
+        handler = make_handler()
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        request_data = {
+            "messages": [{"role": "user", "content": "test"}],
+            "model": "claude-3-5-sonnet",
+            "litellm_call_id": "test-obs-bytes-id",
+        }
+
+        sse_bytes = [
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n\n',
+        ]
+
+        async def mock_response_iter():
+            for chunk in sse_bytes:
+                yield chunk
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api, patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
+        ) as mock_header:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            async for _ in handler.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_response_iter(),
+                request_data=request_data,
+            ):
+                pass
+
+            # _scan_raw_streaming_text calls add_guardrail_to_applied_guardrails_header
+            mock_header.assert_called_once()
+            header_kwargs = mock_header.call_args.kwargs
+            assert header_kwargs["guardrail_name"] == handler.guardrail_name
+
+            # Verify standard logging was recorded in request_data metadata
+            metadata = request_data.get("metadata", {})
+            guardrail_info_list = metadata.get(
+                "standard_logging_guardrail_information"
+            )
+            assert guardrail_info_list is not None
+            # Find the entry with guardrail_status == "success" from _scan_raw_streaming_text
+            success_entries = [
+                g for g in guardrail_info_list if g["guardrail_status"] == "success"
+            ]
+            assert len(success_entries) >= 1
+
 
 class TestPanwAirsExtractTextNonDictJson:
     """Test _extract_text_from_sse_bytes with non-dict JSON values."""
@@ -2328,6 +2486,59 @@ class TestPanwAirsStreamingPydanticEventsScan:
                 error_data = json.loads(chunks_received[0].removeprefix("data: "))
                 assert error_data["error"]["code"] == 400
                 assert "guardrail_violation" in error_data["error"]["type"]
+
+    @pytest.mark.asyncio
+    async def test_pydantic_streaming_success_adds_observability_header(self):
+        """Test that Pydantic streaming success path calls both observability functions."""
+        from types import SimpleNamespace
+
+        handler = make_handler()
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        request_data = {
+            "messages": [{"role": "user", "content": "test"}],
+            "model": "gpt-4",
+            "litellm_call_id": "test-obs-pydantic-id",
+        }
+
+        mock_events = [
+            SimpleNamespace(type="response.output_text.delta", delta="test content"),
+        ]
+
+        async def mock_response_iter():
+            for event in mock_events:
+                yield event
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api, patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
+        ) as mock_header:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            async for _ in handler.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_response_iter(),
+                request_data=request_data,
+            ):
+                pass
+
+            # _scan_raw_streaming_text calls add_guardrail_to_applied_guardrails_header
+            mock_header.assert_called_once()
+            header_kwargs = mock_header.call_args.kwargs
+            assert header_kwargs["guardrail_name"] == handler.guardrail_name
+
+            # Verify standard logging was recorded in request_data metadata
+            metadata = request_data.get("metadata", {})
+            guardrail_info_list = metadata.get(
+                "standard_logging_guardrail_information"
+            )
+            assert guardrail_info_list is not None
+            # Find the entry with guardrail_status == "success" from _scan_raw_streaming_text
+            success_entries = [
+                g for g in guardrail_info_list if g["guardrail_status"] == "success"
+            ]
+            assert len(success_entries) >= 1
 
 
 class TestPanwAirsApplyGuardrailMetadataEnrichment:

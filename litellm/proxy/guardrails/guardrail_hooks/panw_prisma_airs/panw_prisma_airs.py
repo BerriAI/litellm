@@ -446,15 +446,26 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     "category": "config_error",
                     "_always_block": True,
                 }
+            elif status == 429 or status >= 500:
+                # Transient: rate-limit and server errors — safe to fail-open
+                verbose_proxy_logger.error(
+                    f"PANW Prisma AIRS: API error (HTTP {status}): {error_body[:500]}"
+                )
+                return {
+                    "action": "block",
+                    "category": f"http_{status}_error",
+                    "_is_transient": True,
+                }
             else:
-                if status != 400:  # Already logged above with diagnostics
+                # Permanent 4xx client errors (400, 404, etc.) — must not bypass scanning
+                if status != 400:  # 400 already logged with diagnostics above
                     verbose_proxy_logger.error(
                         f"PANW Prisma AIRS: API error (HTTP {status}): {error_body[:500]}"
                     )
                 return {
                     "action": "block",
                     "category": f"http_{status}_error",
-                    "_is_transient": True,
+                    "_always_block": True,
                 }
 
         except httpx.TimeoutException as e:
@@ -739,13 +750,26 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         )
 
         if scan_result.get("_always_block"):
+            is_config = category == "config_error"
             raise HTTPException(
                 status_code=500,
                 detail={
                     "error": {
-                        "message": "Security scan failed - configuration error",
-                        "type": "guardrail_config_error",
-                        "code": "panw_prisma_airs_config_error",
+                        "message": (
+                            "Security scan failed - configuration error"
+                            if is_config
+                            else "Security scan failed - request blocked for safety"
+                        ),
+                        "type": (
+                            "guardrail_config_error"
+                            if is_config
+                            else "guardrail_scan_error"
+                        ),
+                        "code": (
+                            "panw_prisma_airs_config_error"
+                            if is_config
+                            else "panw_prisma_airs_scan_failed"
+                        ),
                         "guardrail": self.guardrail_name,
                         "category": category,
                     }
