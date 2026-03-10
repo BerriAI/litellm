@@ -1087,6 +1087,12 @@ class SpecialMCPServerName(str, enum.Enum):
     all_proxy_servers = "all-proxy-mcpservers"
 
 
+class MCPApprovalStatus(str, enum.Enum):
+    pending_review = "pending_review"
+    active = "active"
+    rejected = "rejected"
+
+
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -1117,6 +1123,18 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
+    source_url: Optional[str] = None
+    # BYOM submission fields — set by the endpoint, not by the caller.
+    # Any caller-provided values are silently overridden before persistence.
+    approval_status: Optional[str] = Field(
+        None, description="Server-managed: set by the endpoint; caller values are overridden."
+    )
+    submitted_by: Optional[str] = Field(
+        None, description="Server-managed: set by the endpoint; caller values are overridden."
+    )
+    submitted_at: Optional[datetime] = Field(
+        None, description="Server-managed: set by the endpoint; caller values are overridden."
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1176,6 +1194,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
+    source_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1239,6 +1258,16 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     has_user_credential: Optional[bool] = None
+    source_url: Optional[str] = None
+    # BYOM submission fields
+    approval_status: Optional[str] = Field(
+        default="active",
+        description="Approval status: 'pending_review', 'active', 'rejected'",
+    )
+    submitted_by: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    review_notes: Optional[str] = None
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
@@ -1253,6 +1282,18 @@ class MCPUserCredentialRequest(LiteLLMPydanticObjectBase):
 class MCPUserCredentialResponse(LiteLLMPydanticObjectBase):
     server_id: str
     has_credential: bool
+
+
+class RejectMCPServerRequest(LiteLLMPydanticObjectBase):
+    review_notes: Optional[str] = None
+
+
+class MCPSubmissionsSummary(LiteLLMPydanticObjectBase):
+    total: int
+    pending_review: int
+    active: int
+    rejected: int
+    items: List["LiteLLM_MCPServerTable"]
 
 
 ######## Skills API Types ########
@@ -2206,6 +2247,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     route_anthropic_passthrough_to_router: Optional[bool] = Field(
         None,
         description="If True, /anthropic/v1/messages requests whose model matches a configured deployment in model_list are routed through LiteLLM's anthropic_messages flow instead of the default passthrough behavior.",
+    )
+    mcp_required_fields: Optional[List[str]] = Field(
+        None,
+        description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
     )
 
 
