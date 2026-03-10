@@ -43,6 +43,10 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
       // setFieldsValue with undefined silently skips undefined keys.
       form.resetFields(["auth_type", "authorization_url", "token_url"]);
       form.setFieldsValue(updates);
+      // Propagate cleared values so parent formValues stays in sync with the form.
+      updates.auth_type = undefined;
+      updates.authorization_url = undefined;
+      updates.token_url = undefined;
     }
     onValuesChange(updates);
   };
