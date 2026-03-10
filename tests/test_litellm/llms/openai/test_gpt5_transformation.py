@@ -1,8 +1,8 @@
 import pytest
 
 import litellm
-from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.openai import OpenAIConfig
 
 
 @pytest.fixture()
@@ -260,20 +260,21 @@ def test_gpt5_drops_reasoning_effort_xhigh_when_requested(config: OpenAIConfig):
 
 # GPT-5.1 temperature handling tests
 def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
-    """Test that GPT-5.1 models are correctly detected."""
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex-max")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-2025-12-11")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.3-chat-latest")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-pro")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-codex")
+    """Test that models supporting reasoning_effort='none' are correctly detected via model map."""
+    # gpt-5.1 and gpt-5.2 chat variants support none
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-2025-11-13", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-chat-latest", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2-2025-12-11", "none")
+    # codex/pro/chat variants do not support none
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex-max", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.2-chat-latest", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.2-pro", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-mini", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-codex", "none")
 
 
 def test_gpt5_1_temperature_with_reasoning_effort_none(config: OpenAIConfig):
@@ -301,6 +302,176 @@ def test_gpt5_2_temperature_with_reasoning_effort_none(config: OpenAIConfig):
         )
         assert params["temperature"] == temp
         assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_4_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-pro",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_preserves_reasoning_effort_dict_with_summary(config: OpenAIConfig):
+    """Dict with summary/generate_summary is preserved for Responses API.
+
+    Config/deployments may pass Responses API format: {'effort': 'high', 'summary': 'detailed'}.
+    We preserve the full dict so it reaches the Responses API transformation.
+    """
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": "high", "summary": "detailed"}},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == {"effort": "high", "summary": "detailed"}
+
+
+def test_gpt5_xhigh_dict_triggers_validation(config: OpenAIConfig):
+    """Dict with effort='xhigh' triggers xhigh model-support validation.
+
+    Regression: when reasoning_effort is a dict, effective_effort must be used for
+    the xhigh guard so validation is not silently skipped.
+    """
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "xhigh", "summary": "detailed"}},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+def test_gpt5_xhigh_dict_accepted_for_supported_model(config: OpenAIConfig):
+    """Dict with effort='xhigh' passes through for gpt-5.4+."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": "xhigh", "summary": "detailed"}},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == {"effort": "xhigh", "summary": "detailed"}
+
+
+def test_gpt5_none_dict_with_tools_no_tool_drop(config: OpenAIConfig):
+    """Dict with effort='none' and tools: no tool-drop, reasoning_effort preserved.
+
+    Regression: effective_effort='none' must be used for tool-drop guard so
+    {"effort": "none", "summary": "detailed"} is not incorrectly treated as non-none.
+    """
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": "none", "summary": "detailed"}, "tools": tools},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == {"effort": "none", "summary": "detailed"}
+    assert params["tools"] == tools
+
+
+def test_gpt5_none_dict_with_sampling_params_allowed(config: OpenAIConfig):
+    """Dict with effort='none' allows logprobs/top_p/top_logprobs.
+
+    Regression: effective_effort='none' must be used for sampling guard so
+    {"effort": "none", "summary": "detailed"} does not incorrectly trigger sampling errors.
+    """
+    params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": {"effort": "none", "summary": "detailed"},
+            "logprobs": True,
+            "top_p": 0.9,
+        },
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == {"effort": "none", "summary": "detailed"}
+    assert params["logprobs"] is True
+    assert params["top_p"] == 0.9
+
+
+def test_gpt5_preserves_reasoning_effort_dict_with_summary_from_optional_params(config: OpenAIConfig):
+    """reasoning_effort dict with summary in optional_params is preserved."""
+    params = config.map_openai_params(
+        non_default_params={},
+        optional_params={"reasoning_effort": {"effort": "medium", "summary": "detailed"}},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == {"effort": "medium", "summary": "detailed"}
+
+
+def test_gpt5_4_drops_reasoning_effort_when_tools_present(config: OpenAIConfig):
+    """gpt-5.4: function calls not supported with reasoning_effort != 'none'. Drop reasoning_effort."""
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high", "tools": tools},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in params
+    assert params["tools"] == tools
+
+
+def test_gpt5_4_keeps_reasoning_effort_when_no_tools(config: OpenAIConfig):
+    """reasoning_effort is kept when tools are not present."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "high"
+
+
+def test_gpt5_4_keeps_reasoning_effort_none_with_tools(config: OpenAIConfig):
+    """reasoning_effort='none' is kept when tools are present."""
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none", "tools": tools},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
+    assert params["tools"] == tools
+
+
+def test_gpt5_2_keeps_reasoning_effort_with_tools(config: OpenAIConfig):
+    """gpt-5.2: reasoning_effort drop only applies to gpt-5.4, not gpt-5.2."""
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high", "tools": tools},
+        optional_params={},
+        model="gpt-5.2",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "high"
+    assert params["tools"] == tools
+
+
+def test_gpt5_4_pro_rejects_non_default_temperature(config: OpenAIConfig):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="gpt-5.4-pro",
+            drop_params=False,
+        )
 
 
 def test_gpt5_1_temperature_without_reasoning_effort(config: OpenAIConfig):
@@ -403,7 +574,7 @@ def test_gpt5_2_chat_temperature_restricted(config: OpenAIConfig):
     Regression test for https://github.com/BerriAI/litellm/issues/21911
     """
     # gpt-5.2-chat should reject non-1 temperature when drop_params=False
-    for model in ["gpt-5.2-chat", "gpt-5.2-chat-latest", "gpt-5.3-chat-latest"]:
+    for model in ["gpt-5.2-chat", "gpt-5.2-chat-latest"]:
         with pytest.raises(litellm.utils.UnsupportedParamsError):
             config.map_openai_params(
                 non_default_params={"temperature": 0.7},

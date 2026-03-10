@@ -111,6 +111,8 @@ const routeFor = (slug: string): string => {
       return "tools/mcp-servers";
     case "vector-stores":
       return "tools/vector-stores";
+    case "byok-demo":
+      return "tools/byok-demo";
 
     // experimental
     case "caching":

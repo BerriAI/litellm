@@ -19,9 +19,16 @@ export default function UISettings() {
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
+  const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
+  const allowAgentsTeamAdminsProperty = schema?.properties?.allow_agents_for_team_admins;
+  const disableVectorStoresProperty = schema?.properties?.disable_vector_stores_for_internal_users;
+  const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
+  const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
+  const isAgentsDisabled = Boolean(values.disable_agents_for_internal_users);
+  const isVectorStoresDisabled = Boolean(values.disable_vector_stores_for_internal_users);
 
   const handleToggle = (checked: boolean) => {
     updateSettings(
@@ -94,6 +101,76 @@ export default function UISettings() {
   const handleToggleRequireAuthForPublicAIHub = (checked: boolean) => {
     updateSettings(
       { require_auth_for_public_ai_hub: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleDisableAgents = (checked: boolean) => {
+    updateSettings(
+      { disable_agents_for_internal_users: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleAllowAgentsTeamAdmins = (checked: boolean) => {
+    updateSettings(
+      { allow_agents_for_team_admins: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleDisableVectorStores = (checked: boolean) => {
+    updateSettings(
+      { disable_vector_stores_for_internal_users: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleAllowVectorStoresTeamAdmins = (checked: boolean) => {
+    updateSettings(
+      { allow_vector_stores_for_team_admins: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleScopeUserSearch = (checked: boolean) => {
+    updateSettings(
+      { scope_user_search_to_org: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
@@ -205,6 +282,100 @@ export default function UISettings() {
               <Typography.Text type="secondary">
                 {enableProjectsUIProperty?.description ??
                   "If enabled, shows the Projects feature in the UI sidebar and the project field in key management."}
+              </Typography.Text>
+            </Space>
+          </Space>
+
+          <Divider />
+
+          {/* Agents access control */}
+          <Space align="start" size="middle">
+            <Switch
+              checked={isAgentsDisabled}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleDisableAgents}
+              aria-label={disableAgentsProperty?.description ?? "Disable agents for internal users"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Disable agents for internal users</Typography.Text>
+              {disableAgentsProperty?.description && (
+                <Typography.Text type="secondary">{disableAgentsProperty.description}</Typography.Text>
+              )}
+            </Space>
+          </Space>
+
+          <Space align="start" size="middle" style={{ marginLeft: 32 }}>
+            <Switch
+              checked={Boolean(values.allow_agents_for_team_admins)}
+              disabled={isUpdating || !isAgentsDisabled}
+              loading={isUpdating}
+              onChange={handleToggleAllowAgentsTeamAdmins}
+              aria-label={allowAgentsTeamAdminsProperty?.description ?? "Allow agents for team admins"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong type={!isAgentsDisabled ? "secondary" : undefined}>
+                Allow agents for team admins
+              </Typography.Text>
+              {allowAgentsTeamAdminsProperty?.description && (
+                <Typography.Text type="secondary">{allowAgentsTeamAdminsProperty.description}</Typography.Text>
+              )}
+            </Space>
+          </Space>
+
+          <Divider />
+
+          {/* Vector Stores access control */}
+          <Space align="start" size="middle">
+            <Switch
+              checked={isVectorStoresDisabled}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleDisableVectorStores}
+              aria-label={disableVectorStoresProperty?.description ?? "Disable vector stores for internal users"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Disable vector stores for internal users</Typography.Text>
+              {disableVectorStoresProperty?.description && (
+                <Typography.Text type="secondary">{disableVectorStoresProperty.description}</Typography.Text>
+              )}
+            </Space>
+          </Space>
+
+          <Space align="start" size="middle" style={{ marginLeft: 32 }}>
+            <Switch
+              checked={Boolean(values.allow_vector_stores_for_team_admins)}
+              disabled={isUpdating || !isVectorStoresDisabled}
+              loading={isUpdating}
+              onChange={handleToggleAllowVectorStoresTeamAdmins}
+              aria-label={allowVectorStoresTeamAdminsProperty?.description ?? "Allow vector stores for team admins"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong type={!isVectorStoresDisabled ? "secondary" : undefined}>
+                Allow vector stores for team admins
+              </Typography.Text>
+              {allowVectorStoresTeamAdminsProperty?.description && (
+                <Typography.Text type="secondary">{allowVectorStoresTeamAdminsProperty.description}</Typography.Text>
+              )}
+            </Space>
+          </Space>
+
+          <Divider />
+
+          {/* Scope user search to organization */}
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.scope_user_search_to_org)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleScopeUserSearch}
+              aria-label={scopeUserSearchProperty?.description ?? "Scope user search to organization"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Scope user search to organization</Typography.Text>
+              <Typography.Text type="secondary">
+                {scopeUserSearchProperty?.description ??
+                  "If enabled, the user search endpoint restricts results by organization. When off, any authenticated user can search all users."}
               </Typography.Text>
             </Space>
           </Space>

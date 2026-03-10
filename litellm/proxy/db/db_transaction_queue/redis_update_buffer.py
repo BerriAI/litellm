@@ -10,33 +10,31 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
-from litellm.constants import (
-    MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-    REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
-    REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
-    REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
-    REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
-    REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
-    REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
-    REDIS_UPDATE_BUFFER_KEY,
-)
+from litellm.constants import (MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+                               REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
+                               REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
+                               REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
+                               REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+                               REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
+                               REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+                               REDIS_UPDATE_BUFFER_KEY)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import (
-    DailyTagSpendTransaction,
-    DailyTeamSpendTransaction,
-    DailyUserSpendTransaction,
-    DailyOrganizationSpendTransaction,
-    DailyEndUserSpendTransaction,
-    DBSpendUpdateTransactions,
-    DailyAgentSpendTransaction,
-)
-from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
-from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
-    DailySpendUpdateQueue,
-)
-from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+from litellm.proxy._types import (DailyAgentSpendTransaction,
+                                  DailyEndUserSpendTransaction,
+                                  DailyOrganizationSpendTransaction,
+                                  DailyTagSpendTransaction,
+                                  DailyTeamSpendTransaction,
+                                  DailyUserSpendTransaction,
+                                  DBSpendUpdateTransactions)
+from litellm.proxy.db.db_transaction_queue.base_update_queue import \
+    service_logger_obj
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import \
+    DailySpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import \
+    SpendUpdateQueue
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
+from litellm.types.caching import (RedisPipelineLpopOperation,
+                                   RedisPipelineRpushOperation)
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -579,6 +577,7 @@ class RedisUpdateBuffer:
             team_member_list_transactions={},
             org_list_transactions={},
             tag_list_transactions={},
+            agent_list_transactions={},
         )
 
         # Define the transaction fields to process
@@ -590,6 +589,7 @@ class RedisUpdateBuffer:
             "team_member_list_transactions",
             "org_list_transactions",
             "tag_list_transactions",
+            "agent_list_transactions",
         ]
 
         # Loop through each transaction and combine the values
