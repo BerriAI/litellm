@@ -52,8 +52,6 @@ def akto_sync():
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
         on_flagged="block",
-        akto_account_id="1000000",
-        akto_vxlan_id="test-vxlan-id",
         unreachable_fallback="fail_closed",
         guardrail_name="test-akto-sync",
         event_hook="pre_call",
@@ -160,8 +158,6 @@ def test_init_from_env():
             "AKTO_DATA_INGESTION_URL": "http://env-host:9090",
             "AKTO_API_KEY": "env-token",
             "AKTO_ON_FLAGGED": "monitor",
-            "AKTO_ACCOUNT_ID": "2000000",
-            "AKTO_VXLAN_ID": "env-vxlan",
         },
     ):
         g = AktoGuardrail(guardrail_name="env-test", event_hook="post_call")
@@ -169,8 +165,6 @@ def test_init_from_env():
         assert g.akto_api_key == "env-token"
         assert g.on_flagged == "monitor"
         assert g.sync_mode is False
-        assert g.akto_account_id == "2000000"
-        assert g.akto_vxlan_id == "env-vxlan"
         assert g.guardrail_timeout == 5  # default
 
 
@@ -192,16 +186,14 @@ def test_on_flagged_default_block():
 # ---------------------------------------------------------------------------
 
 
-def test_build_akto_payload_format(akto_sync, sample_inputs, sample_request_data):
+def testbuild_akto_payload_format(akto_sync, sample_inputs, sample_request_data):
     """Verify payload matches the exact Akto data-ingestion schema."""
-    payload = akto_sync._build_akto_payload(
+    payload = akto_sync.build_akto_payload(
         sample_inputs, sample_request_data, include_response=False
     )
 
     assert payload["path"] == "/v1/chat/completions"
     assert payload["method"] == "POST"
-    assert payload["akto_account_id"] == "1000000"
-    assert payload["akto_vxlan_id"] == "test-vxlan-id"
     assert payload["is_pending"] == "false"
     assert payload["source"] == "MIRRORING"
     assert payload["contextSource"] == "AGENTIC"
@@ -222,26 +214,26 @@ def test_build_akto_payload_format(akto_sync, sample_inputs, sample_request_data
     assert len(payload["time"]) >= 13
 
 
-def test_build_akto_payload_with_response(
+def testbuild_akto_payload_with_response(
     akto_sync, sample_inputs, sample_request_data
 ):
-    payload = akto_sync._build_akto_payload(
+    payload = akto_sync.build_akto_payload(
         sample_inputs, sample_request_data, include_response=True
     )
     resp_body = json.loads(payload["responsePayload"])
     assert "choices" in resp_body
 
 
-def test_build_query_params():
+def testbuild_query_params():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
-    params = AktoGuardrail._build_query_params(guardrails=True, ingest_data=False)
+    params = AktoGuardrail.build_query_params(guardrails=True, ingest_data=False)
     assert params == {"akto_connector": "litellm", "guardrails": "true"}
 
-    params = AktoGuardrail._build_query_params(guardrails=False, ingest_data=True)
+    params = AktoGuardrail.build_query_params(guardrails=False, ingest_data=True)
     assert params == {"akto_connector": "litellm", "ingest_data": "true"}
 
-    params = AktoGuardrail._build_query_params(guardrails=True, ingest_data=True)
+    params = AktoGuardrail.build_query_params(guardrails=True, ingest_data=True)
     assert params == {
         "akto_connector": "litellm",
         "guardrails": "true",
@@ -254,33 +246,33 @@ def test_build_query_params():
 # ---------------------------------------------------------------------------
 
 
-def test_parse_guardrails_result_allowed():
+def testparse_guardrails_result_allowed():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
-    allowed, reason = AktoGuardrail._parse_guardrails_result(
+    allowed, reason = AktoGuardrail.parse_guardrails_result(
         {"data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}}
     )
     assert allowed is True
     assert reason == ""
 
 
-def test_parse_guardrails_result_blocked():
+def testparse_guardrails_result_blocked():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
-    allowed, reason = AktoGuardrail._parse_guardrails_result(
+    allowed, reason = AktoGuardrail.parse_guardrails_result(
         {"data": {"guardrailsResult": {"Allowed": False, "Reason": "PII detected"}}}
     )
     assert allowed is False
     assert reason == "PII detected"
 
 
-def test_parse_guardrails_result_missing():
+def testparse_guardrails_result_missing():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
-    allowed, _ = AktoGuardrail._parse_guardrails_result({})
+    allowed, _ = AktoGuardrail.parse_guardrails_result({})
     assert allowed is True
 
-    allowed, _ = AktoGuardrail._parse_guardrails_result("invalid")
+    allowed, _ = AktoGuardrail.parse_guardrails_result("invalid")
     assert allowed is True
 
 
@@ -497,44 +489,44 @@ async def test_fail_closed_on_unreachable():
 # ---------------------------------------------------------------------------
 
 
-def test_extract_request_path_from_metadata():
+def testextract_request_path_from_metadata():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
-    path = AktoGuardrail._extract_request_path(
+    path = AktoGuardrail.extract_request_path(
         {"metadata": {"user_api_key_request_route": "/v1/embeddings"}}
     )
     assert path == "/v1/embeddings"
 
 
-def test_extract_request_path_fallback():
+def testextract_request_path_fallback():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
-    path = AktoGuardrail._extract_request_path({})
+    path = AktoGuardrail.extract_request_path({})
     assert path == "/v1/chat/completions"
 
 
-def test_resolve_metadata_value():
+def testresolve_metadata_value():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
     assert (
-        AktoGuardrail._resolve_metadata_value(
+        AktoGuardrail.resolve_metadata_value(
             {"metadata": {"user_api_key_user_id": "u1"}}, "user_api_key_user_id"
         )
         == "u1"
     )
     assert (
-        AktoGuardrail._resolve_metadata_value(
+        AktoGuardrail.resolve_metadata_value(
             {"litellm_metadata": {"user_api_key_team_id": "t1"}},
             "user_api_key_team_id",
         )
         == "t1"
     )
-    assert AktoGuardrail._resolve_metadata_value({}, "some_key") is None
-    assert AktoGuardrail._resolve_metadata_value(None, "some_key") is None
+    assert AktoGuardrail.resolve_metadata_value({}, "some_key") is None
+    assert AktoGuardrail.resolve_metadata_value(None, "some_key") is None
 
 
-def test_build_tag_metadata(akto_sync, sample_request_data):
-    tag = akto_sync._build_tag_metadata(sample_request_data)
+def testbuild_tag_metadata(akto_sync, sample_request_data):
+    tag = akto_sync.build_tag_metadata(sample_request_data)
     assert tag["gen-ai"] == "Gen AI"
     assert tag["user_id"] == "user-1"
     assert tag["team_id"] == "team-1"

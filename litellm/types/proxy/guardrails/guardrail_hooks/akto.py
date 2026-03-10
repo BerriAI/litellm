@@ -31,16 +31,6 @@ class AktoConfigModel(GuardrailConfigModel):
         description="'block' = pre-call validation, 'monitor' = post-call log only. Env: AKTO_ON_FLAGGED.",
     )
 
-    akto_account_id: Optional[str] = Field(
-        default=None,
-        description="Akto account ID. Env: AKTO_ACCOUNT_ID. Default: '1000000'.",
-    )
-
-    akto_vxlan_id: Optional[str] = Field(
-        default=None,
-        description="VXLAN ID for traffic identification. Env: AKTO_VXLAN_ID. Default: '0'.",
-    )
-
     unreachable_fallback: Optional[Literal["fail_closed", "fail_open"]] = Field(
         default="fail_closed",
         description="What to do when Akto is unreachable. 'fail_open' = allow, 'fail_closed' = block.",

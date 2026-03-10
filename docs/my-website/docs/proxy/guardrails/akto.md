@@ -28,8 +28,6 @@ guardrails:
       akto_base_url: os.environ/AKTO_DATA_INGESTION_URL
       akto_api_key: os.environ/AKTO_API_KEY
       on_flagged: block
-      akto_account_id: os.environ/AKTO_ACCOUNT_ID      # optional, default: 1000000
-      akto_vxlan_id: os.environ/AKTO_VXLAN_ID           # optional
       unreachable_fallback: fail_open                   # optional, default: fail_closed
       guardrail_timeout: 10                             # optional, default: 5s
 ```
@@ -96,10 +94,8 @@ Request → LiteLLM → forward to LLM → get response
 | Parameter | Env Variable | Default | Description |
 |-----------|-------------|---------|-------------|
 | `akto_base_url` | `AKTO_DATA_INGESTION_URL` | *required* | Akto ingestion URL |
-| `akto_api_key` | `AKTO_API_KEY` | *required* | API key (sent as Bearer token) |
+| `akto_api_key` | `AKTO_API_KEY` | *required* | API key (sent as `Authorization` header) |
 | `on_flagged` | `AKTO_ON_FLAGGED` | `block` | `block` or `monitor` |
-| `akto_account_id` | `AKTO_ACCOUNT_ID` | `1000000` | Account ID |
-| `akto_vxlan_id` | `AKTO_VXLAN_ID` | `0` | VXLAN ID |
 | `unreachable_fallback` | — | `fail_closed` | `fail_open` or `fail_closed` |
 | `guardrail_timeout` | — | `5` | Timeout in seconds |
 
