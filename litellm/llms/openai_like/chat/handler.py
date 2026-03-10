@@ -4,8 +4,17 @@ OpenAI-like chat completion handler
 For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 """
 
-import orjson
 from typing import Any, Callable, Optional, Union
+
+try:
+    import orjson
+
+    _orjson_dumps = orjson.dumps
+except ImportError:
+    import json
+
+    def _orjson_dumps(obj: Any) -> bytes:  # type: ignore[misc]
+        return json.dumps(obj).encode()
 
 import httpx
 
@@ -139,7 +148,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             client=client,
             api_base=api_base,
             headers=headers,
-            data=orjson.dumps(data),
+            data=_orjson_dumps(data),
             model=model,
             messages=messages,
             logging_obj=logging_obj,
@@ -185,7 +194,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
 
         try:
             response = await client.post(
-                api_base, headers=headers, data=orjson.dumps(data), timeout=timeout
+                api_base, headers=headers, data=_orjson_dumps(data), timeout=timeout
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -350,7 +359,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     ),
                     api_base=api_base,
                     headers=headers,
-                    data=orjson.dumps(data),
+                    data=_orjson_dumps(data),
                     model=model,
                     messages=messages,
                     logging_obj=logging_obj,
@@ -370,7 +379,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     client = HTTPHandler(timeout=timeout)  # type: ignore
                 try:
                     response = client.post(
-                        url=api_base, headers=headers, data=orjson.dumps(data)
+                        url=api_base, headers=headers, data=_orjson_dumps(data)
                     )
                     response.raise_for_status()
 
