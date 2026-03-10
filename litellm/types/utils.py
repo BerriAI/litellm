@@ -1329,7 +1329,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
             mapped = map_finish_reason(finish_reason)
             params["finish_reason"] = mapped
             if finish_reason != mapped:
-                provider_specific_fields = provider_specific_fields or {}
+                provider_specific_fields = dict(provider_specific_fields) if provider_specific_fields else {}
                 provider_specific_fields["native_finish_reason"] = finish_reason
         else:
             params["finish_reason"] = "stop"

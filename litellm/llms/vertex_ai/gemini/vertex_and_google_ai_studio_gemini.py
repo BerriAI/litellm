@@ -1230,18 +1230,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
+    _GEMINI_FINISH_REASON_KEYS = frozenset({
+        "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "FINISH_REASON_UNSPECIFIED",
+        "MALFORMED_FUNCTION_CALL", "LANGUAGE", "OTHER", "BLOCKLIST",
+        "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
+        "TOO_MANY_TOOL_CALLS", "MALFORMED_RESPONSE",
+    })
+
     @staticmethod
     def get_finish_reason_mapping() -> Dict[str, OpenAIChatCompletionFinishReason]:
         """
-        Return Dictionary of finish reasons which indicate response was flagged
-
-        and what it means.
-
-        Delegates to the centralized _FINISH_REASON_MAP to avoid duplication.
+        Return Dictionary of Gemini/Vertex AI finish reasons and their
+        OpenAI-compatible mappings.
         """
         from litellm.litellm_core_utils.core_helpers import _FINISH_REASON_MAP
 
-        return dict(_FINISH_REASON_MAP)
+        return {
+            k: v
+            for k, v in _FINISH_REASON_MAP.items()
+            if k in VertexGeminiConfig._GEMINI_FINISH_REASON_KEYS
+        }
 
     def translate_exception_str(self, exception_string: str):
         if (
