@@ -373,7 +373,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
-        const isAdmin = isAdminRole(userRole);
         const response = isAdmin
           ? await createMCPServer(accessToken, payload)
           : await registerMCPServer(accessToken, payload);
@@ -468,11 +467,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [isModalVisible]);
 
-  // rendering
-  if (!isAdminRole(userRole)) {
-    return null;
-  }
+  const isAdmin = isAdminRole(userRole);
 
+  // rendering
   return (
     <Modal
       title={
@@ -496,7 +493,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               objectFit: "contain",
             }}
           />
-          <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
+          <h2 className="text-xl font-semibold text-gray-900">
+            {isAdmin ? "Add New MCP Server" : "Submit MCP Server for Review"}
+          </h2>
         </div>
       }
       open={isModalVisible}
@@ -517,6 +516,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           layout="vertical"
           className="space-y-6"
         >
+          {!isAdmin && (
+            <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+              Your submission will be sent for admin review before it becomes active.
+              {" "}Note: the request must be made with a team-scoped API key.
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-6">
             <Form.Item
               label={
