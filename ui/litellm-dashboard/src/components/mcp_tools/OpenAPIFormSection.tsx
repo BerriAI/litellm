@@ -37,13 +37,13 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
       updates.auth_type = AUTH_TYPE.OAUTH2;
       updates.authorization_url = entry.oauth.authorization_url;
       updates.token_url = entry.oauth.token_url;
+      form.setFieldsValue(updates);
     } else {
-      // Clear stale OAuth config from previous preset selection
-      updates.auth_type = undefined;
-      updates.authorization_url = undefined;
-      updates.token_url = undefined;
+      // resetFields is required to visually clear Ant Design form fields —
+      // setFieldsValue with undefined silently skips undefined keys.
+      form.resetFields(["auth_type", "authorization_url", "token_url"]);
+      form.setFieldsValue(updates);
     }
-    form.setFieldsValue(updates);
     onValuesChange(updates);
   };
 

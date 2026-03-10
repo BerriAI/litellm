@@ -619,7 +619,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             {transportType === TRANSPORT.OPENAPI && (
               <OpenAPIFormSection
                 form={form}
-                accessToken={accessToken}
+                accessToken={isModalVisible ? accessToken : null}
                 onValuesChange={(updates) =>
                   setFormValues((prev) => ({ ...prev, ...updates }))
                 }
