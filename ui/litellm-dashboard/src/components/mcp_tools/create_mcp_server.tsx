@@ -498,6 +498,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       width={1000}
       onCancel={handleCancel}
       footer={null}
+      forceRender
       className="top-8"
       styles={{
         body: { padding: "24px" },

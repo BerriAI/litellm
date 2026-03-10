@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
 import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from "@ant-design/icons";
-import { Badge, Spin, Checkbox, Input, Tooltip } from "antd";
+import { Badge, Spin, Checkbox, Input } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 
 interface KeyTool {
@@ -49,6 +49,39 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     enabled: true,
   });
 
+  // Fuzzy-match curated key tool names against actual loaded tool names
+  const suggestedTools = useMemo(() => {
+    if (!keyTools || keyTools.length === 0 || tools.length === 0) return [];
+    const usedNames = new Set<string>();
+    const result: typeof tools = [];
+    for (const keyTool of keyTools) {
+      const keywords = keyTool.name.split("_").map((k) => k.toLowerCase()).filter((k) => k.length > 1);
+      const normalize = (s: string) => s.toLowerCase().replace(/[-_/]/g, " ");
+      let match = tools.find((t) => {
+        if (usedNames.has(t.name)) return false;
+        const n = normalize(t.name);
+        return keywords.every((kw) => n.includes(kw));
+      });
+      if (!match) {
+        const mainKw = keywords.find((k) => k.length > 3) ?? keywords[keywords.length - 1];
+        match = tools.find((t) => {
+          if (usedNames.has(t.name)) return false;
+          return normalize(t.name).includes(mainKw);
+        });
+      }
+      if (match) {
+        result.push(match);
+        usedNames.add(match.name);
+      }
+    }
+    return result;
+  }, [keyTools, tools]);
+
+  const suggestedToolNames = useMemo(
+    () => new Set(suggestedTools.map((t) => t.name)),
+    [suggestedTools]
+  );
+
   // Filter tools based on search term
   const filteredTools = tools.filter((tool) => {
     const searchLower = toolSearchTerm.toLowerCase();
@@ -76,6 +109,9 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
           // Edit mode: pre-select tools that match existing allowed tools
           const validExistingTools = existingAllowedTools.filter((toolName) => availableToolNames.includes(toolName));
           onAllowedToolsChange(validExistingTools);
+        } else if (suggestedTools.length > 0) {
+          // OpenAPI preset: only enable suggested tools by default
+          onAllowedToolsChange(suggestedTools.map((t) => t.name).filter((name) => availableToolNames.includes(name)));
         } else {
           // Create mode: auto-select all tools
           onAllowedToolsChange(availableToolNames);
@@ -94,7 +130,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     
     // Update ref to track current tools
     previousToolsRef.current = tools;
-  }, [tools, allowedTools, existingAllowedTools, onAllowedToolsChange]);
+  }, [tools, allowedTools, existingAllowedTools, onAllowedToolsChange, suggestedTools]);
 
   const handleToolToggle = (toolName: string) => {
     if (allowedTools.includes(toolName)) {
@@ -185,11 +221,6 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
           </div>
         )}
 
-        {/* Key tools preview — shown while loading or when spec hasn't loaded yet */}
-        {keyTools && keyTools.length > 0 && (isLoadingTools || (!isLoadingTools && !toolsError && tools.length === 0)) && (
-          <KeyToolsPreview tools={keyTools} />
-        )}
-
         {/* Error state */}
         {toolsError && !isLoadingTools && (
           <div className="text-center py-6 text-red-500 border rounded-lg border-dashed border-red-300 bg-red-50">
@@ -223,30 +254,12 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         {/* Tools loaded successfully */}
         {!isLoadingTools && !toolsError && tools.length > 0 && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200 flex-1">
-                <CheckCircleOutlined className="text-green-600" />
-                <Text className="text-green-700 font-medium">
-                  {allowedTools.length} of {tools.length} {tools.length === 1 ? "tool" : "tools"} enabled for user
-                  access
-                </Text>
-              </div>
-              <div className="flex gap-2 ml-3">
-                <button
-                  type="button"
-                  onClick={handleSelectAll}
-                  className="px-3 py-1.5 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                >
-                  Enable All
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDeselectAll}
-                  className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
-                >
-                  Disable All
-                </button>
-              </div>
+            <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200">
+              <CheckCircleOutlined className="text-green-600" />
+              <Text className="text-green-700 font-medium">
+                {allowedTools.length} of {tools.length} {tools.length === 1 ? "tool" : "tools"} enabled for user
+                access
+              </Text>
             </div>
 
             {/* Search bar */}
@@ -261,30 +274,32 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
             />
 
             {/* Tool list with checkboxes */}
-            <div className="space-y-2">
-              {filteredTools.length === 0 ? (
-                <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
-                  <SearchOutlined className="text-2xl mb-2" />
-                  <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
-                </div>
-              ) : (
-                filteredTools.map((tool, index) => {
-                  const isEnabled = allowedTools.includes(tool.name);
-                  const isEditExpanded = expandedTools.has(tool.name);
-                  return (
+            {(() => {
+              const pinnedFiltered = filteredTools.filter((t) => suggestedToolNames.has(t.name));
+              const restFiltered = filteredTools.filter((t) => !suggestedToolNames.has(t.name));
+
+              if (filteredTools.length === 0) {
+                return (
+                  <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
+                    <SearchOutlined className="text-2xl mb-2" />
+                    <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
+                  </div>
+                );
+              }
+
+              const renderRow = (tool: typeof filteredTools[0], index: number) => {
+                const isEnabled = allowedTools.includes(tool.name);
+                const isEditExpanded = expandedTools.has(tool.name);
+                return (
                   <div
-                    key={index}
+                    key={tool.name + index}
                     className={`rounded-lg border transition-colors ${
                       isEnabled
                         ? "bg-blue-50 border-blue-300 hover:border-blue-400"
                         : "bg-gray-50 border-gray-200 hover:border-gray-300"
                     }`}
                   >
-                    {/* Main tool row */}
-                    <div
-                      className="p-4 cursor-pointer"
-                      onClick={() => handleToolToggle(tool.name)}
-                    >
+                    <div className="p-4 cursor-pointer" onClick={() => handleToolToggle(tool.name)}>
                       <div className="flex items-start gap-3">
                         <Checkbox checked={isEnabled} onChange={() => handleToolToggle(tool.name)} />
                         <div className="flex-1">
@@ -314,7 +329,6 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                             {isEnabled ? "✓ Users can call this tool" : "✗ Users cannot call this tool"}
                           </Text>
                         </div>
-                        {/* Edit toggle button */}
                         <button
                           type="button"
                           onClick={(e) => handleToggleEditExpanded(tool.name, e)}
@@ -329,17 +343,13 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                         </button>
                       </div>
                     </div>
-
-                    {/* Inline edit section */}
                     {isEditExpanded && (
                       <div
                         className="px-4 pb-4 pt-3 border-t border-gray-200 space-y-3 bg-gray-50 rounded-b-lg"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div>
-                          <Text className="text-xs font-medium text-gray-600 mb-1 block">
-                            Display Name
-                          </Text>
+                          <Text className="text-xs font-medium text-gray-600 mb-1 block">Display Name</Text>
                           <Input
                             placeholder={tool.name}
                             value={toolNameToDisplayName[tool.name] || ""}
@@ -350,9 +360,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                           </Text>
                         </div>
                         <div>
-                          <Text className="text-xs font-medium text-gray-600 mb-1 block">
-                            Description
-                          </Text>
+                          <Text className="text-xs font-medium text-gray-600 mb-1 block">Description</Text>
                           <Input.TextArea
                             placeholder={tool.description || "No description"}
                             value={toolNameToDescription[tool.name] || ""}
@@ -366,10 +374,58 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                       </div>
                     )}
                   </div>
-                  );
-                })
-              )}
-            </div>
+                );
+              };
+
+              const handleEnableSuggested = () => {
+                const suggestedNames = pinnedFiltered.map((t) => t.name);
+                const others = allowedTools.filter((n) => !suggestedToolNames.has(n));
+                onAllowedToolsChange([...others, ...suggestedNames]);
+              };
+              const handleDisableSuggested = () => {
+                onAllowedToolsChange(allowedTools.filter((n) => !suggestedToolNames.has(n)));
+              };
+              const handleEnableRest = () => {
+                const restNames = restFiltered.map((t) => t.name);
+                const current = new Set(allowedTools);
+                onAllowedToolsChange([...allowedTools, ...restNames.filter((n) => !current.has(n))]);
+              };
+              const handleDisableRest = () => {
+                const restNames = new Set(restFiltered.map((t) => t.name));
+                onAllowedToolsChange(allowedTools.filter((n) => !restNames.has(n)));
+              };
+
+              return (
+                <div className="space-y-2">
+                  {pinnedFiltered.length > 0 && (
+                    <>
+                      <div className="flex items-center justify-between px-1">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                          Suggested tools
+                        </p>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={handleEnableSuggested} className="text-xs text-blue-600 hover:text-blue-700">Enable all</button>
+                          <button type="button" onClick={handleDisableSuggested} className="text-xs text-gray-500 hover:text-gray-700">Disable all</button>
+                        </div>
+                      </div>
+                      {pinnedFiltered.map((tool, i) => renderRow(tool, i))}
+                      {restFiltered.length > 0 && (
+                        <div className="flex items-center justify-between px-1 pt-2">
+                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            All tools
+                          </p>
+                          <div className="flex gap-2">
+                            <button type="button" onClick={handleEnableRest} className="text-xs text-blue-600 hover:text-blue-700">Enable all</button>
+                            <button type="button" onClick={handleDisableRest} className="text-xs text-gray-500 hover:text-gray-700">Disable all</button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {restFiltered.map((tool, i) => renderRow(tool, i))}
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -377,33 +433,5 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   );
 };
 
-const KeyToolsPreview: React.FC<{ tools: KeyTool[] }> = ({ tools }) => {
-  const [expanded, setExpanded] = useState(false);
-  const shown = expanded ? tools : tools.slice(0, 4);
-
-  return (
-    <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
-      <p className="text-xs font-medium text-gray-500 mb-2">Key tools from this API (preview — all tools load from the spec)</p>
-      <div className="flex flex-wrap gap-1.5">
-        {shown.map((tool) => (
-          <Tooltip key={tool.name} title={tool.description} placement="top">
-            <span className="inline-flex items-center px-2 py-0.5 rounded bg-white border border-gray-300 text-xs text-gray-700 font-mono cursor-default hover:border-blue-400 transition-colors">
-              {tool.name}
-            </span>
-          </Tooltip>
-        ))}
-      </div>
-      {tools.length > 4 && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="mt-2 text-xs text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none p-0"
-        >
-          {expanded ? "Show less" : `+ ${tools.length - 4} more`}
-        </button>
-      )}
-    </div>
-  );
-};
 
 export default MCPToolConfiguration;
