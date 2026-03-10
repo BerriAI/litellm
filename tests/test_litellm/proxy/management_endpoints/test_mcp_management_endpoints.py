@@ -1739,6 +1739,9 @@ class TestMCPApprovalWorkflow:
         now_rejected = generate_mock_mcp_server_db_record()
         now_rejected.approval_status = MCPApprovalStatus.rejected
 
+        mock_manager = MagicMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -1752,6 +1755,10 @@ class TestMCPApprovalWorkflow:
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.reject_mcp_server",
                 AsyncMock(return_value=now_rejected),
             ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
         ):
             result = await reject_mcp_server_submission(
                 server_id=active_server.server_id,
@@ -1759,3 +1766,4 @@ class TestMCPApprovalWorkflow:
                 user_api_key_dict=admin,
             )
         assert result is not None
+        mock_manager.reload_servers_from_database.assert_awaited_once()

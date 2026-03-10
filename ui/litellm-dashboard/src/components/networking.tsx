@@ -6551,7 +6551,6 @@ export const approveMCPServer = async (accessToken: string, serverId: string) =>
       method: HTTP_REQUEST.PUT,
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
       },
     });
     if (!response.ok) {

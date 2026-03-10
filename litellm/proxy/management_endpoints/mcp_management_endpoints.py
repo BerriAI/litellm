@@ -1026,9 +1026,12 @@ if MCP_AVAILABLE:
 
         # TODO: audit log for create
 
-        # Admin-created servers are always active regardless of any lifecycle fields
-        # in the payload — prevents an admin from accidentally creating a pending server.
+        # Admin-created servers are always active — clear any submission lifecycle
+        # fields the caller may have provided to prevent fake entries appearing in
+        # the submissions queue.
         payload.approval_status = MCPApprovalStatus.active
+        payload.submitted_by = None
+        payload.submitted_at = None
 
         # Attempt to create the mcp server
         try:

@@ -322,7 +322,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
             )}
           </div>
           {/* Approve/Reject when no checks panel (no rules configured) */}
-          {checks.length === 0 && approvalStatus === "pending_review" && (
+          {checks.length === 0 && (approvalStatus === "pending_review" || approvalStatus === "rejected") && (
             <div className="flex items-center gap-2 flex-shrink-0">
               <button
                 type="button"
@@ -331,13 +331,15 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               >
                 Approve
               </button>
-              <button
-                type="button"
-                onClick={onReject}
-                className="text-xs border border-red-300 text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-md transition-colors font-medium"
-              >
-                Reject
-              </button>
+              {approvalStatus === "pending_review" && (
+                <button
+                  type="button"
+                  onClick={onReject}
+                  className="text-xs border border-red-300 text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-md transition-colors font-medium"
+                >
+                  Reject
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -375,7 +377,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               </div>
             </div>
             {/* Approve / Reject in header */}
-            {approvalStatus === "pending_review" && (
+            {(approvalStatus === "pending_review" || approvalStatus === "rejected") && (
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button
                   type="button"
@@ -384,13 +386,15 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 >
                   Approve
                 </button>
-                <button
-                  type="button"
-                  onClick={onReject}
-                  className="text-xs border border-red-300 text-red-600 hover:bg-red-50 bg-white px-3 py-1.5 rounded-md transition-colors font-medium"
-                >
-                  Reject
-                </button>
+                {approvalStatus === "pending_review" && (
+                  <button
+                    type="button"
+                    onClick={onReject}
+                    className="text-xs border border-red-300 text-red-600 hover:bg-red-50 bg-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  >
+                    Reject
+                  </button>
+                )}
               </div>
             )}
           </div>
