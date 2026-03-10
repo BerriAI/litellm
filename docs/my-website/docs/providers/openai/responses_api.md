@@ -704,7 +704,6 @@ Requires `gpt-5.4` or later. See [OpenAI Tool Search docs](https://developers.op
 
 ```python showLineNumbers title="Tool Search with Namespaces"
 import litellm
-import json
 
 # Define namespaces with deferred tools
 tools = [
