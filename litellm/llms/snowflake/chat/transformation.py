@@ -6,7 +6,9 @@ import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
+from pydantic import BaseModel
 
+import litellm
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse
 
@@ -164,9 +166,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         1. Assistant messages with tool_calls -> content_list with tool_use blocks
         2. Tool messages (role: "tool") -> User messages with content_list containing tool_results
 
-        Snowflake uses a format similar to Anthropic/Bedrock where:
+        Snowflake uses a format where:
         - tool_use blocks are in assistant message content_list
         - tool_results are in user message content_list (not role: "tool")
+
+        Note: is_async parameter is accepted for interface compatibility but not used.
+        Snowflake transformation is synchronous and doesn't require async operations
+        like image URL downloads that the parent class handles.
         """
         # Build a map of tool_call_id -> tool_call for looking up function names
         tool_calls_map: Dict[str, Dict[str, Any]] = {}
@@ -180,7 +186,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         pending_tool_messages: List[Dict[str, Any]] = []
 
         for message in messages:
-            if not isinstance(message, dict):
+            # Handle Pydantic models by converting to dict
+            if isinstance(message, BaseModel):
+                message = message.model_dump()
+            elif not isinstance(message, dict):
                 continue
 
             role = message.get("role", "")
@@ -300,9 +309,16 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         for tool_msg in tool_messages:
             tool_call_id = tool_msg.get("tool_call_id", "")
-            tool_call = tool_calls_map.get(tool_call_id, {})
-            function = tool_call.get("function", {})
-            function_name = function.get("name", "")
+            tool_call = tool_calls_map.get(tool_call_id)
+            if tool_call is None:
+                litellm.utils.verbose_logger.warning(
+                    f"Snowflake: tool_call_id '{tool_call_id}' not found in prior "
+                    "assistant messages; function name will be empty."
+                )
+                function_name = ""
+            else:
+                function = tool_call.get("function", {})
+                function_name = function.get("name", "")
 
             # Get content - could be string, list, or None
             content = tool_msg.get("content")
