@@ -100,7 +100,6 @@ const sidebars = {
       label: "Policies",
       items: [
         "proxy/guardrails/guardrail_policies",
-        "proxy/guardrails/guardrail_pipeline_flow_builder",
         "proxy/guardrails/policy_templates",
         "proxy/guardrails/policy_tags",
       ],
