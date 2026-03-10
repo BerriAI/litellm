@@ -27,7 +27,7 @@ import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
 import { makeOpenAIResponsesRequest } from "../playground/llm_calls/responses_api";
-import MCPEventsDisplay, { MCPEvent } from "../playground/chat_ui/MCPEventsDisplay";
+import { MCPEvent } from "../playground/chat_ui/MCPEventsDisplay";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
@@ -138,7 +138,6 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
-  const [mcpEvents, setMcpEvents] = useState<MCPEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
@@ -248,26 +247,36 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       appendMessage(convId, { role: "user", content: trimmed });
       appendMessage(convId, { role: "assistant", content: "" });
 
-      setMcpEvents([]); // clear MCP events from previous request
       setIsStreaming(true);
       abortControllerRef.current = new AbortController();
 
-      // Explicitly filter to only user/assistant roles — tool messages lack
-      // a required tool_call_id and would cause API errors if forwarded.
-      const history = [
-        ...(historyOverride ?? (activeConversation?.messages ?? [])
-          .filter((m): m is typeof m & { role: "user" | "assistant" } =>
-            m.role === "user" || m.role === "assistant"
-          )
-          .map((m) => ({
-            role: m.role,
-            content: m.content,
-          }))),
-        { role: "user" as const, content: trimmed },
-      ];
+      // When responsesSessionId is set, the Responses API already holds the
+      // prior context server-side via session chaining.  Sending the full
+      // history alongside previous_response_id would double-count it, so we
+      // only pass the new message for subsequent turns.
+      // On the first turn (no session yet) we send the full history so the
+      // model has the context it needs.
+      const history: Array<{ role: "user" | "assistant"; content: string }> =
+        historyOverride
+          ? [...historyOverride, { role: "user" as const, content: trimmed }]
+          : responsesSessionId
+          ? [{ role: "user" as const, content: trimmed }]
+          : [
+              // Explicitly filter to only user/assistant roles — tool messages
+              // lack a required tool_call_id and would cause API errors.
+              ...(activeConversation?.messages ?? [])
+                .filter((m): m is typeof m & { role: "user" | "assistant" } =>
+                  m.role === "user" || m.role === "assistant"
+                )
+                .map((m) => ({ role: m.role, content: m.content })),
+              { role: "user" as const, content: trimmed },
+            ];
 
       let accumulatedContent = "";
       let accumulatedReasoning = "";
+      // MCP events accumulated locally so we can persist them to the message
+      // without relying on component state (which would cause stale closures).
+      const accumulatedMCPEvents: MCPEvent[] = [];
 
       try {
         await makeOpenAIResponsesRequest(
@@ -288,7 +297,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           selectedMCPServers.length > 0 ? selectedMCPServers : undefined,
           responsesSessionId,
           (id: string) => setResponsesSessionId(id),
-          (event: MCPEvent) => setMcpEvents((prev) => [...prev, event]),
+          (event: MCPEvent) => {
+            accumulatedMCPEvents.push(event);
+            // Persist a snapshot to the assistant message so events survive
+            // across turns instead of disappearing when the next send starts.
+            updateLastAssistantMessage(convId!, { mcpEvents: [...accumulatedMCPEvents] });
+          },
         );
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
@@ -1134,18 +1148,11 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                     })}
                   </div>
                 ) : (
-                  <>
-                    <ChatMessages
-                      messages={activeConversation!.messages}
-                      isStreaming={isStreaming}
-                      onEditMessage={handleEditAndResend}
-                    />
-                    {mcpEvents.length > 0 && (
-                      <div style={{ padding: "0 16px 16px" }}>
-                        <MCPEventsDisplay events={mcpEvents} />
-                      </div>
-                    )}
-                  </>
+                  <ChatMessages
+                    messages={activeConversation!.messages}
+                    isStreaming={isStreaming}
+                    onEditMessage={handleEditAndResend}
+                  />
                 )}
               </div>
               {showScrollButton && (

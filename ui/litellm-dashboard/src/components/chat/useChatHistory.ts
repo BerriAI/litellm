@@ -51,7 +51,7 @@ export function useChatHistory(activeConversationId: string | null): {
   staleId: boolean;
   createConversation: (model: string) => string;
   appendMessage: (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => void;
-  updateLastAssistantMessage: (conversationId: string, updates: Partial<Pick<ChatMessage, "content" | "reasoningContent">>) => void;
+  updateLastAssistantMessage: (conversationId: string, updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>) => void;
   truncateAfterMessage: (conversationId: string, messageId: string) => void;
   deleteConversation: (id: string) => void;
   renameConversation: (id: string, newTitle: string) => void;
@@ -148,7 +148,7 @@ export function useChatHistory(activeConversationId: string | null): {
   const updateLastAssistantMessage = useCallback(
     (
       conversationId: string,
-      updates: Partial<Pick<ChatMessage, "content" | "reasoningContent">>,
+      updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>,
     ) => {
       setConversations((prev) => {
         const updated = prev.map((conv) => {

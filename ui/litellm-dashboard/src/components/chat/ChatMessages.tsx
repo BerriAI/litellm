@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReasoningContent from "../playground/chat_ui/ReasoningContent";
+import MCPEventsDisplay, { MCPEvent } from "../playground/chat_ui/MCPEventsDisplay";
 import { ChatMessage } from "./types";
 
 const { Panel } = Collapse;
@@ -237,6 +238,8 @@ interface AssistantBubbleProps {
   isLastMessage: boolean;
   isStreaming: boolean;
   isTypingIndicator: boolean;
+  /** MCP events stored on the message — rendered inline below the response. */
+  mcpEvents?: ChatMessage["mcpEvents"];
 }
 
 function AssistantBubble({
@@ -244,6 +247,7 @@ function AssistantBubble({
   isLastMessage,
   isStreaming,
   isTypingIndicator,
+  mcpEvents,
 }: AssistantBubbleProps) {
   // Ref to control ReasoningContent collapse on streaming end.
   // ReasoningContent manages its own expanded state; we use a key to
@@ -321,6 +325,11 @@ function AssistantBubble({
       </div>
 
       <CopyButton text={mainContent} />
+      {mcpEvents && mcpEvents.length > 0 && (
+        <div style={{ marginTop: 8, maxWidth: "100%" }}>
+          <MCPEventsDisplay events={mcpEvents as MCPEvent[]} />
+        </div>
+      )}
     </div>
   );
 }
@@ -566,6 +575,7 @@ const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage })
             isLastMessage={isLastMessage}
             isStreaming={isStreaming}
             isTypingIndicator={isLastMessage && isTypingIndicator}
+            mcpEvents={msg.mcpEvents}
           />
         );
       })}
