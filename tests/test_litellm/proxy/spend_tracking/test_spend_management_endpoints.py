@@ -140,110 +140,190 @@ async def test_is_admin_view_safe_exception(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_can_team_member_view_log_none_team_id():
-    # team_id=None should immediately return False
-    class MockPrisma:
-        class DB:
-            class TeamTable:
-                async def find_unique(self, where: dict):
-                    return None
-
-            def __init__(self):
-                self.litellm_teamtable = self.TeamTable()
-
-        def __init__(self):
-            self.db = self.DB()
-
-    prisma = MockPrisma()
+    # team_id=None should immediately return result with all False
+    prisma = MagicMock()
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
-    allowed = await spend_management_endpoints._can_team_member_view_log(
+    result = await spend_management_endpoints._can_team_member_view_log(
         prisma, auth, None
     )
-    assert allowed is False
+    assert result.can_view_all is False
+    assert result.is_member is False
+    assert result.team_obj is None
 
 
 @pytest.mark.asyncio
 async def test_can_team_member_view_log_team_not_found(monkeypatch):
-    # Non-existent team should return False
-    class MockPrisma:
-        class DB:
-            class TeamTable:
-                async def find_unique(self, where: dict):
-                    return None
+    # Non-existent team should return all False
+    from fastapi import HTTPException as _HTTPException
 
-            def __init__(self):
-                self.litellm_teamtable = self.TeamTable()
+    async def mock_get_team_object(**kwargs):
+        raise _HTTPException(status_code=404, detail="Team not found")
 
-        def __init__(self):
-            self.db = self.DB()
-
-    prisma = MockPrisma()
-    # Even if admin check would return True, no team means False
     monkeypatch.setattr(
-        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+        "litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object
     )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    prisma = MagicMock()
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
-    allowed = await spend_management_endpoints._can_team_member_view_log(
+    result = await spend_management_endpoints._can_team_member_view_log(
         prisma, auth, "team_x"
     )
-    assert allowed is False
+    assert result.can_view_all is False
+    assert result.is_member is False
+    assert result.team_obj is None
 
 
 @pytest.mark.asyncio
 async def test_can_team_member_view_log_not_admin(monkeypatch):
-    # Existing team but caller is not a team admin -> False
-    class MockTeam:
-        pass
+    # Existing team, user is member but not admin, no permission → can_view_all=False, is_member=True
+    mock_team = MagicMock()
+    mock_team.members_with_roles = [Member(user_id="user_1", role="user")]
+    mock_team.team_member_permissions = []
+    mock_team.organization_id = None
 
-    class MockPrisma:
-        class DB:
-            class TeamTable:
-                async def find_unique(self, where: dict):
-                    return MockTeam()
+    async def mock_get_team_object(**kwargs):
+        return mock_team
 
-            def __init__(self):
-                self.litellm_teamtable = self.TeamTable()
-
-        def __init__(self):
-            self.db = self.DB()
-
-    prisma = MockPrisma()
     monkeypatch.setattr(
-        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: False
+        "litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object
     )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    async def mock_org_admin(user_api_key_dict, team_obj):
+        return False
+
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_org_admin_for_team", mock_org_admin
+    )
+
+    prisma = MagicMock()
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
-    allowed = await spend_management_endpoints._can_team_member_view_log(
+    result = await spend_management_endpoints._can_team_member_view_log(
         prisma, auth, "team_x"
     )
-    assert allowed is False
+    assert result.can_view_all is False
+    assert result.is_member is True
 
 
 @pytest.mark.asyncio
 async def test_can_team_member_view_log_admin(monkeypatch):
-    # Existing team and caller is team admin -> True
-    class MockTeam:
-        pass
+    # Existing team and caller is team admin → can_view_all=True, is_member=True
+    mock_team = MagicMock()
+    mock_team.members_with_roles = [Member(user_id="user_1", role="admin")]
+    mock_team.team_member_permissions = []
+    mock_team.organization_id = None
 
-    class MockPrisma:
-        class DB:
-            class TeamTable:
-                async def find_unique(self, where: dict):
-                    return MockTeam()
+    async def mock_get_team_object(**kwargs):
+        return mock_team
 
-            def __init__(self):
-                self.litellm_teamtable = self.TeamTable()
-
-        def __init__(self):
-            self.db = self.DB()
-
-    prisma = MockPrisma()
     monkeypatch.setattr(
-        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+        "litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object
     )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    prisma = MagicMock()
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
-    allowed = await spend_management_endpoints._can_team_member_view_log(
+    result = await spend_management_endpoints._can_team_member_view_log(
         prisma, auth, "team_x"
     )
-    assert allowed is True
+    assert result.can_view_all is True
+    assert result.is_member is True
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_member_with_permission(monkeypatch):
+    """Member with /team/member/view_all_logs permission → can_view_all=True."""
+    mock_team = MagicMock()
+    mock_team.members_with_roles = [Member(user_id="user_1", role="user")]
+    mock_team.team_member_permissions = ["/team/member/view_all_logs"]
+    mock_team.organization_id = None
+
+    async def mock_get_team_object(**kwargs):
+        return mock_team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    prisma = MagicMock()
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    result = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_x"
+    )
+    assert result.can_view_all is True
+    assert result.is_member is True
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_org_admin(monkeypatch):
+    """Org admin (not a team member) → can_view_all=True, is_member=False."""
+    mock_team = MagicMock()
+    mock_team.members_with_roles = [Member(user_id="other_user", role="admin")]
+    mock_team.team_member_permissions = []
+    mock_team.organization_id = "org_1"
+
+    async def mock_get_team_object(**kwargs):
+        return mock_team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    async def mock_org_admin(user_api_key_dict, team_obj):
+        return True
+
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_org_admin_for_team", mock_org_admin
+    )
+
+    prisma = MagicMock()
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    result = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_x"
+    )
+    assert result.can_view_all is True
+    assert result.is_member is False
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_non_member(monkeypatch):
+    """User not in team members → can_view_all=False, is_member=False."""
+    mock_team = MagicMock()
+    mock_team.members_with_roles = [Member(user_id="other_user", role="admin")]
+    mock_team.team_member_permissions = []
+    mock_team.organization_id = None
+
+    async def mock_get_team_object(**kwargs):
+        return mock_team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    async def mock_org_admin(user_api_key_dict, team_obj):
+        return False
+
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_org_admin_for_team", mock_org_admin
+    )
+
+    prisma = MagicMock()
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    result = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_x"
+    )
+    assert result.can_view_all is False
+    assert result.is_member is False
 
 
 def test_can_user_view_spend_log_true_for_internal_user():
@@ -797,6 +877,7 @@ async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(client, m
 async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeypatch):
     """
     Team admins should be able to view team-wide spend when team_id is provided.
+    Uses get_team_object (cached) instead of raw DB query.
     """
     mock_spend_logs = [
         {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "member1", "team_id": "team_admin_team", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
@@ -808,16 +889,27 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
             return [mock_spend_logs[0]]
         return mock_spend_logs
 
-    class TeamTable:
-        members_with_roles = [Member(user_id="admin_user", role="admin")]
-
-    async def team_lookup(where):
-        return TeamTable() if where == {"team_id": "team_admin_team"} else None
-
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
-        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_team, team_lookup),
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_team),
     )
+
+    # Mock get_team_object to return a team where the user is admin
+    mock_team = MagicMock()
+    mock_team.members_with_roles = [Member(user_id="admin_user", role="admin")]
+    mock_team.team_member_permissions = []
+    mock_team.organization_id = None
+
+    async def mock_get_team_object(**kwargs):
+        from fastapi import HTTPException as _HTTPException
+        if kwargs.get("team_id") == "team_admin_team":
+            return mock_team
+        raise _HTTPException(status_code=404, detail="Team not found")
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="admin_user"
     )
@@ -2403,3 +2495,276 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
         where={"session_id": {"in": [session_id]}},
         count={"session_id": True},
     )
+
+
+# ── Endpoint-level tests for team visibility permissions ──
+
+
+def _mock_team_with_members(members, permissions=None, organization_id=None):
+    """Helper to create a mock team object for visibility permission tests."""
+    team = MagicMock()
+    team.members_with_roles = members
+    team.team_member_permissions = permissions or []
+    team.organization_id = organization_id
+    return team
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_member_with_view_all_logs_sees_team_logs(client, monkeypatch):
+    """Member with /team/member/view_all_logs permission sees all team logs (no user filter)."""
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-key1", "user": "member1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-key2", "user": "member2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    def filter_fn(where):
+        result = mock_spend_logs
+        if "team_id" in where:
+            result = [l for l in result if l["team_id"] == where["team_id"]]
+        if "user" in where:
+            result = [l for l in result if l["user"] == where["user"]]
+        return result
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn),
+    )
+
+    mock_team = _mock_team_with_members(
+        members=[Member(user_id="member1", role="user")],
+        permissions=["/team/member/view_all_logs"],
+    )
+
+    async def mock_get_team_object(**kwargs):
+        return mock_team
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="member1"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"team_id": "team1", "start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # Should see both logs (no user filter applied)
+        assert data["total"] == 2
+        assert len(data["data"]) == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_member_without_permission_sees_own_logs_in_team(client, monkeypatch):
+    """Member without permission sees only own logs within the team (team_id + user_id filter)."""
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-key1", "user": "member1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-key2", "user": "member2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    def filter_fn(where):
+        result = mock_spend_logs
+        if "team_id" in where:
+            result = [l for l in result if l["team_id"] == where["team_id"]]
+        if "user" in where:
+            result = [l for l in result if l["user"] == where["user"]]
+        return result
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn),
+    )
+
+    # Team with no view_all_logs permission
+    mock_team = _mock_team_with_members(
+        members=[Member(user_id="member1", role="user"), Member(user_id="member2", role="user")],
+    )
+
+    async def mock_get_team_object(**kwargs):
+        return mock_team
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    async def mock_org_admin(user_api_key_dict, team_obj):
+        return False
+
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_org_admin_for_team", mock_org_admin
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="member1"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"team_id": "team1", "start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # Should see only own log (user filter applied)
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["user"] == "member1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_org_admin_sees_team_logs(client, monkeypatch):
+    """Org admin for the team's org sees all team logs."""
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-key1", "user": "member1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-key2", "user": "member2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    def filter_fn(where):
+        result = mock_spend_logs
+        if "team_id" in where:
+            result = [l for l in result if l["team_id"] == where["team_id"]]
+        if "user" in where:
+            result = [l for l in result if l["user"] == where["user"]]
+        return result
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn),
+    )
+
+    # Org admin is NOT a team member
+    mock_team = _mock_team_with_members(
+        members=[Member(user_id="member1", role="user")],
+    )
+    mock_team.organization_id = "org_1"
+
+    async def mock_get_team_object(**kwargs):
+        return mock_team
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    async def mock_org_admin(user_api_key_dict, team_obj):
+        return True
+
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_org_admin_for_team", mock_org_admin
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="org_admin_user"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"team_id": "team1", "start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # Should see all team logs (no user filter)
+        assert data["total"] == 2
+        assert len(data["data"]) == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_non_member_gets_403(client, monkeypatch):
+    """User not in team at all gets 403."""
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-key1", "user": "member1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, lambda where: mock_spend_logs),
+    )
+
+    # User "outsider" is not in the team
+    mock_team = _mock_team_with_members(
+        members=[Member(user_id="member1", role="user")],
+    )
+
+    async def mock_get_team_object(**kwargs):
+        return mock_team
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    async def mock_org_admin(user_api_key_dict, team_obj):
+        return False
+
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_org_admin_for_team", mock_org_admin
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="outsider"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"team_id": "team1", "start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_no_team_id_shows_own_logs(client, monkeypatch):
+    """Without team_id, internal user sees only own logs (unchanged behavior)."""
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-key1", "user": "user_1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-key2", "user": "user_2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    def filter_fn(where):
+        result = mock_spend_logs
+        if "user" in where:
+            result = [l for l in result if l["user"] == where["user"]]
+        return result
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn),
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["user"] == "user_1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)

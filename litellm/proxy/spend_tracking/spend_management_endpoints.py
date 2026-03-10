@@ -14,7 +14,9 @@ from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_org_admin_for_team,
     _is_user_team_admin,
+    _team_member_has_permission,
     _user_has_admin_view,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -1842,12 +1844,20 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         if not is_admin_view:
             if team_id is not None:
-                can_view_team = await _can_team_member_view_log(
+                view_result = await _can_team_member_view_log(
                     prisma_client=prisma_client,
                     user_api_key_dict=user_api_key_dict,
                     team_id=team_id,
                 )
-                if not can_view_team:
+                if view_result.can_view_all:
+                    # Admin / permission holder / org admin → see all team logs
+                    where_conditions["team_id"] = team_id
+                elif view_result.is_member:
+                    # Member without permission → see only own logs in team
+                    where_conditions["team_id"] = team_id
+                    where_conditions["user"] = user_api_key_dict.user_id
+                else:
+                    # Not a member of this team → 403
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail={
@@ -1856,7 +1866,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                             )
                         },
                     )
-                where_conditions["team_id"] = team_id
             else:
                 if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
                     where_conditions["user"] = user_api_key_dict.user_id
@@ -3368,23 +3377,89 @@ def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
         return False
 
 
+class _TeamLogViewResult:
+    """Result of checking a user's log-viewing permissions for a team."""
+
+    __slots__ = ("can_view_all", "is_member", "team_obj")
+
+    def __init__(self, can_view_all: bool, is_member: bool, team_obj: Optional[Any]):
+        self.can_view_all = can_view_all
+        self.is_member = is_member
+        self.team_obj = team_obj
+
+
+def _is_user_member_of_team(
+    user_api_key_dict: UserAPIKeyAuth, team_obj: Any
+) -> bool:
+    """Check if the user appears in the team's members_with_roles list."""
+    for member in team_obj.members_with_roles:
+        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
+            return True
+    return False
+
+
 async def _can_team_member_view_log(
     prisma_client,
     user_api_key_dict: UserAPIKeyAuth,
     team_id: Optional[str],
-) -> bool:
+) -> _TeamLogViewResult:
     """
     Check if the requesting user can view spend logs for the given team.
-    Returns True only if the team exists and the user is a team admin.
+
+    Returns a _TeamLogViewResult with:
+    - can_view_all: True if the user can see ALL team logs (team admin,
+      has /team/member/view_all_logs permission, or is org admin).
+    - is_member: True if the user is a member of the team (any role).
+    - team_obj: The fetched team object, or None if the team was not found.
     """
     if team_id is None:
-        return False
-    team_obj = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": team_id}
+        return _TeamLogViewResult(can_view_all=False, is_member=False, team_obj=None)
+
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    try:
+        from litellm.proxy.auth.auth_checks import get_team_object
+
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException:
+        return _TeamLogViewResult(can_view_all=False, is_member=False, team_obj=None)
+
+    is_member = _is_user_member_of_team(
+        user_api_key_dict=user_api_key_dict, team_obj=team_obj
     )
-    if team_obj is None:
-        return False
-    return _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+
+    # Team admin → can view all
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return _TeamLogViewResult(
+            can_view_all=True, is_member=True, team_obj=team_obj
+        )
+
+    # Member with explicit permission → can view all
+    if is_member and _team_member_has_permission(
+        user_api_key_dict=user_api_key_dict,
+        team_obj=team_obj,
+        permission="/team/member/view_all_logs",
+    ):
+        return _TeamLogViewResult(
+            can_view_all=True, is_member=True, team_obj=team_obj
+        )
+
+    # Org admin for the team's org → can view all
+    if await _is_user_org_admin_for_team(
+        user_api_key_dict=user_api_key_dict, team_obj=team_obj
+    ):
+        return _TeamLogViewResult(
+            can_view_all=True, is_member=is_member, team_obj=team_obj
+        )
+
+    return _TeamLogViewResult(
+        can_view_all=False, is_member=is_member, team_obj=team_obj
+    )
 
 
 def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:

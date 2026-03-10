@@ -245,6 +245,10 @@ class KeyManagementRoutes(str, enum.Enum):
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
 
+    # team member visibility routes
+    TEAM_MEMBER_VIEW_ALL_KEYS = "/team/member/view_all_keys"
+    TEAM_MEMBER_VIEW_ALL_LOGS = "/team/member/view_all_logs"
+
 
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
@@ -516,6 +520,8 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
+        KeyManagementRoutes.TEAM_MEMBER_VIEW_ALL_KEYS.value,
+        KeyManagementRoutes.TEAM_MEMBER_VIEW_ALL_LOGS.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
     ]
@@ -649,6 +655,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
+        "/team/member/view_all_keys",
+        "/team/member/view_all_logs",
         "/model/new",
         "/model/update",
         "/model/delete",
