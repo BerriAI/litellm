@@ -2203,6 +2203,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    allow_custom_api_keys: Optional[bool] = Field(
+        None,
+        description="If False, users cannot specify a custom API key value when creating keys. Keys will always be randomly generated.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):

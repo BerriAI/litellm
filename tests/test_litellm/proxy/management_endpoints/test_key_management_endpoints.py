@@ -986,6 +986,25 @@ def test_get_new_token_with_invalid_key():
     assert "New key must start with 'sk-'" in str(exc_info.value.detail)
 
 
+def test_get_new_token_rejected_when_custom_keys_disabled():
+    """Test get_new_token rejects custom keys when allow_custom_api_keys is False"""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_new_token,
+    )
+
+    data = RegenerateKeyRequest(new_key="sk-custom-regen-key")
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_custom_api_keys": False},
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            get_new_token(data)
+        assert exc_info.value.status_code == 403
+        assert "Custom API keys are disabled" in exc_info.value.detail["error"]
+
+
 @pytest.mark.asyncio
 async def test_generate_service_account_requires_team_id():
     with pytest.raises(HTTPException):
@@ -6758,3 +6777,179 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_validation_user_id_and_team_id(monkeypatch):
+    """
+    Test key generation validation:
+    1. Non-admin user_id is auto-populated from authenticated user when not provided
+    2. Invalid team_id raises 404
+    3. Non-admin cannot remove user_id on update (exclude_unset guard logic)
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            return MagicMock(
+                token="hashed_token_123",
+                litellm_budget_table=None,
+                object_permission=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    # 1. Non-admin: user_id auto-populated
+    data = GenerateKeyRequest(key_alias="my-key")
+    await generate_key_fn(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-user",
+            user_id="internal-user-123",
+        ),
+    )
+    assert data.user_id == "internal-user-123"
+
+    # 2. Invalid team_id raises error
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(side_effect=Exception("Team not found")),
+    )
+    with pytest.raises(ProxyException) as exc:
+        await generate_key_fn(
+            data=GenerateKeyRequest(key_alias="bad-team", team_id="nonexistent"),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin-user",
+            ),
+        )
+    assert exc.value.code == "404"
+
+    # 3. Non-admin cannot remove user_id on update (calls update_key_fn)
+    from starlette.requests import Request as StarletteRequest
+    from starlette.datastructures import Headers
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    # Mock prisma_client.get_data to return an existing key with user_id set
+    mock_prisma_client.get_data = AsyncMock(
+        return_value=LiteLLM_VerificationToken(
+            token="hashed_sk1", user_id="original-user"
+        )
+    )
+
+    # Build a minimal ASGI request
+    scope = {"type": "http", "method": "POST", "headers": [], "query_string": b""}
+    mock_request = StarletteRequest(scope)
+
+    # UpdateKeyRequest with explicit user_id=None
+    update_data = UpdateKeyRequest(key="sk-1", user_id=None)
+    update_data.model_fields_set.add("user_id")
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=update_data,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-user",
+                user_id="original-user",
+            ),
+        )
+    assert exc.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_custom_api_key_rejected_when_disabled():
+    """
+    When general_settings['allow_custom_api_keys'] is False,
+    _common_key_generation_helper should reject requests that specify a custom key.
+    """
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_custom_api_keys": False},
+    ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user", False
+    ):
+        mock_prisma.return_value = AsyncMock()
+
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(key="sk-custom-key-123"),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+        assert exc.value.status_code == 403
+        assert "Custom API keys are disabled" in exc.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_custom_api_key_allowed_when_enabled():
+    """
+    When general_settings['allow_custom_api_keys'] is True (default),
+    _common_key_generation_helper should allow custom keys.
+    """
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_custom_api_keys": True},
+    ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user", False
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
+    ) as mock_generate_key:
+        mock_prisma.return_value = AsyncMock()
+        mock_generate_key.return_value = {
+            "key": "sk-custom-key-123",
+            "expires": None,
+            "user_id": "test-user",
+            "team_id": None,
+        }
+
+        # Should NOT raise
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(key="sk-custom-key-123"),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="test-user",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+        mock_generate_key.assert_awaited_once()

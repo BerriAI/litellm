@@ -129,6 +129,11 @@ class UISettings(BaseModel):
         description="If enabled, the user search endpoint (/user/filter/ui) restricts results by organization. When off, any authenticated user can search all users.",
     )
 
+    allow_custom_api_keys: bool = Field(
+        default=True,
+        description="If false, users cannot specify a custom API key value when creating keys. Keys will always be randomly generated.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -149,6 +154,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
     "scope_user_search_to_org",
+    "allow_custom_api_keys",
 }
 
 # Flags that must be synced from the persisted UISettings into
@@ -159,6 +165,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
+    "allow_custom_api_keys",
 ]
 
 

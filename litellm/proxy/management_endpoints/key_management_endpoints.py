@@ -650,6 +650,18 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         prisma_client=prisma_client,
     )
 
+    # Block custom API keys when disabled in settings
+    if data.key is not None:
+        from litellm.proxy.proxy_server import general_settings
+
+        if not general_settings.get("allow_custom_api_keys", True):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Custom API keys are disabled. Keys must be randomly generated."
+                },
+            )
+
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
         _masked = (
@@ -1166,6 +1178,13 @@ async def generate_key_fn(
 
         verbose_proxy_logger.debug("entered /key/generate")
 
+        # Auto-populate user_id from authenticated user when not provided (non-admins only)
+        if data.user_id is None and user_api_key_dict.user_id is not None:
+            if (
+                user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+            ):
+                data.user_id = user_api_key_dict.user_id
+
         # Validate budget values are not negative
         if data.max_budget is not None and data.max_budget < 0:
             raise HTTPException(
@@ -1206,6 +1225,12 @@ async def generate_key_fn(
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Error getting team object in `/key/generate`: {e}"
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error": f"Team not found, passed team_id={data.team_id}"
+                    },
                 )
 
         key_generation_check(
@@ -1871,6 +1896,20 @@ async def update_key_fn(
             raise HTTPException(
                 status_code=403,
                 detail=f"User={data.user_id} is not allowed to update key={key} to belong to user={existing_key_row.user_id}",
+            )
+
+        ## prevent non-proxy admin user from removing user_id from a key
+        _update_fields = data.model_dump(exclude_unset=True)
+        if (
+            "user_id" in _update_fields
+            and _update_fields["user_id"] is None
+            and existing_key_row.user_id is not None
+            and user_api_key_dict.user_role
+            != LitellmUserRoles.PROXY_ADMIN.value
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Non-admin users cannot remove user_id from a key.",
             )
 
         common_key_access_checks(
@@ -3302,6 +3341,15 @@ async def _rotate_master_key( # noqa: PLR0915
 
 def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
+        from litellm.proxy.proxy_server import general_settings
+
+        if not general_settings.get("allow_custom_api_keys", True):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Custom API keys are disabled. Keys must be randomly generated."
+                },
+            )
         new_token = data.new_key
         if not data.new_key.startswith("sk-"):
             raise HTTPException(
