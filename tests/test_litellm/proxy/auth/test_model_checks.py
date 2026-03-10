@@ -127,6 +127,34 @@ def test_get_key_models_passes_include_model_access_groups():
     assert "model2" in result
 
 
+def test_get_key_models_does_not_mutate_input():
+    """
+    get_key_models must not mutate user_api_key_dict.models in-place.
+    _get_models_from_access_groups uses .pop()/.extend() which would corrupt
+    cached UserAPIKeyAuth objects if all_models were an alias instead of a copy.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    original_models = ["group-a", "extra-model"]
+    user_api_key_dict = UserAPIKeyAuth(
+        models=list(original_models),  # give it a list
+        api_key="test-key",
+    )
+    model_access_groups = {
+        "group-a": ["model1", "model2"],
+    }
+
+    _ = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=["model1", "model2"],
+        model_access_groups=model_access_groups,
+        include_model_access_groups=False,
+    )
+    # The original models list on the auth object must be unchanged
+    assert user_api_key_dict.models == original_models
+
+
 @pytest.mark.parametrize(
     "key_models,team_models,proxy_model_list,model_list,expected",
     [
