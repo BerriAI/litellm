@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { Switch, Spin, Input, Button } from "antd";
 import { SearchOutlined, ArrowLeftOutlined, RightOutlined } from "@ant-design/icons";
 import { fetchMCPServers, listMCPTools } from "../networking";
-import { MCPServer } from "../mcp_tools/types";
+import { AUTH_TYPE, MCPServer } from "../mcp_tools/types";
 import { message } from "antd";
 
 interface Props {
@@ -261,7 +261,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                 {isConnected && (
                   <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#1677ff", flexShrink: 0 }} />
                 )}
-                {server.auth_type === "oauth2" && (
+                {server.auth_type === AUTH_TYPE.OAUTH2 && (
                   <span style={{
                     fontSize: 10, fontWeight: 600, color: "#7c3aed",
                     background: "#f3e8ff", borderRadius: 4, padding: "1px 5px",
