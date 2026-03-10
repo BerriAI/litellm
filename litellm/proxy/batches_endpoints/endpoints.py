@@ -505,7 +505,18 @@ async def retrieve_batch( # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider, **data  # type: ignore
             )
         
-        # FIX: Update the database with the latest state from provider
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
+
+        # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
+        # Resolve raw provider input_file_id to unified ID.
+        if unified_batch_id:
+            await resolve_input_file_id_to_unified(response, prisma_client)
+
+        # Update the database AFTER hooks so stored output_file_id is already encoded.
+        # If we store before the hook, subsequent terminal-state DB reads return raw IDs.
         await update_batch_in_database(
             batch_id=batch_id,
             unified_batch_id=unified_batch_id,
@@ -516,16 +527,6 @@ async def retrieve_batch( # noqa: PLR0915
             db_batch_object=db_batch_object,
             operation="retrieve",
         )
-
-        ### CALL HOOKS ### - modify outgoing data
-        response = await proxy_logging_obj.post_call_success_hook(
-            data=data, user_api_key_dict=user_api_key_dict, response=response
-        )
-
-        # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
-        # Resolve raw provider input_file_id to unified ID.
-        if unified_batch_id:
-            await resolve_input_file_id_to_unified(response, prisma_client)
 
         ### ALERTING ###
         asyncio.create_task(
