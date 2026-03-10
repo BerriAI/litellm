@@ -4,7 +4,7 @@ MiniMax Anthropic-compatible Messages API transformation config.
 MiniMax exposes Claude-compatible `/anthropic/v1/messages` endpoints separately from
 its OpenAI-compatible `/v1/chat/completions` endpoint.
 """
-from typing import Any, List, Optional, Tuple
+from typing import Optional
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -83,4 +83,3 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
             return f"{base_url}v1/messages"
         else:
             return f"{base_url}/v1/messages"
-
