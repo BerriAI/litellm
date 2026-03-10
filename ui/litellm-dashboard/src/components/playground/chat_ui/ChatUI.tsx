@@ -33,6 +33,7 @@ import GuardrailSelector from "../../guardrails/GuardrailSelector";
 import PolicySelector from "../../policies/PolicySelector";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "../../mcp_tools/MCPToolArgumentsForm";
 import { MCPServer } from "../../mcp_tools/types";
+import { ByokCredentialModal } from "../../mcp_tools/ByokCredentialModal";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { callMCPTool, fetchMCPServers, listMCPTools } from "../../networking";
 import TagSelector from "../../tag_management/TagSelector";
@@ -108,6 +109,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   fixedModel,
 }) => {
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
+  const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>(() => {
     const saved = sessionStorage.getItem("selectedMCPServers");
     try {
@@ -1636,9 +1638,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   loading={isLoadingMCPServers}
                   className="mb-2"
                   allowClear
+                  showSearch
                   optionLabelProp="label"
                   disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType)}
                   maxTagCount={endpointType === EndpointType.MCP ? 1 : "responsive"}
+                  filterOption={(input, option) => {
+                    if (option?.value === "__all__") {
+                      return "All MCP Servers".toLowerCase().includes(input.toLowerCase());
+                    }
+                    const server = mcpServers.find((s) => s.server_id === option?.value);
+                    if (!server) return false;
+                    const searchText = [
+                      server.server_name,
+                      server.alias,
+                      server.server_id,
+                      server.description,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")
+                      .toLowerCase();
+                    return searchText.includes(input.toLowerCase());
+                  }}
                 >
                   {/* All MCP Servers option - hidden for MCP direct mode */}
                   {endpointType !== EndpointType.MCP && (
@@ -1723,6 +1743,49 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               }))}
                               maxTagCount={2}
                             />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                {/* BYOK credential status for selected servers */}
+                {selectedMCPServers.length > 0 &&
+                  !selectedMCPServers.includes("__all__") &&
+                  selectedMCPServers.some((serverId) => {
+                    const server = mcpServers.find((s) => s.server_id === serverId);
+                    return server?.is_byok;
+                  }) && (
+                    <div className="mt-3 space-y-2">
+                      {selectedMCPServers.map((serverId) => {
+                        const server = mcpServers.find((s) => s.server_id === serverId);
+                        if (!server?.is_byok) return null;
+                        const serverName = server.alias || server.server_name || serverId;
+                        return (
+                          <div key={serverId} className="border border-blue-100 rounded p-2 bg-blue-50 flex items-center justify-between">
+                            <Text className="text-xs text-blue-700">
+                              {serverName} requires your API key
+                            </Text>
+                            {server.has_user_credential ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-green-600 text-xs font-medium flex items-center gap-1">
+                                  <KeyOutlined /> Connected
+                                </span>
+                                <button
+                                  className="text-xs text-gray-400 hover:text-blue-500 underline"
+                                  onClick={() => setByokModalServer(server)}
+                                >
+                                  Reconnect
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg font-medium"
+                                onClick={() => setByokModalServer(server)}
+                              >
+                                Connect
+                              </button>
+                            )}
                           </div>
                         );
                       })}
@@ -1832,6 +1895,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
                 selectedModel={selectedModel || ""}
                 customProxyBaseUrl={customProxyBaseUrl || undefined}
+                selectedGuardrails={selectedGuardrails.length > 0 ? selectedGuardrails : undefined}
               />
             ) : (
             <>
@@ -2479,6 +2543,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
           {generatedCode}
         </SyntaxHighlighter>
       </Modal>
+
+      {byokModalServer && (
+        <ByokCredentialModal
+          server={byokModalServer}
+          open={!!byokModalServer}
+          onClose={() => setByokModalServer(null)}
+          onSuccess={(_serverId) => {
+            // Refresh MCP servers to pick up updated has_user_credential
+            loadMCPServers();
+            setByokModalServer(null);
+          }}
+          accessToken={accessToken || ""}
+        />
+      )}
     </div>
   );
 };

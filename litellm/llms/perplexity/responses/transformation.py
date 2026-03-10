@@ -490,3 +490,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             verbose_logger.debug("Failed to transform Perplexity cost object: %s", e)
 
         return chunk
+
+    def supports_native_websocket(self) -> bool:
+        """Perplexity does not support native WebSocket for Responses API"""
+        return False

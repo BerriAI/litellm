@@ -148,6 +148,18 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  block_code_execution: {
+    provider: "BlockCodeExecution",
+    guardrailNameSuggestion: "Block Code Execution",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  cf_competitor_intent: {
+    provider: "LitellmContentFilter",
+    guardrailNameSuggestion: "Competitor Name Blocking",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 
   // ── Partner Guardrails ──
   presidio: {

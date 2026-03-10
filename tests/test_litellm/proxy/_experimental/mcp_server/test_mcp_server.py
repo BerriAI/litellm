@@ -28,6 +28,7 @@ def cleanup_mcp_global_state():
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+
         # Clear before test
         global_mcp_server_manager.registry.clear()
         global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
@@ -486,7 +487,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         working_server if server_id == "working_server" else failing_server
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -588,7 +589,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1035,7 +1036,7 @@ async def test_list_tools_single_server_unprefixed_names():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1113,7 +1114,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         server1 if server_id == "server1" else server2
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1364,7 +1365,7 @@ async def test_list_tools_filters_by_key_team_permissions():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1471,7 +1472,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1563,7 +1564,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1658,7 +1659,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["gitmcp_server"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1786,6 +1787,79 @@ def test_filter_tools_by_allowed_tools():
     assert len(filtered_tools) == 2
     assert filtered_tools[0].name == "my_api_mcp-getpetbyid"
     assert filtered_tools[1].name == "my_api_mcp-findpetsbystatus"
+
+
+def test_apply_tool_overrides():
+    """Test that apply_tool_overrides applies custom display names and descriptions."""
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import apply_tool_overrides
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        transport=MCPTransport.http,
+        tool_name_to_display_name={"getpetbyid": "Get Pet"},
+        tool_name_to_description={"getpetbyid": "Custom description for get pet"},
+    )
+    tools = [
+        Tool(
+            name="my_api_mcp-getpetbyid",
+            title=None,
+            description="Original description",
+            inputSchema={"type": "object", "properties": {}},
+            outputSchema=None,
+            annotations=None,
+        ),
+        Tool(
+            name="my_api_mcp-findpetsbystatus",
+            title=None,
+            description="Finds Pets by status",
+            inputSchema={"type": "object", "properties": {}},
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+
+    result = apply_tool_overrides(tools, mcp_server)
+
+    # First tool should have overridden name and description
+    assert result[0].name == "Get Pet"
+    assert result[0].description == "Custom description for get pet"
+    # Second tool should be unchanged
+    assert result[1].name == "my_api_mcp-findpetsbystatus"
+    assert result[1].description == "Finds Pets by status"
+
+
+def test_apply_tool_overrides_no_overrides():
+    """Test that apply_tool_overrides returns tools unchanged when no overrides are set."""
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import apply_tool_overrides
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        transport=MCPTransport.http,
+    )
+    tools = [
+        Tool(
+            name="my_api_mcp-getpetbyid",
+            title=None,
+            description="Original description",
+            inputSchema={"type": "object", "properties": {}},
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+
+    result = apply_tool_overrides(tools, mcp_server)
+    assert result[0].name == "my_api_mcp-getpetbyid"
+    assert result[0].description == "Original description"
 
 
 def _make_db_mcp_server(server_id: str, updated_at: datetime) -> LiteLLM_MCPServerTable:

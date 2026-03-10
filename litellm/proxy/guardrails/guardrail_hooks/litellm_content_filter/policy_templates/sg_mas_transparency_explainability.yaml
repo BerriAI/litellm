@@ -69,10 +69,12 @@ always_block_keywords:
     severity: "high"
 
 exceptions:
-  - "explainability"
+  - "improve explainability"
+  - "add explainability"
   - "interpretability"
   - "model card"
-  - "audit trail"
+  - "with audit trail"
+  - "add audit trail"
   - "explain what"
   - "explain how"
   - "what is"

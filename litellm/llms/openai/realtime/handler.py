@@ -99,6 +99,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         timeout: Optional[float] = None,
         query_params: Optional[RealtimeQueryParams] = None,
         user_api_key_dict: Optional[Any] = None,
+        litellm_metadata: Optional[dict] = None,
         **kwargs: Any,
     ):
         import websockets
@@ -142,6 +143,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     cast(ClientConnection, backend_ws),
                     logging_obj,
                     user_api_key_dict=user_api_key_dict,
+                    request_data={"litellm_metadata": litellm_metadata or {}},
                 )
                 await realtime_streaming.bidirectional_forward()
 

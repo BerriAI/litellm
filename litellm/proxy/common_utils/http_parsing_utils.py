@@ -143,9 +143,14 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
     """
     if request is None:
         return {}
-    cached = getattr(request.state, "_cached_headers", None)
-    if cached is not None:
+    state = getattr(request, "state", None)
+    cached = getattr(state, "_cached_headers", None)
+    if isinstance(cached, dict):
         return cached
+    if cached is not None:
+        verbose_proxy_logger.debug(
+            "Unexpected cached request headers type - {}".format(type(cached))
+        )
     try:
         headers = dict(request.headers)
     except Exception as e:
@@ -154,7 +159,8 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
         )
         headers = {}
     try:
-        request.state._cached_headers = headers
+        if state is not None:
+            state._cached_headers = headers
     except Exception:
         pass  # request.state may not be available in all contexts
     return headers
@@ -514,4 +520,3 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
         verbose_proxy_logger.debug(
             f"populate_request_with_path_params: No vector_store_id present in path={path}"
         )
-
