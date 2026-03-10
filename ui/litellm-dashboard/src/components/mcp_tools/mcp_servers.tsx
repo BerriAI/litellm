@@ -343,7 +343,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
-            {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Team MCPs <NewBadge /></span></Tab>}
+            {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Submitted Tools <NewBadge /></span></Tab>}
           </div>
         </TabList>
         <TabPanels>
