@@ -765,7 +765,10 @@ if MCP_AVAILABLE:
         Creates the server with approval_status=pending_review.
         Requires a team-scoped API key.
         """
-        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        if user_api_key_dict.user_role in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={

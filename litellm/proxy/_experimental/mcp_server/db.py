@@ -511,10 +511,12 @@ async def get_mcp_submissions(
     along with a summary count breakdown by approval_status.
     Mirrors get_guardrail_submissions() from guardrail_endpoints.py.
     """
+    _where = {"submitted_at": {"not": None}}
+    total_count = await prisma_client.db.litellm_mcpservertable.count(where=_where)
     rows = await prisma_client.db.litellm_mcpservertable.find_many(
-        where={"submitted_at": {"not": None}},
+        where=_where,
         order={"submitted_at": "desc"},
-        take=500,  # safety cap; paginate if needed in a future iteration
+        take=500,  # page 1 cap; paginate if needed in a future iteration
     )
     items = [LiteLLM_MCPServerTable(**r.model_dump()) for r in rows]
 
@@ -523,7 +525,7 @@ async def get_mcp_submissions(
     rejected = sum(1 for i in items if i.approval_status == MCPApprovalStatus.rejected)
 
     return MCPSubmissionsSummary(
-        total=len(items),
+        total=total_count,  # true total even when items is capped at 500
         pending_review=pending,
         active=active,
         rejected=rejected,

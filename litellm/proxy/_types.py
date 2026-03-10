@@ -1126,7 +1126,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: Optional[str] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
-    approval_status: Optional[str] = Field(
+    approval_status: Optional[MCPApprovalStatus] = Field(
         None, description="Server-managed: set by the endpoint; caller values are overridden."
     )
     submitted_by: Optional[str] = Field(
@@ -1260,8 +1260,8 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     has_user_credential: Optional[bool] = None
     source_url: Optional[str] = None
     # BYOM submission fields
-    approval_status: Optional[str] = Field(
-        default="active",
+    approval_status: Optional[MCPApprovalStatus] = Field(
+        default=MCPApprovalStatus.active,
         description="Approval status: 'pending_review', 'active', 'rejected'",
     )
     submitted_by: Optional[str] = None
