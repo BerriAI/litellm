@@ -65,7 +65,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
 from litellm.constants import (
-    DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
@@ -1488,13 +1487,6 @@ def completion(  # type: ignore # noqa: PLR0915
             "service_tier": service_tier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
         }
-        for k, v in kwargs.items():
-            if (
-                k in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
-                and k not in optional_param_args
-                and v is not None
-            ):
-                optional_param_args[k] = v
         optional_params = get_optional_params(
             **optional_param_args, **non_default_params
         )
