@@ -79,6 +79,11 @@ export const useTestMCPConnection = ({
       return;
     }
 
+    // For non-OpenAPI transports, auth_type must be selected (mirrors the canFetchTools check).
+    if (!isOpenAPITransport && !formValues.auth_type) {
+      return;
+    }
+
     // For OpenAPI transport, tools are derived from the spec — no OAuth token needed.
     if (requiresOAuthToken && !oauthAccessToken && !isOpenAPITransport) {
       return;
