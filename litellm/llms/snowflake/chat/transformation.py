@@ -303,10 +303,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     ) -> Any:
         """
         Return a Snowflake-specific streaming handler that transforms
-        Snowflake's content_block streaming format to OpenAI-compatible format.
+        Snowflake's streaming format to OpenAI-compatible format.
 
-        Snowflake uses Anthropic-style streaming with content_block_start/delta/stop
-        events for tool calls, which requires custom handling.
+        Snowflake streams tool calls using content_block_start/delta/stop events,
+        which differs from OpenAI's delta.tool_calls format and requires custom handling.
         """
         return SnowflakeStreamingHandler(
             streaming_response=streaming_response,
@@ -319,8 +319,8 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
     """
     Streaming handler for Snowflake Cortex LLM REST API.
 
-    Snowflake uses an Anthropic-style streaming format with content_block events
-    for tool calls. This handler transforms those events to OpenAI-compatible
+    Snowflake streams tool calls using content_block events rather than OpenAI's
+    delta.tool_calls format. This handler transforms those events to OpenAI-compatible
     streaming chunks.
 
     Snowflake streaming format (tool calls):
@@ -359,13 +359,13 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
 
         Handles both:
         1. OpenAI-compatible format (choices with delta) - pass through
-        2. Anthropic-style format (content_block events) - transform to OpenAI format
+        2. Snowflake content_block format - transform to OpenAI format
         """
         # Check if this is OpenAI-compatible format (has choices)
         if "choices" in chunk:
             return self._handle_openai_format_chunk(chunk)
 
-        # Otherwise, handle Anthropic-style content_block format
+        # Otherwise, handle Snowflake's content_block format
         return self._handle_content_block_chunk(chunk)
 
     def _handle_openai_format_chunk(self, chunk: dict) -> ModelResponseStream:
@@ -380,7 +380,7 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
 
     def _handle_content_block_chunk(self, chunk: dict) -> ModelResponseStream:
         """
-        Handle Anthropic-style content_block chunks from Snowflake.
+        Handle Snowflake's content_block streaming chunks.
 
         Event types:
         - message_start: Start of message with usage info
