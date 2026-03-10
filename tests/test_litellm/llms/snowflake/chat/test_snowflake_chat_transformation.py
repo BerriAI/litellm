@@ -713,3 +713,53 @@ class TestSnowflakeStreamingHandler:
             json_mode=False,
         )
         assert isinstance(iterator, SnowflakeStreamingHandler)
+
+    def test_streaming_handler_error_event_raises_exception(self):
+        """
+        Test that error events raise an APIError instead of being silently swallowed.
+        """
+        import pytest
+        from litellm.exceptions import APIError
+
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Simulate an error event from Snowflake
+        error_chunk = {
+            "type": "error",
+            "error": {
+                "type": "overloaded_error",
+                "message": "Overloaded",
+            },
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            handler.chunk_parser(error_chunk)
+
+        assert "Snowflake streaming error" in str(exc_info.value)
+        assert "overloaded_error" in str(exc_info.value)
+        assert "Overloaded" in str(exc_info.value)
+
+    def test_streaming_handler_content_block_stop_returns_minimal_chunk(self):
+        """
+        Test that content_block_stop returns a minimal sentinel chunk.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Set up state as if we were in a tool_use block
+        handler.current_content_block_type = "tool_use"
+
+        result = handler.chunk_parser({"type": "content_block_stop"})
+
+        # Should return minimal chunk with empty delta
+        assert isinstance(result, ModelResponseStream)
+        assert result.choices[0].delta.content is None
+        assert result.choices[0].delta.tool_calls is None
+        assert handler.current_content_block_type is None

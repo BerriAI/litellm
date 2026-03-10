@@ -17,6 +17,7 @@ from typing import (
 
 import httpx
 
+from litellm.exceptions import APIError
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -385,8 +386,22 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         - content_block_delta: Delta update for the current block
         - content_block_stop: End of current content block
         - message_delta: End of message with finish_reason
+        - error: API error during streaming
         """
         type_chunk = chunk.get("type", "")
+
+        # Handle error events - raise exception rather than silently swallowing
+        if type_chunk == "error":
+            error_info = chunk.get("error", {})
+            error_message = error_info.get("message", str(error_info))
+            error_type = error_info.get("type", "unknown_error")
+            raise APIError(
+                status_code=500,
+                message=f"Snowflake streaming error ({error_type}): {error_message}",
+                llm_provider="snowflake",
+                model=None,
+            )
+
         text = ""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         finish_reason: Optional[str] = None
@@ -402,6 +417,13 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
                     completion_tokens=usage_data.get("output_tokens", 0),
                     total_tokens=usage_data.get("input_tokens", 0)
                     + usage_data.get("output_tokens", 0),
+                )
+            else:
+                # No usage data - return minimal sentinel to avoid noisy empty chunks
+                return ModelResponseStream(
+                    id=self.response_id,
+                    object="chat.completion.chunk",
+                    choices=[StreamingChoices(index=0, delta=Delta())],
                 )
 
         elif type_chunk == "content_block_start":
@@ -450,8 +472,13 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
                     )
 
         elif type_chunk == "content_block_stop":
-            # Reset current content block tracking
+            # Reset current content block tracking and return minimal sentinel
             self.current_content_block_type = None
+            return ModelResponseStream(
+                id=self.response_id,
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=0, delta=Delta())],
+            )
 
         elif type_chunk == "message_delta":
             # End of message - extract finish_reason and final usage
