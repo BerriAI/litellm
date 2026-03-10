@@ -537,6 +537,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.llms.custom_httpx.httpx_stream_handler import HttpxStreamHandler
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -7263,15 +7264,21 @@ async def moderations(
 
 
 async def _audio_speech_chunk_generator(
-    _response: HttpxBinaryResponseContent,
+    _response: Union[HttpxBinaryResponseContent, HttpxStreamHandler],
 ) -> AsyncGenerator[bytes, None]:
     # chunk_size has a big impact on latency, it can't be too small or too large
     # too small: latency is high
     # too large: latency is low, but memory usage is high
     # 8192 is a good compromise
-    _generator = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
-    async for chunk in _generator:
-        yield chunk
+    if isinstance(_response, HttpxStreamHandler):
+        # HttpxStreamHandler.aiter_bytes() is an async generator — iterate directly
+        async for chunk in _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE):
+            yield chunk
+    else:
+        # HttpxBinaryResponseContent.aiter_bytes() is a coroutine returning an iterator
+        _generator = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
+        async for chunk in _generator:
+            yield chunk
 
 
 @router.post(
