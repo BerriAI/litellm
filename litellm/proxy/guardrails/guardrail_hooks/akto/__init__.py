@@ -12,14 +12,15 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     import litellm
 
     _akto_callback = AktoGuardrail(
-        api_base=litellm_params.api_base,
-        api_key=litellm_params.api_key,
-        sync_mode=getattr(litellm_params, "sync_mode", None),
+        akto_base_url=getattr(litellm_params, "akto_base_url", None),
+        akto_api_key=getattr(litellm_params, "akto_api_key", None),
+        on_flagged=getattr(litellm_params, "on_flagged", None),
         akto_account_id=getattr(litellm_params, "akto_account_id", None),
         akto_vxlan_id=getattr(litellm_params, "akto_vxlan_id", None),
         unreachable_fallback=getattr(
             litellm_params, "unreachable_fallback", "fail_closed"
         ),
+        guardrail_timeout=getattr(litellm_params, "guardrail_timeout", None),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,

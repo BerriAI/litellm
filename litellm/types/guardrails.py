@@ -495,9 +495,17 @@ class ZscalerAIGuardConfigModel(BaseModel):
 class AktoConfigModel(BaseModel):
     """Configuration parameters for the Akto guardrail"""
 
-    sync_mode: Optional[bool] = Field(
-        default=True,
-        description="Sync (blocking): pre-call guardrails + post-call ingest. Async (non-blocking): single post-call with guardrails+ingest. Falls back to AKTO_SYNC_MODE env var.",
+    akto_base_url: Optional[str] = Field(
+        default=None,
+        description="Akto Data Ingestion Service URL. Falls back to AKTO_DATA_INGESTION_URL env var.",
+    )
+    akto_api_key: Optional[str] = Field(
+        default=None,
+        description="Akto API key for authentication. Falls back to AKTO_API_KEY env var.",
+    )
+    on_flagged: Optional[Literal["block", "monitor"]] = Field(
+        default="block",
+        description="Action to take when a violation occurs: 'block' (blocking pre-call) or 'monitor' (non-blocking log-only). Falls back to AKTO_ON_FLAGGED env var.",
     )
     akto_account_id: Optional[str] = Field(
         default=None,
@@ -507,9 +515,13 @@ class AktoConfigModel(BaseModel):
         default=None,
         description="Akto VXLAN ID for traffic identification. Falls back to AKTO_VXLAN_ID env var.",
     )
-    unreachable_fallback: Optional[str] = Field(
+    unreachable_fallback: Optional[Literal["fail_closed", "fail_open"]] = Field(
         default="fail_closed",
         description="Behavior when Akto is unreachable: 'fail_open' or 'fail_closed'.",
+    )
+    guardrail_timeout: Optional[int] = Field(
+        default=None,
+        description="HTTP timeout in seconds for Akto service calls. Defaults to 5.",
     )
 
 

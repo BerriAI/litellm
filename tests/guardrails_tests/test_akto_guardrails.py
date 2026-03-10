@@ -49,9 +49,9 @@ def akto_sync():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
     return AktoGuardrail(
-        api_base="http://localhost:9090",
-        api_token="test-token",
-        sync_mode=True,
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        on_flagged="block",
         akto_account_id="1000000",
         akto_vxlan_id="test-vxlan-id",
         unreachable_fallback="fail_closed",
@@ -66,9 +66,9 @@ def akto_async():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
     return AktoGuardrail(
-        api_base="http://localhost:9090",
-        api_token="test-token",
-        sync_mode=False,
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        on_flagged="monitor",
         unreachable_fallback="fail_open",
         guardrail_name="test-akto-async",
         event_hook="post_call",
@@ -120,27 +120,27 @@ def _mock_blocked_response(reason="Prompt injection detected"):
 # ---------------------------------------------------------------------------
 
 
-def test_init_requires_api_base():
+def test_init_requires_akto_base_url():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
     with patch.dict(os.environ, {}, clear=True):
-        with pytest.raises(ValueError, match="api_base is required"):
+        with pytest.raises(ValueError, match="akto_base_url is required"):
             AktoGuardrail(
-                api_base="",
-                api_token="test-token",
+                akto_base_url="",
+                akto_api_key="test-token",
                 guardrail_name="test",
                 event_hook="pre_call",
             )
 
 
-def test_init_requires_api_token():
+def test_init_requires_api_key():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
     with patch.dict(os.environ, {}, clear=True):
-        with pytest.raises(ValueError, match="api_token is required"):
+        with pytest.raises(ValueError, match="akto_api_key is required"):
             AktoGuardrail(
-                api_base="http://localhost:9090",
-                api_token="",
+                akto_base_url="http://localhost:9090",
+                akto_api_key="",
                 guardrail_name="test",
                 event_hook="pre_call",
             )
@@ -153,29 +153,32 @@ def test_init_from_env():
         os.environ,
         {
             "AKTO_DATA_INGESTION_URL": "http://env-host:9090",
-            "AKTO_API_TOKEN": "env-token",
-            "AKTO_SYNC_MODE": "false",
+            "AKTO_API_KEY": "env-token",
+            "AKTO_ON_FLAGGED": "monitor",
             "AKTO_ACCOUNT_ID": "2000000",
             "AKTO_VXLAN_ID": "env-vxlan",
         },
     ):
         g = AktoGuardrail(guardrail_name="env-test", event_hook="post_call")
-        assert g.api_base == "http://env-host:9090"
-        assert g.api_token == "env-token"
+        assert g.akto_base_url == "http://env-host:9090"
+        assert g.akto_api_key == "env-token"
+        assert g.on_flagged == "monitor"
         assert g.sync_mode is False
         assert g.akto_account_id == "2000000"
         assert g.akto_vxlan_id == "env-vxlan"
+        assert g.guardrail_timeout == 5  # default
 
 
-def test_sync_mode_default_true():
+def test_on_flagged_default_block():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
     g = AktoGuardrail(
-        api_base="http://localhost:9090",
-        api_token="test-token",
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
         guardrail_name="default-test",
         event_hook="pre_call",
     )
+    assert g.on_flagged == "block"
     assert g.sync_mode is True
 
 
@@ -441,9 +444,9 @@ async def test_fail_open_on_unreachable():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
     g = AktoGuardrail(
-        api_base="http://localhost:9090",
-        api_token="test-token",
-        sync_mode=True,
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        on_flagged="block",
         unreachable_fallback="fail_open",
         guardrail_name="fail-open-test",
         event_hook="pre_call",
@@ -465,9 +468,9 @@ async def test_fail_closed_on_unreachable():
     from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
     g = AktoGuardrail(
-        api_base="http://localhost:9090",
-        api_token="test-token",
-        sync_mode=True,
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        on_flagged="block",
         unreachable_fallback="fail_closed",
         guardrail_name="fail-closed-test",
         event_hook="pre_call",
@@ -477,10 +480,11 @@ async def test_fail_closed_on_unreachable():
     )
 
     inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
-    with pytest.raises(Exception, match="Akto guardrail failed"):
+    with pytest.raises(HTTPException) as exc_info:
         await g.apply_guardrail(
             inputs=inputs, request_data={}, input_type="request"
         )
+    assert exc_info.value.status_code == 503
 
 
 # ---------------------------------------------------------------------------

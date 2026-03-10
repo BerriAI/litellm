@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Literal
 
 from pydantic import Field
 
@@ -10,7 +10,7 @@ from .base import GuardrailConfigModel
 class AktoConfigModel(GuardrailConfigModel):
     """Configuration model for Akto Guardrail integration."""
 
-    api_base: Optional[str] = Field(
+    akto_base_url: Optional[str] = Field(
         default=None,
         description=(
             "Akto Data Ingestion Service URL. "
@@ -24,15 +24,22 @@ class AktoConfigModel(GuardrailConfigModel):
         },
     )
 
-    sync_mode: Optional[bool] = Field(
-        default=True,
+    akto_api_key: Optional[str] = Field(
+        default=None,
         description=(
-            "Operating mode for the guardrail.\\n"
-            "• true (sync/blocking): Pre-call guardrails check + post-call data ingestion.\\n"
-            "• false (async/non-blocking): Single post-call call with guardrails + data ingestion (log-only).\\n"
-            "Falls back to AKTO_SYNC_MODE environment variable."
+            "Akto API key for authentication. "
+            "Falls back to AKTO_API_KEY environment variable."
         ),
-        json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
+    )
+
+    on_flagged: Optional[Literal["block", "monitor"]] = Field(
+        default="block",
+        description=(
+            "Action to take when a violation occurs:\n"
+            "• 'block' (sync): Pre-call validation that blocks requests if flagged.\n"
+            "• 'monitor' (async): Post-call non-blocking logging only.\n"
+            "Falls back to AKTO_ON_FLAGGED environment variable."
+        ),
     )
 
     akto_account_id: Optional[str] = Field(
@@ -51,15 +58,20 @@ class AktoConfigModel(GuardrailConfigModel):
         ),
     )
 
-    unreachable_fallback: Optional[str] = Field(
+    unreachable_fallback: Optional[Literal["fail_closed", "fail_open"]] = Field(
         default="fail_closed",
         description=(
             "Behavior when the Akto service is unreachable. "
             "'fail_open' allows requests through; 'fail_closed' blocks them."
         ),
-        json_schema_extra={
-            "examples": ["fail_open", "fail_closed"],
-        },
+    )
+
+    guardrail_timeout: Optional[int] = Field(
+        default=None,
+        description=(
+            "HTTP timeout in seconds for calls to the Akto service. "
+            "Defaults to 5 seconds if not set."
+        ),
     )
 
     @staticmethod
