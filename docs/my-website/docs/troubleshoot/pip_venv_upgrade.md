@@ -32,10 +32,10 @@ pip install 'litellm[proxy]==<version>'
 ### 4. Regenerate the Prisma client
 
 ```bash
-prisma generate --schema <venv>/lib/pythonX.XX/site-packages/litellm_proxy_extras/schema.prisma
+prisma generate --schema <venv>/lib/python<version>/site-packages/litellm_proxy_extras/schema.prisma
 ```
 
-Replace `<venv>` with your virtual environment path and `pythonX.XX` with your Python version (e.g., `python3.11`).
+Replace `<venv>` with your virtual environment path and `<version>` with your Python version (e.g., `python3.11`, `python3.12`, `python3.13`).
 
 ### 5. Apply DB migrations
 
