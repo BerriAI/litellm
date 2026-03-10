@@ -1,10 +1,14 @@
 import ast
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Dict, Optional
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+LogRecordArgs = Union[Tuple[Any, ...], Mapping[str, Any]]
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -15,12 +19,77 @@ if set_verbose is True:
     logging.warning(
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
+
+_DISABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACTION", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+_REDACTED = "REDACTED"
+
+
+def _build_secret_patterns() -> re.Pattern:
+    patterns: List[str] = [
+        r"(?:AKIA|ASIA)[0-9A-Z]{16}",
+        r"(?:aws_secret_access_key|aws_session_token|aws_access_key_id)"
+        r"(?:\s*[:=]\s*)([A-Za-z0-9/+=]{20,})",
+        r"Bearer\s+[A-Za-z0-9\-._~+/]{10,}=*",
+        r"sk-[A-Za-z0-9\-_]{20,}",
+        r"(?:api[_-]?key\s*[:=]\s*)([0-9a-fA-F]{32})",
+        r"(?:x-api-key|api-key)\s*[:=]\s*\S+",
+        r"x-ak-[A-Za-z0-9\-_]{20,}",
+        r"AIza[0-9A-Za-z\-_]{35}",
+    ]
+    return re.compile("|".join(patterns), re.IGNORECASE)
+
+
+_SECRET_RE = _build_secret_patterns()
+
+
+def _redact_string(value: str) -> str:
+    return _SECRET_RE.sub(_REDACTED, value)
+
+
+class SecretRedactionFilter(logging.Filter):
+    """Scrubs known secret/credential patterns from log records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if _DISABLE_SECRET_REDACTION:
+            return True
+
+        if isinstance(record.msg, str):
+            record.msg = _redact_string(record.msg)
+
+        if record.args:
+            record.args = self._redact_args(record.args)
+
+        return True
+
+    @staticmethod
+    def _redact_args(args: LogRecordArgs) -> LogRecordArgs:
+        if isinstance(args, Mapping):
+            return {
+                k: _redact_string(v) if isinstance(v, str) else v
+                for k, v in args.items()
+            }
+        if isinstance(args, tuple):
+            return tuple(
+                _redact_string(a) if isinstance(a, str) else a for a in args
+            )
+        return args
+
+
+_secret_filter = SecretRedactionFilter()
+
+
 json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: str = getattr(logging, log_level.upper())
 handler = logging.StreamHandler()
 handler.setLevel(numeric_level)
+handler.addFilter(_secret_filter)
 
 
 def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
@@ -240,6 +309,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Adds a handler to each logger
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
+    handler.addFilter(_secret_filter)
     for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
@@ -314,6 +384,7 @@ def _turn_on_json():
     """
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
+    handler.addFilter(_secret_filter)
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
