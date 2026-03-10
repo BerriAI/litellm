@@ -296,24 +296,27 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   };
 
   const handleEnableSuggested = () => {
-    const suggestedNames = pinnedFiltered.map((t) => t.name);
+    // Enable ALL suggested tools (not just the currently filtered subset)
+    const suggestedNames = suggestedTools.map((t) => t.name);
     const others = allowedTools.filter((n) => !suggestedToolNames.has(n));
     onAllowedToolsChange([...others, ...suggestedNames]);
   };
 
   const handleDisableSuggested = () => {
+    // Disable ALL suggested tools (not just the currently filtered subset)
     onAllowedToolsChange(allowedTools.filter((n) => !suggestedToolNames.has(n)));
   };
 
   const handleEnableRest = () => {
-    const restNames = restFiltered.map((t) => t.name);
+    // Enable ALL non-suggested tools (not just the currently filtered subset)
+    const restNames = tools.filter((t) => !suggestedToolNames.has(t.name)).map((t) => t.name);
     const current = new Set(allowedTools);
     onAllowedToolsChange([...allowedTools, ...restNames.filter((n) => !current.has(n))]);
   };
 
   const handleDisableRest = () => {
-    const restNameSet = new Set(restFiltered.map((t) => t.name));
-    onAllowedToolsChange(allowedTools.filter((n) => !restNameSet.has(n)));
+    // Disable ALL non-suggested tools (not just the currently filtered subset)
+    onAllowedToolsChange(allowedTools.filter((n) => suggestedToolNames.has(n)));
   };
 
   // Don't show anything if required fields aren't filled
