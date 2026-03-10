@@ -81,7 +81,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         non_default_params: dict,
         optional_params: dict,
         model: str,
-        drop_params: bool,
+        drop_params: bool,  # unused: unsupported params are always silently skipped
     ) -> dict:
         """
         Map OpenAI params with structured output handling for Azure AI Foundry.
