@@ -2626,7 +2626,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 _list_has_thinking = False
                 if _content_is_list:
                     for _item in assistant_content_block["content"]:
-                        if isinstance(_item, dict) and _item.get("type") == "thinking":
+                        if isinstance(_item, dict) and _item.get("type") in ("thinking", "redacted_thinking"):
                             _list_has_thinking = True
                             break
 
