@@ -530,6 +530,7 @@ def _build_vertex_schema_for_gemini_2(parameters: dict) -> dict:
     """
     valid_schema_fields = set(get_type_hints(Schema).keys())
 
+    parameters = dict(parameters)  # shallow copy to avoid mutating caller's dict
     defs = parameters.pop("$defs", {})
     unpack_defs(parameters, defs)
 
