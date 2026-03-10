@@ -20910,7 +20910,6 @@
         "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false
     },
@@ -20950,7 +20949,6 @@
         "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false
     },
@@ -20988,7 +20986,6 @@
         "supports_system_messages": true,
         "supports_tool_choice": false,
         "supports_vision": true,
-        "supports_web_search": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false
@@ -21030,7 +21027,6 @@
         "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true
     },
@@ -21071,7 +21067,6 @@
         "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true
     },
@@ -21109,7 +21104,6 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false
     },
@@ -21146,7 +21140,6 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false
