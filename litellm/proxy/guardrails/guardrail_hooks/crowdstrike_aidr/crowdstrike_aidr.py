@@ -5,7 +5,10 @@ from typing_extensions import Any, override
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -272,6 +275,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             transformed_texts.append(texts[len(transformed_texts)])
         return transformed_texts[: len(texts)]
 
+    @log_guardrail_information
     @override
     async def apply_guardrail(
         self,

@@ -69,9 +69,11 @@ jobs:
       - run:
           name: Install Python
           command: |
-            choco install python --version=3.11.0 -y
+            choco install python --version=3.11.0 -y --no-progress --force
             refreshenv
             python --version
+          environment:
+            CHOCOLATEY_CONFIRM_ALL: "true"
       - run:
           name: Install Dependencies
           command: |

@@ -898,19 +898,24 @@ export const keyCreateForAgentCall = async (
   agentId: string,
   keyAlias: string,
   models: string[],
+  metadata?: Record<string, any>,
 ) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
+  const body: Record<string, any> = {
+    agent_id: agentId,
+    key_alias: keyAlias,
+    models: models.length > 0 ? models : [],
+  };
+  if (metadata && Object.keys(metadata).length > 0) {
+    body.metadata = metadata;
+  }
   const response = await fetch(url, {
     method: "POST",
     headers: {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      agent_id: agentId,
-      key_alias: keyAlias,
-      models: models.length > 0 ? models : [],
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -1104,6 +1109,7 @@ export const userListCall = async (
   sso_user_id: string | null = null,
   sortBy: string | null = null,
   sortOrder: "asc" | "desc" | null = null,
+  organizationIds: string[] | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -1149,6 +1155,10 @@ export const userListCall = async (
 
     if (sortOrder) {
       queryParams.append("sort_order", sortOrder);
+    }
+
+    if (organizationIds && organizationIds.length > 0) {
+      queryParams.append("organization_ids", organizationIds.join(","));
     }
 
     const queryString = queryParams.toString();
@@ -2473,14 +2483,19 @@ export const allEndUsersCall = async (accessToken: string) => {
 
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
-
+    const base = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
+    const queryParams = new URLSearchParams();
     if (params.get("user_email")) {
-      url += `?user_email=${params.get("user_email")}`;
+      queryParams.append("user_email", params.get("user_email")!);
     }
     if (params.get("user_id")) {
-      url += `?user_id=${params.get("user_id")}`;
+      queryParams.append("user_id", params.get("user_id")!);
     }
+    if (params.get("team_id")) {
+      queryParams.append("team_id", params.get("team_id")!);
+    }
+    const qs = queryParams.toString();
+    const url = qs ? `${base}?${qs}` : base;
 
     const response = await fetch(url, {
       method: "GET",
@@ -7607,9 +7622,10 @@ export const getMajorAirlines = async (accessToken: string) => {
   }
 };
 
-export const getAgentsList = async (accessToken: string) => {
+export const getAgentsList = async (accessToken: string, healthCheck: boolean = false) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
+    const params = healthCheck ? "?health_check=true" : "";
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents${params}` : `/v1/agents${params}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -7695,6 +7711,10 @@ export const patchAgentCall = async (
     agent_name?: string;
     litellm_params?: Record<string, any>;
     agent_card_params?: Record<string, any>;
+    tpm_limit?: number | null;
+    rpm_limit?: number | null;
+    session_tpm_limit?: number | null;
+    session_rpm_limit?: number | null;
   },
 ) => {
   try {
@@ -8879,6 +8899,7 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   const data = await response.json();
   return data;
 };
+
 
 // ============================================================
 // Claude Code Marketplace Networking Functions
