@@ -152,59 +152,6 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _sanitize_anthropic_messages_empty_text_blocks(
-    messages: List[Dict],
-) -> List[Dict]:
-    """
-    Strip empty text content blocks from Anthropic-format messages.
-
-    Claude's API returns assistant messages with ``{"type": "text", "text": ""}``
-    alongside ``tool_use`` blocks, but rejects them when sent back in subsequent
-    requests.  This helper removes those empty text blocks so the /v1/messages
-    native path doesn't forward them as-is.
-
-    - If a content list contains a mix of empty text blocks and other blocks
-      (e.g. tool_use), the empty text blocks are removed.
-    - If *all* blocks in a content list are empty text, the content is replaced
-      with a single non-empty placeholder to avoid sending an empty array.
-
-    Ref: https://github.com/BerriAI/litellm/issues/22930
-    """
-    sanitized: List[Dict] = []
-    for message in messages:
-        content = message.get("content")
-        if not isinstance(content, list):
-            sanitized.append(message)
-            continue
-
-        filtered = [
-            block
-            for block in content
-            if not (
-                isinstance(block, dict)
-                and block.get("type") == "text"
-                and not block.get("text", "").strip()
-            )
-        ]
-
-        if filtered == content:
-            # Nothing was removed — keep original message as-is.
-            sanitized.append(message)
-        elif filtered:
-            # Some empty text blocks removed, but other content remains.
-            new_message = message.copy()
-            new_message["content"] = filtered
-            sanitized.append(new_message)
-        else:
-            # All blocks were empty text blocks. Replace with a placeholder
-            # so we don't send an empty content array.
-            new_message = message.copy()
-            new_message["content"] = [{"type": "text", "text": "..."}]
-            sanitized.append(new_message)
-
-    return sanitized
-
-
 class BaseLLMHTTPHandler:
     async def _make_common_async_call(
         self,
@@ -1957,13 +1904,6 @@ class BaseLLMHTTPHandler:
                 anthropic_messages_optional_request_params = delete_nested_value(
                     anthropic_messages_optional_request_params, path
                 )
-
-        # Sanitize empty text content blocks from messages before forwarding.
-        # Claude's API returns assistant messages with empty text blocks
-        # ({"type": "text", "text": ""}) alongside tool_use blocks, but rejects
-        # them when sent back. Strip these to prevent 400 errors.
-        # Ref: https://github.com/BerriAI/litellm/issues/22930
-        messages = _sanitize_anthropic_messages_empty_text_blocks(messages)
 
         # Prepare request body
         request_body = anthropic_messages_provider_config.transform_anthropic_messages_request(
