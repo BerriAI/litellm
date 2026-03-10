@@ -1767,3 +1767,73 @@ class TestMCPApprovalWorkflow:
             )
         assert result is not None
         mock_manager.reload_servers_from_database.assert_awaited_once()
+
+
+class TestValidateMCPRequiredFields:
+    """Tests for _validate_mcp_required_fields."""
+
+    def test_missing_required_field_raises_400(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _validate_mcp_required_fields,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="My Server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.sse,
+            # source_url is absent
+        )
+        with patch_proxy_general_settings({"mcp_required_fields": ["source_url"]}):
+            with pytest.raises(HTTPException) as exc_info:
+                _validate_mcp_required_fields(payload)
+        assert exc_info.value.status_code == 400
+        assert "source_url" in str(exc_info.value.detail)
+
+    def test_auth_type_sentinel_treated_as_absent(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _validate_mcp_required_fields,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="My Server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.none,  # sentinel value — treated as absent
+        )
+        with patch_proxy_general_settings({"mcp_required_fields": ["auth_type"]}):
+            with pytest.raises(HTTPException) as exc_info:
+                _validate_mcp_required_fields(payload)
+        assert exc_info.value.status_code == 400
+        assert "auth_type" in str(exc_info.value.detail)
+
+    def test_all_required_fields_present_passes(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _validate_mcp_required_fields,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="My Server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.sse,
+            source_url="https://github.com/org/repo",
+            auth_type=MCPAuth.bearer_token,
+        )
+        with patch_proxy_general_settings(
+            {"mcp_required_fields": ["source_url", "auth_type"]}
+        ):
+            # Should not raise
+            _validate_mcp_required_fields(payload)
+
+    def test_no_required_fields_configured_always_passes(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _validate_mcp_required_fields,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="Minimal",
+            url="https://example.com/mcp",
+            transport=MCPTransport.sse,
+        )
+        with patch_proxy_general_settings({}):
+            # Should not raise when no required fields are configured
+            _validate_mcp_required_fields(payload)
