@@ -2263,6 +2263,15 @@ class TestPanwAirsExtractTextNonDictJson:
         result = PanwPrismaAirsHandler._extract_text_from_sse_bytes([raw])
         assert result == "Hello"
 
+    def test_null_delta_in_content_block_delta(self):
+        """Explicit null delta in content_block_delta should not crash."""
+        sse_bytes = [
+            b'data: {"type":"content_block_delta","index":0,"delta":null}\n',
+            b'data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"OK"}}\n',
+        ]
+        text = PanwPrismaAirsHandler._extract_text_from_sse_bytes(sse_bytes)
+        assert text == "OK"
+
 
 class TestPanwAirsStreamingPydanticEventsScan:
     """Test streaming scan for /v1/responses Pydantic event chunks."""
@@ -2943,6 +2952,32 @@ class TestPanwAirsRestMcpFallback:
                 tool_invoked="canonical_tool",
             )
             assert te["input"] == '{"key": "canonical_val"}'
+
+    @pytest.mark.asyncio
+    async def test_non_mcp_request_with_stray_name_no_scan(self, handler):
+        """Stray 'name' without 'arguments' must not trigger MCP tool_event scan."""
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Hello"]}
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gpt-4",
+            "name": "my_function",  # stray — no "arguments"
+        }
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+            # Only 1 call for the text scan, no MCP tool_event
+            assert mock_api.call_count == 1
+            call_kwargs = mock_api.call_args.kwargs
+            assert call_kwargs.get("tool_event") is None
 
 
 class TestPanwAirsDuplicateScanRegression:
@@ -4635,6 +4670,7 @@ class TestPanwAirsMcpToolCallWithoutCallId:
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "call tool"}],
             "name": "web_search_exa",
+            "arguments": {"path": "/tmp"},
             # NO mcp_tool_name, NO litellm_call_id
         }
 
@@ -4654,6 +4690,35 @@ class TestPanwAirsMcpToolCallWithoutCallId:
             assert call_kwargs["call_id"] is not None
             assert call_kwargs["call_id"].startswith("web-search-exa-")
             assert request_data.get("litellm_call_id") == call_kwargs["call_id"]
+
+    @pytest.mark.asyncio
+    async def test_non_mcp_stray_name_gets_plain_uuid(self, handler):
+        """Stray 'name' without 'arguments' and no call_id → plain UUID, not MCP-prefixed."""
+        import uuid as uuid_mod
+
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Hello"]}
+        request_data = {
+            "model": "gpt-4",
+            "name": "my_function",  # stray — no "arguments"
+            # no litellm_call_id
+        }
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+            synth_id = request_data.get("litellm_call_id")
+            assert synth_id is not None
+            # Must be a valid UUID (not MCP-prefixed)
+            uuid_mod.UUID(synth_id)
 
 
 class TestPanwAirsStreamingFallbackFix:

@@ -836,7 +836,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if not isinstance(data, dict):
                 continue
             if data.get("type") == "content_block_delta":
-                delta = data.get("delta", {})
+                delta = data.get("delta") or {}
                 if delta.get("type") == "text_delta":
                     texts.append(delta.get("text", ""))
         return "".join(texts)
@@ -1715,6 +1715,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return scannable
 
+    @staticmethod
+    def _mcp_name_fallback(rd: dict) -> Optional[str]:
+        """Return rd['name'] only when 'arguments' or 'mcp_arguments' co-occurs (MCP shape).
+
+        A bare 'name' key without 'arguments' is NOT an MCP request — it's a
+        stray field from the chat completion body that should be ignored.
+        """
+        return rd.get("name") if ("arguments" in rd or "mcp_arguments" in rd) else None
+
     @log_guardrail_information
     async def apply_guardrail(  # noqa: PLR0915
         self,
@@ -1741,7 +1750,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if not call_id:
             # Use MCP name fallback: mcp_tool_name (canonical) or name (/mcp-rest path)
             _mcp_tool = str(
-                request_data.get("mcp_tool_name") or request_data.get("name") or ""
+                request_data.get("mcp_tool_name")
+                or self._mcp_name_fallback(request_data)
+                or ""
             ).strip()
             if input_type == "request" and logging_obj is None and _mcp_tool:
                 # Synthesize a tool-prefixed call_id for AIRS grouping.
@@ -1895,7 +1906,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # We send a tool_event so AIRS can apply tool-aware policies.
         # REST MCP path sets "name"/"arguments"; canonical keys are
         # "mcp_tool_name"/"mcp_arguments". Check canonical first, then fallback.
-        mcp_tool_name = request_data.get("mcp_tool_name") or request_data.get("name")
+        mcp_tool_name = request_data.get("mcp_tool_name") or self._mcp_name_fallback(
+            request_data
+        )
         if mcp_tool_name and input_type == "request":
             mcp_tool_event: Dict[str, Any] = {
                 "metadata": {
