@@ -1565,13 +1565,15 @@ class TestPanwAirsApplyGuardrail:
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_allow(self, handler):
-        """Test allow action passes text through unchanged."""
+        """Test allow action passes text through unchanged and sets header."""
         inputs: GenericGuardrailAPIInputs = {"texts": ["Hello world"]}
         request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4"}
 
         with patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
+        ) as mock_api, patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
+        ) as mock_header:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             result = await handler.apply_guardrail(
@@ -1582,6 +1584,9 @@ class TestPanwAirsApplyGuardrail:
 
             assert result["texts"] == ["Hello world"]
             mock_api.assert_called_once()
+            mock_header.assert_called_once_with(
+                request_data=request_data, guardrail_name=handler.guardrail_name
+            )
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_block(self, handler):

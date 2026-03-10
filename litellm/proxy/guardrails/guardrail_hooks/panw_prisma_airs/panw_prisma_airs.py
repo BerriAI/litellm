@@ -1957,6 +1957,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     raise HTTPException(status_code=400, detail=error_detail)
 
         inputs["texts"] = new_texts
+        add_guardrail_to_applied_guardrails_header(
+            request_data=request_data, guardrail_name=self.guardrail_name
+        )
         return inputs
 
     @staticmethod
