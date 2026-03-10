@@ -766,6 +766,11 @@ class TestProxyBaseLLMRequestProcessing:
         automatically get stream_options={'include_usage': True}.
         """
         monkeypatch.setenv("LITELLM_ENFORCE_STREAMED_USAGE", "true")
+        # Also patch the cached module-level constant, since it is evaluated at
+        # import time and monkeypatch.setenv alone cannot update it.
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing, "_ENFORCE_STREAMED_USAGE", True
+        )
 
         processing_obj = ProxyBaseLLMRequestProcessing(
             data={
@@ -822,6 +827,11 @@ class TestProxyBaseLLMRequestProcessing:
         non-streaming requests.
         """
         monkeypatch.setenv("LITELLM_ENFORCE_STREAMED_USAGE", "true")
+        # Also patch the cached module-level constant, since it is evaluated at
+        # import time and monkeypatch.setenv alone cannot update it.
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing, "_ENFORCE_STREAMED_USAGE", True
+        )
 
         processing_obj = ProxyBaseLLMRequestProcessing(
             data={
