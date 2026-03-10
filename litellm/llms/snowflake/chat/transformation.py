@@ -338,7 +338,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             # Get content - could be string, list, or None
             content = tool_msg.get("content")
             if content is None:
-                content = "null"
+                content = ""
             elif isinstance(content, list):
                 # Flatten OpenAI multipart tool content to a plain string.
                 # Filter out empty strings from non-text parts (e.g., images).
