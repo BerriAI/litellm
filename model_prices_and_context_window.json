@@ -5741,7 +5741,8 @@
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-11b-vision-instruct-offer?tab=Overview",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": false
     },
     "azure_ai/Llama-3.2-90B-Vision-Instruct": {
         "input_cost_per_token": 2.04e-06,
@@ -5754,7 +5755,8 @@
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-90b-vision-instruct-offer?tab=Overview",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": false
     },
     "azure_ai/Llama-3.3-70B-Instruct": {
         "input_cost_per_token": 7.1e-07,
@@ -5766,7 +5768,8 @@
         "output_cost_per_token": 7.1e-07,
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.llama-3-3-70b-instruct-offer?tab=Overview",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": {
         "input_cost_per_token": 1.41e-06,
@@ -5779,7 +5782,8 @@
         "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": false
     },
     "azure_ai/Llama-4-Scout-17B-16E-Instruct": {
         "input_cost_per_token": 2e-07,
@@ -5792,7 +5796,8 @@
         "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": false
     },
     "azure_ai/Meta-Llama-3-70B-Instruct": {
         "input_cost_per_token": 1.1e-06,
@@ -5802,7 +5807,8 @@
         "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 3.7e-07,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/Meta-Llama-3.1-405B-Instruct": {
         "input_cost_per_token": 5.33e-06,
@@ -5813,7 +5819,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.6e-05,
         "source": "https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-405b-instruct-offer?tab=PlansAndPrice",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/Meta-Llama-3.1-70B-Instruct": {
         "input_cost_per_token": 2.68e-06,
@@ -5824,7 +5831,8 @@
         "mode": "chat",
         "output_cost_per_token": 3.54e-06,
         "source": "https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-70b-instruct-offer?tab=PlansAndPrice",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/Meta-Llama-3.1-8B-Instruct": {
         "input_cost_per_token": 3e-07,
@@ -5835,7 +5843,8 @@
         "mode": "chat",
         "output_cost_per_token": 6.1e-07,
         "source": "https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-8b-instruct-offer?tab=PlansAndPrice",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-3-medium-128k-instruct": {
         "input_cost_per_token": 1.7e-07,
@@ -5847,7 +5856,8 @@
         "output_cost_per_token": 6.8e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-3-medium-4k-instruct": {
         "input_cost_per_token": 1.7e-07,
@@ -5859,7 +5869,8 @@
         "output_cost_per_token": 6.8e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-3-mini-128k-instruct": {
         "input_cost_per_token": 1.3e-07,
@@ -5871,7 +5882,8 @@
         "output_cost_per_token": 5.2e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-3-mini-4k-instruct": {
         "input_cost_per_token": 1.3e-07,
@@ -5883,7 +5895,8 @@
         "output_cost_per_token": 5.2e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-3-small-128k-instruct": {
         "input_cost_per_token": 1.5e-07,
@@ -5895,7 +5908,8 @@
         "output_cost_per_token": 6e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-3-small-8k-instruct": {
         "input_cost_per_token": 1.5e-07,
@@ -5907,7 +5921,8 @@
         "output_cost_per_token": 6e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-3.5-MoE-instruct": {
         "input_cost_per_token": 1.6e-07,
@@ -5919,7 +5934,8 @@
         "output_cost_per_token": 6.4e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-3.5-mini-instruct": {
         "input_cost_per_token": 1.3e-07,
@@ -5931,7 +5947,8 @@
         "output_cost_per_token": 5.2e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-3.5-vision-instruct": {
         "input_cost_per_token": 1.3e-07,
@@ -5943,7 +5960,8 @@
         "output_cost_per_token": 5.2e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-4": {
         "input_cost_per_token": 1.25e-07,
@@ -5956,7 +5974,8 @@
         "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/affordable-innovation-unveiling-the-pricing-of-phi-3-slms-on-models-as-a-service/4156495",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-4-mini-instruct": {
         "input_cost_per_token": 7.5e-08,
@@ -5967,7 +5986,8 @@
         "mode": "chat",
         "output_cost_per_token": 3e-07,
         "source": "https://techcommunity.microsoft.com/blog/Azure-AI-Services-blog/announcing-new-phi-pricing-empowering-your-business-with-small-language-models/4395112",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-4-multimodal-instruct": {
         "input_cost_per_audio_token": 4e-06,
@@ -5981,7 +6001,8 @@
         "source": "https://techcommunity.microsoft.com/blog/Azure-AI-Services-blog/announcing-new-phi-pricing-empowering-your-business-with-small-language-models/4395112",
         "supports_audio_input": true,
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-4-mini-reasoning": {
         "input_cost_per_token": 8e-08,
@@ -5992,7 +6013,8 @@
         "mode": "chat",
         "output_cost_per_token": 3.2e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/microsoft/",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_response_schema": false
     },
     "azure_ai/Phi-4-reasoning": {
         "input_cost_per_token": 1.25e-07,
@@ -6005,7 +6027,8 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/microsoft/",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": false
     },
     "azure_ai/mistral-document-ai-2505": {
         "litellm_provider": "azure_ai",
@@ -6014,7 +6037,8 @@
         "supported_endpoints": [
             "/v1/ocr"
         ],
-        "source": "https://devblogs.microsoft.com/foundry/whats-new-in-azure-ai-foundry-august-2025/#mistral-document-ai-(ocr)-%E2%80%94-serverless-in-foundry"
+        "source": "https://devblogs.microsoft.com/foundry/whats-new-in-azure-ai-foundry-august-2025/#mistral-document-ai-(ocr)-%E2%80%94-serverless-in-foundry",
+        "supports_response_schema": false
     },
     "azure_ai/mistral-document-ai-2512": {
         "litellm_provider": "azure_ai",
@@ -6023,7 +6047,8 @@
         "supported_endpoints": [
             "/v1/ocr"
         ],
-        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/",
+        "supports_response_schema": false
     },
     "azure_ai/doc-intelligence/prebuilt-read": {
         "litellm_provider": "azure_ai",
@@ -6062,7 +6087,8 @@
         "output_cost_per_token": 5.4e-06,
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/microsoft/",
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/cohere-rerank-v3-english": {
         "input_cost_per_query": 0.002,
@@ -6131,7 +6157,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/deepseek-v3.2-speciale": {
         "input_cost_per_token": 5.8e-07,
@@ -6145,7 +6172,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/deepseek-r1": {
         "input_cost_per_token": 1.35e-06,
@@ -6157,7 +6185,8 @@
         "output_cost_per_token": 5.4e-06,
         "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/deepseek-r1-improved-performance-higher-limits-and-transparent-pricing/4386367",
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/deepseek-v3": {
         "input_cost_per_token": 1.14e-06,
@@ -6168,7 +6197,8 @@
         "mode": "chat",
         "output_cost_per_token": 4.56e-06,
         "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/deepseek-v3-0324": {
         "input_cost_per_token": 1.14e-06,
@@ -6180,7 +6210,8 @@
         "output_cost_per_token": 4.56e-06,
         "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/embed-v-4-0": {
         "input_cost_per_token": 1.2e-07,
@@ -6350,7 +6381,8 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 0.00971,
-        "source": "https://azure.microsoft.com/en-us/products/ai-services/ai-foundry/models/jais-30b-chat"
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/ai-foundry/models/jais-30b-chat",
+        "supports_response_schema": false
     },
     "azure_ai/jamba-instruct": {
         "input_cost_per_token": 5e-07,
@@ -6360,7 +6392,8 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 7e-07,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/kimi-k2.5": {
         "input_cost_per_token": 6e-07,
@@ -6374,7 +6407,8 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": false
     },
     "azure_ai/ministral-3b": {
         "input_cost_per_token": 4e-08,
@@ -6386,7 +6420,8 @@
         "output_cost_per_token": 4e-08,
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.ministral-3b-2410-offer?tab=Overview",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/mistral-large": {
         "input_cost_per_token": 4e-06,
@@ -6397,7 +6432,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-05,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/mistral-large-2407": {
         "input_cost_per_token": 2e-06,
@@ -6409,7 +6445,8 @@
         "output_cost_per_token": 6e-06,
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/mistral-large-latest": {
         "input_cost_per_token": 2e-06,
@@ -6421,7 +6458,8 @@
         "output_cost_per_token": 6e-06,
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/mistral-large-3": {
         "input_cost_per_token": 5e-07,
@@ -6434,7 +6472,8 @@
         "source": "https://azure.microsoft.com/en-us/blog/introducing-mistral-large-3-in-microsoft-foundry-open-capable-and-ready-for-production-workloads/",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": false
     },
     "azure_ai/mistral-medium-2505": {
         "input_cost_per_token": 4e-07,
@@ -6446,7 +6485,8 @@
         "output_cost_per_token": 2e-06,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/mistral-nemo": {
         "input_cost_per_token": 1.5e-07,
@@ -6457,7 +6497,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-nemo-12b-2407?tab=PlansAndPrice",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_response_schema": false
     },
     "azure_ai/mistral-small": {
         "input_cost_per_token": 1e-06,
@@ -6468,7 +6509,8 @@
         "mode": "chat",
         "output_cost_per_token": 3e-06,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": false
     },
     "azure_ai/mistral-small-2503": {
         "input_cost_per_token": 1e-07,
@@ -6480,7 +6522,8 @@
         "output_cost_per_token": 3e-07,
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": false
     },
     "babbage-002": {
         "input_cost_per_token": 4e-07,

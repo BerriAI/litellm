@@ -20,7 +20,11 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import _add_path_to_api_base, supports_tool_choice
+from litellm.utils import (
+    _add_path_to_api_base,
+    supports_response_schema,
+    supports_tool_choice,
+)
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -56,6 +60,62 @@ class AzureAIStudioConfig(OpenAIConfig):
             return xai_config._supports_stop_reason(model)
         return True
 
+    def _has_json_schema(self, response_format: dict) -> bool:
+        """Check if a response_format dict contains a JSON schema definition."""
+        return "response_schema" in response_format or "json_schema" in response_format
+
+    def _is_response_format_supported(self, model: str) -> bool:
+        """
+        Check if the model supports native response_format with json_schema.
+
+        Uses the supports_response_schema flag from model_prices_and_context_window.json
+        rather than hardcoding model names.
+        """
+        return supports_response_schema(
+            model=f"azure_ai/{model}",
+            custom_llm_provider="azure_ai",
+        )
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        """
+        Map OpenAI params with structured output handling for Azure AI Foundry.
+
+        For response_format with a JSON schema:
+        - If the model supports native structured output, pass through as-is.
+        - If not, convert the schema to a forced tool call (same fallback
+          used by Azure OpenAI).
+
+        For response_format without a schema (e.g. {"type": "json_object"}),
+        always pass through directly.
+        """
+        supported_openai_params = self.get_supported_openai_params(model)
+
+        for param, value in non_default_params.items():
+            if param not in supported_openai_params:
+                continue
+
+            if param == "response_format" and isinstance(value, dict):
+                if self._has_json_schema(value):
+                    is_supported = self._is_response_format_supported(model)
+                    optional_params = self._add_response_format_to_tools(
+                        optional_params=optional_params,
+                        value=value,
+                        is_response_format_supported=is_supported,
+                    )
+                else:
+                    # Plain json_object mode — pass through as-is
+                    optional_params["response_format"] = value
+            else:
+                optional_params[param] = value
+
+        return optional_params
+
     def validate_environment(
         self,
         headers: dict,
@@ -73,12 +133,8 @@ class AzureAIStudioConfig(OpenAIConfig):
                 headers["Authorization"] = f"Bearer {api_key}"
         else:
             # No api_key provided — fall back to Azure AD token-based auth
-            litellm_params_obj = GenericLiteLLMParams(
-                **(litellm_params if isinstance(litellm_params, dict) else {})
-            )
-            headers = BaseAzureLLM._base_validate_azure_environment(
-                headers=headers, litellm_params=litellm_params_obj
-            )
+            litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
+            headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
 
