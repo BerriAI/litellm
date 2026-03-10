@@ -720,6 +720,7 @@ class TestHealthAppFactory:
                     ["--local", "--skip_server_startup"], standalone_mode=False
                 )
             assert exc_info.value.code == 1
+            mock_setup_database.assert_called_once_with(use_migrate=True)
 
 
 # --- Module-level helpers for worker startup hook tests ---
