@@ -1729,3 +1729,84 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     for condition in or_conditions:
         field = list(condition.keys())[0]
         assert condition[field] == {"in": ["admin-creator"]}
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_for_proxy_admin_uses_prisma(mocker):
+    """
+    Test that _get_user_info_for_proxy_admin uses Prisma find_many calls
+    instead of raw SQL, and runs them concurrently.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_VerificationToken,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _get_user_info_for_proxy_admin,
+    )
+
+    mock_team = LiteLLM_TeamTable(team_id="team-1", team_alias="Team One")
+    mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key.token = "hashed_token_123"
+    mock_key.team_id = "team-1"
+    mock_key.model_dump = MagicMock(return_value={
+        "token": "hashed_token_123",
+        "team_id": "team-1",
+        "models": [],
+    })
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[mock_team]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(
+        return_value=[mock_key]
+    )
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=None)
+
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    )
+    mocker.patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    )
+    mocker.patch(
+        "litellm.proxy.proxy_server.litellm_master_key_hash",
+        "master_key_hash",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user",
+    )
+
+    result = await _get_user_info_for_proxy_admin(user_api_key_dict)
+
+    # Verify Prisma calls (not raw SQL)
+    mock_prisma_client.db.litellm_teamtable.find_many.assert_called_once_with()
+    mock_prisma_client.db.litellm_verificationtoken.find_many.assert_called_once_with(
+        where={
+            "OR": [
+                {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
+                {"team_id": None},
+            ]
+        }
+    )
+
+    # Verify no raw SQL was used
+    mock_prisma_client.db.query_raw.assert_not_called()
+
+    # Verify response shape
+    assert result.user_id == "admin_user"
+    assert len(result.teams) == 1
+    assert result.teams[0].team_id == "team-1"
+    assert len(result.keys) == 1
+    assert result.keys[0]["team_id"] == "team-1"
+    assert result.keys[0]["team_alias"] == "Team One"

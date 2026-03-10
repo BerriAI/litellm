@@ -721,38 +721,31 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
 
     - get all teams in LiteLLM_TeamTable
     - get all keys in LiteLLM_VerificationToken table
-
-    Why separate helper for proxy admin ?
-        - To get Faster UI load times, get all teams and virtual keys in 1 query
     """
 
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
     from litellm.proxy.proxy_server import prisma_client
 
-    sql_query = """
-        SELECT 
-            (SELECT json_agg(t.*) FROM "LiteLLM_TeamTable" t) as teams,
-            (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id != 'litellm-dashboard' OR k.team_id IS NULL) as keys
-    """
     if prisma_client is None:
         raise Exception(
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
-    results = await prisma_client.db.query_raw(sql_query)
+    # Fetch teams and keys concurrently using Prisma instead of raw SQL.
+    _teams_in_db, keys_in_db = await asyncio.gather(
+        prisma_client.db.litellm_teamtable.find_many(),
+        prisma_client.db.litellm_verificationtoken.find_many(
+            where={
+                "OR": [
+                    {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
+                    {"team_id": None},
+                ]
+            }
+        ),
+    )
 
-    verbose_proxy_logger.debug("results_keys: %s", results)
+    verbose_proxy_logger.debug("results_keys: %s", keys_in_db)
 
-    _keys_in_db: List = results[0]["keys"] or []
-    # cast all keys to LiteLLM_VerificationToken
-    keys_in_db = []
-    for key in _keys_in_db:
-        if key.get("models") is None:
-            key["models"] = []
-        keys_in_db.append(LiteLLM_VerificationToken(**key))
-
-    # cast all teams to LiteLLM_TeamTable
-    _teams_in_db: List = results[0]["teams"] or []
-    _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
     _teams_in_db.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
     
