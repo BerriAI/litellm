@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Modal, Tooltip, Form, Select, Input, Switch } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
-import { createMCPServer } from "../networking";
+import { createMCPServer, registerMCPServer } from "../networking";
 import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -373,9 +373,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
-        const response = await createMCPServer(accessToken, payload);
+        const response = isAdmin
+          ? await createMCPServer(accessToken, payload)
+          : await registerMCPServer(accessToken, payload);
 
-        NotificationsManager.success("MCP Server created successfully");
+        NotificationsManager.success(
+          isAdmin
+            ? "MCP Server created successfully"
+            : "MCP Server submitted for admin review"
+        );
         form.resetFields();
         setCostConfig({});
         setTools([]);
@@ -385,7 +391,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         onCreateSuccess(response);
       }
     } catch (error) {
-      NotificationsManager.fromBackend("Error creating MCP Server: " + error);
+      const reason = error instanceof Error ? error.message : String(error);
+      NotificationsManager.fromBackend(
+        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`
+      );
     } finally {
       setIsLoading(false);
     }
@@ -461,11 +470,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [isModalVisible]);
 
-  // rendering
-  if (!isAdminRole(userRole)) {
-    return null;
-  }
+  const isAdmin = isAdminRole(userRole);
 
+  // rendering
   return (
     <Modal
       title={
@@ -489,7 +496,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               objectFit: "contain",
             }}
           />
-          <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
+          <h2 className="text-xl font-semibold text-gray-900">
+            {isAdmin ? "Add New MCP Server" : "Submit MCP Server for Review"}
+          </h2>
         </div>
       }
       open={isModalVisible}
@@ -510,6 +519,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           layout="vertical"
           className="space-y-6"
         >
+          {!isAdmin && (
+            <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+              Your submission will be sent for admin review before it becomes active.
+              {" "}Note: the request must be made with a team-scoped API key.
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-6">
             <Form.Item
               label={
@@ -563,6 +578,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             >
               <TextInput
                 placeholder="Brief description of what this server does"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
+              name="source_url"
+            >
+              <TextInput
+                placeholder="https://github.com/org/mcp-server"
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
             </Form.Item>
