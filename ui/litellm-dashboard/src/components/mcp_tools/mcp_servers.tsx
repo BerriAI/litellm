@@ -7,7 +7,7 @@ import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
-import { deleteMCPServer, registerMCPServer } from "../networking";
+import { deleteMCPServer } from "../networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";

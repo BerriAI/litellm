@@ -105,7 +105,7 @@ def encrypt_credentials(
 
 async def get_all_mcp_servers(
     prisma_client: PrismaClient,
-    approval_status: Optional[str] = "active",
+    approval_status: Optional[str] = None,
 ) -> List[LiteLLM_MCPServerTable]:
     """
     Returns mcp servers from the db, optionally filtered by approval_status.

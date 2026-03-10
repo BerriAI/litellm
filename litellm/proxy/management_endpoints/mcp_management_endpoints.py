@@ -815,7 +815,6 @@ if MCP_AVAILABLE:
             server_id,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         )
-        await global_mcp_server_manager.add_server(approved)
         await global_mcp_server_manager.reload_servers_from_database()
 
         return _redact_mcp_credentials(approved)
@@ -824,6 +823,7 @@ if MCP_AVAILABLE:
         "/server/{server_id}/reject",
         description="Reject a pending MCP server submission (admin only). Mirrors PUT /guardrails/{id}/reject.",
         dependencies=[Depends(user_api_key_auth)],
+        response_model=LiteLLM_MCPServerTable,
     )
     @management_endpoint_wrapper
     async def reject_mcp_server_submission(
@@ -850,12 +850,10 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server '{server_id}' not found."},
             )
-        if existing.approval_status != MCPApprovalStatus.pending_review:
+        if existing.approval_status == MCPApprovalStatus.rejected:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": f"MCP server is not pending review (approval_status={existing.approval_status})."
-                },
+                detail={"error": "MCP server is already rejected."},
             )
 
         rejected = await reject_mcp_server(
