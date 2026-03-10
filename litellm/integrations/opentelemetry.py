@@ -1609,10 +1609,10 @@ class OpenTelemetry(CustomLogger):
                                     )
 
         except Exception as e:
-            self.handle_callback_failure(callback_name= self.callback_name)  
             verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
+            raise
 
     def _cast_as_primitive_value_type(self, value) -> Union[str, bool, int, float]:
         """
@@ -1749,6 +1749,7 @@ class OpenTelemetry(CustomLogger):
             verbose_logger.exception(
                 "OpenTelemetry logging error in set_raw_request_attributes %s", str(e)
             )
+            raise
 
     def _to_ns(self, dt):
         return int(dt.timestamp() * 1e9)

@@ -3092,6 +3092,10 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if isinstance(cb, str):
             return cb
+        if hasattr(cb, "callback_name") and cb.callback_name:
+            return cb.callback_name
+        if hasattr(cb, "integration_name"):
+            return cb.integration_name
         if hasattr(cb, "__name__"):
             return cb.__name__
         if hasattr(cb, "__func__"):
