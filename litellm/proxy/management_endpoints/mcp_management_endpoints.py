@@ -173,9 +173,19 @@ if MCP_AVAILABLE:
         if not required_fields:
             return
 
-        missing = [
-            f for f in required_fields if not getattr(payload, f, None)
-        ]
+        # Mirror the UI's compliance checks (MCPStandardsSettings.tsx FIELD_GROUPS):
+        # auth_type requires a real value — "none" is treated as absent.
+        _AUTH_TYPE_SENTINEL = "none"
+
+        def _field_present(field_name: str) -> bool:
+            value = getattr(payload, field_name, None)
+            if not value:
+                return False
+            if field_name == "auth_type" and value == _AUTH_TYPE_SENTINEL:
+                return False
+            return True
+
+        missing = [f for f in required_fields if not _field_present(f)]
         if missing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
