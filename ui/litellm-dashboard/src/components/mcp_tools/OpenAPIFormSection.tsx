@@ -65,6 +65,12 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
         <Input
           placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
           className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+          onChange={() => {
+            // Clear the preset selection when the user manually edits the spec URL
+            // so stale suggested tools from a previous preset don't persist.
+            setSelectedPreset(null);
+            onKeyToolsChange?.([]);
+          }}
         />
       </Form.Item>
     </>

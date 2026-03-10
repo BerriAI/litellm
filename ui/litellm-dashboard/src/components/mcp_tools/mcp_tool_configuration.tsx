@@ -22,6 +22,11 @@ interface MCPToolConfigurationProps {
   onToolNameToDescriptionChange: (map: Record<string, string>) => void;
   /** Curated key tools from the OpenAPI registry preset (shown before spec loads). */
   keyTools?: KeyTool[];
+  /** External tool state lifted from parent to avoid duplicate fetch requests. */
+  externalTools?: any[];
+  externalIsLoading?: boolean;
+  externalError?: string | null;
+  externalCanFetch?: boolean;
 }
 
 interface ToolEntry {
@@ -148,6 +153,10 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   onToolNameToDisplayNameChange,
   onToolNameToDescriptionChange,
   keyTools,
+  externalTools,
+  externalIsLoading,
+  externalError,
+  externalCanFetch,
 }) => {
   const previousToolsRef = useRef<ToolEntry[]>([]);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
@@ -155,12 +164,19 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   const previousSuggestedToolNamesRef = useRef<string>("");
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
-  const { tools, isLoadingTools, toolsError, canFetchTools } = useTestMCPConnection({
+  // Use external tool state when provided (avoids duplicate fetch with MCPConnectionStatus).
+  // Fall back to internal hook when used standalone (e.g., edit flow).
+  const hasExternalState = externalTools !== undefined;
+  const internalHook = useTestMCPConnection({
     accessToken,
     oauthAccessToken,
     formValues,
-    enabled: true,
+    enabled: !hasExternalState,
   });
+  const tools: ToolEntry[] = hasExternalState ? externalTools : internalHook.tools;
+  const isLoadingTools = hasExternalState ? (externalIsLoading ?? false) : internalHook.isLoadingTools;
+  const toolsError = hasExternalState ? (externalError ?? null) : internalHook.toolsError;
+  const canFetchTools = hasExternalState ? (externalCanFetch ?? false) : internalHook.canFetchTools;
 
   // Fuzzy-match curated key tool names against actual loaded tool names
   const suggestedTools = useMemo(() => {
