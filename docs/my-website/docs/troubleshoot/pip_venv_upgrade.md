@@ -97,15 +97,6 @@ prisma migrate diff \
   --to-schema-datamodel <schema-path> \
   --script
 
-### After upgrading: Check migration status
-
-```sql
-SELECT migration_name, finished_at, rolled_back_at, logs 
-FROM "_prisma_migrations" 
-ORDER BY started_at DESC 
-LIMIT 20;
-```
-
 All migrations should have a `finished_at` timestamp and no `rolled_back_at`.
 
 ## Key Things to Know
