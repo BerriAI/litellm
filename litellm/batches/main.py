@@ -33,6 +33,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     CancelBatchRequest,
     CreateBatchRequest,
+    FileExpiresAfter,
     RetrieveBatchRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -112,6 +113,7 @@ async def acreate_batch(
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
+    output_expires_after: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> LiteLLMBatch:
     """
@@ -133,6 +135,7 @@ async def acreate_batch(
             metadata,
             extra_headers,
             extra_body,
+            output_expires_after,
             **kwargs,
         )
 
@@ -152,7 +155,7 @@ async def acreate_batch(
 
 
 @client
-def create_batch(
+def create_batch(  # noqa: PLR0915
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
@@ -160,6 +163,7 @@ def create_batch(
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
+    output_expires_after: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
     """
@@ -215,6 +219,8 @@ def create_batch(
             extra_headers=extra_headers,
             extra_body=extra_body,
         )
+        if output_expires_after is not None:
+            _create_batch_request["output_expires_after"] = cast(FileExpiresAfter, output_expires_after)
         if model is not None:
             provider_config = ProviderConfigManager.get_provider_batches_config(
                 model=model,

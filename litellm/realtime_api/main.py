@@ -1,5 +1,6 @@
 """Abstraction function for OpenAI's realtime API"""
 
+import os
 from typing import Any, Optional, cast
 
 import litellm
@@ -106,6 +107,8 @@ async def _arealtime(  # noqa: PLR0915
             client=client,
             timeout=timeout,
             headers=headers,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "azure":
         api_base = (
@@ -130,6 +133,8 @@ async def _arealtime(  # noqa: PLR0915
         
         realtime_protocol = (
             kwargs.get("realtime_protocol")
+            or litellm_params.get("realtime_protocol")
+            or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
             or "beta"
         )
         await azure_realtime.async_realtime(
@@ -277,6 +282,8 @@ async def _arealtime(  # noqa: PLR0915
             client=client,
             timeout=timeout,
             headers=headers,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     else:
         raise ValueError(f"Unsupported model: {model}")

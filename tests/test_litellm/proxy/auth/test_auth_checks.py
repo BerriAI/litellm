@@ -108,11 +108,55 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert token_data["models"] == ["gpt-3.5-turbo"]
     assert token_data["max_budget"] == litellm.max_ui_session_budget
 
-    # Verify expiration time is set and valid
+    # Verify expiration time is set and valid (Experimental UI uses fixed 10-min expiry)
     assert "expires" in token_data
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
-    assert expires > get_utc_datetime()
-    assert expires <= get_utc_datetime() + timedelta(minutes=10)
+    now = get_utc_datetime()
+    # Allow 2 second buffer for test execution timing
+    assert expires > now
+    assert expires <= now + timedelta(minutes=10, seconds=2)
+
+
+def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
+    valid_sso_user_defined_values,
+):
+    """Test that Experimental UI token uses fixed 10-minute expiry (does not use LITELLM_UI_SESSION_DURATION)."""
+    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    now = get_utc_datetime()
+    # Should expire in ~10 minutes (allow 2 second buffer)
+    assert expires > now + timedelta(minutes=9)
+    assert expires <= now + timedelta(minutes=10, seconds=2)
+
+
+def test_experimental_ui_token_ignores_litellm_ui_session_duration(
+    valid_sso_user_defined_values,
+):
+    """Regression test: LITELLM_UI_SESSION_DURATION must NOT affect Experimental UI token expiry.
+    Experimental UI intentionally uses fixed 10-min expiry. If this test fails, the constant
+    was incorrectly wired to the experimental flow."""
+    # Default LITELLM_UI_SESSION_DURATION is "24h" - token must still expire in ~10 min
+    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    now = get_utc_datetime()
+    # Must be ~10 min, NOT 24h. If LITELLM_UI_SESSION_DURATION were incorrectly used, this would fail.
+    assert expires <= now + timedelta(minutes=11), (
+        "Experimental UI must use 10-min expiry, not LITELLM_UI_SESSION_DURATION"
+    )
 
 
 def test_get_experimental_ui_login_jwt_auth_token_invalid(
@@ -333,6 +377,65 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_includes_user_email():
+    """Test that user_email is included when creating a new user via get_user_object upsert"""
+    # Mock the necessary dependencies
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+
+    # Set up the user creation mock
+    mock_user = MagicMock()
+    mock_user.user_id = "new_test_user"
+    mock_user.user_email = "test@example.com"
+    mock_user.models = []
+    mock_user.max_budget = None
+    mock_user.user_role = None
+    mock_user.organization_memberships = []
+
+    mock_user.dict = lambda: {
+        "user_id": "new_test_user",
+        "user_email": "test@example.com",
+        "models": [],
+        "max_budget": None,
+        "user_role": None,
+        "organization_memberships": [],
+    }
+
+    # Setup the mock returns - user does not exist
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
+
+    # Create a mock cache
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    # Call get_user_object with user_id_upsert=True and user_email
+    try:
+        await get_user_object(
+            user_id="new_test_user",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+            user_email="test@example.com",
+        )
+    except Exception as e:
+        # May fail since mock object is not a real LiteLLM_UserTable
+        print(e)
+
+    # Verify the user was created with user_email included
+    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
+    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
+
+    assert "user_email" in creation_args, "user_email should be included when upserting a new user"
+    assert creation_args["user_email"] == "test@example.com"
+    assert creation_args["user_id"] == "new_test_user"
 
 
 def test_log_budget_lookup_failure_dry_run():
@@ -1475,3 +1578,54 @@ async def test_get_fuzzy_user_object_case_insensitive_email():
     assert call_args.kwargs["where"]["user_email"]["equals"] == "test@example.com"
     assert call_args.kwargs["where"]["user_email"]["mode"] == "insensitive"
     assert call_args.kwargs["include"] == {"organization_memberships": True}
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_common_checks_opt_in():
+    """
+    Test that _run_post_custom_auth_checks only runs common_checks when
+    custom_auth_run_common_checks is explicitly set to True in general_settings.
+
+    By default (False), common_checks is skipped for backwards compatibility
+    with custom auth flows that existed before PR #22164.
+    """
+    from litellm.proxy.auth.user_api_key_auth import _run_post_custom_auth_checks
+
+    valid_token = UserAPIKeyAuth(token="test-token")
+    mock_request = MagicMock()
+
+    # Default (no flag) — common_checks should NOT be called
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks",
+        new_callable=AsyncMock,
+    ) as mock_common, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    ):
+        mock_common.return_value = True
+        result = await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=mock_request,
+            request_data={},
+            route="/ldap/ngs/ready",
+            parent_otel_span=None,
+        )
+        mock_common.assert_not_called()
+
+    # With flag=True — common_checks SHOULD be called
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks",
+        new_callable=AsyncMock,
+    ) as mock_common, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"custom_auth_run_common_checks": True},
+    ):
+        mock_common.return_value = True
+        result = await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=mock_request,
+            request_data={},
+            route="/chat/completions",
+            parent_otel_span=None,
+        )
+        mock_common.assert_called_once()

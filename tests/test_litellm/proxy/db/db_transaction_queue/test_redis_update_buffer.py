@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.proxy_server import ProxyStartupEvent
 from litellm.types.caching import RedisPipelineRpushOperation
 
 
@@ -192,3 +193,39 @@ async def test_get_all_transactions_from_redis_buffer_pipeline_no_redis():
     buffer = RedisUpdateBuffer(redis_cache=None)
     result = await buffer.get_all_transactions_from_redis_buffer_pipeline()
     assert result == (None, None, None, None, None, None, None)
+
+
+def test_validate_redis_transaction_buffer_raises_without_redis():
+    """
+    When use_redis_transaction_buffer=true but no Redis cache is configured,
+    the proxy should refuse to start with a clear error message.
+    """
+    with pytest.raises(ValueError, match="use_redis_transaction_buffer"):
+        ProxyStartupEvent._validate_redis_transaction_buffer_config(
+            general_settings={"use_redis_transaction_buffer": True},
+            redis_usage_cache=None,
+        )
+
+
+def test_validate_redis_transaction_buffer_passes_with_redis():
+    """
+    When use_redis_transaction_buffer=true and Redis cache is configured,
+    validation should pass without error.
+    """
+    # Should not raise
+    ProxyStartupEvent._validate_redis_transaction_buffer_config(
+        general_settings={"use_redis_transaction_buffer": True},
+        redis_usage_cache=MagicMock(),
+    )
+
+
+def test_validate_redis_transaction_buffer_passes_when_disabled():
+    """
+    When use_redis_transaction_buffer is not set or false,
+    validation should pass regardless of Redis configuration.
+    """
+    # Should not raise even without Redis
+    ProxyStartupEvent._validate_redis_transaction_buffer_config(
+        general_settings={},
+        redis_usage_cache=None,
+    )

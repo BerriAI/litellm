@@ -11,6 +11,7 @@ import litellm
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 
 
+@pytest.mark.flaky(retries=3, delay=5)
 class TestBedrockInvokeClaudeJson(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         litellm._turn_on_debug()

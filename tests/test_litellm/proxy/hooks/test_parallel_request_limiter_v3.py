@@ -1116,7 +1116,7 @@ async def test_dynamic_rate_limiting_v3():
     ), "RPM limit should be enforced when dynamic mode and failures detected"
 
 
-@pytest.mark.flaky(reruns=3)
+@pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio
 async def test_async_increment_tokens_with_ttl_preservation():
     """
@@ -1979,6 +1979,527 @@ async def test_execute_token_increment_script_cluster_compatibility():
             assert (
                 len(args) == len(keys) * 2
             ), f"Each key should have 2 args, got {len(args)} args for {len(keys)} keys"
+
+
+@pytest.mark.asyncio
+async def test_agent_level_rate_limit_descriptors():
+    """
+    Test that agent-level rate limit descriptors are created when
+    an agent has rpm_limit and/or tpm_limit configured.
+    """
+    from unittest.mock import patch
+
+    from litellm.types.agents import AgentResponse
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    _agent_id = "agent_abc123"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        agent_id=_agent_id,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    mock_agent = AgentResponse(
+        agent_id=_agent_id,
+        agent_name="test-agent",
+        agent_card_params={"name": "Test Agent"},
+        rpm_limit=50,
+        tpm_limit=5000,
+    )
+
+    captured_descriptors = None
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
+        return_value=mock_agent,
+    ):
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-4"},
+            call_type="",
+        )
+
+    assert captured_descriptors is not None
+
+    agent_descriptor = None
+    for d in captured_descriptors:
+        if d["key"] == "agent":
+            agent_descriptor = d
+            break
+
+    assert agent_descriptor is not None, "Agent descriptor should be present"
+    assert agent_descriptor["value"] == _agent_id
+    assert agent_descriptor["rate_limit"]["requests_per_unit"] == 50
+    assert agent_descriptor["rate_limit"]["tokens_per_unit"] == 5000
+
+
+@pytest.mark.asyncio
+async def test_agent_session_rate_limit_descriptors():
+    """
+    Test that session-level rate limit descriptors are created when
+    an agent has session_rpm_limit/session_tpm_limit and a session_id is present.
+    """
+    from unittest.mock import patch
+
+    from litellm.types.agents import AgentResponse
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    _agent_id = "agent_abc123"
+    _session_id = "sess_xyz789"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        agent_id=_agent_id,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    mock_agent = AgentResponse(
+        agent_id=_agent_id,
+        agent_name="test-agent",
+        agent_card_params={"name": "Test Agent"},
+        session_rpm_limit=10,
+        session_tpm_limit=1000,
+    )
+
+    captured_descriptors = None
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
+        return_value=mock_agent,
+    ):
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={
+                "model": "gpt-4",
+                "metadata": {"session_id": _session_id},
+            },
+            call_type="",
+        )
+
+    assert captured_descriptors is not None
+
+    session_descriptor = None
+    for d in captured_descriptors:
+        if d["key"] == "agent_session":
+            session_descriptor = d
+            break
+
+    assert session_descriptor is not None, "Agent session descriptor should be present"
+    assert session_descriptor["value"] == f"{_agent_id}:{_session_id}"
+    assert session_descriptor["rate_limit"]["requests_per_unit"] == 10
+    assert session_descriptor["rate_limit"]["tokens_per_unit"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_agent_session_rate_limit_skipped_without_session_id():
+    """
+    Test that session-level rate limit descriptors are NOT created
+    when no session_id is available in the request.
+    """
+    from unittest.mock import patch
+
+    from litellm.types.agents import AgentResponse
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    _agent_id = "agent_abc123"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        agent_id=_agent_id,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    mock_agent = AgentResponse(
+        agent_id=_agent_id,
+        agent_name="test-agent",
+        agent_card_params={"name": "Test Agent"},
+        session_rpm_limit=10,
+        session_tpm_limit=1000,
+    )
+
+    captured_descriptors = None
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
+        return_value=mock_agent,
+    ):
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-4"},
+            call_type="",
+        )
+
+    # should_rate_limit should not have been called (no agent-level limits, only session limits
+    # but no session_id)
+    assert captured_descriptors is None, (
+        "No descriptors should be created when agent has only session limits "
+        "but no session_id in request"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_rate_limit_from_metadata_agent_id():
+    """
+    Test that agent rate limits work when agent_id comes from
+    request metadata (header) rather than from the API key.
+    """
+    from unittest.mock import patch
+
+    from litellm.types.agents import AgentResponse
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    _agent_id = "agent_from_header"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    mock_agent = AgentResponse(
+        agent_id=_agent_id,
+        agent_name="header-agent",
+        agent_card_params={"name": "Header Agent"},
+        rpm_limit=25,
+        tpm_limit=2500,
+    )
+
+    captured_descriptors = None
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
+        return_value=mock_agent,
+    ):
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={
+                "model": "gpt-4",
+                "metadata": {"agent_id": _agent_id},
+            },
+            call_type="",
+        )
+
+    assert captured_descriptors is not None
+
+    agent_descriptor = None
+    for d in captured_descriptors:
+        if d["key"] == "agent":
+            agent_descriptor = d
+            break
+
+    assert agent_descriptor is not None, "Agent descriptor should be created from metadata agent_id"
+    assert agent_descriptor["value"] == _agent_id
+    assert agent_descriptor["rate_limit"]["requests_per_unit"] == 25
+
+
+@pytest.mark.asyncio
+async def test_agent_both_agent_and_session_rate_limits():
+    """
+    Test that both agent-level and session-level descriptors are created
+    when both types of limits are configured on the agent.
+    """
+    from unittest.mock import patch
+
+    from litellm.types.agents import AgentResponse
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    _agent_id = "agent_dual"
+    _session_id = "sess_dual"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        agent_id=_agent_id,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    mock_agent = AgentResponse(
+        agent_id=_agent_id,
+        agent_name="dual-agent",
+        agent_card_params={"name": "Dual Agent"},
+        rpm_limit=100,
+        tpm_limit=10000,
+        session_rpm_limit=20,
+        session_tpm_limit=2000,
+    )
+
+    captured_descriptors = None
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
+        return_value=mock_agent,
+    ):
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={
+                "model": "gpt-4",
+                "metadata": {"session_id": _session_id},
+            },
+            call_type="",
+        )
+
+    assert captured_descriptors is not None
+
+    agent_descriptor = None
+    session_descriptor = None
+    for d in captured_descriptors:
+        if d["key"] == "agent":
+            agent_descriptor = d
+        elif d["key"] == "agent_session":
+            session_descriptor = d
+
+    assert agent_descriptor is not None, "Agent-level descriptor should be present"
+    assert agent_descriptor["rate_limit"]["requests_per_unit"] == 100
+    assert agent_descriptor["rate_limit"]["tokens_per_unit"] == 10000
+
+    assert session_descriptor is not None, "Session-level descriptor should be present"
+    assert session_descriptor["value"] == f"{_agent_id}:{_session_id}"
+    assert session_descriptor["rate_limit"]["requests_per_unit"] == 20
+    assert session_descriptor["rate_limit"]["tokens_per_unit"] == 2000
+
+
+@pytest.mark.asyncio
+async def test_agent_rate_limit_tpm_increment_on_success(monkeypatch):
+    """
+    Test that async_log_success_event increments agent and session
+    TPM counters when agent_id and session_id are in metadata.
+    """
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    _agent_id = "agent_tpm_test"
+    _session_id = "sess_tpm_test"
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    def mock_get_rate_limit_type():
+        return "total"
+
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", mock_get_rate_limit_type
+    )
+
+    mock_usage = Usage(prompt_tokens=20, completion_tokens=30, total_tokens=50)
+    mock_response = ModelResponse(
+        id="mock-response",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4",
+        usage=mock_usage,
+        choices=[],
+    )
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_hash": _api_key,
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_end_user_id": None,
+                "agent_id": _agent_id,
+                "session_id": _session_id,
+            }
+        },
+        "model": "gpt-4",
+    }
+
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    agent_tpm_op = None
+    session_tpm_op = None
+    for op in captured_operations:
+        if op["key"] == f"{{agent:{_agent_id}}}:tokens":
+            agent_tpm_op = op
+        elif op["key"] == f"{{agent_session:{_agent_id}:{_session_id}}}:tokens":
+            session_tpm_op = op
+
+    assert agent_tpm_op is not None, "Agent TPM increment should be present"
+    assert agent_tpm_op["increment_value"] == 50
+
+    assert session_tpm_op is not None, "Session TPM increment should be present"
+    assert session_tpm_op["increment_value"] == 50
+
+
+@pytest.mark.asyncio
+async def test_agent_rate_limit_429_on_over_limit(monkeypatch, time_controller):
+    """
+    Test end-to-end that agent rate limiting returns 429 when the agent
+    RPM limit is exceeded.
+    """
+    from unittest.mock import patch
+
+    from litellm.types.agents import AgentResponse
+
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "2")
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    _agent_id = "agent_429_test"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        agent_id=_agent_id,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+
+    mock_agent = AgentResponse(
+        agent_id=_agent_id,
+        agent_name="rate-limited-agent",
+        agent_card_params={"name": "Rate Limited Agent"},
+        rpm_limit=2,
+    )
+
+    window_starts: Dict[str, int] = {}
+    request_counts: Dict[str, int] = {}
+
+    async def mock_batch_rate_limiter(*args, **kwargs):
+        keys = kwargs.get("keys") if kwargs else args[0]
+        args_list = kwargs.get("args") if kwargs else args[1]
+        now = args_list[0]
+        window_size = args_list[1]
+        results = []
+        for i in range(0, len(keys), 2):
+            window_key = keys[i]
+            counter_key = keys[i + 1]
+            prev_window = window_starts.get(window_key)
+            prev_counter = request_counts.get(counter_key, 0)
+            if prev_window is None or (now - prev_window) >= window_size:
+                window_starts[window_key] = now
+                new_counter = 1
+                request_counts[counter_key] = new_counter
+                await local_cache.async_set_cache(
+                    key=window_key, value=now, ttl=window_size
+                )
+                await local_cache.async_set_cache(
+                    key=counter_key, value=new_counter, ttl=window_size
+                )
+            else:
+                new_counter = prev_counter + 1
+                request_counts[counter_key] = new_counter
+                await local_cache.async_set_cache(
+                    key=counter_key, value=new_counter, ttl=window_size
+                )
+            results.append(now)
+            results.append(new_counter)
+        return results
+
+    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
+        return_value=mock_agent,
+    ):
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-4"},
+            call_type="",
+        )
+
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-4"},
+            call_type="",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await parallel_request_handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"model": "gpt-4"},
+                call_type="",
+            )
+
+        assert exc_info.value.status_code == 429
+        assert "agent" in exc_info.value.detail
 
 
 class TestGetTotalTokensFromUsageCacheExclusion:
