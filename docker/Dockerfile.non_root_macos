@@ -1,0 +1,142 @@
+# ---- builder ----
+FROM python:3.13-slim AS builder
+ARG PROXY_EXTRAS_SOURCE=published
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc g++ \
+    curl ca-certificates \
+    nodejs npm \
+    libatomic1 \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip build
+
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt \
+  && pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19" "PyJWT==2.9.0"
+
+COPY . .
+ENV LITELLM_NON_ROOT=true
+
+# Build Admin UI
+RUN mkdir -p /var/lib/litellm/ui && \
+  npm install -g npm@latest && npm cache clean --force && \
+  cd /app/ui/litellm-dashboard && \
+  if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
+    cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
+  fi && \
+  npm install --legacy-peer-deps && \
+  npm run build && \
+  cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \
+  mkdir -p /var/lib/litellm/assets && \
+  cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
+  ( cd /var/lib/litellm/ui && \
+    for html_file in *.html; do \
+      if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
+        folder_name="${html_file%.html}" && \
+        mkdir -p "$folder_name" && \
+        mv "$html_file" "$folder_name/index.html"; \
+      fi; \
+    done && \
+    touch .litellm_ui_ready ) && \
+  cd /app/ui/litellm-dashboard && rm -rf ./out
+
+# Build litellm wheel
+RUN rm -rf dist/* && python -m build && \
+  rm -f /wheels/litellm-*.whl && \
+  cp dist/*.whl /wheels/
+
+# Optional local extras
+RUN if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
+  cd /app/litellm-proxy-extras && rm -rf dist && python -m build && \
+  cp dist/*.whl /wheels/; \
+  fi
+
+# Cache Prisma engines/CLI in builder (for offline runtime)
+ENV HOME=/app \
+  XDG_CACHE_HOME=/app/.cache \
+  PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+  NPM_CONFIG_CACHE=/app/.cache/npm
+
+RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 \
+  && mkdir -p /app/.cache/npm
+
+RUN python3 -c "import prisma.cli.prisma as p; p.ensure_cached()"
+
+# Patch schema.prisma (remove binaryTargets for prisma-client-py generator)
+RUN python3 - <<'PY'
+import re
+p="/app/schema.prisma"
+s=open(p,"r",encoding="utf-8").read()
+
+def strip_binary_targets(block: str) -> str:
+    return re.sub(r'^\s*binaryTargets\s*=\s*\[[^\]]*\]\s*\n', '', block, flags=re.M)
+
+pattern = r'(generator\s+\w+\s*\{[^}]*provider\s*=\s*"prisma-client-py"[^}]*\})'
+s2 = re.sub(pattern, lambda m: strip_binary_targets(m.group(1)), s, flags=re.S)
+open(p,"w",encoding="utf-8").write(s2)
+PY
+
+
+# ---- runtime ----
+FROM python:3.13-slim AS runtime
+ARG PROXY_EXTRAS_SOURCE=published
+
+WORKDIR /app
+
+# libatomic1 required for nodeenv's node binary used by prisma-client-py
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates bash openssl \
+    libatomic1 \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/requirements.txt /app/requirements.txt
+COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
+COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
+COPY --from=builder /app/schema.prisma /app/schema.prisma
+COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
+COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
+COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
+COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
+COPY --from=builder /wheels /wheels
+
+# Copy cached prisma binaries/cli
+COPY --from=builder /app/.cache/prisma-python /app/.cache/prisma-python
+
+ENV LITELLM_NON_ROOT=true \
+  HOME=/app \
+  XDG_CACHE_HOME=/app/.cache \
+  PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+  NPM_CONFIG_CACHE=/app/.cache/npm \
+  LITELLM_MIGRATION_DIR=/app/.litellm_migrations
+
+# Install deps offline
+RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
+  pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
+  pip install --no-index --find-links=/wheels/ --no-deps semantic_router==0.1.11 && \
+  pip install --no-index --find-links=/wheels/ aurelio-sdk==0.0.19 && \
+  if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
+    if ls /wheels/litellm_proxy_extras-*.whl >/dev/null 2>&1; then \
+      pip install --no-index --find-links=/wheels/ /wheels/litellm_proxy_extras-*.whl; \
+    fi; \
+  fi && \
+  rm -rf /wheels
+
+# Install prisma tooling in runtime and generate client INTO runtime site-packages
+RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 && \
+  python3 -m prisma generate
+
+# scripts + permissions (non-root uid/gid 65534)
+RUN sed -i 's/\r$//' /app/docker/entrypoint.sh && \
+  sed -i 's/\r$//' /app/docker/prod_entrypoint.sh && \
+  chmod +x /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh && \
+  mkdir -p /app/.litellm_migrations && \
+  chown -R 65534:65534 /app /var/lib/litellm/ui /var/lib/litellm/assets /app/.cache/prisma-python
+
+USER 65534:65534
+
+EXPOSE 4000
+ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
+CMD ["--port", "4000"]
