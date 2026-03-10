@@ -96,6 +96,13 @@ prisma migrate diff \
   --from-url $DATABASE_URL \
   --to-schema-datamodel <schema-path> \
   --script
+```
+
+### After applying migrations: Check status
+
+```bash
+prisma migrate status --schema <schema-path>
+```
 
 All migrations should have a `finished_at` timestamp and no `rolled_back_at`.
 
