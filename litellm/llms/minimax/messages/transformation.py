@@ -1,7 +1,10 @@
 """
-MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
+MiniMax Anthropic-compatible Messages API transformation config.
+
+MiniMax exposes Claude-compatible `/anthropic/v1/messages` endpoints separately from
+its OpenAI-compatible `/v1/chat/completions` endpoint.
 """
-from typing import Optional
+from typing import Any, List, Optional, Tuple
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -19,7 +22,9 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
     
     Supported models:
     - MiniMax-M2.1
-    - MiniMax-M2.1-lightning
+    - MiniMax-M2.1-highspeed
+    - MiniMax-M2.5
+    - MiniMax-M2.5-highspeed
     - MiniMax-M2
     """
 
