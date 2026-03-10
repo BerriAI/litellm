@@ -26,6 +26,7 @@ import MCPConnectPicker from "./MCPConnectPicker";
 import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
+import { makeOpenAIResponsesRequest } from "../playground/llm_calls/responses_api";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
@@ -135,6 +136,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const [modelSearchText, setModelSearchText] = useState("");
 
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
+  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
@@ -231,6 +233,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       let convId = activeConversationId;
       if (!convId) {
         convId = createConversation(model);
+        setResponsesSessionId(null); // new conversation starts a fresh session
         router.push(getChatUrl(uiRoot, convId));
       }
 
@@ -254,15 +257,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       let accumulatedReasoning = "";
 
       try {
-        await makeOpenAIChatCompletionRequest(
+        await makeOpenAIResponsesRequest(
           history,
-          (chunk: string) => {
+          (_role: string, chunk: string) => {
             accumulatedContent += chunk;
             updateLastAssistantMessage(convId!, { content: accumulatedContent });
           },
           model,
           accessToken,
-          undefined,
+          undefined, // tags
           abortControllerRef.current.signal,
           (rc: string) => {
             accumulatedReasoning += rc;
@@ -270,6 +273,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           },
           undefined, undefined, undefined, undefined, undefined, undefined,
           selectedMCPServers.length > 0 ? selectedMCPServers : undefined,
+          responsesSessionId,
+          (id: string) => setResponsesSessionId(id),
         );
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
@@ -287,7 +292,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       }
     },
     [activeConversationId, activeConversation, selectedModels, selectedMCPServers, accessToken,
-      createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming],
+      createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming, responsesSessionId],
   );
 
   const handleSendComparison = useCallback(
