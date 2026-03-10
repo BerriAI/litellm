@@ -7,11 +7,17 @@ transformations for the Agent API (Responses API).
 Source: litellm/llms/perplexity/responses/transformation.py
 """
 
+import json
 import os
 import sys
 
+import httpx
+import pytest
+
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.utils import LlmProviders
@@ -359,3 +365,90 @@ class TestPerplexityResponsesTransformation:
         assert config is not None
         assert isinstance(config, PerplexityResponsesConfig)
         assert config.custom_llm_provider == LlmProviders.PERPLEXITY
+
+    def test_failed_status_raises_exception(self):
+        """Perplexity HTTP 200 with status:'failed' must raise BaseLLMException"""
+        config = PerplexityResponsesConfig()
+
+        failed_body = {
+            "status": "failed",
+            "error": {"message": "Model quota exceeded"},
+        }
+
+        raw_response = httpx.Response(
+            status_code=200,
+            json=failed_body,
+            request=httpx.Request("POST", "https://api.perplexity.ai/v1/responses"),
+        )
+
+        logging_obj = LiteLLMLoggingObj(
+            model="perplexity/openai/gpt-5.2",
+            messages=[],
+            stream=False,
+            call_type="responses",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+        )
+
+        with pytest.raises(BaseLLMException) as exc_info:
+            config.transform_response_api_response(
+                model="perplexity/openai/gpt-5.2",
+                raw_response=raw_response,
+                logging_obj=logging_obj,
+            )
+
+        assert "Model quota exceeded" in str(exc_info.value.message)
+
+    def test_successful_response_passes_through(self):
+        """Normal completed response delegates to base OpenAI handler"""
+        config = PerplexityResponsesConfig()
+
+        success_body = {
+            "id": "resp_123",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "openai/gpt-5.2",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {"type": "output_text", "text": "Hello!", "annotations": []}
+                    ],
+                }
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            },
+        }
+
+        raw_response = httpx.Response(
+            status_code=200,
+            json=success_body,
+            request=httpx.Request("POST", "https://api.perplexity.ai/v1/responses"),
+        )
+
+        logging_obj = LiteLLMLoggingObj(
+            model="perplexity/openai/gpt-5.2",
+            messages=[],
+            stream=False,
+            call_type="responses",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+        )
+
+        response = config.transform_response_api_response(
+            model="perplexity/openai/gpt-5.2",
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        assert response.id == "resp_123"
+        assert response.status == "completed"
