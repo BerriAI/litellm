@@ -846,6 +846,84 @@ print(response.output)
 </TabItem>
 </Tabs>
 
+### Tool Search via Chat Completions Bridge
+
+You can also use tool search through the `/v1/chat/completions` endpoint by prefixing the model with `openai/responses/`. The request is routed through the Responses API but returns a standard chat completions response.
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python showLineNumbers title="Tool Search via Chat Completions Bridge"
+import litellm
+
+response = litellm.completion(
+    model="openai/responses/gpt-5.4",
+    messages=[{"role": "user", "content": "Look up invoice INV-2024-001"}],
+    tools=[
+        {"type": "tool_search"},
+        {
+            "type": "namespace",
+            "name": "billing",
+            "description": "Billing and invoicing tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_invoice",
+                    "description": "Get an invoice by ID",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"invoice_id": {"type": "string"}},
+                        "required": ["invoice_id"],
+                    },
+                    "defer_loading": True,
+                },
+            ],
+        },
+    ],
+)
+
+# Standard chat completions response
+for tool_call in response.choices[0].message.tool_calls:
+    print(f"Called: {tool_call.function.name}({tool_call.function.arguments})")
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+```bash showLineNumbers title="Tool Search via /v1/chat/completions"
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/responses/gpt-5.4",
+    "messages": [{"role": "user", "content": "Look up invoice INV-2024-001"}],
+    "tools": [
+      {"type": "tool_search"},
+      {
+        "type": "namespace",
+        "name": "billing",
+        "description": "Billing and invoicing tools",
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_invoice",
+            "description": "Get an invoice by ID",
+            "parameters": {
+              "type": "object",
+              "properties": {"invoice_id": {"type": "string"}},
+              "required": ["invoice_id"]
+            },
+            "defer_loading": true
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Free-form Function Calling
 
 <Tabs>
