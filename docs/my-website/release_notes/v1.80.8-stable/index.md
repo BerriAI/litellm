@@ -462,6 +462,7 @@ Users can now filter usage statistics by customers, providing the same granular 
     - Parallel Request Limiter with /messages - [PR #17426](https://github.com/BerriAI/litellm/pull/17426)
     - Allow using dynamic rate limit/priority reservation on teams - [PR #17061](https://github.com/BerriAI/litellm/pull/17061)
     - Dynamic Rate Limiter - Fix token count increases/decreases by 1 instead of actual count + Redis TTL - [PR #17558](https://github.com/BerriAI/litellm/pull/17558)
+    - Add team model RPM/TPM support on `/model/new`, `PATCH /model/{model_id}/update`, and `POST /model/update`.
 
 - **Spend Logs**
     - Deprecate `spend/logs` & add `spend/logs/v2` - [PR #17167](https://github.com/BerriAI/litellm/pull/17167)

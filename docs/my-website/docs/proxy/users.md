@@ -544,6 +544,7 @@ You can set:
 - rpm limits (requests per minute)
 - max parallel requests
 - rpm / tpm limits per model for a given key
+- rpm / tpm limits per model for a given team model
 
 
 <Tabs>
@@ -671,6 +672,37 @@ These headers indicate:
 
 - 1 request remaining for the GPT-4 model for key=`sk-ulGNRXWtv7M0lFnnsQk0wQ`
 - 179 tokens remaining for the GPT-4 model for key=`sk-ulGNRXWtv7M0lFnnsQk0wQ`
+
+</TabItem>
+<TabItem value="per-team-model" label="Per Team Model">
+
+Set `model_info.team_model_rpm_limit` and `model_info.team_model_tpm_limit` when creating/updating team models.
+
+Use this when a model is attached to a team via `model_info.team_id`.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/model/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+  "model_name": "my-team-model",
+  "litellm_params": {
+    "model": "openai/gpt-4o",
+    "api_key": "os.environ/OPENAI_API_KEY"
+  },
+  "model_info": {
+    "team_id": "my-prod-team",
+    "team_model_rpm_limit": 80,
+    "team_model_tpm_limit": 160000
+  }
+}'
+```
+
+Use `PATCH /model/{model_id}/update` to update limits later.
+
+All usage for this model is aggregated across team members in one `{team_id}:{model}` rate limit bucket.
+
+See [Allow Teams to Add Models](./team_model_add.md) for full setup and examples.
 
 </TabItem>
 <TabItem value="per-end-user" label="For customers">

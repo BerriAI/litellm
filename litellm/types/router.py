@@ -118,6 +118,10 @@ class ModelInfo(BaseModel):
     # the model_name that can be used by the team when making LLM calls
     team_public_model_name: Optional[str] = None
 
+    # per-team-model limits (applies across all keys and users in the team)
+    team_model_rpm_limit: Optional[int] = None
+    team_model_tpm_limit: Optional[int] = None
+
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided

@@ -36,6 +36,79 @@ curl -L -X POST 'http://0.0.0.0:4000/model/new' \
 
 ```
 
+## Set Team Model Rate Limits on Registration
+
+You can set RPM/TPM for a specific team model when creating it via `/model/new`.
+
+Use `model_info.team_model_rpm_limit` and `model_info.team_model_tpm_limit`:
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/model/new' \
+-H 'Authorization: Bearer sk-******2ql3-sm28WU0tTAmA' \
+-H 'Content-Type: application/json' \
+-d '{
+  "model_name": "my-team-model",
+  "litellm_params": {
+    "model": "openai/gpt-4o",
+    "custom_llm_provider": "openai",
+    "api_key": "******ccb07"
+  },
+  "model_info": {
+    "team_id": "e59e2671-a064-436a-a0fa-16ae96e5a0a1",
+    "team_model_rpm_limit": 60,
+    "team_model_tpm_limit": 120000
+  }
+}'
+```
+
+### How team model rate limits are enforced
+
+- Limits are applied per `{team_id}:{model}` bucket.
+- Usage from **all keys/team members** for that team model is aggregated into the same bucket.
+- If a team has multiple models with different limits, each model gets its own independent team-level bucket.
+
+
+## Patch Existing Team Model Rate Limits
+
+You can update team model rate limits on existing models via:
+
+- `PATCH /model/{model_id}/update` (recommended)
+- `POST /model/update` (legacy)
+
+### PATCH example
+
+```bash
+curl -L -X PATCH 'http://0.0.0.0:4000/model/<model_id>/update' \
+-H 'Authorization: Bearer sk-******2ql3-sm28WU0tTAmA' \
+-H 'Content-Type: application/json' \
+-d '{
+  "model_info": {
+    "team_id": "e59e2671-a064-436a-a0fa-16ae96e5a0a1",
+    "team_model_rpm_limit": 80,
+    "team_model_tpm_limit": 180000
+  }
+}'
+```
+
+### Legacy `/model/update` example
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/model/update' \
+-H 'Authorization: Bearer sk-******2ql3-sm28WU0tTAmA' \
+-H 'Content-Type: application/json' \
+-d '{
+  "model_info": {
+    "id": "<model_id>",
+    "team_id": "e59e2671-a064-436a-a0fa-16ae96e5a0a1",
+    "team_model_rpm_limit": 80,
+    "team_model_tpm_limit": 180000
+  },
+  "litellm_params": {
+    "model": "openai/gpt-4o"
+  }
+}'
+```
+
 ## Test it! 
 
 ```bash

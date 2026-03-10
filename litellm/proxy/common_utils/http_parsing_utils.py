@@ -2,7 +2,19 @@ import json
 import re
 from typing import Any, Collection, Dict, List, Optional
 
-import orjson
+try:
+    import orjson
+except ModuleNotFoundError:
+    class _OrjsonFallback:
+        JSONDecodeError = json.JSONDecodeError
+
+        @staticmethod
+        def loads(payload: Any) -> Any:
+            if isinstance(payload, bytes):
+                payload = payload.decode("utf-8")
+            return json.loads(payload)
+
+    orjson = _OrjsonFallback()  # type: ignore[assignment]
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger

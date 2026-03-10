@@ -77,6 +77,11 @@ When adding a new model, your JSON payload should conform to the following struc
 - `litellm_params`: A dictionary containing parameters specific to the Litellm setup (required).
 - `model_info`: An optional dictionary to provide additional information about the model.
 
+For team models (`model_info.team_id` is set), you can also set:
+
+- `model_info.team_model_rpm_limit`: team-level requests per minute for this model
+- `model_info.team_model_tpm_limit`: team-level tokens per minute for this model
+
 Here's an example of how to structure your `ModelParams`:
 
 ```json
@@ -89,10 +94,32 @@ Here's an example of how to structure your `ModelParams`:
   "model_info": {
     "author": "Your Name",
     "version": "1.0",
-    "description": "A brief description of the model."
+    "description": "A brief description of the model.",
+    "team_id": "team-123",
+    "team_model_rpm_limit": 60,
+    "team_model_tpm_limit": 120000
   }
 }
 ```
+
+### Patch existing team model limits
+
+Use `PATCH /model/{model_id}/update`:
+
+```bash
+curl -L -X PATCH 'http://0.0.0.0:4000/model/<model_id>/update' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+  "model_info": {
+    "team_id": "team-123",
+    "team_model_rpm_limit": 80,
+    "team_model_tpm_limit": 180000
+  }
+}'
+```
+
+For full team model setup + troubleshooting, see [Allow Teams to Add Models](./team_model_add.md).
 ---
 
 Keep in mind that as both endpoints are in [BETA], you may need to visit the associated GitHub issues linked in the API descriptions to check for updates or provide feedback:

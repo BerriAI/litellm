@@ -20,10 +20,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
+    _build_team_model_limit_updates,
     clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
 
 
 class MockPrismaClient:
@@ -372,6 +373,8 @@ class TestClearCache:
         """
         Test that clear_cache successfully clears router model caches and reloads models.
         """
+        import litellm.proxy.proxy_server  # noqa: F401
+
         mock_router = MagicMock()
         mock_router.model_list = ["openai/gpt-4o", "openai/gpt-4o-mini"]
 
@@ -394,12 +397,76 @@ class TestClearCache:
 
             assert len(mock_router.auto_routers) == 0
 
+
+class _MockTeamTableClient:
+    def __init__(self, metadata: Optional[dict]):
+        self._metadata = metadata
+
+    async def find_unique(self, where):
+        return LiteLLM_TeamTable(
+            team_id=where["team_id"],
+            team_alias="team",
+            metadata=self._metadata,
+        )
+
+
+class _MockPrismaWithTeamMetadata:
+    def __init__(self, metadata: Optional[dict]):
+        self.db = MagicMock()
+        self.db.litellm_teamtable = _MockTeamTableClient(metadata=metadata)
+
+
+class TestBuildTeamModelLimitUpdates:
+    @pytest.mark.asyncio
+    async def test_merge_existing_limits_with_new_team_model_limits(self):
+        prisma_client = _MockPrismaWithTeamMetadata(
+            metadata={
+                "model_rpm_limit": {"gpt-4": 10},
+                "model_tpm_limit": {"gpt-4": 1000},
+            }
+        )
+
+        updates = await _build_team_model_limit_updates(
+            team_id="team-1",
+            public_model_name="gpt-4.1",
+            prisma_client=prisma_client,
+            model_info=ModelInfo(
+                team_id="team-1",
+                team_model_rpm_limit=20,
+                team_model_tpm_limit=2000,
+            ),
+        )
+
+        assert updates["model_rpm_limit"] == {"gpt-4": 10, "gpt-4.1": 20}
+        assert updates["model_tpm_limit"] == {"gpt-4": 1000, "gpt-4.1": 2000}
+
+    @pytest.mark.asyncio
+    async def test_rename_team_model_preserves_existing_limits(self):
+        prisma_client = _MockPrismaWithTeamMetadata(
+            metadata={
+                "model_rpm_limit": {"old-public-model": 30},
+                "model_tpm_limit": {"old-public-model": 3000},
+            }
+        )
+
+        updates = await _build_team_model_limit_updates(
+            team_id="team-1",
+            public_model_name="new-public-model",
+            old_public_model_name="old-public-model",
+            prisma_client=prisma_client,
+            model_info=ModelInfo(team_id="team-1"),
+        )
+
+        assert updates["model_rpm_limit"] == {"new-public-model": 30}
+        assert updates["model_tpm_limit"] == {"new-public-model": 3000}
+
     @pytest.mark.asyncio
     async def test_clear_cache_preserve_config_models(self):
         """
         Test that clear_cache clears DB models and preserves config models.
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+        import litellm.proxy.proxy_server  # noqa: F401
 
         # Create mock router with mixed DB and config models
         mock_router = MagicMock()
@@ -463,6 +530,7 @@ class TestTeamModelUpdate:
             _update_team_model_in_db,
         )
         from litellm.types.router import ModelInfo
+        import litellm.proxy.proxy_server  # noqa: F401
 
         patch_data = updateDeployment(
             model_name="tenant-azure-gpt4",
