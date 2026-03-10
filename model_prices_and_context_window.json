@@ -27453,17 +27453,10 @@
         "mode": "chat",
         "output_cost_per_token": 2e-06,
         "source": "https://openrouter.ai/qwen/qwen3.5-35b-a3b",
-        "supported_modalities": [
-            "text",
-            "image",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/qwen/qwen3.5-27b": {
         "input_cost_per_token": 3e-07,
@@ -27474,17 +27467,10 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-06,
         "source": "https://openrouter.ai/qwen/qwen3.5-27b",
-        "supported_modalities": [
-            "text",
-            "image",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/qwen/qwen3.5-122b-a10b": {
         "input_cost_per_token": 4e-07,
@@ -27495,17 +27481,10 @@
         "mode": "chat",
         "output_cost_per_token": 2e-06,
         "source": "https://openrouter.ai/qwen/qwen3.5-122b-a10b",
-        "supported_modalities": [
-            "text",
-            "image",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/qwen/qwen3.5-flash-02-23": {
         "input_cost_per_token": 1e-07,
@@ -27516,17 +27495,10 @@
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "source": "https://openrouter.ai/qwen/qwen3.5-flash-02-23",
-        "supported_modalities": [
-            "text",
-            "image",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/qwen/qwen3.5-plus-02-15": {
         "input_cost_per_token": 4e-07,
@@ -27539,17 +27511,10 @@
         "output_cost_per_token": 2.4e-06,
         "output_cost_per_token_above_256k_tokens": 3e-06,
         "source": "https://openrouter.ai/qwen/qwen3.5-plus-02-15",
-        "supported_modalities": [
-            "text",
-            "image",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/qwen/qwen3.5-397b-a17b": {
         "input_cost_per_token": 6e-07,
@@ -27560,17 +27525,10 @@
         "mode": "chat",
         "output_cost_per_token": 3.6e-06,
         "source": "https://openrouter.ai/qwen/qwen3.5-397b-a17b",
-        "supported_modalities": [
-            "text",
-            "image",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/switchpoint/router": {
         "input_cost_per_token": 8.5e-07,
