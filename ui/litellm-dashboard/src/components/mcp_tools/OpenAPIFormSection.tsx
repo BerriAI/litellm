@@ -37,6 +37,11 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
       updates.auth_type = AUTH_TYPE.OAUTH2;
       updates.authorization_url = entry.oauth.authorization_url;
       updates.token_url = entry.oauth.token_url;
+    } else {
+      // Clear stale OAuth config from previous preset selection
+      updates.auth_type = undefined;
+      updates.authorization_url = undefined;
+      updates.token_url = undefined;
     }
     form.setFieldsValue(updates);
     onValuesChange(updates);

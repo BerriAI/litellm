@@ -396,13 +396,23 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         )}
 
         {/* No tools state */}
-        {!isLoadingTools && !toolsError && tools.length === 0 && canFetchTools && (!keyTools || keyTools.length === 0) && (
-          <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
-            <ToolOutlined className="text-2xl mb-2" />
-            <Text>No tools available for configuration</Text>
-            <br />
-            <Text className="text-sm">Connect to an MCP server with tools to configure them</Text>
-          </div>
+        {!isLoadingTools && !toolsError && tools.length === 0 && canFetchTools && (
+          keyTools && keyTools.length > 0 ? (
+            <div className="text-center py-4 text-gray-400 border rounded-lg border-dashed">
+              <ToolOutlined className="text-2xl mb-2" />
+              <Text>No tools loaded from spec</Text>
+              <Text className="text-sm block mt-1">
+                Expected tools: {keyTools.map((t) => t.name).join(", ")}
+              </Text>
+            </div>
+          ) : (
+            <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
+              <ToolOutlined className="text-2xl mb-2" />
+              <Text>No tools available for configuration</Text>
+              <br />
+              <Text className="text-sm">Connect to an MCP server with tools to configure them</Text>
+            </div>
+          )
         )}
 
         {/* Incomplete form state */}
