@@ -1,26 +1,11 @@
-# +-------------------------------------------------------------+
 #
-#           Akto Guardrail Integration for LiteLLM
+#  Akto Guardrail Integration for LiteLLM
+#  https://www.akto.io/
 #
-# +-------------------------------------------------------------+
+#  Two modes:
+#    on_flagged="block"   -> pre-call check + post-call ingest
+#    on_flagged="monitor" -> post-call only (log, don't block)
 #
-# Integrates Akto's guardrail and data-ingestion capabilities
-# with LiteLLM's unified guardrail framework.
-#
-# Two modes of operation controlled by `on_flagged`:
-#
-#   on_flagged="block" (blocking):
-#     Pre-call:  POST ?akto_connector&guardrails=true
-#       → Allowed=true  → proceed to LLM → post-call ingest
-#       → Allowed=false → ingest blocked details → raise error
-#     Post-call: POST ?akto_connector&ingest_data=true
-#       → Sends request+response for observability
-#
-#   on_flagged="monitor" (non-blocking):
-#     Post-call only: POST ?akto_connector&guardrails=true&ingest_data=true
-#       → Single call after LLM response (log-only, does not block)
-#
-# Reference: https://www.akto.io/
 
 import json
 import os
@@ -55,28 +40,19 @@ DEFAULT_GUARDRAIL_TIMEOUT = 5
 
 class AktoGuardrail(CustomGuardrail):
     """
-    Akto Guardrail integration for LiteLLM.
+    Akto guardrail — validates requests via the Akto HTTP proxy
+    and ingests request/response data for observability.
 
-    Sends requests to the Akto Data Ingestion Service's HTTP proxy endpoint
-    for guardrail validation and data ingestion.
+    Config example:
 
-    Two modes controlled by `on_flagged`:
-      on_flagged="block"   (blocking):     pre-call guardrail check + post-call ingest
-      on_flagged="monitor" (non-blocking): single post-call call with guardrails+ingest
-
-    Config example (config.yaml):
         guardrails:
           - guardrail_name: "akto-guard"
             litellm_params:
               guardrail: akto
-              mode: [pre_call, post_call]                 # block mode
+              mode: [pre_call, post_call]
               akto_base_url: os.environ/AKTO_DATA_INGESTION_URL
-              akto_api_key: os.environ/AKTO_API_KEY             # required
-              on_flagged: block                           # or "monitor"
-              akto_account_id: os.environ/AKTO_ACCOUNT_ID  # optional
-              akto_vxlan_id: os.environ/AKTO_VXLAN_ID      # optional
-              unreachable_fallback: fail_open              # optional, default fail_closed
-              guardrail_timeout: 10                        # optional, default 5s
+              akto_api_key: os.environ/AKTO_API_KEY
+              on_flagged: block          # or "monitor"
     """
 
     @staticmethod
@@ -124,14 +100,13 @@ class AktoGuardrail(CustomGuardrail):
         )
         self.akto_vxlan_id = akto_vxlan_id or os.environ.get("AKTO_VXLAN_ID", "0")
 
-        # Resolve on_flagged: explicit param > env var > default (block)
+        # on_flagged: param > env var > default "block"
         if on_flagged:
             self.on_flagged = on_flagged
         else:
             env_on_flagged = os.environ.get("AKTO_ON_FLAGGED", "block").lower()
             self.on_flagged = env_on_flagged if env_on_flagged in ("block", "monitor") else "block"
 
-        # Sync mode internal flag: True if we are blocking (run pre_call + post_call)
         self.sync_mode = (self.on_flagged == "block")
 
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
@@ -140,10 +115,7 @@ class AktoGuardrail(CustomGuardrail):
 
         self.guardrail_timeout = guardrail_timeout or DEFAULT_GUARDRAIL_TIMEOUT
 
-        # Declare all event hooks that Akto's apply_guardrail can handle.
-        # Do NOT override event_hook here — it comes from the config's "mode" field.
-        # The proxy's pre_call_hook/post_call dispatch checks should_run_guardrail(event_type)
-        # which compares against event_hook. If we override it, those dispatchers skip us.
+        # Don't override event_hook — it comes from config "mode" field.
         kwargs["supported_event_hooks"] = [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -159,20 +131,11 @@ class AktoGuardrail(CustomGuardrail):
             self.unreachable_fallback,
         )
 
-    # ------------------------------------------------------------------ #
-    #  Metadata resolution
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _resolve_metadata_value(
         request_data: Optional[dict], key: str
     ) -> Optional[str]:
-        """
-        Resolve metadata value from request_data, checking both metadata locations.
-
-        During pre-call: metadata is at request_data["metadata"][key]
-        During post-call: metadata is at request_data["litellm_metadata"][key]
-        """
+        """Look up a metadata value — checks litellm_metadata first, then metadata."""
         if request_data is None:
             return None
 
@@ -190,44 +153,31 @@ class AktoGuardrail(CustomGuardrail):
 
         return None
 
-    # ------------------------------------------------------------------ #
-    #  Request path extraction
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _extract_request_path(request_data: dict) -> str:
-        """Extract the original request path from request metadata."""
+        """Get the original request path, defaults to /v1/chat/completions."""
         fallback = "/v1/chat/completions"
         try:
-            metadata = request_data.get("metadata", {})
-            route = metadata.get("user_api_key_request_route")
+            route = request_data.get("metadata", {}).get("user_api_key_request_route")
             if route:
                 return route
         except Exception:
             pass
         return fallback
 
-    # ------------------------------------------------------------------ #
-    #  Header construction
-    # ------------------------------------------------------------------ #
-
     def _prepare_headers(self) -> Dict[str, str]:
-        """Build request headers for the Akto HTTP proxy endpoint."""
+        """Headers for the Akto HTTP proxy call."""
         headers: Dict[str, str] = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.akto_api_key}",
         }
         return headers
 
-    # ------------------------------------------------------------------ #
-    #  Query params construction
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _build_query_params(
         *, guardrails: bool, ingest_data: bool
     ) -> Dict[str, str]:
-        """Build query parameters for the Akto HTTP proxy endpoint."""
+        """Query params for the Akto HTTP proxy call."""
         params: Dict[str, str] = {"akto_connector": AKTO_CONNECTOR_NAME}
         if guardrails:
             params["guardrails"] = "true"
@@ -235,16 +185,8 @@ class AktoGuardrail(CustomGuardrail):
             params["ingest_data"] = "true"
         return params
 
-    # ------------------------------------------------------------------ #
-    #  Payload construction — Akto data-ingestion format
-    # ------------------------------------------------------------------ #
-
     def _build_request_headers(self, request_data: dict) -> Dict[str, str]:
-        """
-        Extract and build request headers from proxy context.
-
-        Returns a dict of sanitized request headers to send to Akto.
-        """
+        """Extract request headers from the proxy context."""
         headers: Dict[str, str] = {"content-type": "application/json"}
 
         proxy_req = request_data.get("proxy_server_request", {})
@@ -259,15 +201,11 @@ class AktoGuardrail(CustomGuardrail):
         self,
         inputs: GenericGuardrailAPIInputs,
     ) -> Dict[str, Any]:
-        """
-        Build the request body from guardrail inputs.
-
-        Reconstructs the LLM request payload shape.
-        """
+        """Reconstruct the LLM request body from guardrail inputs."""
         model = inputs.get("model", "") or ""
         body: Dict[str, Any] = {"model": model}
 
-        # Prefer structured_messages if available (preserves role info)
+        # Use structured_messages if available (keeps role info)
         structured = inputs.get("structured_messages")
         if structured:
             body["messages"] = structured
@@ -292,7 +230,7 @@ class AktoGuardrail(CustomGuardrail):
         self,
         inputs: GenericGuardrailAPIInputs,
     ) -> Dict[str, Any]:
-        """Build a response body from post-call guardrail inputs."""
+        """Build an LLM-style response body for Akto ingestion."""
         texts = inputs.get("texts", [])
         if texts:
             return {
@@ -303,11 +241,7 @@ class AktoGuardrail(CustomGuardrail):
         return {}
 
     def _build_tag_metadata(self, request_data: dict) -> Dict[str, str]:
-        """
-        Build tags and metadata for Akto ingestion.
-
-        Includes gen-ai marker and any LiteLLM auth context.
-        """
+        """Tags for Akto ingestion (gen-ai marker + user/team context)."""
         tag: Dict[str, str] = {"gen-ai": "Gen AI"}
 
         user_id = self._resolve_metadata_value(request_data, "user_api_key_user_id")
@@ -328,18 +262,7 @@ class AktoGuardrail(CustomGuardrail):
         include_response: bool = False,
         response_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Build the full payload in Akto data-ingestion format.
-
-        This matches the exact schema expected by the Akto Data Ingestion Service:
-        {
-            "path", "requestHeaders", "responseHeaders",
-            "method", "requestPayload", "responsePayload",
-            "ip", "destIp", "time", "statusCode", "status",
-            "akto_account_id", "akto_vxlan_id", "is_pending",
-            "source", "tag", "metadata", "contextSource"
-        }
-        """
+        """Build the full payload in Akto's data-ingestion format."""
         request_path = self._extract_request_path(request_data)
         request_headers = self._build_request_headers(request_data)
         request_body = self._build_request_body(inputs)
@@ -357,7 +280,7 @@ class AktoGuardrail(CustomGuardrail):
             response_payload = json.dumps(response_body)
             response_headers = {"content-type": "application/json"}
 
-        # Use actual client IP from proxy headers, fall back to empty string
+        # Client IP from proxy headers
         ip = ""
         proxy_req = request_data.get("proxy_server_request", {})
         proxy_headers = proxy_req.get("headers", {}) if isinstance(proxy_req, dict) else {}
@@ -367,7 +290,7 @@ class AktoGuardrail(CustomGuardrail):
                 or proxy_headers.get("x-real-ip")
                 or ""
             )
-            # X-Forwarded-For may contain multiple IPs; use the first (client) one
+            # X-Forwarded-For can have multiple IPs, take the first
             if "," in ip:
                 ip = ip.split(",")[0].strip()
 
@@ -398,10 +321,6 @@ class AktoGuardrail(CustomGuardrail):
             "contextSource": "AGENTIC",
         }
 
-    # ------------------------------------------------------------------ #
-    #  HTTP send
-    # ------------------------------------------------------------------ #
-
     async def _send_request(
         self,
         *,
@@ -424,18 +343,9 @@ class AktoGuardrail(CustomGuardrail):
             timeout=self.guardrail_timeout,
         )
 
-    # ------------------------------------------------------------------ #
-    #  Response handling
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _parse_guardrails_result(result: Any) -> Tuple[bool, str]:
-        """
-        Parse the guardrails result from an Akto HTTP proxy response.
-
-        Returns:
-            (allowed: bool, reason: str)
-        """
+        """Parse (allowed, reason) from Akto's response."""
         if not isinstance(result, dict):
             return True, ""
         guardrails_result = (
@@ -448,25 +358,16 @@ class AktoGuardrail(CustomGuardrail):
     def _handle_guardrail_response(
         self, response: httpx.Response
     ) -> Tuple[bool, str]:
-        """
-        Handle the HTTP response from Akto guardrail API.
-
-        Returns:
-            (allowed: bool, reason: str)
-        """
+        """Parse the Akto response. Raises on non-200 so caller can handle it."""
         if response.status_code != 200:
             verbose_proxy_logger.error(
                 "Akto guardrail returned HTTP %d", response.status_code
             )
-            return True, ""
+            response.raise_for_status()
 
         response_json = response.json()
         verbose_proxy_logger.debug("Akto guardrail response: %s", response_json)
         return self._parse_guardrails_result(response_json)
-
-    # ------------------------------------------------------------------ #
-    #  Fail-open / fail-closed
-    # ------------------------------------------------------------------ #
 
     def _handle_unreachable(
         self,
@@ -476,7 +377,7 @@ class AktoGuardrail(CustomGuardrail):
         error: Exception,
         http_status_code: Optional[int] = None,
     ) -> GenericGuardrailAPIInputs:
-        """Handle unreachable guardrail endpoint based on fail-open/fail-closed config."""
+        """Fail-open lets the request through, fail-closed blocks with 503."""
         if self.unreachable_fallback == "fail_open":
             status_suffix = (
                 f" http_status_code={http_status_code}" if http_status_code else ""
@@ -498,10 +399,6 @@ class AktoGuardrail(CustomGuardrail):
             detail=f"Akto guardrail service unreachable: {str(error)}",
         )
 
-    # ------------------------------------------------------------------ #
-    #  Observability
-    # ------------------------------------------------------------------ #
-
     def _add_guardrail_observability(
         self,
         request_data: dict,
@@ -509,7 +406,7 @@ class AktoGuardrail(CustomGuardrail):
         guardrail_status: GuardrailStatus,
         guardrail_json_response: Any,
     ) -> None:
-        """Add standard logging guardrail information to the request data."""
+        """Log guardrail timing and status for observability."""
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         self.add_standard_logging_guardrail_information_to_request_data(
@@ -522,10 +419,6 @@ class AktoGuardrail(CustomGuardrail):
             duration=duration,
         )
 
-    # ------------------------------------------------------------------ #
-    #  Main entry point
-    # ------------------------------------------------------------------ #
-
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -534,16 +427,7 @@ class AktoGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        """
-        Apply Akto guardrail to the given inputs.
-
-        SYNC mode (blocking):
-          request:  guardrails check → block if Allowed=false + ingest blocked details
-          response: ingest request+response for observability
-
-        ASYNC mode (non-blocking):
-          response only: single call with guardrails+ingest_data (log-only)
-        """
+        """Main entry point — called by LiteLLM for pre_call / post_call."""
         start_time = datetime.now()
         guardrail_status: GuardrailStatus = "success"
         guardrail_json_response: Any = {}
@@ -551,11 +435,10 @@ class AktoGuardrail(CustomGuardrail):
         try:
             if self.sync_mode:
                 if input_type == "request":
-                    # Sync pre-call: POST ?akto_connector&guardrails=true
+                    # Block mode pre-call: check guardrails
                     payload = self._build_akto_payload(
                         inputs, request_data, include_response=False
                     )
-                    
                     try:
                         response = await self._send_request(
                             guardrails=True, ingest_data=False, payload=payload
@@ -563,7 +446,7 @@ class AktoGuardrail(CustomGuardrail):
                         allowed, reason = self._handle_guardrail_response(response)
 
                         if not allowed:
-                            # Ingest the blocked request for observability
+                            # Send blocked details to Akto for tracking
                             await self._ingest_blocked_request(
                                 inputs=inputs,
                                 request_data=request_data,
@@ -575,14 +458,7 @@ class AktoGuardrail(CustomGuardrail):
                             )
                     except HTTPException:
                         raise
-                    except (Timeout, httpx.RequestError) as e:
-                        return self._handle_unreachable(
-                            inputs=inputs,
-                            input_type=input_type,
-                            logging_obj=logging_obj,
-                            error=e,
-                        )
-                    except httpx.HTTPStatusError as e:
+                    except (Timeout, httpx.RequestError, httpx.HTTPStatusError) as e:
                         status_code = getattr(
                             getattr(e, "response", None), "status_code", None
                         )
@@ -595,7 +471,7 @@ class AktoGuardrail(CustomGuardrail):
                         )
 
                 else:
-                    # Sync post-call: POST ?akto_connector&ingest_data=true
+                    # Block mode post-call: ingest request+response
                     payload = self._build_akto_payload(
                         inputs, request_data, include_response=True
                     )
@@ -612,7 +488,7 @@ class AktoGuardrail(CustomGuardrail):
                             "Akto guardrail: post-call ingestion error: %s", str(e)
                         )
             else:
-                # Async mode: only response
+                # Monitor mode: post-call only
                 if input_type == "response":
                     payload = self._build_akto_payload(
                         inputs, request_data, include_response=True
@@ -651,17 +527,13 @@ class AktoGuardrail(CustomGuardrail):
                 guardrail_json_response=guardrail_json_response,
             )
 
-    # ------------------------------------------------------------------ #
-    #  Ingest blocked request
-    # ------------------------------------------------------------------ #
-
     async def _ingest_blocked_request(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         reason: str,
     ) -> None:
-        """Ingest a blocked request into Akto for observability."""
+        """Send blocked request details to Akto for tracking."""
         blocked_response = {"x-blocked-by": "Akto Guardrails", "reason": reason}
         payload = self._build_akto_payload(
             inputs,

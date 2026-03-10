@@ -493,35 +493,35 @@ class ZscalerAIGuardConfigModel(BaseModel):
 
 
 class AktoConfigModel(BaseModel):
-    """Configuration parameters for the Akto guardrail"""
+    """Config for the Akto guardrail."""
 
     akto_base_url: Optional[str] = Field(
         default=None,
-        description="Akto Data Ingestion Service URL. Falls back to AKTO_DATA_INGESTION_URL env var.",
+        description="Akto ingestion URL. Env: AKTO_DATA_INGESTION_URL.",
     )
     akto_api_key: Optional[str] = Field(
         default=None,
-        description="Akto API key for authentication. Falls back to AKTO_API_KEY env var.",
+        description="API key. Env: AKTO_API_KEY.",
     )
     on_flagged: Optional[Literal["block", "monitor"]] = Field(
         default="block",
-        description="Action to take when a violation occurs: 'block' (blocking pre-call) or 'monitor' (non-blocking log-only). Falls back to AKTO_ON_FLAGGED env var.",
+        description="'block' = pre-call validation, 'monitor' = post-call log only. Env: AKTO_ON_FLAGGED.",
     )
     akto_account_id: Optional[str] = Field(
         default=None,
-        description="Akto account ID. Falls back to AKTO_ACCOUNT_ID env var. Defaults to '1000000'.",
+        description="Account ID. Env: AKTO_ACCOUNT_ID. Default: '1000000'.",
     )
     akto_vxlan_id: Optional[str] = Field(
         default=None,
-        description="Akto VXLAN ID for traffic identification. Falls back to AKTO_VXLAN_ID env var.",
+        description="VXLAN ID. Env: AKTO_VXLAN_ID.",
     )
     unreachable_fallback: Optional[Literal["fail_closed", "fail_open"]] = Field(
         default="fail_closed",
-        description="Behavior when Akto is unreachable: 'fail_open' or 'fail_closed'.",
+        description="'fail_open' = allow, 'fail_closed' = block when Akto is down.",
     )
     guardrail_timeout: Optional[int] = Field(
         default=None,
-        description="HTTP timeout in seconds for Akto service calls. Defaults to 5.",
+        description="HTTP timeout in seconds. Default: 5.",
     )
 
 

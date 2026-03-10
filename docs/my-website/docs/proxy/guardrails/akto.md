@@ -1,23 +1,23 @@
 # Akto
 
 ## Overview
-[Akto](https://www.akto.io/) provides API security guardrails and data ingestion for LLM traffic. It validates requests against configurable guardrail policies and optionally ingests request/response pairs for API observability.
+[Akto](https://www.akto.io/) provides API security guardrails and data ingestion for LLM traffic.
 
-Akto supports two operating modes via `on_flagged`:
-- **`block`**: Pre-call guardrail validation + post-call data ingestion (blocking)
-- **`monitor`**: Single post-call with guardrails + data ingestion (non-blocking, log-only)
+Two modes via `on_flagged`:
+- **`block`** — Pre-call guardrail check + post-call data ingestion (blocks violating requests)
+- **`monitor`** — Post-call only, logs violations without blocking
 
 ## 1. Get Your Akto Credentials
 
-Set up your Akto Data Ingestion Service and obtain:
-- `AKTO_GUARDRAIL_API_BASE` — Your Akto Data Ingestion Service endpoint
-- `AKTO_API_KEY` — Your API key (**required** for authentication)
+Set up the Akto Data Ingestion Service and grab:
+- `AKTO_DATA_INGESTION_URL` — your ingestion endpoint
+- `AKTO_API_KEY` — your API key
 
-## 2. Define Akto Guardrail in `config.yaml`
+## 2. Configure in `config.yaml`
 
-### Block Mode (Blocking) — Recommended
+### Block Mode (recommended)
 
-Pre-call guardrail check blocks violating requests. Post-call ingests data for observability.
+Checks requests before they reach the LLM. Blocked requests get a `400` error.
 
 ```yaml
 guardrails:
@@ -25,18 +25,18 @@ guardrails:
     litellm_params:
       guardrail: akto
       mode: [pre_call, post_call]
-      akto_base_url: os.environ/AKTO_GUARDRAIL_API_BASE
-      akto_api_key: os.environ/AKTO_API_KEY            # required
-      on_flagged: block                                # default: block
+      akto_base_url: os.environ/AKTO_DATA_INGESTION_URL
+      akto_api_key: os.environ/AKTO_API_KEY
+      on_flagged: block
       akto_account_id: os.environ/AKTO_ACCOUNT_ID      # optional, default: 1000000
       akto_vxlan_id: os.environ/AKTO_VXLAN_ID           # optional
       unreachable_fallback: fail_open                   # optional, default: fail_closed
       guardrail_timeout: 10                             # optional, default: 5s
 ```
 
-### Monitor Mode (Non-Blocking)
+### Monitor Mode
 
-Single post-call with guardrails + data ingestion. Does not block requests.
+Logs everything after the LLM responds. Never blocks requests.
 
 ```yaml
 guardrails:
@@ -44,14 +44,12 @@ guardrails:
     litellm_params:
       guardrail: akto
       mode: post_call
-      akto_base_url: os.environ/AKTO_GUARDRAIL_API_BASE
+      akto_base_url: os.environ/AKTO_DATA_INGESTION_URL
       akto_api_key: os.environ/AKTO_API_KEY
       on_flagged: monitor
 ```
 
-## 3. Test Request
-
-Send a test request to verify the guardrail is working:
+## 3. Test It
 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
@@ -65,9 +63,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-### Blocked Request Example
-
-If a request violates Akto guardrail policies (`on_flagged: block`):
+If a request gets blocked:
 
 ```json
 {
@@ -82,40 +78,35 @@ If a request violates Akto guardrail policies (`on_flagged: block`):
 
 ## 4. How It Works
 
-### Block Mode Flow
-
+**Block mode:**
 ```
-User Request → LiteLLM Proxy
-  → Pre-call: POST /api/http-proxy?akto_connector=litellm&guardrails=true
-    → Allowed=true  → forward to LLM → get response
-      → Post-call: POST /api/http-proxy?akto_connector=litellm&ingest_data=true
-    → Allowed=false → ingest blocked details → return error to user
+Request → LiteLLM → Akto guardrail check
+  → Allowed  → forward to LLM → ingest response
+  → Blocked  → ingest blocked details → 400 error
 ```
 
-### Monitor Mode Flow
-
+**Monitor mode:**
 ```
-User Request → LiteLLM Proxy → forward to LLM → get response
-  → Post-call: POST /api/http-proxy?akto_connector=litellm&guardrails=true&ingest_data=true
-  → If flagged: logged only, response already sent to user
+Request → LiteLLM → forward to LLM → get response
+  → Send to Akto (guardrails + ingest) → log only
 ```
 
-## 5. Configuration Reference
+## 5. Parameters
 
-| Parameter | Environment Variable | Default | Description |
-|-----------|---------------------|---------|-------------|
-| `akto_base_url` | `AKTO_DATA_INGESTION_URL` | *required* | Akto Data Ingestion Service URL |
-| `akto_api_key` | `AKTO_API_KEY` | *required* | API key for authentication (sent as `Authorization: Bearer` header) |
-| `on_flagged` | `AKTO_ON_FLAGGED` | `block` | `block`: blocking pre-call + post-call ingest. `monitor`: single post-call log-only |
-| `akto_account_id` | `AKTO_ACCOUNT_ID` | `1000000` | Akto account ID |
-| `akto_vxlan_id` | `AKTO_VXLAN_ID` | `0` | VXLAN ID for traffic identification |
-| `unreachable_fallback` | — | `fail_closed` | `fail_open` or `fail_closed` when Akto is unreachable |
-| `guardrail_timeout` | — | `5` | HTTP timeout in seconds for Akto service calls |
+| Parameter | Env Variable | Default | Description |
+|-----------|-------------|---------|-------------|
+| `akto_base_url` | `AKTO_DATA_INGESTION_URL` | *required* | Akto ingestion URL |
+| `akto_api_key` | `AKTO_API_KEY` | *required* | API key (sent as Bearer token) |
+| `on_flagged` | `AKTO_ON_FLAGGED` | `block` | `block` or `monitor` |
+| `akto_account_id` | `AKTO_ACCOUNT_ID` | `1000000` | Account ID |
+| `akto_vxlan_id` | `AKTO_VXLAN_ID` | `0` | VXLAN ID |
+| `unreachable_fallback` | — | `fail_closed` | `fail_open` or `fail_closed` |
+| `guardrail_timeout` | — | `5` | Timeout in seconds |
 
 ## 6. Error Handling
 
 | Scenario | `fail_closed` (default) | `fail_open` |
 |----------|------------------------|-------------|
-| Akto is unreachable | ❌ Request blocked (503) | ✅ Request passes through |
-| Akto returns error | ❌ Request blocked (503) | ✅ Request passes through |
-| Guardrail says Allowed=false | ❌ Request blocked (400) + details ingested | ❌ Request blocked (400) + details ingested |
+| Akto unreachable | ❌ Blocked (503) | ✅ Passes through |
+| Akto returns error | ❌ Blocked (503) | ✅ Passes through |
+| Guardrail says no | ❌ Blocked (400) | ❌ Blocked (400) |

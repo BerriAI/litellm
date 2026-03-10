@@ -8,14 +8,11 @@ from .base import GuardrailConfigModel
 
 
 class AktoConfigModel(GuardrailConfigModel):
-    """Configuration model for Akto Guardrail integration."""
+    """Config for the Akto guardrail."""
 
     akto_base_url: Optional[str] = Field(
         default=None,
-        description=(
-            "Akto Data Ingestion Service URL. "
-            "Falls back to AKTO_DATA_INGESTION_URL environment variable."
-        ),
+        description="Akto Data Ingestion Service URL. Env: AKTO_DATA_INGESTION_URL.",
         json_schema_extra={
             "examples": [
                 "http://localhost:9090",
@@ -26,52 +23,32 @@ class AktoConfigModel(GuardrailConfigModel):
 
     akto_api_key: Optional[str] = Field(
         default=None,
-        description=(
-            "Akto API key for authentication. "
-            "Falls back to AKTO_API_KEY environment variable."
-        ),
+        description="API key for Akto. Env: AKTO_API_KEY.",
     )
 
     on_flagged: Optional[Literal["block", "monitor"]] = Field(
         default="block",
-        description=(
-            "Action to take when a violation occurs:\n"
-            "• 'block' (sync): Pre-call validation that blocks requests if flagged.\n"
-            "• 'monitor' (async): Post-call non-blocking logging only.\n"
-            "Falls back to AKTO_ON_FLAGGED environment variable."
-        ),
+        description="'block' = pre-call validation, 'monitor' = post-call log only. Env: AKTO_ON_FLAGGED.",
     )
 
     akto_account_id: Optional[str] = Field(
         default=None,
-        description=(
-            "Akto account ID for data ingestion. "
-            "Falls back to AKTO_ACCOUNT_ID environment variable. Defaults to '1000000'."
-        ),
+        description="Akto account ID. Env: AKTO_ACCOUNT_ID. Default: '1000000'.",
     )
 
     akto_vxlan_id: Optional[str] = Field(
         default=None,
-        description=(
-            "Akto VXLAN ID for traffic identification. "
-            "Falls back to AKTO_VXLAN_ID environment variable. Defaults to '0'."
-        ),
+        description="VXLAN ID for traffic identification. Env: AKTO_VXLAN_ID. Default: '0'.",
     )
 
     unreachable_fallback: Optional[Literal["fail_closed", "fail_open"]] = Field(
         default="fail_closed",
-        description=(
-            "Behavior when the Akto service is unreachable. "
-            "'fail_open' allows requests through; 'fail_closed' blocks them."
-        ),
+        description="What to do when Akto is unreachable. 'fail_open' = allow, 'fail_closed' = block.",
     )
 
     guardrail_timeout: Optional[int] = Field(
         default=None,
-        description=(
-            "HTTP timeout in seconds for calls to the Akto service. "
-            "Defaults to 5 seconds if not set."
-        ),
+        description="HTTP timeout in seconds. Default: 5.",
     )
 
     @staticmethod
