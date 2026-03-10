@@ -174,7 +174,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             }}>Beta</span>
           </div>
           <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>
-            Connect tools to your chat.
+            Browse tools, authenticate once, use in chat — no setup needed.
           </p>
         </div>
         <Input
@@ -260,6 +260,15 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                 </div>
                 {isConnected && (
                   <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#1677ff", flexShrink: 0 }} />
+                )}
+                {server.auth_type === "oauth2" && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 600, color: "#7c3aed",
+                    background: "#f3e8ff", borderRadius: 4, padding: "1px 5px",
+                    letterSpacing: "0.03em", flexShrink: 0, whiteSpace: "nowrap",
+                  }}>
+                    OAuth2
+                  </span>
                 )}
                 <RightOutlined style={{ fontSize: 11, color: "#d1d5db", flexShrink: 0 }} />
               </div>
