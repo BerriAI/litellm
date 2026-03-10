@@ -43,7 +43,7 @@ guardrails:
     litellm_params:
       guardrail: qohash_qaigs
       api_key: os.environ/QAIGS_API_KEY
-      api_base: http://qaigs:8800/api/v1/integrations/litellm
+      api_base: http://qaigs:8800
       mode: "pre_call"
       default_on: true
 ```
@@ -56,7 +56,7 @@ guardrails:
     litellm_params:
       guardrail: qohash_qaigs
       api_key: os.environ/QAIGS_API_KEY
-      api_base: http://qaigs:8800/api/v1/integrations/litellm
+      api_base: http://qaigs:8800
       mode: "post_call"
       default_on: true
 ```
@@ -219,7 +219,7 @@ QAIGS returns one decision per request:
 |---|---|---|
 | `guardrail` | string | Must be `qohash_qaigs` |
 | `api_key` | string | API key for QAIGS (use `os.environ/VAR_NAME` for env vars) |
-| `api_base` | string | Base URL of your QAIGS instance (e.g. `http://qaigs:8800/api/v1/integrations/litellm`) |
+| `api_base` | string | Base URL of your QAIGS instance (e.g. `http://qaigs:8800`) |
 | `mode` | string | `pre_call` (scan prompt) or `post_call` (scan model output) |
 | `default_on` | boolean | Apply this guardrail to all requests by default |
 
