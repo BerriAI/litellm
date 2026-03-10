@@ -928,7 +928,16 @@ const sidebars = {
             "providers/vllm_batches",
           ]
         },
-        "providers/volcano",
+        {
+          type: "category",
+          label: "Volcengine / BytePlus",
+          items: [
+            "providers/volcano",
+            "providers/volcano_plan",
+            "providers/byteplus",
+            "providers/byteplus_plan",
+          ]
+        },
         "providers/voyage",
         "providers/wandb_inference",
         {

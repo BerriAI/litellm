@@ -98,9 +98,20 @@ response = embedding(
 )
 ```
 
+## Supported Chat Models
+
+| Model ID | Context Window |
+|---|---|
+| `doubao-seed-2-0-pro-260215` | 256,000 |
+| `kimi-k2-5-260127` | 256,000 |
+| `glm-4-7-251222` | 200,000 |
+| `deepseek-v3-2-251201` | 128,000 |
+
+All chat models support function calling and tool choice.
+
 ## Supported Models - 💥 ALL Volcengine Models Supported!
 We support ALL `volcengine` models for both chat completions and embeddings:
-- **Chat Models**: Set `volcengine/<OUR_ENDPOINT_ID>` as a prefix when sending completion requests
+- **Chat Models**: Set `volcengine/<model-id>` as a prefix when sending completion requests (e.g., `volcengine/doubao-seed-2-0-pro-260215`)
 - **Embedding Models**: Use the specific model names listed above (e.g., `volcengine/doubao-embedding-text-240715`)
 
 ## Sample Usage - LiteLLM Proxy
@@ -149,3 +160,11 @@ curl --location 'http://localhost:4000/embeddings' \
     "input": ["hello world", "good morning"]
 }'
 ```
+
+## Related Providers
+
+| Provider | Prefix | Description | Docs |
+|---|---|---|---|
+| [Volcengine Plan](./volcano_plan.md) | `volcengine_plan/` | Coding-optimized models via `/api/coding/v3` endpoint. Shares API key with Volcengine. | [volcano_plan](./volcano_plan.md) |
+| [BytePlus](./byteplus.md) | `byteplus/` | International version of Volcengine for Southeast Asia. | [byteplus](./byteplus.md) |
+| [BytePlus Plan](./byteplus_plan.md) | `byteplus_plan/` | Coding-optimized models on BytePlus international endpoint. | [byteplus_plan](./byteplus_plan.md) |
