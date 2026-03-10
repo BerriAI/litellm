@@ -618,7 +618,11 @@ class MCPServerManager:
             mcp_info["description"] = mcp_server.description
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
-        if mcp_server.url and auth_type == MCPAuth.oauth2:
+        if (
+            mcp_server.url
+            and auth_type == MCPAuth.oauth2
+            and not mcp_server.authorization_url
+        ):
             mcp_oauth_metadata = await self._descovery_metadata(
                 server_url=mcp_server.url,
             )

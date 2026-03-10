@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, Switch } from "antd";
+import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer } from "../networking";
@@ -61,6 +61,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [keyTools, setKeyTools] = useState<OpenAPIKeyTool[]>([]);
   const [searchValue, setSearchValue] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
+  const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
@@ -108,8 +109,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     getCredentials: () => form.getFieldValue("credentials"),
     getTemporaryPayload: () => {
       const values = form.getFieldsValue(true);
-      const url = values.url;
       const transport = values.transport || transportType;
+      // For OpenAPI transport the form has spec_path instead of url.
+      // We pass the spec_path as url so the temp-session endpoint has something
+      // to store; the backend uses authorization_url / token_url for the actual
+      // OAuth redirect, so the spec_path value is never used for OAuth itself.
+      const url = values.url || (transport === TRANSPORT.OPENAPI ? values.spec_path : undefined);
       if (!url || !transport) {
         return null;
       }
@@ -130,7 +135,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         alias: values.alias,
         description: values.description,
         url,
-        transport,
+        transport: transport === TRANSPORT.OPENAPI ? "http" : transport,
         auth_type: AUTH_TYPE.OAUTH2,
         credentials: values.credentials,
         authorization_url: values.authorization_url,
@@ -415,7 +420,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const handleCancel = () => {
     form.resetFields();
     setCostConfig({});
-    setTools([]);
+    clearTools();
     setAllowedTools([]);
     setAliasManuallyEdited(false);
     setModalVisible(false);
@@ -649,6 +654,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   setFormValues((prev) => ({ ...prev, ...updates }))
                 }
                 onKeyToolsChange={setKeyTools}
+                onOAuthDocsUrlChange={setOauthDocsUrl}
               />
             )}
 
@@ -738,60 +744,74 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
             {/* Authentication - show for HTTP, SSE, and OpenAPI */}
             {transportType !== "stdio" && transportType !== "" && (
-              <Form.Item
-                label={<span className="text-sm font-medium text-gray-700">Authentication</span>}
-                name="auth_type"
-                rules={[{ required: true, message: "Please select an auth type" }]}
-              >
-                <Select placeholder="Select auth type" className="rounded-lg" size="large">
-                  <Select.Option value="none">None</Select.Option>
-                  <Select.Option value="api_key">API Key</Select.Option>
-                  <Select.Option value="bearer_token">Bearer Token</Select.Option>
-                  <Select.Option value="token">Token</Select.Option>
-                  <Select.Option value="basic">Basic Auth</Select.Option>
-                  <Select.Option value="oauth2">OAuth</Select.Option>
-                </Select>
-              </Form.Item>
-            )}
-
-            {transportType !== "stdio" && transportType !== "" && shouldShowAuthValueField && (
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    Authentication Value
-                    <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
-                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                    </Tooltip>
-                  </span>
-                }
-                name={["credentials", "auth_value"]}
-                rules={[
+              <Collapse
+                defaultActiveKey={["auth"]}
+                className="mb-4"
+                items={[
                   {
-                    validator: (_, value) =>
-                      value && typeof value === "string" && value.trim() === ""
-                        ? Promise.reject(new Error("Authentication value cannot be empty whitespace"))
-                        : Promise.resolve(),
+                    key: "auth",
+                    label: <span className="text-sm font-semibold text-gray-700">Authentication</span>,
+                    children: (
+                      <>
+                        <Form.Item
+                          name="auth_type"
+                          rules={[{ required: true, message: "Please select an auth type" }]}
+                        >
+                          <Select placeholder="Select auth type" className="rounded-lg" size="large">
+                            <Select.Option value="none">None</Select.Option>
+                            <Select.Option value="api_key">API Key</Select.Option>
+                            <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                            <Select.Option value="token">Token</Select.Option>
+                            <Select.Option value="basic">Basic Auth</Select.Option>
+                            <Select.Option value="oauth2">OAuth</Select.Option>
+                          </Select>
+                        </Form.Item>
+
+                        {shouldShowAuthValueField && (
+                          <Form.Item
+                            label={
+                              <span className="text-sm font-medium text-gray-700 flex items-center">
+                                Authentication Value
+                                <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
+                                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                                </Tooltip>
+                              </span>
+                            }
+                            name={["credentials", "auth_value"]}
+                            rules={[
+                              {
+                                validator: (_, value) =>
+                                  value && typeof value === "string" && value.trim() === ""
+                                    ? Promise.reject(new Error("Authentication value cannot be empty whitespace"))
+                                    : Promise.resolve(),
+                              },
+                            ]}
+                          >
+                            <TextInput
+                              type="password"
+                              placeholder="Enter token or secret"
+                              className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                            />
+                          </Form.Item>
+                        )}
+
+                        {isOAuthAuthType && (
+                          <OAuthFormFields
+                            isM2M={isM2MFlow}
+                            initialFlowType={OAUTH_FLOW.INTERACTIVE}
+                            docsUrl={oauthDocsUrl}
+                            oauthFlow={{
+                              startOAuthFlow,
+                              status: oauthStatus,
+                              error: oauthError,
+                              tokenResponse: oauthTokenResponse,
+                            }}
+                          />
+                        )}
+                      </>
+                    ),
                   },
                 ]}
-              >
-                <TextInput
-                  type="password"
-                  placeholder="Enter token or secret"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
-            )}
-
-            {transportType !== "stdio" && transportType !== "" && isOAuthAuthType && (
-              <OAuthFormFields
-                isM2M={isM2MFlow}
-                initialFlowType={OAUTH_FLOW.INTERACTIVE}
-                oauthFlow={{
-                  startOAuthFlow,
-                  status: oauthStatus,
-                  error: oauthError,
-                  tokenResponse: oauthTokenResponse,
-                }}
               />
             )}
 
