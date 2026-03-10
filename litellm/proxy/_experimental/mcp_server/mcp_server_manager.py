@@ -2297,7 +2297,7 @@ class MCPServerManager:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        db_mcp_servers = await get_all_mcp_servers(prisma_client)
+        db_mcp_servers = await get_all_mcp_servers(prisma_client, approval_status="active")
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
 
         previous_registry = self.registry
