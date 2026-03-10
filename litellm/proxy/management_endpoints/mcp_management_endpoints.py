@@ -1373,14 +1373,8 @@ if MCP_AVAILABLE:
 
     @functools.lru_cache(maxsize=1)
     def _load_openapi_registry() -> Dict[str, Any]:
-        try:
-            with open(_OPENAPI_REGISTRY_PATH, "r") as f:
-                data: Dict[str, Any] = json.load(f)
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                f"Failed to load OpenAPI registry from {_OPENAPI_REGISTRY_PATH}: {e}"
-            )
-            data = {"apis": []}
+        with open(_OPENAPI_REGISTRY_PATH, "r") as f:
+            data: Dict[str, Any] = json.load(f)
         return data
 
     @router.get(
@@ -1399,4 +1393,10 @@ if MCP_AVAILABLE:
                     )
                 },
             )
-        return _load_openapi_registry()
+        try:
+            return _load_openapi_registry()
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to load OpenAPI registry from {_OPENAPI_REGISTRY_PATH}: {e}"
+            )
+            return {"apis": []}

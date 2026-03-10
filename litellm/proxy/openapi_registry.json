@@ -189,7 +189,7 @@
       "title": "Shopify",
       "description": "Products, orders, customers, and store management (requires your store subdomain)",
       "icon_url": "https://cdn.simpleicons.org/shopify",
-      "spec_url": "https://raw.githubusercontent.com/allengrant/shopify_openapi/master/shopify_openapi.json",
+      "spec_url": "https://raw.githubusercontent.com/Shopify/shopify-api-specs/main/admin/rest/2024-01/openapi.json",
       "oauth": {
         "authorization_url": "https://your-store.myshopify.com/admin/oauth/authorize",
         "token_url": "https://your-store.myshopify.com/admin/oauth/access_token",
