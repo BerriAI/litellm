@@ -4,7 +4,6 @@ ARG PROXY_EXTRAS_SOURCE=published
 
 WORKDIR /app
 
-# Build deps (UI build + compiling wheels)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc g++ \
     curl ca-certificates \
@@ -13,17 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir --upgrade pip build
 
-# Wheels cache
 COPY requirements.txt .
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt \
   && pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19" \
   && pip wheel --no-cache-dir --wheel-dir=/wheels/ "PyJWT==2.9.0"
 
-# Source
 COPY . .
 ENV LITELLM_NON_ROOT=true
 
-# Build Admin UI
 RUN mkdir -p /var/lib/litellm/ui && \
   npm install -g npm@latest && npm cache clean --force && \
   cd /app/ui/litellm-dashboard && \
@@ -46,18 +42,15 @@ RUN mkdir -p /var/lib/litellm/ui && \
     touch .litellm_ui_ready ) && \
   cd /app/ui/litellm-dashboard && rm -rf ./out
 
-# Build litellm wheel
 RUN rm -rf dist/* && python -m build && \
   rm -f /wheels/litellm-*.whl && \
   cp dist/*.whl /wheels/
 
-# Optional local extras
 RUN if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
   cd /app/litellm-proxy-extras && rm -rf dist && python -m build && \
   cp dist/*.whl /wheels/; \
   fi
 
-# Cache Prisma engines/CLI in builder (for offline runtime)
 ENV HOME=/app \
   XDG_CACHE_HOME=/app/.cache \
   PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
@@ -68,7 +61,6 @@ RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 \
 
 RUN python3 -c "import prisma.cli.prisma as p; p.ensure_cached()"
 
-# Patch schema.prisma (remove binaryTargets for prisma-client-py generator)
 RUN python3 - <<'PY'
 import re
 p="/app/schema.prisma"
@@ -89,10 +81,6 @@ ARG PROXY_EXTRAS_SOURCE=published
 
 WORKDIR /app
 
-# Runtime deps:
-# - supervisor: prod_entrypoint.sh may exec supervisord when SEPARATE_HEALTH_APP=1
-# - libatomic1: required for nodeenv node used by prisma generate
-# - nodejs/npm: needed to run `npm pack` for CVE patching
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates bash openssl \
     supervisor \
@@ -100,7 +88,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs npm \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy app bits + wheels
 COPY --from=builder /app/requirements.txt /app/requirements.txt
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
 COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
@@ -110,11 +97,8 @@ COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 COPY --from=builder /wheels /wheels
-
-# Copy cached prisma binaries/cli
 COPY --from=builder /app/.cache/prisma-python /app/.cache/prisma-python
 
-# Offline + non-root friendly env (align with sibling Dockerfile expectations)
 ENV LITELLM_NON_ROOT=true \
   HOME=/app \
   XDG_CACHE_HOME=/app/.cache \
@@ -128,7 +112,6 @@ ENV LITELLM_NON_ROOT=true \
   NPM_CONFIG_CACHE=/app/.cache/npm \
   LITELLM_MIGRATION_DIR=/app/.litellm_migrations
 
-# Install python deps from wheels offline (install PyJWT last to dedupe/pin)
 RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
   pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
   pip install --no-index --find-links=/wheels/ --no-deps semantic_router==0.1.11 && \
@@ -141,17 +124,13 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
   pip install --no-index --find-links=/wheels/ "PyJWT==2.9.0" && \
   rm -rf /wheels
 
-# Install prisma tooling in runtime and generate client INTO runtime site-packages
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 && \
   python3 -m prisma generate
 
-# ---- Soft-mode CVE patching of bundled npm tree via npm pack (no shell funcs) ----
-# Patches every on-disk copy under any */node_modules/<pkg> in Python site-packages.
 RUN python3 - <<'PY'
-import site, pathlib, subprocess, tarfile, tempfile, shutil, sys
+import site, pathlib, subprocess, tarfile, tempfile, shutil, sys, inspect
 
 SAFE = {
-    # folder_name: (npm_package, version)
     "tar": ("tar", "7.5.10"),
     "glob": ("glob", "11.1.0"),
     "brace-expansion": ("@isaacs/brace-expansion", "5.0.1"),
@@ -162,18 +141,36 @@ SAFE = {
 def warn(msg: str) -> None:
     print(msg, file=sys.stderr)
 
-# Determine site-packages roots
 roots = [pathlib.Path(p) for p in site.getsitepackages() if p]
 try:
     roots.append(pathlib.Path(site.getusersitepackages()))
 except Exception:
     pass
 
+def safe_extract(tf: tarfile.TarFile, path: pathlib.Path) -> None:
+    sig = inspect.signature(tf.extractall)
+    if "filter" in sig.parameters:
+        tf.extractall(path, filter="data")
+        return
+    for m in tf.getmembers():
+        n = m.name
+        if n.startswith("/") or ".." in pathlib.PurePosixPath(n).parts:
+            raise RuntimeError(f"Unsafe path in tar: {n}")
+    tf.extractall(path)
+
+def is_node_modules_pkg_dir(d: pathlib.Path) -> bool:
+    # unscoped: .../node_modules/<pkg>
+    if d.parent.name == "node_modules":
+        return True
+    # scoped: .../node_modules/@scope/<pkg>
+    if d.parent.parent and d.parent.parent.name == "node_modules" and d.parent.name.startswith("@"):
+        return True
+    return False
+
 with tempfile.TemporaryDirectory() as tmpdir:
     tmpdir = pathlib.Path(tmpdir)
     packed_sources: dict[str, pathlib.Path] = {}
 
-    # Pack and extract each patched package
     for folder_name, (npm_name, ver) in SAFE.items():
         try:
             cmd = f"cd '{tmpdir}' && npm pack --silent {npm_name}@{ver}"
@@ -194,7 +191,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
             extract_dir.mkdir(parents=True, exist_ok=True)
 
             with tarfile.open(tgz_path, "r:gz") as tf:
-                tf.extractall(extract_dir)
+                safe_extract(tf, extract_dir)
 
             pkg_dir = extract_dir / "package"
             if not pkg_dir.exists():
@@ -203,9 +200,8 @@ with tempfile.TemporaryDirectory() as tmpdir:
 
             packed_sources[folder_name] = pkg_dir
         except Exception as e:
-            warn(f"Warning: exception while packing {npm_name}@{ver}: {e}; skipping")
+            warn(f"Warning: exception while packing/extracting {npm_name}@{ver}: {e}; skipping")
 
-    # Replace every occurrence
     total_replaced = 0
     for folder_name, src_pkg_dir in packed_sources.items():
         for root in roots:
@@ -213,7 +209,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
                 continue
             try:
                 for d in root.rglob(folder_name):
-                    if d.is_dir() and d.parent.name == "node_modules":
+                    if d.is_dir() and is_node_modules_pkg_dir(d):
                         try:
                             shutil.rmtree(d)
                             shutil.copytree(src_pkg_dir, d, symlinks=True)
@@ -226,7 +222,6 @@ with tempfile.TemporaryDirectory() as tmpdir:
     warn(f"Soft-mode npm patch complete. Total directories replaced: {total_replaced}")
 PY
 
-# Scripts + permissions for non-root uid/gid 65534
 RUN sed -i 's/\r$//' /app/docker/entrypoint.sh && \
   sed -i 's/\r$//' /app/docker/prod_entrypoint.sh && \
   chmod +x /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh && \
