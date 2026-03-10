@@ -298,9 +298,14 @@ class MCPServerManager:
             resolved_authorization_url = server_config.get("authorization_url") or (
                 mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
             )
-            token_url_from_config = bool(server_config.get("token_url"))
-            resolved_token_url = server_config.get("token_url") or (
-                mcp_oauth_metadata.token_url if mcp_oauth_metadata else None
+            _explicit_token_url = server_config.get("token_url")
+            _has_pkce_creds = bool(
+                server_config.get("client_id") and server_config.get("client_secret")
+            )
+            resolved_token_url = _explicit_token_url or (
+                (mcp_oauth_metadata.token_url if mcp_oauth_metadata else None)
+                if not _has_pkce_creds
+                else None
             )
             resolved_registration_url = server_config.get("registration_url") or (
                 mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
@@ -323,7 +328,6 @@ class MCPServerManager:
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
-                token_url_from_config=token_url_from_config,
                 registration_url=resolved_registration_url,
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),

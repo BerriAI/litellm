@@ -47,7 +47,6 @@ class MCPServer(BaseModel):
     scopes: Optional[List[str]] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
-    token_url_from_config: bool = False  # True only when token_url was explicitly set in user config (not auto-discovered)
     registration_url: Optional[str] = None
     # AWS SigV4 fields
     aws_access_key_id: Optional[str] = None
