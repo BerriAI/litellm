@@ -1206,6 +1206,7 @@ class AmazonConverseConfig(BaseConfig):
             self._validate_request_metadata(request_metadata)
 
         output_config: Optional[OutputConfigBlock] = inference_params.pop("outputConfig", None)
+        inference_params.pop("output_config", None)  # Bedrock Converse doesn't support it
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
