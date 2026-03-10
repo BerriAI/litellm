@@ -1326,7 +1326,11 @@ class Choices(SafeAttributeModel, OpenAIObject):
         **params,
     ):
         if finish_reason is not None:
-            params["finish_reason"] = map_finish_reason(finish_reason)
+            mapped = map_finish_reason(finish_reason)
+            params["finish_reason"] = mapped
+            if finish_reason != mapped:
+                provider_specific_fields = dict(provider_specific_fields) if provider_specific_fields else {}
+                provider_specific_fields["native_finish_reason"] = finish_reason
         else:
             params["finish_reason"] = "stop"
         if index is not None:
