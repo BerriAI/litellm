@@ -87,9 +87,11 @@ litellm --config your_config.yaml --port 4000
 
 ## How to Verify Migrations
 
+> **Note:** `<schema-path>` = `<venv>/lib/python<version>/site-packages/litellm_proxy_extras/schema.prisma`
+
 ### Before applying migrations: Preview what will change
 
-> **Note:** Run `pip install 'litellm[proxy]==<version>'` first (Step 3) so the new `schema.prisma` is available at `<schema-path>`.
+Run `pip install 'litellm[proxy]==<version>'` first (Step 3) so the new `schema.prisma` is available.
 
 ```bash
 prisma migrate diff \
