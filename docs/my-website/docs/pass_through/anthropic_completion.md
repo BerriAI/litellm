@@ -5,6 +5,15 @@ import TabItem from '@theme/TabItem';
 
 Pass-through endpoints for Anthropic - call provider-specific endpoint, in native format (no translation).
 
+## Routing Behavior
+
+`/anthropic/*` supports two routing modes:
+
+- Default pass-through: if the request does not target a configured router model, LiteLLM forwards the request to the Anthropic-compatible upstream configured for the pass-through route.
+- Router-model dispatch: if the request `model` matches a deployment in `model_list`, LiteLLM routes the request through its native `anthropic_messages` flow instead of forwarding it directly upstream.
+
+This makes `/anthropic/v1/messages` usable for any provider that exposes an Anthropic-compatible API through a configured LiteLLM deployment.
+
 | Feature | Supported | Notes | 
 |-------|-------|-------|
 | Cost Tracking | ✅ | supports all models on `/messages`, `/v1/messages/batches` endpoint |
@@ -65,6 +74,39 @@ print(response)
 Supports **ALL** Anthropic Endpoints (including streaming).
 
 [**See All Anthropic Endpoints**](https://docs.anthropic.com/en/api/messages)
+
+## When To Use This Route
+
+- Use pure pass-through when you want LiteLLM to proxy requests directly to Anthropic's native API shape.
+- Use a configured router model when your upstream provider exposes an Anthropic-compatible API and you want LiteLLM to resolve the deployment from `model_list`.
+
+Example router-model config:
+
+```yaml
+model_list:
+  - model_name: my-anthropic-compatible-model
+    litellm_params:
+      model: provider/model-name
+      api_key: os.environ/PROVIDER_API_KEY
+      api_base: https://provider.example.com/anthropic
+```
+
+Then call the same LiteLLM Proxy route:
+
+```bash
+curl --request POST \
+  --url http://0.0.0.0:4000/anthropic/v1/messages \
+  --header "x-api-key: $LITELLM_API_KEY" \
+  --header "anthropic-version: 2023-06-01" \
+  --header "content-type: application/json" \
+  --data '{
+    "model": "my-anthropic-compatible-model",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "Hello, world"}
+    ]
+  }'
+```
 
 ## Quick Start
 

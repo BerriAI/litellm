@@ -585,6 +585,56 @@ async def anthropic_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
     """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    request_body = await get_request_body(request)
+    is_router_model = is_passthrough_request_using_router_model(
+        request_body, llm_router
+    )
+    normalized_endpoint = endpoint.lstrip("/")
+
+    # Route configured router models through LiteLLM's Anthropic-compatible
+    # processing flow instead of blindly forwarding them to Anthropic.
+    if (
+        normalized_endpoint == "v1/messages"
+        and is_router_model
+        and llm_router is not None
+    ):
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=request_body)
+        return await base_llm_response_processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="anthropic_messages",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=None,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
     base_target_url = os.getenv("ANTHROPIC_API_BASE") or "https://api.anthropic.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -603,7 +653,7 @@ async def anthropic_proxy_route(
     )
 
     ## check for streaming
-    is_streaming_request = await is_streaming_request_fn(request)
+    is_streaming_request = is_passthrough_request_streaming(request_body)
 
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
