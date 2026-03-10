@@ -5,10 +5,7 @@ import re
 import sys
 from datetime import datetime
 from logging import Formatter
-from collections.abc import Mapping
-from typing import Any, Dict, List, Optional, Tuple, Union
-
-LogRecordArgs = Union[Tuple[Any, ...], Mapping[str, Any]]
+from typing import Any, Dict, List, Optional, Union
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -20,11 +17,7 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-_DISABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACTION", "").lower() in (
-    "1",
-    "true",
-    "yes",
-)
+_ENABLE_SECRET_REDACTION = bool(os.getenv("LITELLM_REDACT_SECRETS", False))
 
 _REDACTED = "REDACTED"
 
@@ -72,29 +65,17 @@ class SecretRedactionFilter(logging.Filter):
     """Scrubs known secret/credential patterns from log records."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if _DISABLE_SECRET_REDACTION:
+        if not _ENABLE_SECRET_REDACTION:
             return True
 
-        if isinstance(record.msg, str):
-            record.msg = _redact_string(record.msg)
-
-        if record.args:
-            record.args = self._redact_args(record.args)
+        try:
+            record.msg = _redact_string(record.getMessage())
+            record.args = None
+        except Exception:
+            if isinstance(record.msg, str):
+                record.msg = _redact_string(record.msg)
 
         return True
-
-    @staticmethod
-    def _redact_args(args: LogRecordArgs) -> LogRecordArgs:
-        if isinstance(args, Mapping):
-            return {
-                k: _redact_string(v) if isinstance(v, str) else v
-                for k, v in args.items()
-            }
-        if isinstance(args, tuple):
-            return tuple(
-                _redact_string(a) if isinstance(a, str) else a for a in args
-            )
-        return args
 
 
 _secret_filter = SecretRedactionFilter()
@@ -401,7 +382,6 @@ def _turn_on_json():
     """
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
-    handler.addFilter(_secret_filter)
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
