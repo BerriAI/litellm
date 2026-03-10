@@ -26,8 +26,8 @@ litellm_settings:
   langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"] # default tags for Langfuse Logging
   # Networking settings
   # Global proxy budget settings
-  max_budget: 100.0 # (float) Proxy-wide max spend across all requests. Requires general_settings.database_url + budget_duration.
-  budget_duration: "30d" # (str) Reset interval for proxy-wide max_budget. Supports seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+  max_budget: 100.0 # (float, default = 0.0) Proxy-wide max spend across all requests. Requires general_settings.database_url + budget_duration.
+  budget_duration: "30d" # (str, default = None) Reset interval for proxy-wide max_budget. Required when max_budget > 0. Supports seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 
   request_timeout: 10 # (int) llm requesttimeout in seconds. Raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout
   force_ipv4: boolean # If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API
@@ -191,8 +191,8 @@ router_settings:
 | json_logs | boolean | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging) |
 | default_fallbacks | array of strings | List of fallback models to use if a specific model group is misconfigured / bad. [Further docs](./reliability#default-fallbacks) |
 | request_timeout | integer | The timeout for requests in seconds. If not set, the default value is `6000 seconds`. [For reference OpenAI Python SDK defaults to `600 seconds`.](https://github.com/openai/openai-python/blob/main/src/openai/_constants.py) |
-| max_budget | float | Proxy-wide spend limit across all requests. Requires a database connection and `budget_duration`. [Budgets, Rate Limits](users#global-proxy) |
-| budget_duration | string | Reset interval for proxy-wide `max_budget`. Supported values use duration suffixes like `30s`, `30m`, `30h`, `30d`. Required when `max_budget` is set. [Budgets, Rate Limits](users#global-proxy) |
+| max_budget | float | Proxy-wide spend limit across all requests. Default `0.0` (disabled). Requires a database connection and `budget_duration`. [Budgets, Rate Limits](users#global-proxy) |
+| budget_duration | string | Reset interval for proxy-wide `max_budget`. Default `None`. Required when `max_budget` is set. Supported values use duration suffixes like `30s`, `30m`, `30h`, `30d`. [Budgets, Rate Limits](users#global-proxy) |
 | force_ipv4 | boolean | If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API |
 | content_policy_fallbacks | array of objects | Fallbacks to use when a ContentPolicyViolationError is encountered. [Further docs](./reliability#content-policy-fallbacks) |
 | context_window_fallbacks | array of objects | Fallbacks to use when a ContextWindowExceededError is encountered. [Further docs](./reliability#context-window-fallbacks) |
