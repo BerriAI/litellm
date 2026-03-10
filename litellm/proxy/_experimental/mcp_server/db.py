@@ -513,7 +513,7 @@ async def get_mcp_submissions(
     """
     rows = await prisma_client.db.litellm_mcpservertable.find_many(
         where={"submitted_at": {"not": None}},
-        order={"submitted_at": "asc"},
+        order={"submitted_at": "desc"},
     )
     items = [LiteLLM_MCPServerTable(**r.model_dump()) for r in rows]
 

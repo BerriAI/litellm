@@ -1026,6 +1026,10 @@ if MCP_AVAILABLE:
 
         # TODO: audit log for create
 
+        # Admin-created servers are always active regardless of any lifecycle fields
+        # in the payload — prevents an admin from accidentally creating a pending server.
+        payload.approval_status = MCPApprovalStatus.active
+
         # Attempt to create the mcp server
         try:
             new_mcp_server = await create_mcp_server(
