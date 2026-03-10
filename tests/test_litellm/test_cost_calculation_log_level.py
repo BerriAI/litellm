@@ -67,7 +67,7 @@ def test_cost_calculation_uses_debug_level():
         # Find the cost calculation log records
         cost_calc_records = [
             record for record in handler.records
-            if "selected model name for cost calculation" in record.message
+            if "selected model name for cost calculation" in record.getMessage()
         ]
 
         # Verify that cost calculation logs are at DEBUG level
@@ -126,7 +126,7 @@ def test_batch_cost_calculation_uses_debug_level():
         # Find batch cost calculation log records
         batch_cost_records = [
             record for record in handler.records
-            if "Calculating batch cost per token" in record.message
+            if "Calculating batch cost per token" in record.getMessage()
         ]
 
         # Verify logs exist and are at DEBUG level

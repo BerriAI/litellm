@@ -626,6 +626,7 @@ class TestStreamingEventProcessing:
         assert UPDATE_INTERVAL * 1000 == 150  # 150 milliseconds
 
 
+@pytest.mark.xdist_group("heavy_imports")
 class TestBackgroundStreamingModule:
     """Test cases for background_streaming module imports and structure"""
 
@@ -650,12 +651,12 @@ class TestBackgroundStreamingModule:
 
     def test_background_streaming_task_is_async(self):
         """Test that background_streaming_task is an async function"""
-        import asyncio
+        import inspect
         from litellm.proxy.response_polling.background_streaming import (
             background_streaming_task,
         )
-        
-        assert asyncio.iscoroutinefunction(background_streaming_task)
+
+        assert inspect.iscoroutinefunction(background_streaming_task)
 
 
 class TestProviderResolutionForPolling:

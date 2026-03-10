@@ -790,6 +790,46 @@ def test_containers_routes_are_llm_api_routes(route):
     assert RouteChecks.is_llm_api_route(route) is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
+    ],
+)
+def test_rag_routes_are_llm_api_routes(route):
+    """Test that RAG routes are recognized as LLM API routes (internal_user_viewer can access)"""
+
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+def test_rag_routes_accessible_to_internal_user_viewer():
+    """
+    Test that internal_user_viewer can access RAG routes (/rag/ingest, /rag/query).
+
+    internal_user_viewer should be able to call RAG endpoints like chat/completions
+    since they are LLM API routes. For /rag/ingest, they can only add to existing
+    vector stores (enforced in the endpoint).
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    )
+
+    for route in ["/rag/ingest", "/v1/rag/ingest", "/rag/query", "/v1/rag/query"]:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+            route=route,
+            request=MagicMock(spec=Request),
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
 def test_videos_route_accessible_to_internal_users():
     """
     Test that internal users can access the videos routes.
@@ -1076,3 +1116,77 @@ def test_route_in_additional_public_routes_exact_match():
         assert route_in_additonal_public_routes("/status") is True
         # Non-matching routes should fail
         assert route_in_additonal_public_routes("/other") is False
+
+
+def test_internal_user_can_access_key_reset_spend_route():
+    """
+    Regression test: team admins (role=internal_user) should pass the route-level
+    check for /key/{hash}/reset_spend. The endpoint itself enforces team admin status.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="team-admin-user",
+        user_email="teamadmin@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    key_hash = "baec26d2901589fe9fec76610e6e2be4895cdd8e19b3ada9a4fa2eb85e1901ae"
+    route = f"/key/{key_hash}/reset_spend"
+
+    # Should not raise — the route-level check must pass for team admins
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_reset_spend():
+    """
+    An internal_user passes the route check for /key/{hash}/reset_spend
+    (authorization is deferred to the endpoint), but is still blocked from
+    admin-only routes like /config/update.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="regular-user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="regular-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    key_hash = "baec26d2901589fe9fec76610e6e2be4895cdd8e19b3ada9a4fa2eb85e1901ae"
+
+    # /key/{hash}/reset_spend passes the route check for internal_user
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=f"/key/{key_hash}/reset_spend",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+    # /config/update is still blocked
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/config/update",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin can be used to generate" in str(exc_info.value)

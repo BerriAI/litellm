@@ -42,6 +42,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "amoderation": "/moderations",
     "arerank": "/rerank",
     "aresponses": "/responses",
+    "_aresponses_websocket": "/responses",
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
     "acancel_responses": "/responses/{response_id}/cancel",
@@ -142,7 +143,7 @@ def add_shared_session_to_data(data: dict) -> None:
         pass
 
 
-async def route_request(
+async def route_request(  # noqa: PLR0915 - Complex routing function, refactoring tracked separately
     data: dict,
     llm_router: Optional[LitellmRouter],
     user_model: Optional[str],
@@ -163,6 +164,7 @@ async def route_request(
         "acreate_response_reply",
         "alist_input_items",
         "_arealtime",  # private function for realtime API
+        "_aresponses_websocket",  # private function for responses WebSocket mode
         "aimage_edit",
         "agenerate_content",
         "agenerate_content_stream",

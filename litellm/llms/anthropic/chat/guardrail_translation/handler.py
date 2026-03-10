@@ -75,7 +75,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        chat_completion_compatible_request, tool_name_mapping = (
+        chat_completion_compatible_request, _tool_name_mapping = (
             LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
                 # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
                 anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
@@ -124,6 +124,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tools = guardrailed_inputs.get("tools")
+            if guardrailed_tools is not None:
+                data["tools"] = guardrailed_tools
 
             # Step 3: Map guardrail responses back to original message structure
             await self._apply_guardrail_responses_to_input(
@@ -137,6 +140,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
         return data
+
+    def extract_request_tool_names(self, data: dict) -> List[str]:
+        """Extract tool names from Anthropic messages request (tools[].name)."""
+        names: List[str] = []
+        for tool in data.get("tools") or []:
+            if isinstance(tool, dict) and tool.get("name"):
+                names.append(str(tool["name"]))
+        return names
 
     def _extract_input_text_and_images(
         self,
@@ -194,7 +205,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             openai_tools = self.adapter.translate_anthropic_tools_to_openai(
                 tools=cast(List[AllAnthropicToolsValues], tools)
             )
-            tools_to_check.extend(openai_tools)
+            tools_to_check.extend(openai_tools) # type: ignore
 
     async def _apply_guardrail_responses_to_input(
         self,

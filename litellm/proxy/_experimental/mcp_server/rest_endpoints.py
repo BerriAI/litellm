@@ -12,6 +12,7 @@ from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.types.mcp import MCPAuth
 from litellm.types.utils import CallTypes
 
@@ -282,8 +283,10 @@ if MCP_AVAILABLE:
                 )
                 allowed_server_ids_set.update(servers)
 
-            allowed_server_ids = global_mcp_server_manager.filter_server_ids_by_ip(
-                list(allowed_server_ids_set), _rest_client_ip
+            allowed_server_ids, _ip_blocked_count = (
+                global_mcp_server_manager.filter_server_ids_by_ip_with_info(
+                    list(allowed_server_ids_set), _rest_client_ip
+                )
             )
 
             list_tools_result = []
@@ -292,6 +295,26 @@ if MCP_AVAILABLE:
             # If server_id is specified, only query that specific server
             if server_id:
                 if server_id not in allowed_server_ids:
+                    _server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                    if (
+                        _server is not None
+                        and _rest_client_ip is not None
+                        and not global_mcp_server_manager._is_server_accessible_from_ip(
+                            _server, _rest_client_ip
+                        )
+                    ):
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "ip_filtering",
+                                "message": (
+                                    f"MCP server '{server_id}' is not accessible from your IP address "
+                                    f"({_rest_client_ip}). This server is restricted to internal "
+                                    "networks only. To make it externally accessible, set "
+                                    "'available_on_public_internet: true' in the server configuration."
+                                ),
+                            },
+                        )
                     raise HTTPException(
                         status_code=403,
                         detail={
@@ -329,6 +352,19 @@ if MCP_AVAILABLE:
                     }
             else:
                 if not allowed_server_ids:
+                    if _ip_blocked_count > 0:
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "ip_filtering",
+                                "message": (
+                                    f"No MCP tools are available for your IP address ({_rest_client_ip}). "
+                                    f"{_ip_blocked_count} server(s) are restricted to internal networks only. "
+                                    "To make servers externally accessible, set "
+                                    "'available_on_public_internet: true' in the server configuration."
+                                ),
+                            },
+                        )
                     raise HTTPException(
                         status_code=403,
                         detail={
@@ -625,6 +661,46 @@ if MCP_AVAILABLE:
                 "message": "Failed to connect to MCP server. Check proxy logs for details.",
             }
 
+    async def _preview_openapi_tools(spec_path: str) -> dict:
+        """Generate tool previews from an OpenAPI spec without creating a server."""
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            build_input_schema,
+            load_openapi_spec_async,
+        )
+
+        try:
+            spec = await load_openapi_spec_async(spec_path)
+            paths = spec.get("paths", {})
+            tools: List[dict] = []
+            for path, path_item in paths.items():
+                for method in ("get", "post", "put", "patch", "delete"):
+                    operation = path_item.get(method)
+                    if operation is None:
+                        continue
+                    op_id = operation.get("operationId", f"{method}_{path}")
+                    summary = operation.get("summary", "")
+                    description = operation.get("description", summary)
+                    input_schema = build_input_schema(operation)
+                    tools.append(
+                        {
+                            "name": op_id,
+                            "description": description or summary or f"{method.upper()} {path}",
+                            "inputSchema": input_schema,
+                        }
+                    )
+            return {
+                "tools": tools,
+                "error": None,
+                "message": f"Found {len(tools)} tools from OpenAPI spec",
+            }
+        except Exception as e:
+            verbose_logger.error("Error previewing OpenAPI tools: %s", e, exc_info=True)
+            return {
+                "tools": [],
+                "error": True,
+                "message": f"Failed to load OpenAPI spec: {e}",
+            }
+
     @router.post("/test/connection", dependencies=[Depends(user_api_key_auth)])
     async def test_connection(
         request: Request,
@@ -645,7 +721,7 @@ if MCP_AVAILABLE:
         return await _execute_with_mcp_client(
             new_mcp_server_request,
             _test_connection_operation,
-            raw_headers=dict(request.headers),
+            raw_headers=_safe_get_request_headers(request),
         )
 
     @router.post("/test/tools/list")
@@ -657,6 +733,10 @@ if MCP_AVAILABLE:
         """
         Preview tools available from MCP server before adding it
         """
+        # For OpenAPI spec servers, generate tools from the spec directly
+        if new_mcp_server_request.spec_path:
+            return await _preview_openapi_tools(new_mcp_server_request.spec_path)
+
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
@@ -700,5 +780,5 @@ if MCP_AVAILABLE:
             _list_tools_operation,
             mcp_auth_header=mcp_auth_header,
             oauth2_headers=oauth2_headers,
-            raw_headers=dict(request.headers),
+            raw_headers=_safe_get_request_headers(request),
         )

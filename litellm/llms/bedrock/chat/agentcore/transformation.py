@@ -26,7 +26,7 @@ from litellm.types.llms.bedrock_agentcore import (
     AgentCoreUsage,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices, Usage
+from litellm.types.utils import Choices, Delta, Message, ModelResponse, ModelResponseStream, StreamingChoices, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -114,6 +114,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
+        # Set Accept header required by MCP servers on AgentCore
+        # Per MCP spec (Streamable HTTP transport): client MUST include Accept header
+        # listing both application/json and text/event-stream as supported content types
+        headers["Accept"] = "application/json, text/event-stream"
+
         # Check if api_key (bearer token) is provided for Cognito authentication
         # Priority: api_key parameter first, then optional_params
         jwt_token = api_key or optional_params.get("api_key")
@@ -476,7 +481,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                             text = delta.get("text", "")
 
                             if text:
-                                chunk = ModelResponse(
+                                chunk = ModelResponseStream(
                                     id=f"chatcmpl-{uuid.uuid4()}",
                                     created=0,
                                     model=model,
@@ -494,7 +499,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                         # Process metadata/usage
                         metadata = event_payload.get("metadata")
                         if metadata and "usage" in metadata:
-                            chunk = ModelResponse(
+                            chunk = ModelResponseStream(
                                 id=f"chatcmpl-{uuid.uuid4()}",
                                 created=0,
                                 model=model,
@@ -517,7 +522,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
                     # Process final message
                     if "message" in data_obj and isinstance(data_obj["message"], dict):
-                        chunk = ModelResponse(
+                        chunk = ModelResponseStream(
                             id=f"chatcmpl-{uuid.uuid4()}",
                             created=0,
                             model=model,
@@ -596,7 +601,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         self,
         response: httpx.Response,
         model: str,
-    ) -> AsyncGenerator[ModelResponse, None]:
+    ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Internal async generator that parses SSE and yields ModelResponse chunks.
         """
@@ -631,7 +636,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                             text = delta.get("text", "")
 
                             if text:
-                                chunk = ModelResponse(
+                                chunk = ModelResponseStream(
                                     id=f"chatcmpl-{uuid.uuid4()}",
                                     created=0,
                                     model=model,
@@ -649,7 +654,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                         # Process metadata/usage
                         metadata = event_payload.get("metadata")
                         if metadata and "usage" in metadata:
-                            chunk = ModelResponse(
+                            chunk = ModelResponseStream(
                                 id=f"chatcmpl-{uuid.uuid4()}",
                                 created=0,
                                 model=model,
@@ -672,7 +677,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
                     # Process final message
                     if "message" in data_obj and isinstance(data_obj["message"], dict):
-                        chunk = ModelResponse(
+                        chunk = ModelResponseStream(
                             id=f"chatcmpl-{uuid.uuid4()}",
                             created=0,
                             model=model,

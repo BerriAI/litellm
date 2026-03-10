@@ -16,6 +16,7 @@ interface GuardrailSelectionModalProps {
   onConfirm: (selectedGuardrails: any[]) => void;
   onCancel: () => void;
   isLoading?: boolean;
+  progressInfo?: { current: number; total: number } | null;
 }
 
 const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
@@ -25,6 +26,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
   onConfirm,
   onCancel,
   isLoading = false,
+  progressInfo,
 }) => {
   const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(
     new Set()
@@ -90,8 +92,15 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
     <Modal
       title={
         <div>
-          <h3 className="text-lg font-semibold mb-1">{template?.title}</h3>
-          <p className="text-sm text-gray-500 font-normal">
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold mb-0">{template?.title}</h3>
+            {progressInfo && (
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-600 border border-blue-100">
+                Template {progressInfo.current} of {progressInfo.total}
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-gray-500 font-normal mt-1">
             Review and select guardrails to create for this template
           </p>
         </div>
@@ -201,6 +210,11 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                         {guardrail.definition.litellm_params.patterns.length} pattern(s)
                       </Tag>
                     )}
+                    {guardrail.definition?.litellm_params?.categories && (
+                      <Tag className="text-xs" color="orange">
+                        {guardrail.definition.litellm_params.categories.length} category/categories
+                      </Tag>
+                    )}
                   </div>
                 </div>
               </div>
@@ -215,6 +229,31 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
               This template will use existing guardrails in your system.
             </p>
           </div>
+        )}
+
+        {/* Discovered Competitors */}
+        {template?.discoveredCompetitors?.length > 0 && (
+          <>
+            <Divider />
+            <div className="p-3 bg-purple-50 rounded-lg border border-purple-100">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-lg">✨</span>
+                <span className="font-medium text-purple-900 text-sm">
+                  AI-Discovered Competitors ({template.discoveredCompetitors.length})
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {template.discoveredCompetitors.map((name: string) => (
+                  <Tag key={name} color="purple" className="text-xs">
+                    {name}
+                  </Tag>
+                ))}
+              </div>
+              <p className="text-xs text-purple-600 mt-2">
+                These competitor names will be automatically blocked by the competitor-name-blocker guardrail.
+              </p>
+            </div>
+          </>
         )}
 
         <Divider />

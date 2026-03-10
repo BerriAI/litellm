@@ -404,7 +404,7 @@ def extract_model_name_from_bedrock_arn(model: str) -> str:
 
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
-    for prefix in ["bedrock/", "converse/", "invoke/", "openai/"]:
+    for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
         if model.startswith(prefix):
             model = model.split("/", 1)[1]
     return model
@@ -427,7 +427,20 @@ def get_bedrock_base_model(model: str) -> str:
     - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
     - "bedrock/converse/model" -> "model"
     - "anthropic.claude-3-5-sonnet-20241022-v2:0:51k" -> "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    - "bedrock/nova-2/arn:aws:..." -> "amazon.nova-2-custom"
+    - "bedrock/nova/arn:aws:..." -> "amazon.nova-custom"
     """
+    # Detect nova spec prefixes before stripping them
+    stripped = model
+    for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
+        if stripped.startswith(rp):
+            stripped = stripped[len(rp):]
+            break
+    if stripped.startswith("nova-2/"):
+        return "amazon.nova-2-custom"
+    elif stripped.startswith("nova/"):
+        return "amazon.nova-custom"
+
     model = strip_bedrock_routing_prefix(model)
     model = extract_model_name_from_bedrock_arn(model)
     model = strip_bedrock_throughput_suffix(model)
@@ -465,6 +478,14 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
         "opus_4.5",
         "opus-4-5",
         "opus_4_5",
+        "sonnet-4.6",
+        "sonnet_4.6",
+        "sonnet-4-6",
+        "sonnet_4_6",
+        "opus-4.6",
+        "opus_4.6",
+        "opus-4-6",
+        "opus_4_6",
     ]
     return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
@@ -593,6 +614,11 @@ class BedrockModelInfo(BaseLLMModelInfo):
         for prefix, route_type in route_mappings.items():
             if prefix in model:
                 return route_type
+
+        # Check for nova spec prefixes (nova/ and nova-2/)
+        _model_after_bedrock = model.replace("bedrock/", "", 1)
+        if _model_after_bedrock.startswith("nova-2/") or _model_after_bedrock.startswith("nova/"):
+            return "converse"
 
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)

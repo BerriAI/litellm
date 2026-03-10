@@ -335,13 +335,14 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     ):
         lowest_tpm = float("inf")
         potential_deployments = []  # if multiple deployments have the same low value
+        deployment_lookup = {
+            deployment.get("model_info", {}).get("id"): deployment
+            for deployment in healthy_deployments
+        }
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
-            _deployment = None
             item = item.split(":")[0]
-            for m in healthy_deployments:
-                if item == m["model_info"]["id"]:
-                    _deployment = m
+            _deployment = deployment_lookup.get(item)
             if _deployment is None:
                 continue  # skip to next one
             elif item_tpm is None:

@@ -97,11 +97,19 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - Integration tests for each provider in `tests/llm_translation/`
 - Proxy tests in `tests/proxy_unit_tests/`
 - Load tests in `tests/load_tests/`
+- **Always add tests when adding new entity types or features** — if the existing test file covers other entity types, add corresponding tests for the new one
+
+### UI / Backend Consistency
+- When wiring a new UI entity type to an existing backend endpoint, verify the backend API contract (single value vs. array, required vs. optional params) and ensure the UI controls match — e.g., use a single-select dropdown when the backend accepts a single value, not a multi-select
 
 ### Database Migrations
 - Prisma handles schema migrations
 - Migration files auto-generated with `prisma migrate dev`
 - Always test migrations against both PostgreSQL and SQLite
+
+### Proxy database access
+- **Do not write raw SQL** for proxy DB operations. Use Prisma model methods instead of `execute_raw` / `query_raw`.
+- Use the generated client: `prisma_client.db.<model>` (e.g. `litellm_tooltable`, `litellm_usertable`) with `.upsert()`, `.find_many()`, `.find_unique()`, `.update()`, `.update_many()` as appropriate. This avoids schema/client drift, keeps code testable with simple mocks, and matches patterns used in spend logs and other proxy code.
 
 ### Enterprise Features
 - Enterprise-specific code in `enterprise/` directory

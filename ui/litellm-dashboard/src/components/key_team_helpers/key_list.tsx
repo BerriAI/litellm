@@ -30,6 +30,7 @@ export interface KeyResponse {
   config: Record<string, unknown>;
   user_id: string;
   team_id: string | null;
+  project_id: string | null;
   max_parallel_requests: number;
   metadata: Record<string, unknown>;
   tpm_limit: number;
@@ -48,6 +49,7 @@ export interface KeyResponse {
   organization_id: string | null;
   created_at: string;
   updated_at: string;
+  last_active: string | null;
   team_spend: number;
   team_alias: string;
   team_tpm_limit: number;
