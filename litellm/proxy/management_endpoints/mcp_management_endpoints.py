@@ -736,6 +736,14 @@ if MCP_AVAILABLE:
         Creates the server with approval_status=pending_review.
         Requires a team-scoped API key.
         """
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Admin users should use POST /v1/mcp/server to create servers directly instead of the submission workflow."
+                },
+            )
+
         if not user_api_key_dict.team_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -783,7 +791,10 @@ if MCP_AVAILABLE:
         """
         Admin-only endpoint to view all user-submitted MCP servers pending review.
         """
-        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+        if user_api_key_dict.user_role not in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "Admin access required to view MCP server submissions."},
@@ -877,13 +888,16 @@ if MCP_AVAILABLE:
                 detail={"error": "MCP server is already rejected."},
             )
 
+        was_active = existing.approval_status == MCPApprovalStatus.active
         rejected = await reject_mcp_server(
             prisma_client,
             server_id,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             review_notes=payload.review_notes,
         )
-        await global_mcp_server_manager.reload_servers_from_database()
+        # Only evict from the runtime registry if the server was previously active
+        if was_active:
+            await global_mcp_server_manager.reload_servers_from_database()
         return _redact_mcp_credentials(rejected)
 
     @router.get(
