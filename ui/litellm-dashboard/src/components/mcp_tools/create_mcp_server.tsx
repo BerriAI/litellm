@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Modal, Tooltip, Form, Select, Input, Switch } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
-import { createMCPServer } from "../networking";
+import { createMCPServer, registerMCPServer } from "../networking";
 import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -10,10 +10,12 @@ import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
+import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
+import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -29,7 +31,7 @@ interface CreateMCPServerProps {
   onBackToDiscovery?: () => void;
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2];
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
@@ -52,13 +54,22 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     transport?: string;
   } | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
-  const [tools, setTools] = useState<any[]>([]);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
   const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [transportType, setTransportType] = useState<string>("");
+  const [keyTools, setKeyTools] = useState<OpenAPIKeyTool[]>([]);
   const [searchValue, setSearchValue] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
+
+  // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
+  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
+    accessToken,
+    oauthAccessToken,
+    formValues,
+    enabled: true,
+  });
+
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
@@ -373,19 +384,28 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
-        const response = await createMCPServer(accessToken, payload);
+        const response = isAdmin
+          ? await createMCPServer(accessToken, payload)
+          : await registerMCPServer(accessToken, payload);
 
-        NotificationsManager.success("MCP Server created successfully");
+        NotificationsManager.success(
+          isAdmin
+            ? "MCP Server created successfully"
+            : "MCP Server submitted for admin review"
+        );
         form.resetFields();
         setCostConfig({});
-        setTools([]);
+        clearTools();
         setAllowedTools([]);
         setAliasManuallyEdited(false);
         setModalVisible(false);
         onCreateSuccess(response);
       }
     } catch (error) {
-      NotificationsManager.fromBackend("Error creating MCP Server: " + error);
+      const reason = error instanceof Error ? error.message : String(error);
+      NotificationsManager.fromBackend(
+        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`
+      );
     } finally {
       setIsLoading(false);
     }
@@ -461,11 +481,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [isModalVisible]);
 
-  // rendering
-  if (!isAdminRole(userRole)) {
-    return null;
-  }
+  const isAdmin = isAdminRole(userRole);
 
+  // rendering
   return (
     <Modal
       title={
@@ -489,13 +507,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               objectFit: "contain",
             }}
           />
-          <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
+          <h2 className="text-xl font-semibold text-gray-900">
+            {isAdmin ? "Add New MCP Server" : "Submit MCP Server for Review"}
+          </h2>
         </div>
       }
       open={isModalVisible}
       width={1000}
       onCancel={handleCancel}
       footer={null}
+      forceRender
       className="top-8"
       styles={{
         body: { padding: "24px" },
@@ -510,6 +531,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           layout="vertical"
           className="space-y-6"
         >
+          {!isAdmin && (
+            <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+              Your submission will be sent for admin review before it becomes active.
+              {" "}Note: the request must be made with a team-scoped API key.
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-6">
             <Form.Item
               label={
@@ -568,6 +595,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             </Form.Item>
 
             <Form.Item
+              label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
+              name="source_url"
+            >
+              <TextInput
+                placeholder="https://github.com/org/mcp-server"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
               label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
               name="transport"
               rules={[{ required: true, message: "Please select a transport type" }]}
@@ -603,25 +640,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {/* OpenAPI Spec URL - only show for OpenAPI transport */}
+            {/* OpenAPI: logo picker + spec URL input */}
             {transportType === TRANSPORT.OPENAPI && (
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    OpenAPI Spec URL
-                    <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                    </Tooltip>
-                  </span>
+              <OpenAPIFormSection
+                form={form}
+                accessToken={isModalVisible ? accessToken : null}
+                onValuesChange={(updates) =>
+                  setFormValues((prev) => ({ ...prev, ...updates }))
                 }
-                name="spec_path"
-                rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
-              >
-                <Input
-                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
+                onKeyToolsChange={setKeyTools}
+              />
             )}
 
             {/* BYOK toggle - only for OpenAPI */}
@@ -654,6 +682,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                               User keys will be sent as:{" "}
                               <code className="font-mono bg-blue-100 px-1 rounded">
                                 {getFieldValue("auth_type") === "bearer_token" && "Authorization: Bearer {key}"}
+                                {getFieldValue("auth_type") === "token" && "Authorization: token {key}"}
                                 {getFieldValue("auth_type") === "api_key" && "x-api-key: {key}"}
                                 {getFieldValue("auth_type") === "basic" && "Authorization: Basic {key}"}
                                 {getFieldValue("auth_type") === "authorization" && "Authorization: {key}"}
@@ -718,6 +747,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   <Select.Option value="none">None</Select.Option>
                   <Select.Option value="api_key">API Key</Select.Option>
                   <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                  <Select.Option value="token">Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
                   <Select.Option value="oauth2">OAuth</Select.Option>
                 </Select>
@@ -783,10 +813,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           {/* Connection Status Section */}
           <div className="mt-8 pt-6 border-t border-gray-200">
             <MCPConnectionStatus
-              accessToken={accessToken}
-              oauthAccessToken={oauthAccessToken}
               formValues={formValues}
-              onToolsLoaded={setTools}
+              tools={tools}
+              isLoadingTools={isLoadingTools}
+              toolsError={toolsError}
+              toolsErrorStackTrace={toolsErrorStackTrace}
+              canFetchTools={canFetchTools}
+              fetchTools={fetchTools}
             />
           </div>
 
@@ -803,6 +836,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               toolNameToDescription={toolNameToDescription}
               onToolNameToDisplayNameChange={setToolNameToDisplayName}
               onToolNameToDescriptionChange={setToolNameToDescription}
+              keyTools={keyTools}
+              externalTools={tools}
+              externalIsLoading={isLoadingTools}
+              externalError={toolsError}
+              externalCanFetch={canFetchTools}
             />
           </div>
 

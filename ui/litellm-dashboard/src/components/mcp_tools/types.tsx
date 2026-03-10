@@ -9,6 +9,7 @@ export const AUTH_TYPE = {
   NONE: "none",
   API_KEY: "api_key",
   BEARER_TOKEN: "bearer_token",
+  TOKEN: "token",
   BASIC: "basic",
   OAUTH2: "oauth2",
 };
@@ -184,6 +185,16 @@ export interface MCPServer {
   byok_description?: string[] | null;
   byok_api_key_help_url?: string | null;
   has_user_credential?: boolean | null;
+
+  /** GitHub / source repository URL */
+  source_url?: string | null;
+
+  /** BYOM (Bring Your Own MCP) submission fields */
+  approval_status?: "active" | "pending_review" | "rejected" | null;
+  submitted_by?: string | null;
+  submitted_at?: string | null;
+  reviewed_at?: string | null;
+  review_notes?: string | null;
 }
 
 export interface MCPServerProps {
@@ -210,4 +221,12 @@ export interface DiscoverableMCPServer {
 export interface DiscoverMCPServersResponse {
   servers: DiscoverableMCPServer[];
   categories: string[];
+}
+
+export interface MCPSubmissionsSummary {
+  total: number;
+  pending_review: number;
+  active: number;
+  rejected: number;
+  items: MCPServer[];
 }

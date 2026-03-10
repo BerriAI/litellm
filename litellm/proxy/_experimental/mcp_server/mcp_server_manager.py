@@ -38,7 +38,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient
+from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -318,6 +318,7 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
+                oauth2_flow=server_config.get("oauth2_flow", None),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -339,6 +340,12 @@ class MCPServerManager:
                 available_on_public_internet=bool(
                     server_config.get("available_on_public_internet", True)
                 ),
+                # AWS SigV4 fields
+                aws_access_key_id=server_config.get("aws_access_key_id", None),
+                aws_secret_access_key=server_config.get("aws_secret_access_key", None),
+                aws_session_token=server_config.get("aws_session_token", None),
+                aws_region_name=server_config.get("aws_region_name", None),
+                aws_service_name=server_config.get("aws_service_name", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -418,6 +425,8 @@ class MCPServerManager:
                     headers["Authorization"] = f"ApiKey {server.authentication_token}"
                 elif server.auth_type == MCPAuth.basic:
                     headers["Authorization"] = f"Basic {server.authentication_token}"
+                elif server.auth_type == MCPAuth.token:
+                    headers["Authorization"] = f"token {server.authentication_token}"
 
             # Add any static headers from server config.
             #
@@ -588,6 +597,10 @@ class MCPServerManager:
             else:
                 client_secret_value = encrypted_client_secret
 
+        # TODO: Add AWS SigV4 credential decryption here when DB-stored
+        # SigV4 MCP servers are supported. Requires corresponding changes
+        # to encrypt_credentials() in db.py and MCPCredentials TypedDict.
+
         scopes: Optional[List[str]] = None
         if credentials_dict:
             scopes_value = credentials_dict.get("scopes")
@@ -632,6 +645,7 @@ class MCPServerManager:
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
+            oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url
             or getattr(mcp_oauth_metadata, "authorization_url", None),
@@ -973,6 +987,18 @@ class MCPServerManager:
         else:
             # For HTTP/SSE transports
             server_url = server.url or ""
+
+            # Create SigV4 auth if configured
+            aws_auth = None
+            if server.auth_type == MCPAuth.aws_sigv4:
+                aws_auth = MCPSigV4Auth(
+                    aws_access_key_id=server.aws_access_key_id,
+                    aws_secret_access_key=server.aws_secret_access_key,
+                    aws_session_token=server.aws_session_token,
+                    aws_region_name=server.aws_region_name,
+                    aws_service_name=server.aws_service_name,
+                )
+
             return MCPClient(
                 server_url=server_url,
                 transport_type=transport,
@@ -980,6 +1006,7 @@ class MCPServerManager:
                 auth_value=auth_value,
                 timeout=MCP_CLIENT_TIMEOUT,
                 extra_headers=extra_headers,
+                aws_auth=aws_auth,
             )
 
     async def _get_tools_from_server(
@@ -2270,7 +2297,7 @@ class MCPServerManager:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        db_mcp_servers = await get_all_mcp_servers(prisma_client)
+        db_mcp_servers = await get_all_mcp_servers(prisma_client, approval_status="active")
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
 
         previous_registry = self.registry
@@ -2506,9 +2533,11 @@ class MCPServerManager:
         if server.requires_per_user_auth:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
+        # (except aws_sigv4 which uses its own credential fields)
         elif (
             server.auth_type
             and server.auth_type != MCPAuth.none
+            and server.auth_type != MCPAuth.aws_sigv4
             and not server.authentication_token
         ):
             should_skip_health_check = True
