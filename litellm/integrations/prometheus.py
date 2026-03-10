@@ -1999,9 +1999,10 @@ class PrometheusLogger(CustomLogger):
                     "x_ratelimit_remaining_tokens", None
                 )
 
-            if litellm_overhead_time_ms := standard_logging_payload[
+            litellm_overhead_time_ms = standard_logging_payload[
                 "hidden_params"
-            ].get("litellm_overhead_time_ms"):
+            ].get("litellm_overhead_time_ms")
+            if litellm_overhead_time_ms is not None:
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(
                         metric_name="litellm_overhead_latency_metric"
