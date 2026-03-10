@@ -135,6 +135,26 @@ class MCPClient:
         )
         return transport_ctx, http_client
 
+    @staticmethod
+    def _extract_root_cause(exc: BaseException) -> Optional[BaseException]:
+        """Extract the first meaningful root-cause from an ExceptionGroup.
+
+        When the MCP SDK's streamable-HTTP transport encounters an HTTP error
+        (e.g. 401 Unauthorized), the task-group cancels the session, so the
+        caller only sees ``CancelledError``.  The *real* error surfaces later
+        inside the ``ExceptionGroup`` raised during transport cleanup.  This
+        helper digs it out so we can re-raise something actionable.
+        """
+        if isinstance(exc, BaseExceptionGroup):
+            for inner in exc.exceptions:
+                cause = MCPClient._extract_root_cause(inner)
+                if cause is not None:
+                    return cause
+            return exc.exceptions[0] if exc.exceptions else None
+        if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+            return None
+        return exc
+
     async def _execute_session_operation(
         self,
         transport_ctx: Any,
@@ -146,6 +166,7 @@ class MCPClient:
         Handles entering/exiting contexts and running the operation.
         """
         transport = await transport_ctx.__aenter__()
+        original_error: Optional[BaseException] = None
         try:
             read_stream, write_stream = transport[0], transport[1]
             session_ctx = ClientSession(read_stream, write_stream)
@@ -153,16 +174,28 @@ class MCPClient:
             try:
                 await session.initialize()
                 return await operation(session)
+            except asyncio.CancelledError:
+                original_error = None
+                raise
             finally:
                 try:
                     await session_ctx.__aexit__(None, None, None)
                 except BaseException as e:
                     verbose_logger.debug(f"Error during session context exit: {e}")
+        except asyncio.CancelledError:
+            raise
         finally:
             try:
                 await transport_ctx.__aexit__(None, None, None)
             except BaseException as e:
                 verbose_logger.debug(f"Error during transport context exit: {e}")
+                root = self._extract_root_cause(e)
+                if root is not None:
+                    original_error = root
+            if original_error is not None:
+                raise ConnectionError(
+                    f"MCP connection failed: {original_error}"
+                ) from original_error
 
     async def run_with_session(
         self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
@@ -172,6 +205,18 @@ class MCPClient:
         try:
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
+        except asyncio.CancelledError as e:
+            verbose_logger.warning(
+                "MCP client run_with_session cancelled for %s: %s",
+                self.server_url or "stdio",
+                e,
+            )
+            raise ConnectionError(
+                f"MCP session was cancelled while connecting to "
+                f"{self.server_url or 'stdio'}. The remote server may have "
+                f"rejected the request (e.g. authentication failure) or is "
+                f"unreachable."
+            ) from e
         except Exception:
             verbose_logger.warning(
                 "MCP client run_with_session failed for %s", self.server_url or "stdio"

@@ -246,5 +246,153 @@ class TestMCPClient:
             await test_client.aclose()
 
 
+class TestMCPClientErrorHandling:
+    """Test improved error handling for MCP connection failures."""
+
+    def test_extract_root_cause_http_status_error(self):
+        """Should extract HTTPStatusError from an ExceptionGroup."""
+        import httpx
+
+        http_err = httpx.HTTPStatusError(
+            "Client error '401 Unauthorized'",
+            request=httpx.Request("POST", "http://example.com/mcp"),
+            response=httpx.Response(401),
+        )
+        group = ExceptionGroup("test", [http_err])
+        result = MCPClient._extract_root_cause(group)
+        assert result is http_err
+
+    def test_extract_root_cause_nested_group(self):
+        """Should extract root cause from nested ExceptionGroups."""
+        import httpx
+
+        http_err = httpx.HTTPStatusError(
+            "Server error '500'",
+            request=httpx.Request("POST", "http://example.com/mcp"),
+            response=httpx.Response(500),
+        )
+        inner = ExceptionGroup("inner", [http_err])
+        outer = ExceptionGroup("outer", [inner])
+        result = MCPClient._extract_root_cause(outer)
+        assert result is http_err
+
+    def test_extract_root_cause_skips_cancelled(self):
+        """Should skip CancelledError and find the real cause."""
+        import asyncio
+
+        import httpx
+
+        cancelled = asyncio.CancelledError("cancel scope")
+        http_err = httpx.HTTPStatusError(
+            "Client error '401 Unauthorized'",
+            request=httpx.Request("POST", "http://example.com/mcp"),
+            response=httpx.Response(401),
+        )
+        group = BaseExceptionGroup("test", [cancelled, http_err])
+        result = MCPClient._extract_root_cause(group)
+        assert result is http_err
+
+    def test_extract_root_cause_connection_error(self):
+        """Should extract connection errors from ExceptionGroup."""
+        conn_err = ConnectionRefusedError("Connection refused")
+        group = ExceptionGroup("test", [conn_err])
+        result = MCPClient._extract_root_cause(group)
+        assert result is conn_err
+
+    def test_extract_root_cause_returns_none_for_only_cancelled(self):
+        """Should return None when group only contains CancelledError."""
+        import asyncio
+
+        cancelled = asyncio.CancelledError("cancel scope")
+        result = MCPClient._extract_root_cause(cancelled)
+        assert result is None
+
+    def test_extract_root_cause_plain_exception(self):
+        """Should return a non-cancelled plain exception directly."""
+        err = RuntimeError("something broke")
+        result = MCPClient._extract_root_cause(err)
+        assert result is err
+
+    @pytest.mark.asyncio
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_cancelled_error_converted_to_connection_error(
+        self, mock_session, mock_streamable_http_client
+    ):
+        """When session.initialize() raises CancelledError and transport
+        cleanup yields an ExceptionGroup with the real cause, the client
+        should raise ConnectionError with the original HTTP error info."""
+        import asyncio
+
+        import httpx
+
+        http_err = httpx.HTTPStatusError(
+            "Client error '401 Unauthorized'",
+            request=httpx.Request("POST", "http://example.com/mcp"),
+            response=httpx.Response(401),
+        )
+
+        mock_transport = (MagicMock(), MagicMock())
+        mock_http_ctx = AsyncMock()
+        mock_http_ctx.__aenter__.return_value = mock_transport
+        mock_http_ctx.__aexit__.side_effect = ExceptionGroup("tasks", [http_err])
+        mock_streamable_http_client.return_value = mock_http_ctx
+
+        mock_session_instance = AsyncMock()
+        mock_session_instance.initialize = AsyncMock(
+            side_effect=asyncio.CancelledError("Cancelled via cancel scope")
+        )
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__.return_value = mock_session_instance
+        mock_session_ctx.__aexit__.return_value = None
+        mock_session.return_value = mock_session_ctx
+
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type=MCPTransport.http,
+        )
+
+        with pytest.raises(ConnectionError, match="401 Unauthorized"):
+            async def _op(session):
+                return await session.list_tools()
+            await client.run_with_session(_op)
+
+    @pytest.mark.asyncio
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_cancelled_error_fallback_message(
+        self, mock_session, mock_streamable_http_client
+    ):
+        """When CancelledError occurs but no root cause can be extracted,
+        run_with_session should convert it to a ConnectionError with a
+        descriptive fallback message."""
+        import asyncio
+
+        mock_transport = (MagicMock(), MagicMock())
+        mock_http_ctx = AsyncMock()
+        mock_http_ctx.__aenter__.return_value = mock_transport
+        mock_http_ctx.__aexit__.return_value = None
+        mock_streamable_http_client.return_value = mock_http_ctx
+
+        mock_session_instance = AsyncMock()
+        mock_session_instance.initialize = AsyncMock(
+            side_effect=asyncio.CancelledError("Cancelled via cancel scope")
+        )
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__.return_value = mock_session_instance
+        mock_session_ctx.__aexit__.return_value = None
+        mock_session.return_value = mock_session_ctx
+
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type=MCPTransport.http,
+        )
+
+        with pytest.raises(ConnectionError, match="rejected the request"):
+            async def _op(session):
+                return await session.list_tools()
+            await client.run_with_session(_op)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

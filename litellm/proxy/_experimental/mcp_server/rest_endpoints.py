@@ -564,6 +564,41 @@ if MCP_AVAILABLE:
         NewMCPServerRequest,
     )
 
+    def _build_mcp_error_message(exc: BaseException) -> str:
+        """Build a user-facing error message from an MCP connection failure.
+
+        Walks the exception chain (__cause__, __context__) looking for
+        actionable details such as HTTP status codes or connection errors.
+        """
+        import httpx
+
+        parts: List[str] = []
+        seen: set = set()
+        current: Optional[BaseException] = exc
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, httpx.HTTPStatusError):
+                status = current.response.status_code
+                reason = current.response.reason_phrase or ""
+                parts.append(
+                    f"Server returned HTTP {status} {reason}".strip()
+                )
+                break
+            if isinstance(current, (httpx.ConnectError, httpx.TimeoutException)):
+                parts.append(str(current))
+                break
+            if isinstance(current, ConnectionError) and not isinstance(
+                current, ConnectionResetError
+            ):
+                parts.append(str(current))
+            current = current.__cause__ or current.__context__
+
+        if parts:
+            return "Failed to connect to MCP server: " + "; ".join(parts)
+        return (
+            "Failed to connect to MCP server. Check proxy logs for details."
+        )
+
     def _extract_credentials(
         request: NewMCPServerRequest,
     ) -> tuple:
@@ -655,10 +690,11 @@ if MCP_AVAILABLE:
             raise
         except BaseException as e:
             verbose_logger.error("Error in MCP operation: %s", e, exc_info=True)
+            user_message = _build_mcp_error_message(e)
             return {
                 "status": "error",
                 "error": True,
-                "message": "Failed to connect to MCP server. Check proxy logs for details.",
+                "message": user_message,
             }
 
     async def _preview_openapi_tools(spec_path: str) -> dict:
@@ -715,6 +751,26 @@ if MCP_AVAILABLE:
         """
         Test if we can connect to the provided MCP server before adding it
         """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        mcp_auth_header: Optional[str] = None
+        if new_mcp_server_request.auth_type in {
+            MCPAuth.api_key,
+            MCPAuth.bearer_token,
+            MCPAuth.basic,
+            MCPAuth.authorization,
+        }:
+            credentials = getattr(new_mcp_server_request, "credentials", None)
+            if isinstance(credentials, dict):
+                mcp_auth_header = credentials.get("auth_value")
+
+        oauth2_headers: Optional[Dict[str, str]] = None
+        if new_mcp_server_request.auth_type == MCPAuth.oauth2:
+            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(
+                request.headers
+            )
 
         async def _test_connection_operation(client):
             async def _noop(session):
@@ -726,6 +782,8 @@ if MCP_AVAILABLE:
         return await _execute_with_mcp_client(
             new_mcp_server_request,
             _test_connection_operation,
+            mcp_auth_header=mcp_auth_header,
+            oauth2_headers=oauth2_headers,
             raw_headers=_safe_get_request_headers(request),
         )
 
