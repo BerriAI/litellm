@@ -18,7 +18,7 @@ import importlib
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
 from fastapi import (
@@ -712,8 +712,6 @@ if MCP_AVAILABLE:
         Creates the server with approval_status=pending_review.
         Requires a team-scoped API key.
         """
-        from datetime import datetime, timezone
-
         if not user_api_key_dict.team_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
