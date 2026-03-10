@@ -1218,7 +1218,7 @@ class TestMCPServerManager:
         When client_id + client_secret are configured but token_url is absent (3LO intent),
         auto-discovered token_url must NOT be stored on the server — otherwise
         has_client_credentials returns True and incorrectly triggers the
-        client_credentials (2LO) grant, leaving the tool set empty.
+        client_credentials (2LO) grant, leaving the tool set empty
         """
         manager = MCPServerManager()
 

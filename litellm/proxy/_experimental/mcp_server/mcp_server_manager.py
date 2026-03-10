@@ -299,13 +299,21 @@ class MCPServerManager:
                 mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
             )
             _explicit_token_url = server_config.get("token_url")
-            _has_pkce_creds = bool(
+            _has_client_creds = bool(
                 server_config.get("client_id") and server_config.get("client_secret")
             )
+            _discovered_token_url = mcp_oauth_metadata.token_url if mcp_oauth_metadata else None
+            if not _explicit_token_url and _has_client_creds and _discovered_token_url:
+                verbose_logger.warning(
+                    "MCP server '%s': auto-discovered token_url '%s' ignored because "
+                    "client_id + client_secret are set without an explicit token_url, "
+                    "which signals a 3LO (authorization_code) flow. "
+                    "Set token_url explicitly in config to use 2LO (client_credentials).",
+                    server_id,
+                    _discovered_token_url,
+                )
             resolved_token_url = _explicit_token_url or (
-                (mcp_oauth_metadata.token_url if mcp_oauth_metadata else None)
-                if not _has_pkce_creds
-                else None
+                _discovered_token_url if not _has_client_creds else None
             )
             resolved_registration_url = server_config.get("registration_url") or (
                 mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
