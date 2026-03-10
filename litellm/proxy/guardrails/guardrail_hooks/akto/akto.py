@@ -111,7 +111,6 @@ class AktoGuardrail(CustomGuardrail):
         kwargs["supported_event_hooks"] = [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
-            GuardrailEventHooks.during_call,
         ]
 
         super().__init__(**kwargs)
@@ -345,7 +344,11 @@ class AktoGuardrail(CustomGuardrail):
             verbose_proxy_logger.error(
                 "Akto guardrail returned HTTP %d", response.status_code
             )
-            response.raise_for_status()
+            raise httpx.HTTPStatusError(
+                f"Akto guardrail returned unexpected status {response.status_code}",
+                request=response.request,
+                response=response,
+            )
 
         response_json = response.json()
         verbose_proxy_logger.debug("Akto guardrail response: %s", response_json)

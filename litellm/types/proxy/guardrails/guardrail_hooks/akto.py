@@ -2,8 +2,6 @@ from typing import Optional, Literal
 
 from pydantic import Field
 
-from litellm.types.guardrails import GuardrailParamUITypes
-
 from .base import GuardrailConfigModel
 
 
