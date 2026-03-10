@@ -43,6 +43,7 @@ def test_get_team_models_all_proxy_models_includes_access_groups():
     assert "group-b" in result
     assert "model1" in result
     assert "model2" in result
+    assert len(result) == len(set(result)), "result should have no duplicates"
 
 
 def test_get_team_models_all_proxy_models_without_include_flag():
@@ -94,6 +95,7 @@ def test_get_key_models_all_proxy_models_includes_access_groups():
     assert "group-a" in result
     assert "model1" in result
     assert "model2" in result
+    assert len(result) == len(set(result)), "result should have no duplicates"
 
 
 def test_get_key_models_passes_include_model_access_groups():
