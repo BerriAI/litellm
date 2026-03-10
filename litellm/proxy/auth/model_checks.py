@@ -112,10 +112,14 @@ def get_key_models(
         if SpecialModelNames.all_team_models.value in all_models:
             all_models = user_api_key_dict.team_models
         if SpecialModelNames.all_proxy_models.value in all_models:
-            all_models = proxy_model_list
+            all_models = list(proxy_model_list)  # copy to avoid mutating caller's list
+            if include_model_access_groups:
+                all_models.extend(model_access_groups.keys())
 
     all_models = _get_models_from_access_groups(
-        model_access_groups=model_access_groups, all_models=all_models
+        model_access_groups=model_access_groups,
+        all_models=all_models,
+        include_model_access_groups=include_model_access_groups,
     )
 
     verbose_proxy_logger.debug("ALL KEY MODELS - {}".format(len(all_models)))
@@ -141,6 +145,8 @@ def get_team_models(
             all_models_set.update(team_models)
         if SpecialModelNames.all_proxy_models.value in all_models_set:
             all_models_set.update(proxy_model_list)
+            if include_model_access_groups:
+                all_models_set.update(model_access_groups.keys())
 
     all_models = list(all_models_set)
 
