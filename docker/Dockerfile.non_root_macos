@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc g++ \
     curl ca-certificates \
     nodejs npm \
-    libatomic1 \
   && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --upgrade pip build
@@ -58,7 +57,7 @@ RUN if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
   cp dist/*.whl /wheels/; \
   fi
 
-# ---- Prisma cache (builder) ----
+# Cache Prisma engines/CLI in builder (for offline runtime)
 ENV HOME=/app \
   XDG_CACHE_HOME=/app/.cache \
   PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
@@ -67,10 +66,9 @@ ENV HOME=/app \
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 \
   && mkdir -p /app/.cache/npm
 
-# Cache Node Prisma CLI + engines into /app/.cache/prisma-python/binaries
 RUN python3 -c "import prisma.cli.prisma as p; p.ensure_cached()"
 
-# Patch schema.prisma: remove binaryTargets for prisma-client-py generator block
+# Patch schema.prisma (remove binaryTargets for prisma-client-py generator)
 RUN python3 - <<'PY'
 import re
 p="/app/schema.prisma"
@@ -92,12 +90,14 @@ ARG PROXY_EXTRAS_SOURCE=published
 WORKDIR /app
 
 # Runtime deps:
-# - supervisor: required when SEPARATE_HEALTH_APP=1 causes prod_entrypoint.sh to exec supervisord
+# - supervisor: prod_entrypoint.sh may exec supervisord when SEPARATE_HEALTH_APP=1
 # - libatomic1: required for nodeenv node used by prisma generate
+# - nodejs/npm: required to patch bundled npm tree deterministically (CVE remediation via npm pack)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates bash openssl \
     supervisor \
     libatomic1 \
+    nodejs npm \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy app bits + wheels
@@ -114,7 +114,7 @@ COPY --from=builder /wheels /wheels
 # Copy cached prisma binaries/cli
 COPY --from=builder /app/.cache/prisma-python /app/.cache/prisma-python
 
-# Offline + non-root friendly env
+# Offline + non-root friendly env (align with sibling Dockerfile expectations)
 ENV LITELLM_NON_ROOT=true \
   HOME=/app \
   XDG_CACHE_HOME=/app/.cache \
@@ -128,8 +128,7 @@ ENV LITELLM_NON_ROOT=true \
   NPM_CONFIG_CACHE=/app/.cache/npm \
   LITELLM_MIGRATION_DIR=/app/.litellm_migrations
 
-# Install deps offline.
-# Important: install PyJWT last to avoid jwt/PyJWT resolution issues (mirrors non_root logic).
+# Install python deps from wheels offline (install PyJWT last to dedupe/pin)
 RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
   pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
   pip install --no-index --find-links=/wheels/ --no-deps semantic_router==0.1.11 && \
@@ -146,50 +145,58 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 && \
   python3 -m prisma generate
 
-# Patch bundled npm deps under nodejs-wheel-binaries to address known CVEs
-# (tar, glob, brace-expansion, minimatch, diff).
-RUN python3 - <<'PY'
-import site, pathlib, subprocess, sys
+# ---- Patch EVERY COPY of vulnerable npm packages inside bundled npm trees (via npm pack) ----
+# We patch:
+#   tar@7.5.10 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3
+# and replace all occurrences under any */node_modules/<pkg> within Python site-packages.
+RUN set -eux; \
+  PY_SITE="$(python3 - <<'PY'\n\
+import site\n\
+paths = site.getsitepackages() + [site.getusersitepackages()]\n\
+print(' '.join([p for p in paths if p]))\n\
+PY\n)"; \
+  \
+  tmp="$(mktemp -d)"; \
+  mkdir -p "$tmp/packs"; \
+  \
+  pack_extract () { \
+    pkg="$1"; ver="$2"; out="$3"; \
+    cd "$tmp/packs"; \
+    tgz="$(npm pack --silent "$pkg@$ver" | tail -n 1)"; \
+    rm -rf "$out"; mkdir -p "$out"; \
+    tar -xzf "$tgz" -C "$out"; \
+  }; \
+  \
+  # pack each fixed package once
+  pack_extract "tar" "7.5.10" "$tmp/tar"; \
+  pack_extract "glob" "11.1.0" "$tmp/glob"; \
+  pack_extract "@isaacs/brace-expansion" "5.0.1" "$tmp/brace"; \
+  pack_extract "minimatch" "10.2.4" "$tmp/minimatch"; \
+  pack_extract "diff" "8.0.3" "$tmp/diff"; \
+  \
+  replace_all () { \
+    folder="$1"; srcdir="$2"; \
+    for base in $PY_SITE; do \
+      if [ -d "$base" ]; then \
+        find "$base" -type d -path "*/node_modules/$folder" -print | while read -r d; do \
+          rm -rf "$d"; \
+          cp -rL "$srcdir/package" "$d"; \
+        done; \
+      fi; \
+    done; \
+  }; \
+  \
+  replace_all "tar" "$tmp/tar"; \
+  replace_all "glob" "$tmp/glob"; \
+  replace_all "minimatch" "$tmp/minimatch"; \
+  replace_all "diff" "$tmp/diff"; \
+  # on disk the folder is brace-expansion, source comes from @isaacs/brace-expansion
+  replace_all "brace-expansion" "$tmp/brace"; \
+  \
+  rm -rf "$tmp"; \
+  npm cache clean --force || true
 
-# Find site-packages
-paths = [pathlib.Path(p) for p in site.getsitepackages() if p]
-# Find nodejs-wheel-binaries package
-pkg = None
-for sp in paths:
-    cand = sp / "nodejs_wheel_binaries"
-    if cand.exists():
-        pkg = cand
-        break
-
-if not pkg:
-    print("nodejs_wheel_binaries not found; skipping npm CVE patching", file=sys.stderr)
-    sys.exit(0)
-
-# npm node_modules is typically under nodejs_wheel_binaries/<...>/lib/node_modules/npm/node_modules
-nm_roots = list(pkg.rglob("lib/node_modules/npm/node_modules"))
-if not nm_roots:
-    print("npm bundled node_modules not found; skipping npm CVE patching", file=sys.stderr)
-    sys.exit(0)
-
-root = nm_roots[0]
-print(f"Patching npm deps under: {root}")
-
-def npm_pack_install(name, ver):
-    # Use npm from system node if present; if not, skip (but on this image nodejs-wheel-binaries provides node runtime for prisma)
-    cmd = ["bash", "-lc", f"cd '{root}' && npm install --no-audit --no-fund --silent {name}@{ver}"]
-    subprocess.check_call(cmd)
-
-# Versions chosen to match typical non_root patch sets; bump if your security scanner requires newer
-npm_pack_install("tar", "6.2.1")
-npm_pack_install("glob", "10.4.5")
-npm_pack_install("@isaacs/brace-expansion", "5.0.1")
-npm_pack_install("minimatch", "9.0.5")
-npm_pack_install("diff", "5.2.0")
-
-print("npm CVE patching done.")
-PY
-
-# scripts + permissions (non-root uid/gid 65534)
+# Scripts + permissions for non-root uid/gid 65534
 RUN sed -i 's/\r$//' /app/docker/entrypoint.sh && \
   sed -i 's/\r$//' /app/docker/prod_entrypoint.sh && \
   chmod +x /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh && \
