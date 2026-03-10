@@ -25310,7 +25310,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "o4-mini-2025-04-16": {
         "cache_read_input_token_cost": 2.75e-07,
@@ -25329,7 +25330,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "o4-mini-deep-research": {
         "cache_read_input_token_cost": 5e-07,
