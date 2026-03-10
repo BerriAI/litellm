@@ -542,11 +542,12 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     if (!accessToken) return;
     try {
       await approveMCPServer(accessToken, serverId);
-      setConfirmAction(null);
       await fetchData();
       NotificationsManager.success(`MCP server "${serverName}" approved`);
     } catch {
       NotificationsManager.fromBackend("Failed to approve MCP server");
+    } finally {
+      setConfirmAction(null);
     }
   }
 
@@ -554,11 +555,12 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     if (!accessToken) return;
     try {
       await rejectMCPServer(accessToken, serverId, reviewNotes);
-      setConfirmAction(null);
       await fetchData();
       NotificationsManager.success(`MCP server "${serverName}" rejected`);
     } catch {
       NotificationsManager.fromBackend("Failed to reject MCP server");
+    } finally {
+      setConfirmAction(null);
     }
   }
 

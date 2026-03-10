@@ -195,7 +195,10 @@ if MCP_AVAILABLE:
 
         def _field_present(field_name: str) -> bool:
             value = getattr(payload, field_name, None)
-            if not value:
+            if value is None:
+                return False
+            # Treat empty string and empty list as absent (mirrors UI compliance check)
+            if isinstance(value, (str, list)) and not value:
                 return False
             if field_name == "auth_type" and value == _AUTH_TYPE_SENTINEL:
                 return False
