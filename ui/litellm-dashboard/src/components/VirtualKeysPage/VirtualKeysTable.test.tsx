@@ -28,7 +28,6 @@ vi.mock("./networking", async (importOriginal) => {
 
 // Mock filter helpers
 vi.mock("./key_team_helpers/filter_helpers", () => ({
-  fetchAllKeyAliases: vi.fn().mockResolvedValue(["test-key-alias"]),
   fetchAllTeams: vi.fn().mockResolvedValue([
     {
       team_id: "team-1",
@@ -195,7 +194,7 @@ beforeEach(() => {
       "Sort Order": "desc",
     },
     filteredKeys: [mockKey],
-    allKeyAliases: ["test-key-alias"],
+    filteredTotalCount: null,
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -263,8 +262,8 @@ it("should display user email correctly", async () => {
   });
 });
 
-it("should show skeleton loaders when isLoading is true", () => {
-  // Mock loading state
+it("should show loading message only on initial load (isPending)", () => {
+  // Mock initial loading state
   mockUseKeys.mockReturnValue({
     data: null,
     isPending: true,
@@ -284,7 +283,7 @@ it("should show skeleton loaders when isLoading is true", () => {
 
   renderWithProviders(<VirtualKeysTable {...mockProps} />);
 
-  // Check that loading message is shown
+  // Check that loading message is shown on initial load
   expect(screen.getByText("🚅 Loading keys...")).toBeInTheDocument();
 
   // Check that actual key data is not shown
@@ -304,7 +303,6 @@ it("should show 'No keys found' message when filteredKeys is empty", () => {
       "Sort Order": "desc",
     },
     filteredKeys: [],
-    allKeyAliases: [],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -342,7 +340,6 @@ it("should handle models with more than 3 entries to trigger expansion UI", () =
       "Sort Order": "desc",
     },
     filteredKeys: [keyWithManyModels],
-    allKeyAliases: ["test-key-alias"],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -478,7 +475,6 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
       "Sort Order": "desc",
     },
     filteredKeys: [keyWithDefaultUserId],
-    allKeyAliases: ["test-key-alias"],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -518,7 +514,6 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
       "Sort Order": "desc",
     },
     filteredKeys: [keyWithDefaultCreatedBy],
-    allKeyAliases: ["test-key-alias"],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -561,7 +556,6 @@ it("should render table without crashing when models is null", async () => {
       "Sort Order": "desc",
     },
     filteredKeys: [keyWithNullModels],
-    allKeyAliases: ["test-key-alias"],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -602,7 +596,6 @@ it("should render table without crashing when models is undefined", async () => 
       "Sort Order": "desc",
     },
     filteredKeys: [keyWithUndefinedModels],
-    allKeyAliases: ["test-key-alias"],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -678,7 +671,6 @@ it("should display 'Unknown' for last_active when value is null", async () => {
       "Sort Order": "desc",
     },
     filteredKeys: [keyWithNullLastActive],
-    allKeyAliases: ["test-key-alias"],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -699,5 +691,183 @@ it("should display 'Unknown' for last_active when value is null", async () => {
 
   await waitFor(() => {
     expect(screen.getByText("Unknown")).toBeInTheDocument();
+  });
+});
+
+const defaultMockProps = {
+  teams: [mockTeam],
+  organizations: [mockOrganization],
+  onSortChange: vi.fn(),
+  currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+};
+
+describe("pagination display – total count and page count", () => {
+  it("should show total_count from useKeys when no filter is active (filteredTotalCount is null)", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 509,
+        current_page: 1,
+        total_pages: 11,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filteredKeys: [mockKey],
+      filteredTotalCount: null,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing 1 - 50 of 509 results")).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 11")).toBeInTheDocument();
+    });
+  });
+
+  it("should show filteredTotalCount in pagination text when a filter search returns results", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 509,
+        current_page: 1,
+        total_pages: 11,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filteredKeys: [mockKey],
+      filteredTotalCount: 1,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
+    });
+  });
+
+  it("should not show stale unfiltered totals when filteredTotalCount is set", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 509,
+        current_page: 1,
+        total_pages: 11,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filteredKeys: [mockKey],
+      filteredTotalCount: 1,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/509 results/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/of 11/)).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe("refetch button", () => {
+  it("should show Fetch button in normal state", () => {
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    const fetchButton = screen.getByTitle("Fetch data");
+    expect(fetchButton).toBeInTheDocument();
+    expect(fetchButton).not.toBeDisabled();
+    expect(screen.getByText("Fetch")).toBeInTheDocument();
+  });
+
+  it("should show Fetching state and keep table data visible during refetch", () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: true,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    // Button should show "Fetching" and be disabled
+    expect(screen.getByText("Fetching")).toBeInTheDocument();
+    const fetchButton = screen.getByTitle("Fetch data");
+    expect(fetchButton).toBeDisabled();
+
+    // Table data should still be visible (stale data)
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+
+    // "Loading keys..." should NOT appear during refetch
+    expect(screen.queryByText("🚅 Loading keys...")).not.toBeInTheDocument();
+  });
+
+  it("should call refetch when Fetch button is clicked", () => {
+    const mockRefetch = vi.fn();
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: mockRefetch,
+    } as any);
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    const fetchButton = screen.getByTitle("Fetch data");
+    fireEvent.click(fetchButton);
+
+    expect(mockRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("should show Fetch button enabled on error so user can retry", () => {
+    mockUseKeys.mockReturnValue({
+      data: null,
+      isPending: false,
+      isFetching: false,
+      isError: true,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    const fetchButton = screen.getByTitle("Fetch data");
+    expect(fetchButton).not.toBeDisabled();
+    expect(screen.getByText("Fetch")).toBeInTheDocument();
   });
 });

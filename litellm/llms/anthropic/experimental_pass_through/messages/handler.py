@@ -25,7 +25,23 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
+from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from .utils import AnthropicMessagesRequestUtils, mock_response
+
+# Providers that are routed directly to the OpenAI Responses API instead of
+# going through chat/completions.
+_RESPONSES_API_PROVIDERS = frozenset({"openai"})
+
+
+def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
+    """Return True when the provider should use the Responses API path.
+
+    Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
+    opt out and route OpenAI/Azure requests through chat/completions instead.
+    """
+    if litellm.use_chat_completions_url_for_anthropic_messages:
+        return False
+    return custom_llm_provider in _RESPONSES_API_PROVIDERS
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -282,29 +298,34 @@ def anthropic_messages_handler(
             )
         )
     if anthropic_messages_provider_config is None:
-        # Handle non-Anthropic models using the adapter
-        return (
-            LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-                max_tokens=max_tokens,
-                messages=messages,
-                model=model,
-                metadata=metadata,
-                stop_sequences=stop_sequences,
-                stream=stream,
-                system=system,
-                temperature=temperature,
-                thinking=thinking,
-                tool_choice=tool_choice,
-                tools=tools,
-                top_k=top_k,
-                top_p=top_p,
-                _is_async=is_async,
-                api_key=api_key,
-                api_base=api_base,
-                client=client,
-                custom_llm_provider=custom_llm_provider,
-                **kwargs,
+        # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
+        _shared_kwargs = dict(
+            max_tokens=max_tokens,
+            messages=messages,
+            model=model,
+            metadata=metadata,
+            stop_sequences=stop_sequences,
+            stream=stream,
+            system=system,
+            temperature=temperature,
+            thinking=thinking,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_k=top_k,
+            top_p=top_p,
+            _is_async=is_async,
+            api_key=api_key,
+            api_base=api_base,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+        if _should_route_to_responses_api(custom_llm_provider):
+            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+                **_shared_kwargs
             )
+        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+            **_shared_kwargs
         )
 
     if custom_llm_provider is None:
