@@ -140,15 +140,6 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     }
   };
 
-  const handleSelectAll = () => {
-    const allToolNames = tools.map((tool) => tool.name);
-    onAllowedToolsChange(allToolNames);
-  };
-
-  const handleDeselectAll = () => {
-    onAllowedToolsChange([]);
-  };
-
   const handleToggleEditExpanded = (toolName: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setExpandedTools((prev) => {
@@ -409,18 +400,18 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                         </div>
                       </div>
                       {pinnedFiltered.map((tool, i) => renderRow(tool, i))}
-                      {restFiltered.length > 0 && (
-                        <div className="flex items-center justify-between px-1 pt-2">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                            All tools
-                          </p>
-                          <div className="flex gap-2">
-                            <button type="button" onClick={handleEnableRest} className="text-xs text-blue-600 hover:text-blue-700">Enable all</button>
-                            <button type="button" onClick={handleDisableRest} className="text-xs text-gray-500 hover:text-gray-700">Disable all</button>
-                          </div>
-                        </div>
-                      )}
                     </>
+                  )}
+                  {restFiltered.length > 0 && (
+                    <div className="flex items-center justify-between px-1 pt-2">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                        {pinnedFiltered.length > 0 ? "All tools" : "Tools"}
+                      </p>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={handleEnableRest} className="text-xs text-blue-600 hover:text-blue-700">Enable all</button>
+                        <button type="button" onClick={handleDisableRest} className="text-xs text-gray-500 hover:text-gray-700">Disable all</button>
+                      </div>
+                    </div>
                   )}
                   {restFiltered.map((tool, i) => renderRow(tool, i))}
                 </div>
