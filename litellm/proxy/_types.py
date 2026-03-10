@@ -202,6 +202,7 @@ class Litellm_EntityType(enum.Enum):
     ORGANIZATION = "organization"
     PROJECT = "project"
     TAG = "tag"
+    AGENT = "agent"
 
     # global proxy level entity
     PROXY = "proxy"
@@ -652,6 +653,8 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
+        "/user/available_roles",  # read-only role metadata; any authenticated user may read
+        "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -4228,6 +4231,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_member_list_transactions: Optional[Dict[str, float]]
     org_list_transactions: Optional[Dict[str, float]]
     tag_list_transactions: Optional[Dict[str, float]]
+    agent_list_transactions: Optional[Dict[str, float]]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

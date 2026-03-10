@@ -542,7 +542,8 @@ const sidebars = {
             "a2a_invoking_agents",
             "a2a_agent_headers",
             "a2a_cost_tracking",
-            "a2a_agent_permissions"
+            "a2a_agent_permissions",
+            "a2a_iteration_budgets"
           ],
         },
         "assistants",
@@ -683,6 +684,7 @@ const sidebars = {
             "search/firecrawl",
             "search/searxng",
             "search/linkup",
+            "search/serper",
           ]
         },
         "skills",
