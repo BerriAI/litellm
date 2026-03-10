@@ -22,7 +22,7 @@ class QohashGuardrail(GenericGuardrailAPI):
         api_key: Optional[str] = None,
         **kwargs,
     ):
-        api_base = api_base or os.environ.get("QAIGS_API_BASE", "http://qaigs:8080")
+        api_base = api_base or os.environ.get("QAIGS_API_BASE", "http://qaigs:8800")
         api_key = api_key or os.environ.get("QAIGS_API_KEY")
 
         kwargs["guardrail_name"] = kwargs.get("guardrail_name", GUARDRAIL_NAME)

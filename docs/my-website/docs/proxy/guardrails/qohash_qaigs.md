@@ -17,7 +17,7 @@ Run QAIGS as a container with your policy config mounted:
 
 ```bash
 docker run --rm \
-  -p 8080:8080 \
+  -p 8800:8800 \
   -v $(pwd)/qaigs.yaml:/etc/qaigs/config.yaml \
   qohash/qaigs:latest
 ```
@@ -25,7 +25,7 @@ docker run --rm \
 Verify it's ready:
 
 ```bash
-curl -i http://localhost:8080/health
+curl -i http://localhost:8800/health
 # Expected: HTTP/1.1 200 OK
 ```
 
@@ -43,7 +43,7 @@ guardrails:
     litellm_params:
       guardrail: qohash_qaigs
       api_key: os.environ/QAIGS_API_KEY
-      api_base: http://qaigs:8080/api/v1/integrations/litellm
+      api_base: http://qaigs:8800/api/v1/integrations/litellm
       mode: "pre_call"
       default_on: true
 ```
@@ -56,7 +56,7 @@ guardrails:
     litellm_params:
       guardrail: qohash_qaigs
       api_key: os.environ/QAIGS_API_KEY
-      api_base: http://qaigs:8080/api/v1/integrations/litellm
+      api_base: http://qaigs:8800/api/v1/integrations/litellm
       mode: "post_call"
       default_on: true
 ```
@@ -219,7 +219,7 @@ QAIGS returns one decision per request:
 |---|---|---|
 | `guardrail` | string | Must be `qohash_qaigs` |
 | `api_key` | string | API key for QAIGS (use `os.environ/VAR_NAME` for env vars) |
-| `api_base` | string | Base URL of your QAIGS instance (e.g. `http://qaigs:8080/api/v1/integrations/litellm`) |
+| `api_base` | string | Base URL of your QAIGS instance (e.g. `http://qaigs:8800/api/v1/integrations/litellm`) |
 | `mode` | string | `pre_call` (scan prompt) or `post_call` (scan model output) |
 | `default_on` | boolean | Apply this guardrail to all requests by default |
 
