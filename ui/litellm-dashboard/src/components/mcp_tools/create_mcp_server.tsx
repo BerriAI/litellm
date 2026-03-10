@@ -35,6 +35,15 @@ const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOK
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2];
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
+const reduceStaticHeaders = (list: unknown): Record<string, string> => {
+  if (!Array.isArray(list)) return {};
+  return list.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
+    const header = entry?.header?.trim();
+    if (header) acc[header] = entry?.value ?? "";
+    return acc;
+  }, {});
+};
+
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userRole,
   accessToken,
@@ -118,16 +127,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       if (!url || !transport) {
         return null;
       }
-      const staticHeaders = Array.isArray(values.static_headers)
-        ? values.static_headers.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
-            const header = entry?.header?.trim();
-            if (!header) {
-              return acc;
-            }
-            acc[header] = entry?.value ?? "";
-            return acc;
-          }, {})
-        : ({} as Record<string, string>);
+      const staticHeaders = reduceStaticHeaders(values.static_headers);
 
       return {
         server_id: undefined,
@@ -282,16 +282,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // Transform access groups into objects with name property
       const accessGroups = restValues.mcp_access_groups;
 
-      const staticHeaders = Array.isArray(staticHeadersList)
-        ? staticHeadersList.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
-            const header = entry?.header?.trim();
-            if (!header) {
-              return acc;
-            }
-            acc[header] = entry?.value ?? "";
-            return acc;
-          }, {})
-        : ({} as Record<string, string>);
+      const staticHeaders = reduceStaticHeaders(staticHeadersList);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
