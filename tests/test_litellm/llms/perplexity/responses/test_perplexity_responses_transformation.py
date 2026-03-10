@@ -260,10 +260,12 @@ class TestPerplexityResponsesTransformation:
         assert result.get("user") == "user_456"
 
     def test_all_supported_params_declared(self):
-        """get_supported_openai_params returns complete list"""
+        """get_supported_openai_params returns Perplexity-specific restricted list"""
         config = PerplexityResponsesConfig()
         supported = config.get_supported_openai_params("perplexity/openai/gpt-5.2")
 
+        # Perplexity Responses API supports a restricted set of params
+        # Ref: https://docs.perplexity.ai/api-reference/responses-post
         expected = [
             "max_output_tokens",
             "stream",
@@ -271,68 +273,46 @@ class TestPerplexityResponsesTransformation:
             "top_p",
             "tools",
             "reasoning",
-            "preset",
             "instructions",
             "models",
-            "tool_choice",
-            "parallel_tool_calls",
-            "max_tool_calls",
-            "text",
-            "previous_response_id",
-            "store",
-            "background",
-            "truncation",
-            "metadata",
-            "safety_identifier",
-            "user",
-            "stream_options",
-            "top_logprobs",
-            "prompt_cache_key",
-            "frequency_penalty",
-            "presence_penalty",
-            "service_tier",
         ]
 
         for param in expected:
             assert param in supported, f"Missing supported param: {param}"
 
-    def test_cost_transformation(self):
-        """Perplexity cost dict to OpenAI float"""
-        config = PerplexityResponsesConfig()
+    def test_cost_dict_to_float_via_validator(self):
+        """Perplexity cost dict is parsed by generic ResponseAPIUsage.parse_cost validator"""
+        from litellm.types.llms.openai import ResponseAPIUsage
 
-        usage_data = {
-            "input_tokens": 100,
-            "output_tokens": 200,
-            "total_tokens": 300,
-            "cost": {
+        usage = ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=200,
+            total_tokens=300,
+            cost={
                 "currency": "USD",
                 "input_cost": 0.0001,
                 "output_cost": 0.0002,
                 "total_cost": 0.0003,
             },
-        }
+        )
 
-        result = config._transform_usage(usage_data)
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 200
+        assert usage.total_tokens == 300
+        assert usage.cost == 0.0003
 
-        assert result["input_tokens"] == 100
-        assert result["output_tokens"] == 200
-        assert result["total_tokens"] == 300
-        assert result["cost"] == 0.0003
+    def test_cost_float_passthrough_via_validator(self):
+        """Cost already float passes through validator unchanged"""
+        from litellm.types.llms.openai import ResponseAPIUsage
 
-    def test_cost_transformation_float_passthrough(self):
-        """Cost already float passes through"""
-        config = PerplexityResponsesConfig()
+        usage = ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=200,
+            total_tokens=300,
+            cost=0.0005,
+        )
 
-        usage_data = {
-            "input_tokens": 100,
-            "output_tokens": 200,
-            "total_tokens": 300,
-            "cost": 0.0005,
-        }
-
-        result = config._transform_usage(usage_data)
-
-        assert result["cost"] == 0.0005
+        assert usage.cost == 0.0005
 
     def test_preset_handling(self):
         """Preset model names work"""
