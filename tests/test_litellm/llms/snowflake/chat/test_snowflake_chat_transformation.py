@@ -331,6 +331,114 @@ class TestSnowflakeToolTransformation:
         assert "temperature" in supported_params
         assert "max_tokens" in supported_params
 
+    def test_transform_messages_with_tool_results(self):
+        """
+        Test that OpenAI role: "tool" messages are transformed to Snowflake format.
+
+        OpenAI sends tool results as:
+            {"role": "tool", "tool_call_id": "...", "content": "result"}
+
+        Snowflake expects:
+            {"role": "user", "content_list": [{"type": "tool_results", "tool_results": {...}}]}
+        """
+        config = SnowflakeConfig()
+
+        messages = [
+            {"role": "user", "content": "What's the weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": "I'll check that for you.",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "Paris"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_123",
+                "content": "72°F and sunny",
+            },
+        ]
+
+        transformed = config._transform_messages(messages)
+
+        # Should have 3 messages
+        assert len(transformed) == 3
+
+        # First message unchanged
+        assert transformed[0]["role"] == "user"
+        assert transformed[0]["content"] == "What's the weather in Paris?"
+
+        # Second message (assistant) should have content_list with tool_use
+        assert transformed[1]["role"] == "assistant"
+        assert "content_list" in transformed[1]
+        content_list = transformed[1]["content_list"]
+        assert len(content_list) == 2
+        assert content_list[0]["type"] == "text"
+        assert content_list[0]["text"] == "I'll check that for you."
+        assert content_list[1]["type"] == "tool_use"
+        assert content_list[1]["tool_use"]["tool_use_id"] == "call_123"
+        assert content_list[1]["tool_use"]["name"] == "get_weather"
+        assert content_list[1]["tool_use"]["input"] == {"location": "Paris"}
+
+        # Third message (tool) should become user with tool_results
+        assert transformed[2]["role"] == "user"
+        assert "content_list" in transformed[2]
+        tool_results = transformed[2]["content_list"]
+        assert len(tool_results) == 1
+        assert tool_results[0]["type"] == "tool_results"
+        assert tool_results[0]["tool_results"]["tool_use_id"] == "call_123"
+        assert tool_results[0]["tool_results"]["name"] == "get_weather"
+        assert tool_results[0]["tool_results"]["content"] == [
+            {"type": "text", "text": "72°F and sunny"}
+        ]
+
+    def test_transform_messages_multiple_tool_results(self):
+        """
+        Test that multiple consecutive tool messages are combined into one user message.
+        """
+        config = SnowflakeConfig()
+
+        messages = [
+            {"role": "user", "content": "Get weather for Paris and London"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"location": "Paris"}'},
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"location": "London"}'},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "72°F"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "55°F"},
+        ]
+
+        transformed = config._transform_messages(messages)
+
+        # Should have 3 messages (user, assistant, combined tool results)
+        assert len(transformed) == 3
+
+        # Third message should have both tool results
+        assert transformed[2]["role"] == "user"
+        tool_results = transformed[2]["content_list"]
+        assert len(tool_results) == 2
+        assert tool_results[0]["tool_results"]["tool_use_id"] == "call_1"
+        assert tool_results[1]["tool_results"]["tool_use_id"] == "call_2"
+
 
 class TestSnowFlakeCompletion:
     model_name = "mistral"
