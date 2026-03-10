@@ -53,7 +53,8 @@ StreamChunkSerializer = Callable[[Any], str]
 # Type alias for streaming error serializer (ProxyException -> wire format)
 StreamErrorSerializer = Callable[[ProxyException], str]
 
-# Cached at module load time to avoid repeated env var lookups on every request
+# Cached at module load time to avoid repeated env var lookups on every request.
+# NOTE: changing this env var at runtime has no effect; a server restart is required.
 _ENFORCE_STREAMED_USAGE = (
     os.environ.get("LITELLM_ENFORCE_STREAMED_USAGE", "false").lower() == "true"
 )
