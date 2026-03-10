@@ -295,6 +295,9 @@ class TestAgentRBACInternalUser:
             return_value=_sample_agent_response()
         )
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+                return_value=None
+            )
             resp = self.internal_client.get(
                 "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
             )
@@ -439,3 +442,200 @@ class TestAgentRoutesIncludesAgentIdPattern:
         from litellm.proxy._types import LiteLLMRoutes
 
         assert "/v1/agents/{agent_id}" in LiteLLMRoutes.agent_routes.value
+
+
+class TestAgentHealthCheck:
+    """Tests for the health_check query parameter on GET /v1/agents."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        from litellm.proxy.agent_endpoints import agent_registry as ar_mod
+
+        self.admin_client = _make_app_with_role(LitellmUserRoles.PROXY_ADMIN)
+        self.mock_registry = MagicMock()
+        monkeypatch.setattr(ar_mod, "global_agent_registry", self.mock_registry)
+
+    def _make_agent(self, agent_id: str, url: str | None = None) -> AgentResponse:
+        card = _sample_agent_card_params()
+        if url is not None:
+            card["url"] = url
+        else:
+            card.pop("url", None)
+        return AgentResponse(
+            agent_id=agent_id,
+            agent_name=f"Agent {agent_id}",
+            agent_card_params=card,
+            litellm_params={},
+        )
+
+    def test_should_return_all_agents_when_health_check_disabled(self):
+        agents = [self._make_agent("a1", "http://reachable"), self._make_agent("a2", "http://unreachable")]
+        self.mock_registry.get_agent_list = MagicMock(return_value=agents)
+
+        resp = self.admin_client.get(
+            "/v1/agents", headers={"Authorization": "Bearer k"}
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 2
+
+    def test_should_filter_unhealthy_agents_when_health_check_enabled(self, monkeypatch):
+        agents = [
+            self._make_agent("a1", "http://reachable"),
+            self._make_agent("a2", "http://unreachable"),
+        ]
+        self.mock_registry.get_agent_list = MagicMock(return_value=agents)
+
+        results = iter([
+            {"agent_id": "a1", "healthy": True},
+            {"agent_id": "a2", "healthy": False, "error": "Connection refused"},
+        ])
+        monkeypatch.setattr(
+            agent_endpoints,
+            "_check_agent_url_health",
+            AsyncMock(side_effect=lambda agent: next(results)),
+        )
+
+        resp = self.admin_client.get(
+            "/v1/agents?health_check=true",
+            headers={"Authorization": "Bearer k"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["agent_id"] == "a1"
+
+    def test_should_return_empty_list_when_all_agents_unhealthy(self, monkeypatch):
+        agents = [self._make_agent("a1", "http://down")]
+        self.mock_registry.get_agent_list = MagicMock(return_value=agents)
+        monkeypatch.setattr(
+            agent_endpoints,
+            "_check_agent_url_health",
+            AsyncMock(return_value={"agent_id": "a1", "healthy": False, "error": "timeout"}),
+        )
+
+        resp = self.admin_client.get(
+            "/v1/agents?health_check=true",
+            headers={"Authorization": "Bearer k"},
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 0
+
+    def test_should_return_all_agents_when_all_healthy(self, monkeypatch):
+        agents = [self._make_agent("a1", "http://ok1"), self._make_agent("a2", "http://ok2")]
+        self.mock_registry.get_agent_list = MagicMock(return_value=agents)
+
+        results = iter([
+            {"agent_id": "a1", "healthy": True},
+            {"agent_id": "a2", "healthy": True},
+        ])
+        monkeypatch.setattr(
+            agent_endpoints,
+            "_check_agent_url_health",
+            AsyncMock(side_effect=lambda agent: next(results)),
+        )
+
+        resp = self.admin_client.get(
+            "/v1/agents?health_check=true",
+            headers={"Authorization": "Bearer k"},
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 2
+
+
+class TestCheckAgentUrlHealth:
+    """Unit tests for the _check_agent_url_health helper."""
+
+    @pytest.mark.asyncio
+    async def test_should_return_healthy_when_no_url(self):
+        from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
+
+        agent = AgentResponse(
+            agent_id="no-url",
+            agent_name="No URL Agent",
+            agent_card_params={"name": "test"},
+            litellm_params={},
+        )
+        result = await _check_agent_url_health(agent)
+        assert result["healthy"] is True
+        assert "error" not in result
+
+    @pytest.mark.asyncio
+    @patch("litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client")
+    async def test_should_return_healthy_for_200(self, mock_get_client):
+        from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+
+        agent = AgentResponse(
+            agent_id="ok",
+            agent_name="OK Agent",
+            agent_card_params={"url": "http://example.com"},
+            litellm_params={},
+        )
+        result = await _check_agent_url_health(agent)
+        assert result["healthy"] is True
+
+    @pytest.mark.asyncio
+    @patch("litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client")
+    async def test_should_return_unhealthy_for_500(self, mock_get_client):
+        from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+
+        agent = AgentResponse(
+            agent_id="err",
+            agent_name="Error Agent",
+            agent_card_params={"url": "http://failing.com"},
+            litellm_params={},
+        )
+        result = await _check_agent_url_health(agent)
+        assert result["healthy"] is False
+        assert "HTTP 500" in result["error"]
+
+    @pytest.mark.asyncio
+    @patch("litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client")
+    async def test_should_return_unhealthy_on_connection_error(self, mock_get_client):
+        from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=Exception("Connection refused"))
+        mock_get_client.return_value = mock_client
+
+        agent = AgentResponse(
+            agent_id="down",
+            agent_name="Down Agent",
+            agent_card_params={"url": "http://down.com"},
+            litellm_params={},
+        )
+        result = await _check_agent_url_health(agent)
+        assert result["healthy"] is False
+        assert "Connection refused" in result["error"]
+
+    @pytest.mark.asyncio
+    @patch("litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client")
+    async def test_should_treat_404_as_healthy(self, mock_get_client):
+        """A 404 means the server is reachable, just not the specific path."""
+        from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
+
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+
+        agent = AgentResponse(
+            agent_id="notfound",
+            agent_name="NotFound Agent",
+            agent_card_params={"url": "http://example.com/missing"},
+            litellm_params={},
+        )
+        result = await _check_agent_url_health(agent)
+        assert result["healthy"] is True

@@ -16,7 +16,7 @@ LiteLLM provides image editing functionality that maps to OpenAI's `/images/edit
 | Supported operations | Create image edits | Single and multiple images supported |
 | Supported LiteLLM SDK Versions | 1.63.8+ | Gemini support requires 1.79.3+ |
 | Supported LiteLLM Proxy Versions | 1.71.1+ | Gemini support requires 1.79.3+ |
-| Supported LLM providers | **OpenAI**, **Gemini (Google AI Studio)**, **Vertex AI**, **Stability AI**, **AWS Bedrock (Stability)** | Gemini supports the new `gemini-2.5-flash-image` family. Vertex AI supports both Gemini and Imagen models. Stability AI and Bedrock Stability support various image editing operations. |
+| Supported LLM providers | **OpenAI**, **Gemini (Google AI Studio)**, **Vertex AI**, **OpenRouter**, **Stability AI**, **AWS Bedrock (Stability)** | Gemini supports the new `gemini-2.5-flash-image` family. Vertex AI supports both Gemini and Imagen models. OpenRouter routes image edits through chat completions. Stability AI and Bedrock Stability support various image editing operations. |
 
  #### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
 
@@ -245,6 +245,47 @@ print(response)
 ```
 
 </TabItem>
+
+<TabItem value="openrouter" label="OpenRouter">
+
+#### Basic Image Edit
+```python showLineNumbers title="OpenRouter Image Edit"
+import os
+from litellm import image_edit
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=open("original_image.png", "rb"),
+    prompt="Add aurora borealis to the night sky",
+)
+
+print(response)
+```
+
+#### Multiple Images Edit
+```python showLineNumbers title="OpenRouter Multiple Images Edit"
+import os
+from litellm import image_edit
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=[
+        open("scene.png", "rb"),
+        open("style_reference.png", "rb"),
+    ],
+    prompt="Blend the reference style into the scene",
+    size="1536x1024",   # mapped to aspect_ratio 3:2
+    quality="high",      # mapped to image_size 4K
+)
+
+print(response)
+```
+
+</TabItem>
 </Tabs>
 
 ### LiteLLM Proxy with OpenAI SDK
@@ -395,6 +436,34 @@ curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
   -F "mask=@mask_image.png" \
   -F "prompt=Turn this into watercolor style scenery" \
   -F "n=2" \
+  -F "size=1024x1024"
+```
+
+</TabItem>
+
+<TabItem value="openrouter" label="OpenRouter">
+
+1. Add the OpenRouter image edit model to your `config.yaml`:
+```yaml showLineNumbers title="OpenRouter Proxy Configuration"
+model_list:
+  - model_name: openrouter-image-edit
+    litellm_params:
+      model: openrouter/google/gemini-2.5-flash-image
+      api_key: os.environ/OPENROUTER_API_KEY
+```
+
+2. Start the LiteLLM proxy server:
+```bash showLineNumbers title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+```
+
+3. Make an image edit request:
+```bash showLineNumbers title="OpenRouter Proxy Image Edit"
+curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -F "model=openrouter-image-edit" \
+  -F "image=@original_image.png" \
+  -F "prompt=Make the sky a vibrant purple sunset" \
   -F "size=1024x1024"
 ```
 
