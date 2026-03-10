@@ -29,6 +29,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             "tools",
             "reasoning",
             "instructions",
+            "models",
         ]
 
     @property
