@@ -52,6 +52,7 @@ export function useChatHistory(activeConversationId: string | null): {
   createConversation: (model: string) => string;
   appendMessage: (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => void;
   updateLastAssistantMessage: (conversationId: string, updates: Partial<Pick<ChatMessage, "content" | "reasoningContent">>) => void;
+  truncateAfterMessage: (conversationId: string, messageId: string) => void;
   deleteConversation: (id: string) => void;
   renameConversation: (id: string, newTitle: string) => void;
   setActiveConversationId: (id: string | null) => void;
@@ -60,6 +61,12 @@ export function useChatHistory(activeConversationId: string | null): {
   const [storageUnavailable, setStorageUnavailable] = useState(false);
   const [staleId, setStaleId] = useState(false);
   const [currentActiveId, setCurrentActiveId] = useState<string | null>(activeConversationId);
+
+  // Sync internal active id whenever the URL-derived prop changes (e.g. "New chat" → null)
+  useEffect(() => {
+    setCurrentActiveId(activeConversationId);
+    setStaleId(false);
+  }, [activeConversationId]);
 
   useEffect(() => {
     const { conversations: loaded, storageUnavailable: unavailable } = loadFromStorage();
@@ -200,6 +207,24 @@ export function useChatHistory(activeConversationId: string | null): {
     [storageUnavailable],
   );
 
+  const truncateAfterMessage = useCallback(
+    (conversationId: string, messageId: string) => {
+      setConversations((prev) => {
+        const updated = prev.map((conv) => {
+          if (conv.id !== conversationId) return conv;
+          const idx = conv.messages.findIndex((m) => m.id === messageId);
+          if (idx === -1) return conv;
+          const messages = conv.messages.slice(0, idx);
+          return { ...conv, messages, updatedAt: Date.now() };
+        });
+        const trimmed = trimConversations(updated);
+        if (!storageUnavailable) saveToStorage(trimmed);
+        return trimmed;
+      });
+    },
+    [storageUnavailable],
+  );
+
   const deleteConversation = useCallback(
     (id: string) => {
       const updated = conversations.filter((c) => c.id !== id);
@@ -239,6 +264,7 @@ export function useChatHistory(activeConversationId: string | null): {
     createConversation,
     appendMessage,
     updateLastAssistantMessage,
+    truncateAfterMessage,
     deleteConversation,
     renameConversation,
     setActiveConversationId,

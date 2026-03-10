@@ -1,8 +1,8 @@
 "use client";
 
-import { ToolOutlined } from "@ant-design/icons";
-import { Collapse } from "antd";
-import React, { useEffect, useRef } from "react";
+import { ToolOutlined, CopyOutlined, CheckOutlined, EditOutlined } from "@ant-design/icons";
+import { Collapse, Tooltip } from "antd";
+import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -68,33 +68,157 @@ function MarkdownCodeRenderer({
 
 interface UserBubbleProps {
   message: ChatMessage;
+  onEdit?: (messageId: string, newContent: string) => void;
+  isStreaming?: boolean;
 }
 
-function UserBubble({ message }: UserBubbleProps) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-      <div
-        style={{
-          maxWidth: "72%",
-          backgroundColor: "#f0f2f5",
-          borderRadius: 16,
-          padding: "10px 14px",
-          fontSize: 14,
-          lineHeight: "1.6",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          color: "#111827",
-        }}
-      >
-        {message.content}
+function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
+  const [hovered, setHovered] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(message.content);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (editing && textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.selectionStart = textareaRef.current.value.length;
+    }
+  }, [editing]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+  }, [editValue, editing]);
+
+  const handleSave = () => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== message.content && onEdit) {
+      onEdit(message.id, trimmed);
+    }
+    setEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSave();
+    }
+    if (e.key === "Escape") {
+      setEditValue(message.content);
+      setEditing(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+        <div style={{
+          width: "72%",
+          background: "#fff",
+          border: "1.5px solid #1677ff",
+          borderRadius: 12,
+          overflow: "hidden",
+          boxShadow: "0 0 0 3px rgba(22,119,255,0.1)",
+        }}>
+          <textarea
+            ref={textareaRef}
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            style={{
+              width: "100%",
+              padding: "10px 14px",
+              border: "none",
+              outline: "none",
+              resize: "none",
+              fontSize: 14,
+              lineHeight: "1.6",
+              color: "#111827",
+              fontFamily: "inherit",
+              background: "transparent",
+              boxSizing: "border-box",
+              minHeight: 40,
+            }}
+          />
+          <div style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            padding: "6px 10px 8px",
+            borderTop: "1px solid #f0f0f0",
+          }}>
+            <button
+              onClick={() => { setEditValue(message.content); setEditing(false); }}
+              style={{
+                padding: "4px 12px", borderRadius: 6, border: "1px solid #d1d5db",
+                background: "#fff", color: "#374151", fontSize: 13, cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!editValue.trim()}
+              style={{
+                padding: "4px 12px", borderRadius: 6, border: "none",
+                background: editValue.trim() ? "#1677ff" : "#f3f4f6",
+                color: editValue.trim() ? "#fff" : "#9ca3af",
+                fontSize: 13, fontWeight: 500, cursor: editValue.trim() ? "pointer" : "not-allowed",
+              }}
+            >
+              Save &amp; Send
+            </button>
+          </div>
+        </div>
       </div>
-      <span
-        style={{
-          fontSize: 11,
-          color: "#9ca3af",
-          marginTop: 4,
-        }}
-      >
+    );
+  }
+
+  return (
+    <div
+      style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", width: "100%" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, maxWidth: "72%" }}>
+        {/* Edit button — appears on hover, to the left of the bubble */}
+        {hovered && !isStreaming && onEdit && (
+          <Tooltip title="Edit message">
+            <button
+              onClick={() => { setEditValue(message.content); setEditing(true); }}
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                padding: "4px 6px", borderRadius: 5,
+                color: "#9ca3af", fontSize: 13, flexShrink: 0,
+                display: "flex", alignItems: "center",
+                transition: "color 0.15s",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#6b7280"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af"; }}
+            >
+              <EditOutlined />
+            </button>
+          </Tooltip>
+        )}
+        <div
+          style={{
+            backgroundColor: "#f0f2f5",
+            borderRadius: 16,
+            padding: "10px 14px",
+            fontSize: 14,
+            lineHeight: "1.6",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            color: "#111827",
+          }}
+        >
+          {message.content}
+        </div>
+      </div>
+      <span style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
         {formatTimestamp(message.timestamp)}
       </span>
     </div>
@@ -188,9 +312,49 @@ function AssistantBubble({
         )}
       </div>
 
-      <span style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
-        {formatTimestamp(message.timestamp)}
-      </span>
+      <CopyButton text={mainContent} />
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6 }}>
+      <Tooltip title={copied ? "Copied!" : "Copy"}>
+        <button
+          onClick={handleCopy}
+          style={{
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            padding: "4px 6px",
+            borderRadius: 5,
+            color: copied ? "#52c41a" : "#9ca3af",
+            fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            transition: "color 0.15s",
+          }}
+          onMouseEnter={(e) => {
+            if (!copied) (e.currentTarget as HTMLButtonElement).style.color = "#6b7280";
+          }}
+          onMouseLeave={(e) => {
+            if (!copied) (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af";
+          }}
+        >
+          {copied ? <CheckOutlined /> : <CopyOutlined />}
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -356,9 +520,10 @@ function ToolCard({ message }: ToolCardProps) {
 interface Props {
   messages: ChatMessage[];
   isStreaming: boolean;
+  onEditMessage?: (messageId: string, newContent: string) => void;
 }
 
-const ChatMessages: React.FC<Props> = ({ messages, isStreaming }) => {
+const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -379,7 +544,7 @@ const ChatMessages: React.FC<Props> = ({ messages, isStreaming }) => {
         const isLastMessage = idx === lastIndex;
 
         if (msg.role === "user") {
-          return <UserBubble key={msg.id} message={msg} />;
+          return <UserBubble key={msg.id} message={msg} onEdit={onEditMessage} isStreaming={isStreaming} />;
         }
 
         if (msg.role === "tool") {
