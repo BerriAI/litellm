@@ -415,7 +415,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const handleCancel = () => {
     form.resetFields();
     setCostConfig({});
-    setTools([]);
+    clearTools();
     setAllowedTools([]);
     setAliasManuallyEdited(false);
     setModalVisible(false);

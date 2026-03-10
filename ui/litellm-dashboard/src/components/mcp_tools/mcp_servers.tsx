@@ -1,8 +1,8 @@
 import { isAdminRole } from "@/utils/roles";
-import { QuestionCircleOutlined } from "@ant-design/icons";
+import { QuestionCircleOutlined, SearchOutlined } from "@ant-design/icons";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import NewBadge from "../common_components/NewBadge";
-import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
+import { Descriptions, Input, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
@@ -57,6 +57,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [editServer, setEditServer] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<string>("all");
   const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
+  const [searchTerm, setSearchTerm] = useState<string>("");
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
@@ -113,8 +114,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     );
   }, [serversWithHealth]);
 
-  // Filtering logic for both team and access group
-  const filterServers = useCallback((teamId: string, group: string) => {
+  // Filtering logic for team, access group, and search
+  const filterServers = useCallback((teamId: string, group: string, search: string) => {
     if (!serversWithHealth) return setFilteredServers([]);
     let filtered = serversWithHealth;
     if (teamId === "personal") {
@@ -129,25 +130,44 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
       );
     }
+    if (search.trim()) {
+      const searchLower = search.toLowerCase();
+      filtered = filtered.filter((server) => {
+        return (
+          (server.server_name && server.server_name.toLowerCase().includes(searchLower)) ||
+          (server.alias && server.alias.toLowerCase().includes(searchLower)) ||
+          (server.url && server.url.toLowerCase().includes(searchLower)) ||
+          (server.server_id && server.server_id.toLowerCase().includes(searchLower)) ||
+          (server.transport && server.transport.toLowerCase().includes(searchLower))
+        );
+      });
+    }
     setFilteredServers(filtered);
   }, [serversWithHealth]);
 
   // Handle team filter change
   const handleTeamChange = (teamId: string) => {
     setSelectedTeam(teamId);
-    filterServers(teamId, selectedMcpAccessGroup);
+    filterServers(teamId, selectedMcpAccessGroup, searchTerm);
   };
 
   // Handle MCP access group filter change
   const handleMcpAccessGroupChange = (group: string) => {
     setSelectedMcpAccessGroup(group);
-    filterServers(selectedTeam, group);
+    filterServers(selectedTeam, group, searchTerm);
+  };
+
+  // Handle search term change
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const term = e.target.value;
+    setSearchTerm(term);
+    filterServers(selectedTeam, selectedMcpAccessGroup, term);
   };
 
   // Initial and effect-based filtering (trigger on query data updates and health data updates)
   useEffect(() => {
-    filterServers(selectedTeam, selectedMcpAccessGroup);
-  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, filterServers]);
+    filterServers(selectedTeam, selectedMcpAccessGroup, searchTerm);
+  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, searchTerm, filterServers]);
 
   const columns = React.useMemo(
     () =>
@@ -364,7 +384,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               <div className="w-full h-full">
                 <div className="w-full">
                   <div className="flex flex-col space-y-4">
-                    <div className="flex items-center gap-6 bg-white rounded-lg px-4 py-3 border border-gray-200">
+                    <div className="flex items-center gap-4 bg-white rounded-lg px-4 py-3 border border-gray-200">
+                      <div className="flex items-center gap-2 flex-1">
+                        <Input
+                          placeholder="Search servers by name, alias, URL..."
+                          prefix={<SearchOutlined className="text-gray-400" />}
+                          value={searchTerm}
+                          onChange={handleSearchChange}
+                          allowClear
+                          className="rounded-lg"
+                          size="middle"
+                        />
+                      </div>
+                      <div className="h-6 w-px bg-gray-200"></div>
                       <div className="flex items-center gap-2">
                         <Text className="text-sm font-medium text-gray-600 whitespace-nowrap">Team</Text>
                         <Select value={selectedTeam} onChange={handleTeamChange} style={{ width: 220 }} size="middle">

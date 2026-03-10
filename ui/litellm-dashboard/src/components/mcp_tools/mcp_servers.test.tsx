@@ -348,4 +348,110 @@ describe("MCPServers", () => {
     // Team B server should not be visible
     expect(screen.queryByText("Team B Server")).not.toBeInTheDocument();
   });
+
+  it("should filter servers by search term", async () => {
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "GitHub Server",
+        alias: "github",
+        url: "https://api.github.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+      },
+      {
+        server_id: "server-2",
+        server_name: "Notion Server",
+        alias: "notion",
+        url: "https://api.notion.com/mcp",
+        transport: "sse",
+        auth_type: "api_key",
+        created_at: "2024-01-02T00:00:00Z",
+        created_by: "user-2",
+        updated_at: "2024-01-02T00:00:00Z",
+        updated_by: "user-2",
+        teams: [],
+        mcp_access_groups: [],
+      },
+      {
+        server_id: "server-3",
+        server_name: "Slack Server",
+        alias: "slack",
+        url: "https://slack.com/api/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-03T00:00:00Z",
+        created_by: "user-3",
+        updated_at: "2024-01-03T00:00:00Z",
+        updated_by: "user-3",
+        teams: [],
+        mcp_access_groups: [],
+      },
+    ];
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("GitHub Server")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("GitHub Server")).toBeInTheDocument();
+    expect(screen.getByText("Notion Server")).toBeInTheDocument();
+    expect(screen.getByText("Slack Server")).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText("Search servers by name, alias, URL...");
+    expect(searchInput).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.change(searchInput, { target: { value: "github" } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("GitHub Server")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("GitHub Server")).toBeInTheDocument();
+    expect(screen.queryByText("Notion Server")).not.toBeInTheDocument();
+    expect(screen.queryByText("Slack Server")).not.toBeInTheDocument();
+
+    act(() => {
+      fireEvent.change(searchInput, { target: { value: "notion.com" } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Notion Server")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("GitHub Server")).not.toBeInTheDocument();
+    expect(screen.getByText("Notion Server")).toBeInTheDocument();
+    expect(screen.queryByText("Slack Server")).not.toBeInTheDocument();
+
+    act(() => {
+      fireEvent.change(searchInput, { target: { value: "" } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("GitHub Server")).toBeInTheDocument();
+      expect(screen.getByText("Notion Server")).toBeInTheDocument();
+      expect(screen.getByText("Slack Server")).toBeInTheDocument();
+    });
+  });
 });
