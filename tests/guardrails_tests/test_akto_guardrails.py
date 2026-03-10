@@ -91,7 +91,12 @@ def sample_request_data() -> dict:
             "user_api_key": "sk-test-123",
             "user_api_key_user_id": "user-1",
             "user_api_key_team_id": "team-1",
-        }
+        },
+        "proxy_server_request": {
+            "headers": {
+                "x-forwarded-for": "10.0.0.1",
+            }
+        },
     }
 
 
@@ -200,7 +205,7 @@ def test_build_akto_payload_format(akto_sync, sample_inputs, sample_request_data
     assert payload["is_pending"] == "false"
     assert payload["source"] == "MIRRORING"
     assert payload["contextSource"] == "AGENTIC"
-    assert payload["ip"] == "user-1"
+    assert payload["ip"] == "10.0.0.1"
 
     req_headers = json.loads(payload["requestHeaders"])
     assert "content-type" in req_headers
