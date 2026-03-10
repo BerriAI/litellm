@@ -944,9 +944,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                   : greeting}
               </h1>
 
-              {isComparisonMode && (
+              {isComparisonMode ? (
                 <p style={{ margin: "-16px 0 24px", fontSize: 14, color: "#6b7280", textAlign: "center" }}>
                   Send a message to see responses side-by-side
+                </p>
+              ) : (
+                <p style={{ margin: "-16px 0 28px", fontSize: 14, color: "#6b7280", textAlign: "center", maxWidth: 520, lineHeight: 1.6 }}>
+                  Chat with 100+ LLMs + MCP tools — authenticate once, use them here.{" "}
+                  <button
+                    onClick={() => setSidebarView("apps")}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#1677ff", fontSize: 14, padding: 0, fontWeight: 500 }}
+                  >
+                    Open Apps →
+                  </button>
                 </p>
               )}
 
