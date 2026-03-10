@@ -92,7 +92,7 @@ WORKDIR /app
 # Runtime deps:
 # - supervisor: prod_entrypoint.sh may exec supervisord when SEPARATE_HEALTH_APP=1
 # - libatomic1: required for nodeenv node used by prisma generate
-# - nodejs/npm: required to patch bundled npm tree deterministically (CVE remediation via npm pack)
+# - nodejs/npm: needed to run `npm pack` for CVE patching
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates bash openssl \
     supervisor \
@@ -145,56 +145,86 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 && \
   python3 -m prisma generate
 
-# ---- Patch EVERY COPY of vulnerable npm packages inside bundled npm trees (via npm pack) ----
-# We patch:
-#   tar@7.5.10 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3
-# and replace all occurrences under any */node_modules/<pkg> within Python site-packages.
-RUN set -eux; \
-  PY_SITE="$(python3 - <<'PY'\n\
-import site\n\
-paths = site.getsitepackages() + [site.getusersitepackages()]\n\
-print(' '.join([p for p in paths if p]))\n\
-PY\n)"; \
-  \
-  tmp="$(mktemp -d)"; \
-  mkdir -p "$tmp/packs"; \
-  \
-  pack_extract () { \
-    pkg="$1"; ver="$2"; out="$3"; \
-    cd "$tmp/packs"; \
-    tgz="$(npm pack --silent "$pkg@$ver" | tail -n 1)"; \
-    rm -rf "$out"; mkdir -p "$out"; \
-    tar -xzf "$tgz" -C "$out"; \
-  }; \
-  \
-  # pack each fixed package once
-  pack_extract "tar" "7.5.10" "$tmp/tar"; \
-  pack_extract "glob" "11.1.0" "$tmp/glob"; \
-  pack_extract "@isaacs/brace-expansion" "5.0.1" "$tmp/brace"; \
-  pack_extract "minimatch" "10.2.4" "$tmp/minimatch"; \
-  pack_extract "diff" "8.0.3" "$tmp/diff"; \
-  \
-  replace_all () { \
-    folder="$1"; srcdir="$2"; \
-    for base in $PY_SITE; do \
-      if [ -d "$base" ]; then \
-        find "$base" -type d -path "*/node_modules/$folder" -print | while read -r d; do \
-          rm -rf "$d"; \
-          cp -rL "$srcdir/package" "$d"; \
-        done; \
-      fi; \
-    done; \
-  }; \
-  \
-  replace_all "tar" "$tmp/tar"; \
-  replace_all "glob" "$tmp/glob"; \
-  replace_all "minimatch" "$tmp/minimatch"; \
-  replace_all "diff" "$tmp/diff"; \
-  # on disk the folder is brace-expansion, source comes from @isaacs/brace-expansion
-  replace_all "brace-expansion" "$tmp/brace"; \
-  \
-  rm -rf "$tmp"; \
-  npm cache clean --force || true
+# ---- Soft-mode CVE patching of bundled npm tree via npm pack (no shell funcs) ----
+# Patches every on-disk copy under any */node_modules/<pkg> in Python site-packages.
+RUN python3 - <<'PY'
+import site, pathlib, subprocess, tarfile, tempfile, shutil, sys
+
+SAFE = {
+    # folder_name: (npm_package, version)
+    "tar": ("tar", "7.5.10"),
+    "glob": ("glob", "11.1.0"),
+    "brace-expansion": ("@isaacs/brace-expansion", "5.0.1"),
+    "minimatch": ("minimatch", "10.2.4"),
+    "diff": ("diff", "8.0.3"),
+}
+
+def warn(msg: str) -> None:
+    print(msg, file=sys.stderr)
+
+# Determine site-packages roots
+roots = [pathlib.Path(p) for p in site.getsitepackages() if p]
+try:
+    roots.append(pathlib.Path(site.getusersitepackages()))
+except Exception:
+    pass
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    tmpdir = pathlib.Path(tmpdir)
+    packed_sources: dict[str, pathlib.Path] = {}
+
+    # Pack and extract each patched package
+    for folder_name, (npm_name, ver) in SAFE.items():
+        try:
+            cmd = f"cd '{tmpdir}' && npm pack --silent {npm_name}@{ver}"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if result.returncode != 0:
+                warn(f"Warning: failed to pack {npm_name}@{ver} (exit {result.returncode}); skipping")
+                continue
+
+            tgz = result.stdout.strip().splitlines()[-1]
+            tgz_path = tmpdir / tgz
+            if not tgz_path.exists():
+                warn(f"Warning: npm pack did not produce expected file {tgz_path}; skipping {npm_name}@{ver}")
+                continue
+
+            extract_dir = tmpdir / f"extract-{folder_name}"
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+
+            with tarfile.open(tgz_path, "r:gz") as tf:
+                tf.extractall(extract_dir)
+
+            pkg_dir = extract_dir / "package"
+            if not pkg_dir.exists():
+                warn(f"Warning: unexpected npm pack layout for {npm_name}@{ver}; skipping")
+                continue
+
+            packed_sources[folder_name] = pkg_dir
+        except Exception as e:
+            warn(f"Warning: exception while packing {npm_name}@{ver}: {e}; skipping")
+
+    # Replace every occurrence
+    total_replaced = 0
+    for folder_name, src_pkg_dir in packed_sources.items():
+        for root in roots:
+            if not root.exists():
+                continue
+            try:
+                for d in root.rglob(folder_name):
+                    if d.is_dir() and d.parent.name == "node_modules":
+                        try:
+                            shutil.rmtree(d)
+                            shutil.copytree(src_pkg_dir, d, symlinks=True)
+                            total_replaced += 1
+                        except Exception as e:
+                            warn(f"Warning: failed to replace {folder_name} at {d}: {e}")
+            except Exception as e:
+                warn(f"Warning: error scanning {root} for {folder_name}: {e}")
+
+    warn(f"Soft-mode npm patch complete. Total directories replaced: {total_replaced}")
+PY
 
 # Scripts + permissions for non-root uid/gid 65534
 RUN sed -i 's/\r$//' /app/docker/entrypoint.sh && \
