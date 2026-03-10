@@ -2185,3 +2185,48 @@ async def test_apply_guardrail_masks_on_request():
 
     assert "<PERSON>" in result["texts"][0]
     assert "John Smith" not in result["texts"][0]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_bytes_only_logs_warning():
+    """
+    Regression test: when apply_to_output=True and the stream contains only
+    bytes chunks (Anthropic native SSE), output masking is skipped.
+    A warning must be logged so operators are aware.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    byte_chunks = [
+        b'data: {"type":"content_block_delta","delta":{"text":"Hello"}}\n\n',
+        b'data: {"type":"content_block_delta","delta":{"text":" world"}}\n\n',
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+
+    collected = []
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger"
+    ) as mock_logger:
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+        # All bytes should be yielded through
+        assert len(collected) == len(byte_chunks)
+        for original, received in zip(byte_chunks, collected):
+            assert original == received
+
+        # Warning must be logged about skipped masking
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args[0][0]
+        assert "Output PII masking was skipped" in warning_msg

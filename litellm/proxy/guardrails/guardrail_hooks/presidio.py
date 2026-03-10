@@ -1150,6 +1150,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         continue
 
                 if not all_chunks:
+                    # All chunks were Anthropic native SSE bytes — output
+                    # masking cannot be applied to raw bytes.  Log a warning
+                    # so operators know PII masking was skipped for this stream.
+                    verbose_proxy_logger.warning(
+                        "Presidio apply_to_output: streaming response contained only "
+                        "bytes chunks (Anthropic native SSE). Output PII masking was "
+                        "skipped for this response."
+                    )
                     return
 
                 assembled_model_response = stream_chunk_builder(
