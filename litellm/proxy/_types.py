@@ -2203,6 +2203,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    route_anthropic_passthrough_to_router: Optional[bool] = Field(
+        None,
+        description="If True, /anthropic/v1/messages requests whose model matches a configured deployment in model_list are routed through LiteLLM's anthropic_messages flow instead of the default passthrough behavior.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):

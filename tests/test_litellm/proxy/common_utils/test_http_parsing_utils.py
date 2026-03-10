@@ -96,6 +96,34 @@ async def test_form_data_parsing():
 
 
 @pytest.mark.asyncio
+async def test_get_request_body_accepts_application_json_with_charset():
+    mock_request = MagicMock()
+    test_data = {"key": "value"}
+    mock_request.method = "POST"
+    mock_request.body = AsyncMock(return_value=orjson.dumps(test_data))
+    mock_request.headers = {"content-type": "application/json; charset=utf-8"}
+    mock_request.scope = {}
+
+    result = await get_request_body(mock_request)
+
+    assert result == test_data
+
+
+@pytest.mark.asyncio
+async def test_get_request_body_falls_back_to_json_without_content_type():
+    mock_request = MagicMock()
+    test_data = {"key": "value"}
+    mock_request.method = "POST"
+    mock_request.body = AsyncMock(return_value=orjson.dumps(test_data))
+    mock_request.headers = {}
+    mock_request.scope = {}
+
+    result = await get_request_body(mock_request)
+
+    assert result == test_data
+
+
+@pytest.mark.asyncio
 async def test_form_data_with_json_metadata():
     """
     Test that form data with a JSON-encoded metadata field is correctly parsed.

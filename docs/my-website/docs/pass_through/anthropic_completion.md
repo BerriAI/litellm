@@ -9,8 +9,8 @@ Pass-through endpoints for Anthropic - call provider-specific endpoint, in nativ
 
 `/anthropic/*` supports two routing modes:
 
-- Default pass-through: if the request does not target a configured router model, LiteLLM forwards the request to the Anthropic-compatible upstream configured for the pass-through route.
-- Router-model dispatch: if the request `model` matches a deployment in `model_list`, LiteLLM routes the request through its native `anthropic_messages` flow instead of forwarding it directly upstream.
+- Default pass-through: LiteLLM forwards the request to the Anthropic-compatible upstream configured for the pass-through route.
+- Router-model dispatch: if `general_settings.route_anthropic_passthrough_to_router: true` is set and the request `model` matches a deployment in `model_list`, LiteLLM routes the request through its native `anthropic_messages` flow instead of forwarding it directly upstream.
 
 This makes `/anthropic/v1/messages` usable for any provider that exposes an Anthropic-compatible API through a configured LiteLLM deployment.
 
@@ -79,10 +79,14 @@ Supports **ALL** Anthropic Endpoints (including streaming).
 
 - Use pure pass-through when you want LiteLLM to proxy requests directly to Anthropic's native API shape.
 - Use a configured router model when your upstream provider exposes an Anthropic-compatible API and you want LiteLLM to resolve the deployment from `model_list`.
+- Router-model dispatch is opt-in. Without the flag below, `/anthropic/v1/messages` preserves the historical pass-through behavior.
 
 Example router-model config:
 
 ```yaml
+general_settings:
+  route_anthropic_passthrough_to_router: true
+
 model_list:
   - model_name: my-anthropic-compatible-model
     litellm_params:

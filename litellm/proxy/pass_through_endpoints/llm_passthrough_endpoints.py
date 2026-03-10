@@ -603,11 +603,16 @@ async def anthropic_proxy_route(
         request_body, llm_router
     )
     normalized_endpoint = endpoint.lstrip("/")
+    route_anthropic_passthrough_to_router = (
+        general_settings.get("route_anthropic_passthrough_to_router", False) is True
+    )
 
     # Route configured router models through LiteLLM's Anthropic-compatible
     # processing flow instead of blindly forwarding them to Anthropic.
+    # This is opt-in to preserve the historical passthrough behavior.
     if (
         normalized_endpoint == "v1/messages"
+        and route_anthropic_passthrough_to_router
         and is_router_model
         and llm_router is not None
     ):
