@@ -854,4 +854,20 @@ describe("refetch button", () => {
 
     expect(mockRefetch).toHaveBeenCalledTimes(1);
   });
+
+  it("should show Fetch button enabled on error so user can retry", () => {
+    mockUseKeys.mockReturnValue({
+      data: null,
+      isPending: false,
+      isFetching: false,
+      isError: true,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    const fetchButton = screen.getByTitle("Fetch data");
+    expect(fetchButton).not.toBeDisabled();
+    expect(screen.getByText("Fetch")).toBeInTheDocument();
+  });
 });

@@ -81,6 +81,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     data: keys,
     isPending: isLoading,
     isFetching,
+    isError,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, {
     sortBy: sortBy || undefined,
@@ -100,7 +101,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   // Defer the transition so the button stays in loading state until the table
   // has rendered with the new data (mirrors the spend-logs pattern)
   const isFetchingDeferred = useDeferredValue(isFetching);
-  const isButtonLoading = isFetching || isFetchingDeferred;
+  const isButtonLoading = (isFetching || isFetchingDeferred) && !isError;
 
   const handleRefresh = () => {
     refetch();
