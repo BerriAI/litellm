@@ -29,7 +29,7 @@ interface CreateMCPServerProps {
   onBackToDiscovery?: () => void;
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2];
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
@@ -654,6 +654,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                               User keys will be sent as:{" "}
                               <code className="font-mono bg-blue-100 px-1 rounded">
                                 {getFieldValue("auth_type") === "bearer_token" && "Authorization: Bearer {key}"}
+                                {getFieldValue("auth_type") === "token" && "Authorization: token {key}"}
                                 {getFieldValue("auth_type") === "api_key" && "x-api-key: {key}"}
                                 {getFieldValue("auth_type") === "basic" && "Authorization: Basic {key}"}
                                 {getFieldValue("auth_type") === "authorization" && "Authorization: {key}"}
@@ -718,6 +719,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   <Select.Option value="none">None</Select.Option>
                   <Select.Option value="api_key">API Key</Select.Option>
                   <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                  <Select.Option value="token">Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
                   <Select.Option value="oauth2">OAuth</Select.Option>
                 </Select>
