@@ -160,7 +160,6 @@ const toHref = (slugOrPath: string) => {
 // ----- Menu config (unchanged labels/icons; same appearance) -----
 const menuItems: MenuItemCfg[] = [
   { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined style={{ fontSize: 18 }} /> },
-  { key: "29", page: "chat", label: "Chat", icon: <MessageOutlined style={{ fontSize: 18 }} />, newTab: true },
   {
     key: "3",
     page: "llm-playground",
@@ -424,6 +423,8 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
         style={{
           transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
           position: "relative",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
         <ConfigProvider
@@ -446,6 +447,8 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
               borderRight: 0,
               backgroundColor: "transparent",
               fontSize: "14px",
+              flex: 1,
+              overflowY: "auto",
             }}
             items={filteredMenuItems.map((item) => ({
               key: item.key,

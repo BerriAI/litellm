@@ -27,6 +27,7 @@ import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
 import { makeOpenAIResponsesRequest } from "../playground/llm_calls/responses_api";
+import MCPEventsDisplay, { MCPEvent } from "../playground/chat_ui/MCPEventsDisplay";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
@@ -137,6 +138,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
+  const [mcpEvents, setMcpEvents] = useState<MCPEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
@@ -205,6 +207,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     if (staleId) router.replace(getChatUrl(uiRoot));
   }, [staleId, router]);
 
+  // Reset the responses session when switching between conversations so that
+  // previous_response_id from conversation A is never sent for conversation B.
+  useEffect(() => {
+    setResponsesSessionId(null);
+  }, [activeConversationId]);
+
   const toggleModel = useCallback((model: string) => {
     setSelectedModels((prev) => {
       let next: string[];
@@ -240,14 +248,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       appendMessage(convId, { role: "user", content: trimmed });
       appendMessage(convId, { role: "assistant", content: "" });
 
+      setMcpEvents([]); // clear MCP events from previous request
       setIsStreaming(true);
       abortControllerRef.current = new AbortController();
 
+      // Explicitly filter to only user/assistant roles — tool messages lack
+      // a required tool_call_id and would cause API errors if forwarded.
       const history = [
         ...(historyOverride ?? (activeConversation?.messages ?? [])
-          .filter((m) => m.role === "user" || m.role === "assistant")
+          .filter((m): m is typeof m & { role: "user" | "assistant" } =>
+            m.role === "user" || m.role === "assistant"
+          )
           .map((m) => ({
-            role: m.role as "user" | "assistant",
+            role: m.role,
             content: m.content,
           }))),
         { role: "user" as const, content: trimmed },
@@ -275,6 +288,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           selectedMCPServers.length > 0 ? selectedMCPServers : undefined,
           responsesSessionId,
           (id: string) => setResponsesSessionId(id),
+          (event: MCPEvent) => setMcpEvents((prev) => [...prev, event]),
         );
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
@@ -1120,11 +1134,18 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                     })}
                   </div>
                 ) : (
-                  <ChatMessages
-                    messages={activeConversation!.messages}
-                    isStreaming={isStreaming}
-                    onEditMessage={handleEditAndResend}
-                  />
+                  <>
+                    <ChatMessages
+                      messages={activeConversation!.messages}
+                      isStreaming={isStreaming}
+                      onEditMessage={handleEditAndResend}
+                    />
+                    {mcpEvents.length > 0 && (
+                      <div style={{ padding: "0 16px 16px" }}>
+                        <MCPEventsDisplay events={mcpEvents} />
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
               {showScrollButton && (
