@@ -945,14 +945,17 @@ async def test_langfuse_callback_failure_metric(prometheus_logger):
     """
     Test that Langfuse callback failures are properly tracked in Prometheus metrics.
     
-    This test verifies that when Langfuse logging fails, the 
-    litellm_callback_logging_failures_metric is incremented with callback_name="langfuse".
+    This test verifies that when Langfuse logging fails, the wrapper-level exception
+    handler in litellm_logging.py increments litellm_callback_logging_failures_metric
+    with callback_name="langfuse".
     """
+    from datetime import datetime
     from unittest.mock import MagicMock, patch
 
     from litellm.integrations.langfuse.langfuse_prompt_management import (
         LangfusePromptManagement,
     )
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
     # Get initial value
     initial_value = 0
@@ -967,6 +970,20 @@ async def test_langfuse_callback_failure_metric(prometheus_logger):
     with patch("litellm.integrations.langfuse.langfuse_prompt_management.langfuse_client_init"):
         langfuse_logger = LangfusePromptManagement()
     
+    # Register prometheus logger in litellm callbacks
+    litellm.callbacks = [prometheus_logger]
+    
+    # Create a Logging wrapper instance
+    logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    
     # Mock the log_event_on_langfuse to raise an exception
     with patch(
         "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler.get_langfuse_logger_for_request"
@@ -975,23 +992,28 @@ async def test_langfuse_callback_failure_metric(prometheus_logger):
         mock_logger.log_event_on_langfuse.side_effect = Exception("Langfuse API error")
         mock_get_logger.return_value = mock_logger
         
-        # Mock handle_callback_failure to track calls
-        with patch.object(prometheus_logger, "increment_callback_logging_failure") as mock_increment:
-            # Inject prometheus logger into the langfuse logger
-            langfuse_logger.handle_callback_failure = lambda callback_name: mock_increment(
-                callback_name=callback_name
+        # Call the wrapper's async_success_handler with langfuse callback
+        # The wrapper should catch the exception and call _handle_callback_failure
+        logging_obj.dynamic_async_success_callbacks = [langfuse_logger]
+        
+        try:
+            await logging_obj.async_success_handler(
+                result={"choices": [{"message": {"role": "assistant", "content": "test"}}]},
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
-            
-            # Call async_log_success_event - should catch exception and increment metric
-            await langfuse_logger.async_log_success_event(
-                kwargs={},
-                response_obj={},
-                start_time=None,
-                end_time=None,
-            )
-            
-            # Verify that increment was called with correct callback name
-            mock_increment.assert_called_once_with(callback_name="langfuse")
+        except Exception:
+            pass
+        
+        # Verify that the metric was incremented
+        current_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+            callback_name="langfuse"
+        )._value.get()
+        
+        assert current_value == initial_value + 1, (
+            f"Expected callback failure metric to increment by 1, "
+            f"got {current_value - initial_value}"
+        )
     
     print("✓ Langfuse callback failure metric test passed")
 
@@ -1001,12 +1023,15 @@ async def test_langfuse_otel_callback_failure_metric(prometheus_logger):
     """
     Test that Langfuse OTEL callback failures are properly tracked in Prometheus metrics.
     
-    This test verifies that when Langfuse OTEL logging fails, the 
-    litellm_callback_logging_failures_metric is incremented with callback_name="langfuse_otel".
+    This test verifies that when Langfuse OTEL logging fails, the wrapper-level exception
+    handler in litellm_logging.py increments litellm_callback_logging_failures_metric
+    with callback_name="langfuse_otel".
     """
+    from datetime import datetime
     from unittest.mock import MagicMock, patch
 
     from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
     # Get initial value
     initial_value = 0
@@ -1022,40 +1047,120 @@ async def test_langfuse_otel_callback_failure_metric(prometheus_logger):
         langfuse_otel_logger = LangfuseOtelLogger(callback_name="langfuse_otel")
         langfuse_otel_logger.callback_name = "langfuse_otel"
     
-    # Mock handle_callback_failure to track calls
-    with patch.object(prometheus_logger, "increment_callback_logging_failure") as mock_increment:
-        # Inject prometheus logger into the langfuse otel logger
-        langfuse_otel_logger.handle_callback_failure = lambda callback_name: mock_increment(
-            callback_name=callback_name
-        )
+    # Register prometheus logger in litellm callbacks
+    litellm.callbacks = [prometheus_logger]
+    
+    # Create a Logging wrapper instance
+    logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    
+    # Mock set_attributes to raise an exception
+    with patch.object(langfuse_otel_logger, "set_attributes") as mock_set_attributes:
+        mock_set_attributes.side_effect = Exception("OTEL attribute error")
         
-        # Test that the OpenTelemetry base class set_attributes exception handler works
-        # This is where langfuse_otel failures are caught and tracked
-        with patch.object(langfuse_otel_logger, "set_attributes") as mock_set_attributes:
-            # Simulate the exception handling in set_attributes
-            def set_attributes_with_error(*args, **kwargs):
-                # This simulates what happens in the real set_attributes method
-                try:
-                    raise Exception("Attribute error")
-                except Exception as e:
-                    langfuse_otel_logger.handle_callback_failure(callback_name=langfuse_otel_logger.callback_name)
-            
-            mock_set_attributes.side_effect = set_attributes_with_error
-            
-            # Call set_attributes
-            try:
-                langfuse_otel_logger.set_attributes(
-                    span=MagicMock(),
-                    kwargs={},
-                    response_obj={}
-                )
-            except Exception:
-                pass
-            
-            # Verify that increment was called with correct callback name
-            mock_increment.assert_called_with(callback_name="langfuse_otel")
+        # Call the wrapper's async_success_handler with langfuse_otel callback
+        # The wrapper should catch the exception and call _handle_callback_failure
+        logging_obj.dynamic_async_success_callbacks = [langfuse_otel_logger]
+        
+        try:
+            await logging_obj.async_success_handler(
+                result={"choices": [{"message": {"role": "assistant", "content": "test"}}]},
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+        except Exception:
+            pass
+        
+        # Verify that the metric was incremented
+        current_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+            callback_name="langfuse_otel"
+        )._value.get()
+        
+        assert current_value == initial_value + 1, (
+            f"Expected callback failure metric to increment by 1, "
+            f"got {current_value - initial_value}"
+        )
     
     print("✓ Langfuse OTEL callback failure metric test passed")
+
+
+@pytest.mark.asyncio
+async def test_generic_otel_callback_failure_metric(prometheus_logger):
+    """
+    Test that generic OTEL callback failures are properly tracked in Prometheus metrics.
+    
+    This test verifies that the wrapper-level exception handler works for any OTEL-based
+    callback, not just langfuse_otel.
+    """
+    from datetime import datetime
+    from unittest.mock import MagicMock, patch
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    # Get initial value
+    initial_value = 0
+    try:
+        initial_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+            callback_name="otel"
+        )._value.get()
+    except Exception:
+        initial_value = 0
+    
+    # Create generic OTEL logger with mocked initialization
+    with patch("litellm.integrations.opentelemetry.OpenTelemetry.__init__", return_value=None):
+        otel_logger = OpenTelemetry(callback_name="otel")
+        otel_logger.callback_name = "otel"
+    
+    # Register prometheus logger in litellm callbacks
+    litellm.callbacks = [prometheus_logger]
+    
+    # Create a Logging wrapper instance
+    logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    
+    # Mock set_attributes to raise an exception
+    with patch.object(otel_logger, "set_attributes") as mock_set_attributes:
+        mock_set_attributes.side_effect = Exception("OTEL attribute error")
+        
+        # Call the wrapper's async_success_handler with otel callback
+        # The wrapper should catch the exception and call _handle_callback_failure
+        logging_obj.dynamic_async_success_callbacks = [otel_logger]
+        
+        try:
+            await logging_obj.async_success_handler(
+                result={"choices": [{"message": {"role": "assistant", "content": "test"}}]},
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+        except Exception:
+            pass
+        
+        # Verify that the metric was incremented
+        current_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+            callback_name="otel"
+        )._value.get()
+        
+        assert current_value == initial_value + 1, (
+            f"Expected callback failure metric to increment by 1, "
+            f"got {current_value - initial_value}"
+        )
+    
+    print("✓ Generic OTEL callback failure metric test passed")
 
 
 # ==============================================================================
