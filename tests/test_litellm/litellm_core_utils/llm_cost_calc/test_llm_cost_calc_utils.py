@@ -209,7 +209,8 @@ def test_inline_pdf_tokens_costed_when_text_both_costed_correctly():
         f"Unaccounted PDF tokens alongside audio are not being costed."
     )
 
-def test_inline_pdf_with_audio_tokens_both_costed_correctly(self): 
+
+def test_inline_pdf_with_audio_tokens_both_costed_correctly(): 
         """
         Scenario: User sends a PDF inline + audio + text.
         Provider reports:
@@ -261,7 +262,7 @@ def test_inline_pdf_with_audio_tokens_both_costed_correctly(self):
             f"Unaccounted PDF tokens alongside audio are not being costed."
         )
 
-   def test_no_prompt_tokens_details_all_tokens_costed_as_text(self):
+def test_no_prompt_tokens_details_all_tokens_costed_as_text():
         """
         Scenario: Provider returns no prompt_tokens_details at all.
         Expected: All prompt_tokens should default to text_tokens and be costed.
@@ -295,7 +296,7 @@ def test_inline_pdf_with_audio_tokens_both_costed_correctly(self):
             f"With no prompt_tokens_details, all tokens should be costed as text."
         )
 
-  def test_fully_accounted_tokens_no_change(self):
+def test_fully_accounted_tokens_no_change():
         """
         Scenario: All prompt tokens are fully accounted for in details.
         Expected: No adjustment needed, cost calculated normally.
@@ -336,7 +337,7 @@ def test_inline_pdf_with_audio_tokens_both_costed_correctly(self):
             f"Fully accounted tokens should not be adjusted."
         )
  
-    def test_double_counting_still_handled(self):
+def test_double_counting_still_handled():
         """
         Scenario: xAI-style double counting where text_tokens includes cached_tokens.
         Provider reports:
@@ -386,7 +387,7 @@ def test_inline_pdf_with_audio_tokens_both_costed_correctly(self):
             f"Double-counting fix should still work."
         )
  
-    def test_large_pdf_small_text_message(self):
+def test_large_pdf_small_text_message():
         """
         Scenario: A large PDF (~50 pages) with a tiny instruction.
         This is the most common real-world case.
