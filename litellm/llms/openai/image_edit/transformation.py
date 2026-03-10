@@ -40,6 +40,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             "image",
             "prompt",
             "background",
+            "input_fidelity",
             "mask",
             "model",
             "n",
