@@ -404,66 +404,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Phase 1: Initial Response Stream (emit standard OpenAI events first)
         if self.phase == "initial_response":
-            # Create the initial response iterator if not already created
-            if self.base_iterator is None:
-                await self._create_initial_response_iterator()
-            
-            if self.base_iterator:
-                # Check if base_iterator is actually iterable
-                if hasattr(self.base_iterator, "__anext__"):
-                    try:
-                        chunk = await cast(Any, self.base_iterator).__anext__()  # type: ignore[attr-defined]
-
-                        # Capture the response ID from the first event to ensure consistency
-                        if self._cached_response_id is None and hasattr(chunk, 'response'):
-                            response_obj = getattr(chunk, 'response', None)
-                            if response_obj and hasattr(response_obj, 'id'):
-                                self._cached_response_id = response_obj.id
-                                verbose_logger.debug(f"Cached response ID: {self._cached_response_id}")
-
-                        # After emitting response.output_item.added, transition to MCP discovery
-                        # Check if this is the output_item.added event
-                        if not self.initial_events_emitted and hasattr(chunk, 'type'):
-                            chunk_type = getattr(chunk, 'type', None)
-                            if chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
-                                self.initial_events_emitted = True
-                                # Transition to MCP discovery phase after returning this chunk
-                                self.phase = "mcp_discovery"
-                                return chunk
-                        
-                        # If auto-execution is enabled, check for completed responses
-                        if self.should_auto_execute and self._is_response_completed(
-                            chunk
-                        ):
-                            # Collect the response for tool execution
-                            response_obj = getattr(chunk, "response", None)
-                            if isinstance(response_obj, ResponsesAPIResponse):
-                                self.collected_response = response_obj
-                            # Move to tool execution phase after emitting this chunk
-                            self.phase = "tool_execution"
-                            await self._generate_tool_execution_events()
-
-                        return chunk
-                    except StopAsyncIteration:
-                        # Initial response ended, move to next phase
-                        if self.should_auto_execute and self.collected_response:
-                            self.phase = "tool_execution"
-                            await self._generate_tool_execution_events()
-                        else:
-                            self.phase = "finished"
-                            raise
-                else:
-                    # base_iterator is not async iterable (likely a ResponsesAPIResponse)
-                    # Collect it for tool execution if needed
-                    if self.should_auto_execute and isinstance(
-                        self.base_iterator, ResponsesAPIResponse
-                    ):
-                        self.collected_response = self.base_iterator
-                        self.phase = "tool_execution"
-                        await self._generate_tool_execution_events()
-                    else:
-                        self.phase = "finished"
-                        raise StopAsyncIteration
+            result = await self._handle_initial_response_phase()
+            if result is not None:
+                return result
 
         # Phase 2: MCP Discovery Events (after response.output_item.added)
         if self.phase == "mcp_discovery":
@@ -514,6 +457,76 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Should not reach here
         raise StopAsyncIteration
+
+    async def _handle_initial_response_phase(
+        self,
+    ) -> Optional[ResponsesAPIStreamingResponse]:
+        """
+        Handle Phase 1: Initial Response Stream.
+
+        Returns a chunk to emit, or None to fall through to the next phase.
+        Raises StopAsyncIteration when the stream is exhausted with no auto-execution.
+        """
+        if self.base_iterator is None:
+            await self._create_initial_response_iterator()
+
+        if self.base_iterator is None:
+            # LLM call failed — still emit MCP discovery events before finishing
+            if self.mcp_discovery_events:
+                self.phase = "mcp_discovery"
+            else:
+                self.phase = "finished"
+                raise StopAsyncIteration
+            return None
+
+        if self.base_iterator:
+            if hasattr(self.base_iterator, "__anext__"):
+                try:
+                    chunk = await cast(Any, self.base_iterator).__anext__()  # type: ignore[attr-defined]
+
+                    # Capture the response ID from the first event to ensure consistency
+                    if self._cached_response_id is None and hasattr(chunk, "response"):
+                        response_obj = getattr(chunk, "response", None)
+                        if response_obj and hasattr(response_obj, "id"):
+                            self._cached_response_id = response_obj.id
+                            verbose_logger.debug(f"Cached response ID: {self._cached_response_id}")
+
+                    # After emitting response.output_item.added, transition to MCP discovery
+                    if not self.initial_events_emitted and hasattr(chunk, "type"):
+                        chunk_type = getattr(chunk, "type", None)
+                        if chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+                            self.initial_events_emitted = True
+                            self.phase = "mcp_discovery"
+                            return chunk
+
+                    # If auto-execution is enabled, check for completed responses
+                    if self.should_auto_execute and self._is_response_completed(chunk):
+                        response_obj = getattr(chunk, "response", None)
+                        if isinstance(response_obj, ResponsesAPIResponse):
+                            self.collected_response = response_obj
+                        self.phase = "tool_execution"
+                        await self._generate_tool_execution_events()
+
+                    return chunk
+                except StopAsyncIteration:
+                    if self.should_auto_execute and self.collected_response:
+                        self.phase = "tool_execution"
+                        await self._generate_tool_execution_events()
+                    else:
+                        self.phase = "finished"
+                        raise
+            else:
+                # base_iterator is not async iterable (likely a ResponsesAPIResponse)
+                if self.should_auto_execute and isinstance(
+                    self.base_iterator, ResponsesAPIResponse
+                ):
+                    self.collected_response = self.base_iterator
+                    self.phase = "tool_execution"
+                    await self._generate_tool_execution_events()
+                else:
+                    self.phase = "finished"
+                    raise StopAsyncIteration
+        return None
 
     def _is_response_completed(self, chunk: ResponsesAPIStreamingResponse) -> bool:
         """Check if this chunk indicates the response is completed"""
@@ -601,7 +614,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.base_iterator = None
-            self.phase = "finished"
+            # Don't set phase to "finished" here — let __anext__ emit any
+            # pre-generated MCP discovery events before ending the iteration.
 
     async def _generate_tool_execution_events(self) -> None:
         """Generate tool execution events and execute tools"""

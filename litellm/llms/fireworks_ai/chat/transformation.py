@@ -426,8 +426,11 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 "FIREWORKS_ACCOUNT_ID is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
             )
 
+        base = api_base.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
         response = litellm.module_level_client.get(
-            url=f"{api_base}/v1/accounts/{account_id}/models",
+            url=f"{base}/v1/accounts/{account_id}/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
 

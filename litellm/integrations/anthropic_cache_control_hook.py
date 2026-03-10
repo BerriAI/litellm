@@ -82,8 +82,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         _targetted_index: Optional[Union[int, str]] = point.get("index", None)
         targetted_index: Optional[int] = None
         if isinstance(_targetted_index, str):
-            if _targetted_index.isdigit():
+            try:
                 targetted_index = int(_targetted_index)
+            except ValueError:
+                pass
         else:
             targetted_index = _targetted_index
 

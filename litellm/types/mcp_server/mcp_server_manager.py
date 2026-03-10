@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -66,12 +66,22 @@ class MCPServer(BaseModel):
     byok_api_key_help_url: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    # OAuth2 flow type.  Defaults to None (interactive / authorization_code).
+    # Set to "client_credentials" to enable M2M token fetching.
+    oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property
     def has_client_credentials(self) -> bool:
-        """True if this server has OAuth2 client_credentials config (client_id, client_secret, token_url)."""
-        return bool(self.client_id and self.client_secret and self.token_url)
+        """True if this server should use the OAuth2 client_credentials (M2M) flow.
+
+        M2M flow must be opted into explicitly via ``oauth2_flow: client_credentials``.
+        Having client_id / client_secret / token_url present is NOT sufficient —
+        those fields are also used for interactive (authorization_code) OAuth,
+        e.g. GitHub Enterprise.  Auto-detecting M2M from field presence was a
+        breaking regression introduced with the M2M feature.
+        """
+        return self.oauth2_flow == "client_credentials"
 
     @property
     def needs_user_oauth_token(self) -> bool:

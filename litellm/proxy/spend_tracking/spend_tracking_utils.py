@@ -11,6 +11,10 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+)
 from litellm.constants import \
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 from litellm.constants import REDACTED_BY_LITELM_STRING
@@ -628,7 +632,10 @@ def _sanitize_request_body_for_spend_logs_payload(
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
     """
-    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+    from litellm.constants import (
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+        LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    )
 
     if visited is None:
         visited = set()
@@ -674,7 +681,8 @@ def _sanitize_request_body_for_spend_logs_payload(
                 # Build the truncated string: beginning + truncation marker + end
                 truncated_value = (
                     f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
+                    f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
                     f"{value[-end_chars:]}"
                 )
                 return truncated_value
@@ -791,6 +799,11 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
+            if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
+                verbose_proxy_logger.info(
+                    "Spend Log: request body was truncated before storing in DB. %s",
+                    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+                )
             return _request_body_json_str
     return "{}"
 
@@ -866,8 +879,15 @@ def _get_response_for_spend_logs_payload(
         if sanitized_response is None:
             return "{}"
         if isinstance(sanitized_response, str):
-            return sanitized_response
-        return safe_dumps(sanitized_response)
+            result_str = sanitized_response
+        else:
+            result_str = safe_dumps(sanitized_response)
+        if LITELLM_TRUNCATED_PAYLOAD_FIELD in result_str:
+            verbose_proxy_logger.info(
+                "Spend Log: response was truncated before storing in DB. %s",
+                LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+            )
+        return result_str
     return "{}"
 
 

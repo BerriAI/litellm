@@ -24,6 +24,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.secret_managers.main import get_secret
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
@@ -439,6 +440,8 @@ async def new_vector_store(
     - vector_store_description: Optional[str] - Description of the vector store
     - vector_store_metadata: Optional[Dict] - Additional metadata for the vector store
     """
+    await check_feature_access_for_user(user_api_key_dict, "vector_stores")
+
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -506,6 +509,8 @@ async def list_vector_stores(
     - page: int - Page number for pagination (default: 1)
     - page_size: int - Number of items per page (default: 100)
     """
+    await check_feature_access_for_user(user_api_key_dict, "vector_stores")
+
     from litellm.proxy.proxy_server import prisma_client
 
     vector_store_map: Dict[str, LiteLLM_ManagedVectorStore] = {}
@@ -605,6 +610,8 @@ async def delete_vector_store(
     Parameters:
     - vector_store_id: str - ID of the vector store to delete
     """
+    await check_feature_access_for_user(user_api_key_dict, "vector_stores")
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -687,6 +694,8 @@ async def get_vector_store_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Return a single vector store's details"""
+    await check_feature_access_for_user(user_api_key_dict, "vector_stores")
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -770,6 +779,8 @@ async def update_vector_store(
     Update vector store details in both database and in-memory registry.
     The updated data is immediately synchronized to the in-memory registry.
     """
+    await check_feature_access_for_user(user_api_key_dict, "vector_stores")
+
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.router import GenericLiteLLMParams
 

@@ -96,10 +96,23 @@ class VertexBase:
                     else ""
                 )
                 if isinstance(environment_id, str) and "aws" in environment_id:
-                    creds = self._credentials_from_identity_pool_with_aws(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    # Check if explicit AWS params are in the JSON (bypasses metadata)
+                    from litellm.llms.vertex_ai.vertex_ai_aws_wif import (
+                        VertexAIAwsWifAuth,
                     )
+
+                    aws_params = VertexAIAwsWifAuth.extract_aws_params(json_obj)
+                    if aws_params:
+                        creds = VertexAIAwsWifAuth.credentials_from_explicit_aws(
+                            json_obj,
+                            aws_params=aws_params,
+                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                        )
+                    else:
+                        creds = self._credentials_from_identity_pool_with_aws(
+                            json_obj,
+                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                        )
                 else:
                     creds = self._credentials_from_identity_pool(
                         json_obj,
