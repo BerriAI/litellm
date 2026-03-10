@@ -818,6 +818,12 @@ curl -L -X POST 'http://0.0.0.0:4000/model/new' \
 
 Use `PATCH /model/{model_id}/update` to update limits later.
 
+**Removal semantics:**
+
+- `team_model_rpm_limit` / `team_model_tpm_limit` are upsert-style on update.
+- Passing `null` (or omitting a field) does not unset an existing limit.
+- Per-team-model limit entries are removed when the team model is deleted.
+
 All usage for this model is aggregated across team members in one `{team_id}:{model}` rate limit bucket.
 
 See [Allow Teams to Add Models](./team_model_add.md) for full setup and examples.

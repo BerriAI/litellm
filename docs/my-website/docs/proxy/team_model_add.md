@@ -75,6 +75,17 @@ You can update team model rate limits on existing models via:
 - `PATCH /model/{model_id}/update` (recommended)
 - `POST /model/update` (legacy)
 
+:::note Removal semantics
+
+- `team_model_rpm_limit` / `team_model_tpm_limit` are **upsert-style** on update.
+- Passing `null` (or omitting a field) does **not** remove an existing per-team-model limit.
+- Limits are removed automatically when the team model is deleted.
+
+If you need to remove a specific existing limit without deleting the model, update the team's
+`metadata.model_rpm_limit` / `metadata.model_tpm_limit` map via team management endpoints.
+
+:::
+
 ### PATCH example
 
 ```bash

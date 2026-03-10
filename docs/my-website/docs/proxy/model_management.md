@@ -106,6 +106,14 @@ Here's an example of how to structure your `ModelParams`:
 
 Use `PATCH /model/{model_id}/update`:
 
+:::note Removal semantics
+
+- `team_model_rpm_limit` / `team_model_tpm_limit` are upsert-style on update.
+- Passing `null` (or omitting a field) does not unset an existing limit entry.
+- Limit entries are removed when the team model is deleted.
+
+:::
+
 ```bash
 curl -L -X PATCH 'http://0.0.0.0:4000/model/<model_id>/update' \
 -H 'Authorization: Bearer sk-1234' \
