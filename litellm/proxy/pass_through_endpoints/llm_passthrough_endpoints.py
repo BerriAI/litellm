@@ -599,7 +599,6 @@ async def anthropic_proxy_route(
     )
 
     request_body = await get_request_body(request)
-    request_body = await get_request_body(request)
     normalized_endpoint = endpoint.lstrip("/")
     route_anthropic_passthrough_to_router = (
         general_settings.get("route_anthropic_passthrough_to_router", False) is True
