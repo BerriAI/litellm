@@ -156,7 +156,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return f"{api_base}/cortex/inference:complete"
 
-    def _transform_messages(
+    def _transform_messages(  # noqa: ARG002 - model, is_async unused; accepted for interface compatibility
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> List[AllMessageValues]:
         """
@@ -335,9 +335,12 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             if content is None:
                 content = "null"
             elif isinstance(content, list):
-                # Flatten OpenAI multipart tool content to a plain string
+                # Flatten OpenAI multipart tool content to a plain string.
+                # Filter out empty strings from non-text parts (e.g., images).
                 content = " ".join(
-                    part.get("text", "") for part in content if isinstance(part, dict)
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("text")
                 )
             elif not isinstance(content, str):
                 content = str(content)
