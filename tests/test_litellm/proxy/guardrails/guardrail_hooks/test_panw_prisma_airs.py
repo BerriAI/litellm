@@ -289,11 +289,11 @@ class TestPanwAirsPromptScanning:
         text = base_handler._extract_text_from_messages(messages)
         assert text == "Latest message"
 
-        # Developer role is NOT extracted by _extract_text_from_messages (legacy path).
-        # Developer-role handling is only in _get_latest_user_text_indices (apply_guardrail path).
+        # Developer role is extracted by _extract_text_from_messages (legacy path),
+        # matching the apply_guardrail path's handling of developer-role messages.
         messages = [{"role": "developer", "content": "Dev prompt"}]
         text = base_handler._extract_text_from_messages(messages)
-        assert text == ""
+        assert text == "Dev prompt"
 
 
 class TestPanwAirsResponseScanning:
@@ -3498,12 +3498,11 @@ class TestPanwAirsDeveloperRoleGuardrail:
             assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_developer_role_not_scanned_in_legacy_path(self):
-        """Developer-only messages are NOT scanned by async_pre_call_hook (legacy path).
+    async def test_developer_role_scanned_in_legacy_path(self):
+        """Developer-only messages ARE scanned by async_pre_call_hook (legacy path).
 
-        Developer-role handling is only in _get_latest_user_text_indices
-        (apply_guardrail path). The legacy path uses _extract_text_from_messages
-        which only looks at user-role messages.
+        Both the legacy path (_extract_text_from_messages) and the apply_guardrail
+        path (_get_latest_user_text_indices) now handle developer-role messages.
         """
         handler = make_handler(mask_request_content=True)
 
@@ -3518,6 +3517,8 @@ class TestPanwAirsDeveloperRoleGuardrail:
         with patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
         ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
             result = await handler.async_pre_call_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
@@ -3525,11 +3526,12 @@ class TestPanwAirsDeveloperRoleGuardrail:
                 call_type="completion",
             )
 
-            # No user message found — API not called, content unchanged
+            # Developer message found and scanned — API called, returns None on allow
             assert result is None
-            mock_api.assert_not_called()
-            assert data["messages"][0]["content"] == "secret API key: sk-12345"
-            assert data["messages"][0]["role"] == "developer"
+            mock_api.assert_called_once()
+            # Verify the developer content was sent to the API
+            call_args = mock_api.call_args
+            assert "secret API key: sk-12345" in str(call_args)
 
 
 class TestPanwAirsEmptyToolArgsBlock:

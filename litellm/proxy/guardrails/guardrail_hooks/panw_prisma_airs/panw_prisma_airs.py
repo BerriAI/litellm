@@ -184,7 +184,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         # Find the last user message
         for message in reversed(messages):
-            if message.get("role") != "user":
+            if message.get("role") not in ("user", "developer"):
                 continue
 
             content = message.get("content")
