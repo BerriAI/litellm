@@ -20,6 +20,9 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -48,6 +51,8 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import ResponseText  # type: ignore
 else:
     ResponseText = str  # Fallback for ResponseText import
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
@@ -174,6 +179,17 @@ async def aresponses_api_with_mcp(
         "litellm_metadata", {}
     ).get("user_api_key_auth")
 
+    # Extract MCP auth headers from request (for dynamic auth when fetching tools)
+    mcp_auth_header: Optional[str] = None
+    mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
+    secret_fields = kwargs.get("secret_fields")
+    if secret_fields and isinstance(secret_fields, dict):
+        mcp_auth_header, mcp_server_auth_headers, _, _ = (
+            ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+                secret_fields=secret_fields, tools=tools
+            )
+        )
+
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
         original_mcp_tools,
@@ -182,6 +198,8 @@ async def aresponses_api_with_mcp(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         original_mcp_tools
@@ -286,7 +304,7 @@ async def aresponses_api_with_mcp(
             )
 
             # Extract MCP auth headers from the request to pass to MCP server
-            secret_fields: Optional[Dict[str, Any]] = kwargs.get("secret_fields")
+            secret_fields = kwargs.get("secret_fields")
             (
                 mcp_auth_header,
                 mcp_server_auth_headers,
@@ -367,6 +385,8 @@ async def aresponses_api_with_mcp(
                     ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
                         user_api_key_auth=user_api_key_auth,
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
                     )
                     final_response = (
                         LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
@@ -600,8 +620,12 @@ def responses(
         # Update input and tools with provider-specific file IDs if managed files are used
         #########################################################
         model_file_id_mapping = kwargs.get("model_file_id_mapping")
-        model_info_id = kwargs.get("model_info", {}).get("id") if isinstance(kwargs.get("model_info"), dict) else None
-        
+        model_info_id = (
+            kwargs.get("model_info", {}).get("id")
+            if isinstance(kwargs.get("model_info"), dict)
+            else None
+        )
+
         input = cast(
             Union[str, ResponseInputParam],
             update_responses_input_with_model_file_ids(
@@ -611,7 +635,7 @@ def responses(
             ),
         )
         local_vars["input"] = input
-        
+
         # Update tools with provider-specific file IDs if needed
         if tools:
             tools = cast(
@@ -666,6 +690,14 @@ def responses(
         )
 
         local_vars.update(kwargs)
+        # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
+        if reasoning is None and "reasoning_effort" in local_vars:
+            _mapped = LiteLLMResponsesTransformationHandler()._map_reasoning_effort(
+                local_vars.pop("reasoning_effort")
+            )
+            if _mapped is not None:
+                reasoning = _mapped
+                local_vars["reasoning"] = _mapped
         # Get ResponsesAPIOptionalRequestParams with only valid parameters
         response_api_optional_params: ResponsesAPIOptionalRequestParams = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
@@ -696,7 +728,10 @@ def responses(
             )
         )
 
-        # Pre Call logging
+        # Pre Call logging - preserve metadata for custom callbacks
+        # When called from completion bridge (codex models), metadata is in litellm_metadata
+        metadata_for_callbacks = metadata or kwargs.get("litellm_metadata") or {}
+
         litellm_logging_obj.update_environment_variables(
             model=model,
             user=user,
@@ -705,9 +740,14 @@ def responses(
                 **responses_api_request_params,
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
-                "metadata": metadata,
+                "metadata": metadata_for_callbacks,
             },
             custom_llm_provider=custom_llm_provider,
+        )
+
+        # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
+        input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(
+            input
         )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
@@ -1582,6 +1622,12 @@ def compact_responses(
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
+        # before forwarding to the upstream provider.
+        input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(
+            input
+        )
+
         # Call the handler with _is_async flag instead of directly calling the async handler
         response = base_llm_http_handler.compact_response_api_handler(
             model=model,
@@ -1616,3 +1662,100 @@ def compact_responses(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+# ---------------------------------------------------------------------------
+# Responses API WebSocket mode
+# ---------------------------------------------------------------------------
+
+
+def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
+    metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
+    guardrails = (
+        (kwargs.get("metadata") or {}).get("guardrails")
+        or kwargs.get("guardrails")
+        or []
+    )
+    if guardrails:
+        metadata["guardrails"] = guardrails
+    return metadata
+
+
+@client
+async def _aresponses_websocket(
+    model: str,
+    websocket: Any,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
+    timeout: Optional[float] = None,
+    **kwargs,
+):
+    """
+    Private function to handle the Responses API WebSocket mode.
+
+    For PROXY use only.
+
+    Resolves the LLM provider from ``model``, looks up the matching
+    ``BaseResponsesAPIConfig``, and hands off to
+    ``BaseLLMHTTPHandler.async_responses_websocket``.
+    """
+    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+    user = kwargs.get("user", None)
+    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict = get_litellm_params(**kwargs)
+
+    model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
+        litellm.get_llm_provider(
+            model=model,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    )
+
+    litellm_logging_obj.update_environment_variables(
+        model=model,
+        user=user,
+        optional_params={},
+        litellm_params=litellm_params_dict,
+        custom_llm_provider=_custom_llm_provider,
+    )
+
+    responses_api_provider_config: Optional[BaseResponsesAPIConfig] = None
+    if _custom_llm_provider is not None:
+        responses_api_provider_config = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=model,
+                provider=litellm.LlmProviders(_custom_llm_provider),
+            )
+        )
+
+    resolved_api_base = (
+        dynamic_api_base
+        or litellm_params.api_base
+        or litellm.api_base
+        or None
+    )
+    resolved_api_key = (
+        dynamic_api_key
+        or litellm_params.api_key
+        or litellm.api_key
+        or litellm.openai_key
+        or get_secret_str("OPENAI_API_KEY")
+    )
+
+    # Extract params that we're passing explicitly to avoid duplicates in **kwargs
+    remaining_kwargs = {k: v for k, v in kwargs.items() if k not in {"user_api_key_dict", "litellm_metadata"}}
+
+    await base_llm_http_handler.async_responses_websocket(
+        model=model,
+        websocket=websocket,
+        logging_obj=litellm_logging_obj,
+        responses_api_provider_config=responses_api_provider_config,
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
+        timeout=timeout,
+        user_api_key_dict=kwargs.get("user_api_key_dict"),
+        litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
+        custom_llm_provider=_custom_llm_provider,
+        **remaining_kwargs,
+    )

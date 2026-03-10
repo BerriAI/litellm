@@ -3,15 +3,10 @@ from typing import Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
-from litellm.proxy._types import (
-    DBSpendUpdateTransactions,
-    Litellm_EntityType,
-    SpendUpdateQueueItem,
-)
+from litellm.proxy._types import (DBSpendUpdateTransactions,
+                                  Litellm_EntityType, SpendUpdateQueueItem)
 from litellm.proxy.db.db_transaction_queue.base_update_queue import (
-    BaseUpdateQueue,
-    service_logger_obj,
-)
+    BaseUpdateQueue, service_logger_obj)
 from litellm.types.services import ServiceTypes
 
 
@@ -31,6 +26,11 @@ class SpendUpdateQueue(BaseUpdateQueue):
     ) -> DBSpendUpdateTransactions:
         """Flush all updates from the queue and return all updates aggregated by entity type."""
         updates = await self.flush_all_updates_from_in_memory_queue()
+        if len(updates) > 0:
+            verbose_proxy_logger.info(
+                "Spend tracking - flushed %d spend update items from in-memory queue",
+                len(updates),
+            )
         verbose_proxy_logger.debug("Aggregating updates by entity type: %s", updates)
         return self.get_aggregated_db_spend_update_transactions(updates)
 
@@ -140,6 +140,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             team_member_list_transactions={},
             org_list_transactions={},
             tag_list_transactions={},
+            agent_list_transactions={},
         )
 
         # Map entity types to their corresponding transaction dictionary keys
@@ -151,6 +152,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             Litellm_EntityType.TEAM_MEMBER: "team_member_list_transactions",
             Litellm_EntityType.ORGANIZATION: "org_list_transactions",
             Litellm_EntityType.TAG: "tag_list_transactions",
+            Litellm_EntityType.AGENT: "agent_list_transactions",
         }
 
         for update in updates:
@@ -201,6 +203,10 @@ class SpendUpdateQueue(BaseUpdateQueue):
             elif dict_key == "tag_list_transactions":
                 transactions_dict = db_spend_update_transactions[
                     "tag_list_transactions"
+                ]
+            elif dict_key == "agent_list_transactions":
+                transactions_dict = db_spend_update_transactions[
+                    "agent_list_transactions"
                 ]
             else:
                 continue

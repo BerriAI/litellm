@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
@@ -15,6 +15,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,
     _get_enforced_params,
+    _get_metadata_variable_name,
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
@@ -45,6 +46,47 @@ def test_check_if_token_is_service_account():
         api_key="test-key", metadata={"user_id": "test-user"}
     )
     assert check_if_token_is_service_account(other_metadata_token) == False
+
+
+class TestGetMetadataVariableName:
+    """Tests for _get_metadata_variable_name()"""
+
+    def _make_request(self, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.url.path = path
+        return request
+
+    def test_returns_litellm_metadata_for_thread_routes(self):
+        request = self._make_request("/v1/threads/thread_123/messages")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_assistant_routes(self):
+        request = self._make_request("/v1/assistants/asst_123")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_batches_route(self):
+        request = self._make_request("/v1/batches")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_messages_route(self):
+        request = self._make_request("/v1/messages")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_files_route(self):
+        request = self._make_request("/v1/files")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_metadata_for_chat_completions(self):
+        request = self._make_request("/chat/completions")
+        assert _get_metadata_variable_name(request) == "metadata"
+
+    def test_returns_metadata_for_completions(self):
+        request = self._make_request("/v1/completions")
+        assert _get_metadata_variable_name(request) == "metadata"
+
+    def test_returns_metadata_for_embeddings(self):
+        request = self._make_request("/v1/embeddings")
+        assert _get_metadata_variable_name(request) == "metadata"
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -1014,91 +1056,136 @@ async def test_add_litellm_metadata_from_request_headers():
     # Set up test logger
     litellm._turn_on_debug()
     test_logger = TestCustomLogger()
+    original_callbacks = litellm.callbacks
     litellm.callbacks = [test_logger]
 
-    # Prepare test data (ensure no streaming, add mock_response and api_key to route to litellm.acompletion)
-    headers = {"x-litellm-spend-logs-metadata": '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion", "timestamp": "2025-09-02T10:30:00Z"}'}
-    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "stream": False, "mock_response": "Hi", "api_key": "fake-key"}
-    
-    # Create mock request with headers
-    mock_request = MagicMock(spec=Request)
-    mock_request.headers = headers
-    mock_request.url.path = "/chat/completions"
-    
-    # Create mock response
-    mock_fastapi_response = MagicMock(spec=Response)
-    
-    # Create mock user API key dict
-    mock_user_api_key_dict = UserAPIKeyAuth(
-        api_key="test-key",
-        user_id="test-user",
-        org_id="test-org"
+    try:
+        # Prepare test data (ensure no streaming, add mock_response and api_key to route to litellm.acompletion)
+        headers = {"x-litellm-spend-logs-metadata": '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion", "timestamp": "2025-09-02T10:30:00Z"}'}
+        data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "stream": False, "mock_response": "Hi", "api_key": "fake-key"}
+
+        # Create mock request with headers
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = headers
+        mock_request.url.path = "/chat/completions"
+
+        # Create mock response
+        mock_fastapi_response = MagicMock(spec=Response)
+
+        # Create mock user API key dict
+        mock_user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            org_id="test-org"
+        )
+
+        # Create mock proxy logging object
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+        # Create async functions for the hooks
+        async def mock_during_call_hook(*args, **kwargs):
+            return None
+
+        async def mock_pre_call_hook(*args, **kwargs):
+            return data
+
+        async def mock_post_call_success_hook(*args, **kwargs):
+            # Return the response unchanged
+            return kwargs.get('response', args[2] if len(args) > 2 else None)
+
+        mock_proxy_logging_obj.during_call_hook = mock_during_call_hook
+        mock_proxy_logging_obj.pre_call_hook = mock_pre_call_hook
+        mock_proxy_logging_obj.post_call_success_hook = mock_post_call_success_hook
+
+        # Create mock proxy config
+        mock_proxy_config = MagicMock()
+
+        # Create mock general settings
+        general_settings = {}
+
+        # Create mock select_data_generator with correct signature
+        def mock_select_data_generator(response=None, user_api_key_dict=None, request_data=None):
+            async def mock_generator():
+                yield "data: " + json.dumps({"choices": [{"delta": {"content": "Hello"}}]}) + "\n\n"
+                yield "data: [DONE]\n\n"
+            return mock_generator()
+
+        # Create the processor
+        processor = ProxyBaseLLMRequestProcessing(data=data)
+
+        # Call base_process_llm_request (it will use the mock_response="Hi" parameter)
+        result = await processor.base_process_llm_request(
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+            route_type="acompletion",
+            proxy_logging_obj=mock_proxy_logging_obj,
+            general_settings=general_settings,
+            proxy_config=mock_proxy_config,
+            select_data_generator=mock_select_data_generator,
+            llm_router=None,
+            model="gpt-4",
+            is_streaming_request=False
+        )
+
+        # Sleep for 3 seconds to allow logging to complete
+        await asyncio.sleep(3)
+
+        # Check if standard_logging_object was set
+        assert test_logger.standard_logging_object is not None, "standard_logging_object should be populated after LLM request"
+
+        # Verify the logging object contains expected metadata
+        standard_logging_obj = test_logger.standard_logging_object
+
+        print(f"Standard logging object captured: {json.dumps(standard_logging_obj, indent=4, default=str)}")
+
+        SPEND_LOGS_METADATA = standard_logging_obj["metadata"]["spend_logs_metadata"]
+        assert SPEND_LOGS_METADATA == dict(json.loads(headers["x-litellm-spend-logs-metadata"])), "spend_logs_metadata should be the same as the headers"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+def test_add_litellm_metadata_from_request_headers_x_litellm_trace_id_sets_chain_id():
+    """x-litellm-trace-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
+    headers = {"x-litellm-trace-id": "foo"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
     )
-    
-    # Create mock proxy logging object
-    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
-    
-    # Create async functions for the hooks
-    async def mock_during_call_hook(*args, **kwargs):
-        return None
-        
-    async def mock_pre_call_hook(*args, **kwargs):
-        return data
-        
-    async def mock_post_call_success_hook(*args, **kwargs):
-        # Return the response unchanged
-        return kwargs.get('response', args[2] if len(args) > 2 else None)
-        
-    mock_proxy_logging_obj.during_call_hook = mock_during_call_hook
-    mock_proxy_logging_obj.pre_call_hook = mock_pre_call_hook
-    mock_proxy_logging_obj.post_call_success_hook = mock_post_call_success_hook
-    
-    # Create mock proxy config
-    mock_proxy_config = MagicMock()
-    
-    # Create mock general settings
-    general_settings = {}
-    
-    # Create mock select_data_generator with correct signature
-    def mock_select_data_generator(response=None, user_api_key_dict=None, request_data=None):
-        async def mock_generator():
-            yield "data: " + json.dumps({"choices": [{"delta": {"content": "Hello"}}]}) + "\n\n"
-            yield "data: [DONE]\n\n"
-        return mock_generator()
-    
-    # Create the processor
-    processor = ProxyBaseLLMRequestProcessing(data=data)
-    
-    # Call base_process_llm_request (it will use the mock_response="Hi" parameter)
-    result = await processor.base_process_llm_request(
-        request=mock_request,
-        fastapi_response=mock_fastapi_response,
-        user_api_key_dict=mock_user_api_key_dict,
-        route_type="acompletion",
-        proxy_logging_obj=mock_proxy_logging_obj,
-        general_settings=general_settings,
-        proxy_config=mock_proxy_config,
-        select_data_generator=mock_select_data_generator,
-        llm_router=None,
-        model="gpt-4",
-        is_streaming_request=False
+    assert data["metadata"]["trace_id"] == "foo"
+    assert data["metadata"]["session_id"] == "foo"
+    assert data["litellm_session_id"] == "foo"
+    assert data["litellm_trace_id"] == "foo"
+
+
+def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
+    """x-litellm-session-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
+    headers = {"x-litellm-session-id": "bar"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
     )
-    
-    # Sleep for 3 seconds to allow logging to complete
-    await asyncio.sleep(3)
-    
-    # Check if standard_logging_object was set
-    assert test_logger.standard_logging_object is not None, "standard_logging_object should be populated after LLM request"
-    
-    # Verify the logging object contains expected metadata
-    standard_logging_obj = test_logger.standard_logging_object
+    assert data["metadata"]["trace_id"] == "bar"
+    assert data["metadata"]["session_id"] == "bar"
+    assert data["litellm_session_id"] == "bar"
+    assert data["litellm_trace_id"] == "bar"
 
-    print(f"Standard logging object captured: {json.dumps(standard_logging_obj, indent=4, default=str)}")
 
-    SPEND_LOGS_METADATA = standard_logging_obj["metadata"]["spend_logs_metadata"]
-    assert SPEND_LOGS_METADATA == dict(json.loads(headers["x-litellm-spend-logs-metadata"])), "spend_logs_metadata should be the same as the headers"
+def test_add_litellm_metadata_from_request_headers_both_headers_trace_id_precedence():
+    """When both x-litellm-trace-id and x-litellm-session-id are present, trace-id takes precedence for chain_id."""
+    headers = {
+        "x-litellm-trace-id": "trace-value",
+        "x-litellm-session-id": "session-value",
+    }
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "trace-value"
+    assert data["metadata"]["session_id"] == "trace-value"
+    assert data["litellm_session_id"] == "trace-value"
+    assert data["litellm_trace_id"] == "trace-value"
 
-        
 
 def test_get_internal_user_header_from_mapping_returns_expected_header():
     mappings = [
@@ -1485,7 +1572,8 @@ async def test_embedding_header_forwarding_without_model_group_config():
         litellm.model_group_settings = original_model_group_settings
 
 
-def test_add_guardrails_from_policy_engine():
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine():
     """
     Test that add_guardrails_from_policy_engine adds guardrails from matching policies
     and tracks applied policies in metadata.
@@ -1532,7 +1620,7 @@ def test_add_guardrails_from_policy_engine():
     attachment_registry._initialized = True
 
     # Call the function
-    add_guardrails_from_policy_engine(
+    await add_guardrails_from_policy_engine(
         data=data,
         metadata_variable_name="metadata",
         user_api_key_dict=user_api_key_dict,
@@ -1555,11 +1643,12 @@ def test_add_guardrails_from_policy_engine():
     attachment_registry._initialized = False
 
 
-def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
     """
     Test that add_guardrails_from_policy_engine accepts dynamic 'policies' from the request body
     and removes them to prevent forwarding to the LLM provider.
-    
+
     This is critical because 'policies' is a LiteLLM proxy-specific parameter that should
     not be sent to the actual LLM API (e.g., OpenAI, Anthropic, etc.).
     """
@@ -1585,7 +1674,7 @@ def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_fro
     policy_registry._initialized = False
 
     # Call the function - should accept dynamic policies and not raise an error
-    add_guardrails_from_policy_engine(
+    await add_guardrails_from_policy_engine(
         data=data,
         metadata_variable_name="metadata",
         user_api_key_dict=user_api_key_dict,
@@ -1600,3 +1689,131 @@ def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_fro
     assert "messages" in data
     assert data["messages"] == [{"role": "user", "content": "Hello"}]
     assert "metadata" in data
+
+
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_policy_version_by_id():
+    """
+    Test that add_guardrails_from_policy_engine executes a specific policy version
+    when policy_<uuid> is passed in the request body.
+    """
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    policy_version_uuid = "12345678-1234-5678-1234-567812345678"
+    policy_version_ref = f"policy_{policy_version_uuid}"
+
+    # Policy from the specific version (e.g. published) - different guardrail than production
+    published_version_policy = Policy(
+        guardrails=PolicyGuardrails(add=["published_version_guardrail"]),
+    )
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "policies": [policy_version_ref],
+        "metadata": {},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_alias="test-team",
+        key_alias="test-key",
+    )
+
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {}
+    policy_registry._initialized = True
+
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = []
+    attachment_registry._initialized = True
+
+    with patch.object(
+        policy_registry,
+        "get_policy_by_id_for_request",
+        return_value=("test-policy-from-version", published_version_policy),
+    ):
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    # Verify guardrails from the specific version were applied
+    assert "metadata" in data
+    assert "guardrails" in data["metadata"]
+    assert "published_version_guardrail" in data["metadata"]["guardrails"]
+    assert "policies" not in data
+
+    # Clean up
+    policy_registry._policies = {}
+    policy_registry._initialized = False
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_not_in_debug_logs():
+    """
+    E2E regression test for the client-reported JWT leak.
+
+    Calls add_litellm_data_to_request with a Bearer token in the request
+    headers and captures all debug log output. Asserts the raw token never
+    appears in any log message — covering the exact paths the client reported:
+      - "Request Headers: ..."
+      - "receiving data: ..."
+      - "[PROXY] returned data from litellm_pre_call_utils: ..."
+    """
+    import logging
+    from io import StringIO
+
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    secret_token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.fakesignature"
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {
+        "authorization": f"Bearer {secret_token}",
+        "content-type": "application/json",
+    }
+    mock_request.url = MagicMock()
+    mock_request.url.__str__ = lambda self: "http://localhost:4000/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.query_params = {}
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+
+    # Capture all debug log output from the proxy logger
+    log_capture = StringIO()
+    log_handler = logging.StreamHandler(log_capture)
+    log_handler.setLevel(logging.DEBUG)
+    logger = logging.getLogger("LiteLLM Proxy")
+    logger.addHandler(log_handler)
+    original_level = logger.level
+    logger.setLevel(logging.DEBUG)
+
+    try:
+        with patch("litellm.proxy.proxy_server.llm_router", None), \
+             patch("litellm.proxy.proxy_server.premium_user", True):
+            await add_litellm_data_to_request(
+                data=data,
+                request=mock_request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=ProxyConfig(),
+                general_settings={},
+            )
+    finally:
+        logger.removeHandler(log_handler)
+        logger.setLevel(original_level)
+
+    log_output = log_capture.getvalue()
+    assert secret_token not in log_output, (
+        f"Bearer token leaked in debug logs. "
+        f"Found token in log output:\n{log_output[:500]}"
+    )

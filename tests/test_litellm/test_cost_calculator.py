@@ -1600,6 +1600,56 @@ def test_completion_cost_service_tier_priority():
     ), "Costs from params and usage should be similar (both flex)"
 
 
+def test_completion_cost_service_tier_for_bedrock():
+    """Test that Bedrock cost calculation applies service_tier-specific pricing."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "bedrock/us-east-1/test-bedrock-service-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "input_cost_per_token_priority": 0.01,
+                "output_cost_per_token_priority": 0.02,
+                "input_cost_per_token_flex": 0.0005,
+                "output_cost_per_token_flex": 0.001,
+                "litellm_provider": "bedrock",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    response = ModelResponse(usage=usage, model=model)
+
+    default_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+
+    priority_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+        optional_params={"service_tier": "priority"},
+    )
+
+    response_with_flex_tier = ModelResponse(usage=usage, model=model)
+    setattr(response_with_flex_tier, "service_tier", "flex")
+    flex_cost = completion_cost(
+        completion_response=response_with_flex_tier,
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+
+    assert priority_cost > default_cost > flex_cost > 0
+
+
 def test_gemini_cache_tokens_details_no_negative_values():
     """
     Test for Issue #18750: Negative text_tokens with Gemini caching
@@ -1776,3 +1826,43 @@ def test_gemini_implicit_caching_cost_calculation():
     )
 
     print("✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly")
+
+
+def test_additional_costs_only_for_azure_ai():
+    """
+    Test that _get_additional_costs is only called for azure_ai provider.
+
+    completion_cost() guards the call with `if custom_llm_provider == "azure_ai"`.
+    This test verifies that non-azure_ai providers get additional_costs=None
+    (reflected by the absence of "additional_costs" in cost_breakdown),
+    while azure_ai providers can include additional costs.
+    """
+    from litellm.cost_calculator import _get_additional_costs
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Non-azure_ai providers should return None
+    result = _get_additional_costs(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+    assert result is None, "Non-azure_ai providers should have no additional costs"
+
+    result = _get_additional_costs(
+        model="claude-sonnet-4-20250514",
+        custom_llm_provider="anthropic",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+    assert result is None, "Anthropic should have no additional costs"
+
+    result = _get_additional_costs(
+        model="gemini-2.0-flash",
+        custom_llm_provider="vertex_ai",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+    assert result is None, "Vertex AI should have no additional costs"

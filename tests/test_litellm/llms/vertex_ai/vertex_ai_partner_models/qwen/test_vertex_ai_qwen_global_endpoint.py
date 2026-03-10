@@ -10,7 +10,7 @@ These tests verify that:
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
@@ -210,7 +210,12 @@ async def test_vertex_ai_qwen_global_endpoint_url():
     async def mock_post_func(*args, **kwargs):
         return mock_response
 
-    with patch.object(client, "post", side_effect=mock_post_func) as mock_post, patch.object(
+    mock_vertexai = MagicMock()
+    mock_vertexai.preview = MagicMock()
+
+    with patch.dict("sys.modules", {"vertexai": mock_vertexai}), patch.object(
+        client, "post", side_effect=mock_post_func
+    ) as mock_post, patch.object(
         VertexLLM, "_ensure_access_token", return_value=("fake-token", "test-project")
     ), patch(
         "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
@@ -220,6 +225,7 @@ async def test_vertex_ai_qwen_global_endpoint_url():
             model="vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
             messages=[{"role": "user", "content": "Hello"}],
             vertex_ai_project="test-project",
+            vertex_ai_location="us-central1",
             client=client,
         )
 

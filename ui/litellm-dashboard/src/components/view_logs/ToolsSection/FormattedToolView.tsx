@@ -58,7 +58,14 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
       {/* Description */}
       {tool.description && (
         <div style={{ marginBottom: 16 }}>
-          <Text style={{ lineHeight: 1.6 }}>{tool.description}</Text>
+          <Text
+            style={{
+              lineHeight: 1.6,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {tool.description}
+          </Text>
         </div>
       )}
 

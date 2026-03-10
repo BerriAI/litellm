@@ -363,6 +363,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
     speed: Optional[str]  # Fast mode support for Opus models
     output_config: Optional[AnthropicOutputConfig]  # Configuration for Claude's output behavior
+    cache_control: Optional[Dict[str, Any]]  # Automatic prompt caching
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):

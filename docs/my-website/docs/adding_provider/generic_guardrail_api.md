@@ -237,11 +237,41 @@ litellm_settings:
         mode: pre_call  # or post_call, during_call
         api_base: https://your-guardrail-api.com
         api_key: os.environ/YOUR_GUARDRAIL_API_KEY  # optional
+        unreachable_fallback: fail_closed  # default: fail_closed. Set to fail_open to proceed if the guardrail endpoint is unreachable (network errors, or HTTP 502/503/504 from an upstream proxy/LB).
         additional_provider_specific_params:
           # your custom parameters
           threshold: 0.8
           language: "en"
 ```
+
+### Static and dynamic headers
+
+You can send two kinds of headers to your guardrail endpoint:
+
+- **Static headers** (`headers`): A key/value map sent with **every** request to your guardrail. Use this for fixed values (e.g. API keys, `X-Service-Name`). Configure in `litellm_params`:
+
+  ```yaml
+  litellm_params:
+    guardrail: generic_guardrail_api
+    api_base: https://your-guardrail-api.com
+    headers:
+      X-Service-Name: "my-app"
+      X-API-Key: "secret"
+  ```
+
+- **Dynamic headers** (`extra_headers`): A list of **header names** that are forwarded from the **client request** to your guardrail. Only headers in this list (plus a small default allowlist such as `x-litellm-*`) have their values sent; others are sent as `[present]`. Use this to pass through client-provided headers (e.g. `x-request-id`, `x-correlation-id`). Configure in `litellm_params`:
+
+  ```yaml
+  litellm_params:
+    guardrail: generic_guardrail_api
+    api_base: https://your-guardrail-api.com
+    extra_headers:
+      - x-request-id
+      - x-correlation-id
+      - x-custom-auth
+  ```
+
+This mirrors the [MCP static and extra headers](/docs/mcp#forwarding-custom-headers-to-mcp-servers) behavior.
 
 ### Example: Pillar Security
 

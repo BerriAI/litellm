@@ -4,9 +4,11 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Optional
-from unittest.mock import MagicMock, patch
 import threading
+from typing import Any, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
 
 logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
@@ -14,6 +16,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm import completion
 from litellm.caching import InMemoryCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
@@ -444,6 +447,57 @@ class TestLangfuseLogging:
             await self._verify_langfuse_call(
                 setup["mock_post"], "completion_with_vertex_call.json", setup["trace_id"]
             )
+
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_vllm_embedding(self, mock_setup):
+        """
+        Test that the request sent to the vllm embedding endpoint is correct.
+
+        Verifies the request body matches the expected JSON fixture,
+        including that the hosted_vllm/ prefix is stripped from the model name
+        and that no unexpected fields (e.g. encoding_format) are included.
+        """
+        setup = mock_setup
+
+        vllm_response_data = {
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
+            "model": "BAAI/bge-small-en-v1.5",
+            "usage": {"prompt_tokens": 10, "total_tokens": 10},
+        }
+        mock_vllm_response = httpx.Response(
+            status_code=200,
+            json=vllm_response_data,
+        )
+
+        mock_async_client = AsyncHTTPHandler()
+        mock_async_client.post = AsyncMock(return_value=mock_vllm_response)
+
+        with patch("httpx.Client.post", setup["mock_post"]):
+            await litellm.aembedding(
+                model="hosted_vllm/BAAI/bge-small-en-v1.5",
+                input=["Hello from litellm!"],
+                api_base="http://my-fake-vllm.com/v1",
+                metadata={"trace_id": setup["trace_id"]},
+                client=mock_async_client,
+            )
+
+        # Verify the request sent to vllm matches the expected JSON fixture
+        assert mock_async_client.post.call_count == 1
+        actual_vllm_request = mock_async_client.post.call_args.kwargs["json"]
+
+        pwd = os.path.dirname(os.path.realpath(__file__))
+        expected_body_path = os.path.join(
+            pwd, "langfuse_expected_request_body", "embedding_with_vllm.json"
+        )
+        with open(expected_body_path, "r") as f:
+            expected_vllm_request = json.load(f)
+
+        assert actual_vllm_request == expected_vllm_request, (
+            f"vllm request body mismatch:\n"
+            f"actual:   {json.dumps(actual_vllm_request, indent=2)}\n"
+            f"expected: {json.dumps(expected_vllm_request, indent=2)}"
+        )
 
     @pytest.mark.asyncio
     async def test_langfuse_logging_with_router(self, mock_setup):
