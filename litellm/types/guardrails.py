@@ -497,7 +497,7 @@ class AktoConfigModel(BaseModel):
 
     akto_base_url: Optional[str] = Field(
         default=None,
-        description="Akto ingestion URL. Env: AKTO_DATA_INGESTION_URL.",
+        description="Akto Guardrail API Base URL. Env: AKTO_GUARDRAIL_API_BASE.",
     )
     akto_api_key: Optional[str] = Field(
         default=None,

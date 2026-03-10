@@ -12,7 +12,7 @@ class AktoConfigModel(GuardrailConfigModel):
 
     akto_base_url: Optional[str] = Field(
         default=None,
-        description="Akto Data Ingestion Service URL. Env: AKTO_DATA_INGESTION_URL.",
+        description="Akto Guardrail API Base URL. Env: AKTO_GUARDRAIL_API_BASE.",
         json_schema_extra={
             "examples": [
                 "http://localhost:9090",

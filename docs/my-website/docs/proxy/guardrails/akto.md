@@ -9,8 +9,8 @@ Two modes via `on_flagged`:
 
 ## 1. Get Your Akto Credentials
 
-Set up the Akto Data Ingestion Service and grab:
-- `AKTO_DATA_INGESTION_URL` — your ingestion endpoint
+Set up the Akto Guardrail API Service and grab:
+- `AKTO_GUARDRAIL_API_BASE` — your Guardrail API Base URL
 - `AKTO_API_KEY` — your API key
 
 ## 2. Configure in `config.yaml`
@@ -25,7 +25,7 @@ guardrails:
     litellm_params:
       guardrail: akto
       mode: [pre_call, post_call]
-      akto_base_url: os.environ/AKTO_DATA_INGESTION_URL
+      akto_base_url: os.environ/AKTO_GUARDRAIL_API_BASE
       akto_api_key: os.environ/AKTO_API_KEY
       on_flagged: block
       unreachable_fallback: fail_open                   # optional, default: fail_closed
@@ -42,7 +42,7 @@ guardrails:
     litellm_params:
       guardrail: akto
       mode: post_call
-      akto_base_url: os.environ/AKTO_DATA_INGESTION_URL
+      akto_base_url: os.environ/AKTO_GUARDRAIL_API_BASE
       akto_api_key: os.environ/AKTO_API_KEY
       on_flagged: monitor
 ```
@@ -93,7 +93,7 @@ Request → LiteLLM → forward to LLM → get response
 
 | Parameter | Env Variable | Default | Description |
 |-----------|-------------|---------|-------------|
-| `akto_base_url` | `AKTO_DATA_INGESTION_URL` | *required* | Akto ingestion URL |
+| `akto_base_url` | `AKTO_GUARDRAIL_API_BASE` | *required* | Akto Guardrail API Base URL |
 | `akto_api_key` | `AKTO_API_KEY` | *required* | API key (sent as `Authorization` header) |
 | `on_flagged` | `AKTO_ON_FLAGGED` | `block` | `block` or `monitor` |
 | `unreachable_fallback` | — | `fail_closed` | `fail_open` or `fail_closed` |

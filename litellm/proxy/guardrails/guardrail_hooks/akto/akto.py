@@ -11,7 +11,7 @@ import json
 import os
 from datetime import datetime
 from fastapi import HTTPException
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Type, cast
 
 import httpx
 
@@ -50,7 +50,7 @@ class AktoGuardrail(CustomGuardrail):
             litellm_params:
               guardrail: akto
               mode: [pre_call, post_call]
-              akto_base_url: os.environ/AKTO_DATA_INGESTION_URL
+              akto_base_url: os.environ/AKTO_GUARDRAIL_API_BASE
               akto_api_key: os.environ/AKTO_API_KEY
               on_flagged: block          # or "monitor"
     """
@@ -77,12 +77,12 @@ class AktoGuardrail(CustomGuardrail):
         )
 
         self.akto_base_url = (
-            akto_base_url or os.environ.get("AKTO_DATA_INGESTION_URL", "")
+            akto_base_url or os.environ.get("AKTO_GUARDRAIL_API_BASE", "")
         ).rstrip("/")
         if not self.akto_base_url:
             raise ValueError(
                 "akto_base_url is required for Akto guardrail. "
-                "Set AKTO_DATA_INGESTION_URL environment variable or pass it in litellm_params."
+                "Set AKTO_GUARDRAIL_API_BASE environment variable or pass it in litellm_params."
             )
 
         self.akto_api_key = (
@@ -98,8 +98,11 @@ class AktoGuardrail(CustomGuardrail):
         if on_flagged:
             self.on_flagged = on_flagged
         else:
-            env_on_flagged = os.environ.get("AKTO_ON_FLAGGED", "block").lower()
-            self.on_flagged = env_on_flagged if env_on_flagged in ("block", "monitor") else "block"
+            env_val = os.environ.get("AKTO_ON_FLAGGED", "block").lower()
+            self.on_flagged = cast(
+                Literal["block", "monitor"],
+                env_val if env_val in ("block", "monitor") else "block"
+            )
 
         self.sync_mode = (self.on_flagged == "block")
 
@@ -343,8 +346,8 @@ class AktoGuardrail(CustomGuardrail):
         guardrails_result = (
             result.get("data", {}).get("guardrailsResult", {}) or {}
         )
-        return guardrails_result.get("Allowed", True), guardrails_result.get(
-            "Reason", ""
+        return bool(guardrails_result.get("Allowed", True)), str(
+            guardrails_result.get("Reason", "")
         )
 
     def handle_guardrail_response(

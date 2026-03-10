@@ -155,7 +155,7 @@ def test_init_from_env():
     with patch.dict(
         os.environ,
         {
-            "AKTO_DATA_INGESTION_URL": "http://env-host:9090",
+            "AKTO_GUARDRAIL_API_BASE": "http://env-host:9090",
             "AKTO_API_KEY": "env-token",
             "AKTO_ON_FLAGGED": "monitor",
         },
