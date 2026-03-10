@@ -41,6 +41,14 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 
+@pytest.fixture(autouse=True)
+def setup_local_model_cost():
+    """Use the local model cost map for all tests."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    yield
+    os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+ 
 def test_reasoning_tokens_no_price_set():
     model = "o1-mini"
     custom_llm_provider = "openai"
@@ -140,7 +148,7 @@ def test_inline_pdf_tokens_costed_when_text_tokens_less_than_prompt_tokens():
         model = "gemini-2.0-flash-001",
     )
     cost = response_cost_calculator(
-        reponse_object= response,
+        response_object= response,
         model = "gemini-2.0-flash-001",
         custom_llm_provider = "vertex_ai",
         call_type = "acompletion",
@@ -174,7 +182,7 @@ def test_inline_pdf_tokens_costed_when_text_both_costed_correctly():
         model = "gemini-2.0-flash-001",
     )
     cost = response_cost_calculator(
-        reponse_object= response,
+        response_object= response,
         model = "gemini-2.0-flash-001",
         custom_llm_provider = "vertex_ai",
         call_type = "acompletion",
@@ -189,11 +197,11 @@ def test_inline_pdf_tokens_costed_when_text_both_costed_correctly():
     expected_input_cost = (
         5500 * input_cost_per_token + 500 * input_cost_per_audio_token
     )
-    expected_output_cost = 80 *  = output_cost_per_token
+    expected_output_cost = 80 *  output_cost_per_token
     expected_cost = expected_input_cost + expected_output_cost
 
     assert cost == pytest.approx(expected_cost), (
-        f"Expected cost={expected_cost}, "got cost={cost}. "
+        f"Expected cost={expected_cost}, got cost={cost}. "
         f"Unaccounted PDF tokens alongside audio are not being costed."
     )
                          
