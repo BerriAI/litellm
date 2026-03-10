@@ -17,10 +17,7 @@ import httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import Timeout
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -85,9 +82,7 @@ class AktoGuardrail(CustomGuardrail):
                 "Set AKTO_GUARDRAIL_API_BASE environment variable or pass it in litellm_params."
             )
 
-        self.akto_api_key = (
-            akto_api_key or os.environ.get("AKTO_API_KEY", "")
-        )
+        self.akto_api_key = akto_api_key or os.environ.get("AKTO_API_KEY", "")
         if not self.akto_api_key:
             raise ValueError(
                 "akto_api_key is required for Akto guardrail. "
@@ -101,14 +96,14 @@ class AktoGuardrail(CustomGuardrail):
             env_val = os.environ.get("AKTO_ON_FLAGGED", "block").lower()
             self.on_flagged = cast(
                 Literal["block", "monitor"],
-                env_val if env_val in ("block", "monitor") else "block"
+                env_val if env_val in ("block", "monitor") else "block",
             )
 
-        self.sync_mode = (self.on_flagged == "block")
+        self.sync_mode = self.on_flagged == "block"
 
-        self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
-            unreachable_fallback
-        )
+        self.unreachable_fallback: Literal[
+            "fail_closed", "fail_open"
+        ] = unreachable_fallback
 
         self.guardrail_timeout = guardrail_timeout or DEFAULT_GUARDRAIL_TIMEOUT
 
@@ -129,9 +124,7 @@ class AktoGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def resolve_metadata_value(
-        request_data: Optional[dict], key: str
-    ) -> Optional[str]:
+    def resolve_metadata_value(request_data: Optional[dict], key: str) -> Optional[str]:
         """Look up a metadata value — checks litellm_metadata first, then metadata."""
         if request_data is None:
             return None
@@ -171,9 +164,7 @@ class AktoGuardrail(CustomGuardrail):
         return headers
 
     @staticmethod
-    def build_query_params(
-        *, guardrails: bool, ingest_data: bool
-    ) -> Dict[str, str]:
+    def build_query_params(*, guardrails: bool, ingest_data: bool) -> Dict[str, str]:
         """Query params for the Akto HTTP proxy call."""
         params: Dict[str, str] = {"akto_connector": AKTO_CONNECTOR_NAME}
         if guardrails:
@@ -280,7 +271,9 @@ class AktoGuardrail(CustomGuardrail):
         # Client IP from proxy headers
         ip = ""
         proxy_req = request_data.get("proxy_server_request", {})
-        proxy_headers = proxy_req.get("headers", {}) if isinstance(proxy_req, dict) else {}
+        proxy_headers = (
+            proxy_req.get("headers", {}) if isinstance(proxy_req, dict) else {}
+        )
         if isinstance(proxy_headers, dict):
             ip = (
                 proxy_headers.get("x-forwarded-for")
@@ -325,9 +318,7 @@ class AktoGuardrail(CustomGuardrail):
     ) -> httpx.Response:
         """POST to the Akto HTTP proxy endpoint."""
         endpoint = f"{self.akto_base_url}{HTTP_PROXY_PATH}"
-        params = self.build_query_params(
-            guardrails=guardrails, ingest_data=ingest_data
-        )
+        params = self.build_query_params(guardrails=guardrails, ingest_data=ingest_data)
         headers = self.prepare_headers()
 
         return await self.async_handler.post(
@@ -343,16 +334,12 @@ class AktoGuardrail(CustomGuardrail):
         """Parse (allowed, reason) from Akto's response."""
         if not isinstance(result, dict):
             return True, ""
-        guardrails_result = (
-            result.get("data", {}).get("guardrailsResult", {}) or {}
-        )
+        guardrails_result = result.get("data", {}).get("guardrailsResult", {}) or {}
         return bool(guardrails_result.get("Allowed", True)), str(
             guardrails_result.get("Reason", "")
         )
 
-    def handle_guardrail_response(
-        self, response: httpx.Response
-    ) -> Tuple[bool, str]:
+    def handle_guardrail_response(self, response: httpx.Response) -> Tuple[bool, str]:
         """Parse the Akto response. Raises on non-200 so caller can handle it."""
         if response.status_code != 200:
             verbose_proxy_logger.error(
@@ -388,7 +375,9 @@ class AktoGuardrail(CustomGuardrail):
             )
             return dict(inputs)  # type: ignore[return-value]
 
-        verbose_proxy_logger.error("Akto guardrail unreachable (fail-closed): %s", str(error))
+        verbose_proxy_logger.error(
+            "Akto guardrail unreachable (fail-closed): %s", str(error)
+        )
         raise HTTPException(
             status_code=503,
             detail=f"Akto guardrail service unreachable: {str(error)}",
@@ -416,7 +405,7 @@ class AktoGuardrail(CustomGuardrail):
             event_type=event_type,
         )
 
-    async def apply_guardrail(
+    async def apply_guardrail(  # noqa: PLR0915
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
@@ -477,7 +466,8 @@ class AktoGuardrail(CustomGuardrail):
                         )
                         if response.status_code != 200:
                             verbose_proxy_logger.error(
-                                "Akto guardrail: ingestion returned HTTP %d", response.status_code
+                                "Akto guardrail: ingestion returned HTTP %d",
+                                response.status_code,
                             )
                     except Exception as e:
                         verbose_proxy_logger.error(
@@ -546,9 +536,7 @@ class AktoGuardrail(CustomGuardrail):
         )
 
         try:
-            await self.send_request(
-                guardrails=False, ingest_data=True, payload=payload
-            )
+            await self.send_request(guardrails=False, ingest_data=True, payload=payload)
         except Exception as e:
             verbose_proxy_logger.error(
                 "Akto guardrail: failed to ingest blocked request: %s", str(e)
