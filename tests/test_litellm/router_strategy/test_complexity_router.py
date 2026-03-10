@@ -483,7 +483,7 @@ class TestAsyncPreRoutingHookEdgeCases:
 
     @pytest.mark.asyncio
     async def test_pre_routing_hook_no_user_message(self, complexity_router):
-        """Test pre-routing hook returns None when no user message found."""
+        """Test pre-routing hook falls back to default model when no user message found."""
         messages = [
             {"role": "system", "content": "You are helpful."},
             {"role": "assistant", "content": "Hello!"},
@@ -493,21 +493,45 @@ class TestAsyncPreRoutingHookEdgeCases:
             request_kwargs={},
             messages=messages,
         )
-        assert result is None
+        # Should return default model rather than None (None would cause
+        # the complexity_router deployment itself to be selected, crashing)
+        assert result is not None
+        assert result.model in ["gpt-4o-mini", "gpt-4o", "claude-sonnet-4-20250514", "o1-preview"]
 
     @pytest.mark.asyncio
-    async def test_pre_routing_hook_only_list_content(self, complexity_router):
-        """Test pre-routing hook returns None when all user content is list type."""
+    async def test_pre_routing_hook_list_content(self, complexity_router):
+        """Test pre-routing hook handles list-format message content (OpenAI multi-part format)."""
         messages = [
-            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Hello, how are you?"}]},
         ]
         result = await complexity_router.async_pre_routing_hook(
             model="test-model",
             request_kwargs={},
             messages=messages,
         )
-        # Should return None since we can't extract string content
-        assert result is None
+        # Should extract text from list content and classify normally
+        assert result is not None
+        assert result.model == "gpt-4o-mini"  # "Hello, how are you?" is SIMPLE
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_list_content_complex(self, complexity_router):
+        """Test pre-routing hook classifies list-format content by complexity."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Think step by step and reason through this: design a distributed system"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ],
+            }
+        ]
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        assert result is not None
+        assert result.model == "o1-preview"  # REASONING tier
 
     @pytest.mark.asyncio
     async def test_pre_routing_hook_preserves_messages(self, complexity_router):
@@ -526,7 +550,7 @@ class TestAsyncPreRoutingHookEdgeCases:
 
     @pytest.mark.asyncio
     async def test_pre_routing_hook_empty_string_content(self, complexity_router):
-        """Test pre-routing hook returns None for empty string content."""
+        """Test pre-routing hook falls back to default model for empty string content."""
         messages = [
             {"role": "user", "content": ""},
         ]
@@ -535,8 +559,9 @@ class TestAsyncPreRoutingHookEdgeCases:
             request_kwargs={},
             messages=messages,
         )
-        # Empty string content is treated as "no user message found"
-        assert result is None
+        # Empty string content → no extractable user message → routes to default model
+        assert result is not None
+        assert result.model in ["gpt-4o-mini", "gpt-4o", "claude-sonnet-4-20250514", "o1-preview"]
 
 
 class TestSingletonMutation:

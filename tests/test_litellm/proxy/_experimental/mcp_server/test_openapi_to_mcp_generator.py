@@ -15,10 +15,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    _resolve_param_list,
+    _resolve_ref,
     build_input_schema,
     create_tool_function,
     extract_parameters,
     get_base_url,
+    resolve_operation_params,
 )
 
 GET_ASYNC_CLIENT_TARGET = (
@@ -660,6 +663,195 @@ class TestGetBaseUrl:
             "paths": {}
         }
         spec_path = "https://api.example.com/v2/docs/api/openapi.json"
-        
+
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://api.example.com/v2/docs/api"
+
+
+class TestResolveRef:
+    """Test $ref resolution for individual parameters."""
+
+    def test_inline_param_returned_unchanged(self):
+        """Inline params (no $ref) are returned as-is."""
+        param = {"name": "owner", "in": "path", "required": True}
+        component_params: dict = {}
+        result = _resolve_ref(param, component_params)
+        assert result is param
+
+    def test_ref_resolved_from_components(self):
+        """A $ref pointing at components/parameters is resolved correctly."""
+        param = {"$ref": "#/components/parameters/per-page"}
+        component_params = {
+            "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+        }
+        result = _resolve_ref(param, component_params)
+        assert result == {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+
+    def test_unresolvable_ref_returns_none(self):
+        """A $ref whose target is absent from components returns None (not the stub)."""
+        param = {"$ref": "#/components/parameters/missing-param"}
+        component_params: dict = {}
+        result = _resolve_ref(param, component_params)
+        assert result is None
+
+    def test_non_component_ref_returned_unchanged(self):
+        """A $ref that doesn't start with #/components/parameters/ is returned as-is."""
+        param = {"$ref": "#/definitions/SomeModel"}
+        result = _resolve_ref(param, {})
+        assert result is param
+
+
+class TestResolveParamList:
+    """Test batch $ref resolution with filtering."""
+
+    def test_all_inline_params_preserved(self):
+        """All inline params with names are preserved."""
+        raw = [
+            {"name": "owner", "in": "path"},
+            {"name": "repo", "in": "path"},
+        ]
+        result = _resolve_param_list(raw, {})
+        assert len(result) == 2
+        assert result[0]["name"] == "owner"
+        assert result[1]["name"] == "repo"
+
+    def test_refs_resolved(self):
+        """$ref entries are resolved against component_params."""
+        raw = [
+            {"$ref": "#/components/parameters/per-page"},
+            {"name": "q", "in": "query"},
+        ]
+        component_params = {
+            "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+        }
+        result = _resolve_param_list(raw, component_params)
+        assert len(result) == 2
+        assert result[0]["name"] == "per_page"
+        assert result[1]["name"] == "q"
+
+    def test_unresolvable_refs_dropped(self):
+        """Unresolvable $refs are silently dropped — no None or nameless entries."""
+        raw = [
+            {"$ref": "#/components/parameters/does-not-exist"},
+            {"name": "q", "in": "query"},
+        ]
+        result = _resolve_param_list(raw, {})
+        assert len(result) == 1
+        assert result[0]["name"] == "q"
+
+    def test_nameless_entries_dropped(self):
+        """Entries that resolve to dicts without a 'name' key are dropped."""
+        raw = [{"schema": {"type": "string"}}]  # no "name" field
+        result = _resolve_param_list(raw, {})
+        assert result == []
+
+
+class TestResolveOperationParams:
+    """Test the shared resolve_operation_params helper."""
+
+    def test_inline_params_unchanged(self):
+        """Simple inline operation with no $refs or path-level params is returned unchanged."""
+        operation = {
+            "operationId": "listRepos",
+            "parameters": [
+                {"name": "owner", "in": "path", "required": True},
+                {"name": "sort", "in": "query"},
+            ],
+        }
+        path_item = {"get": operation}
+        result = resolve_operation_params(operation, path_item, {})
+        names = [p["name"] for p in result["parameters"]]
+        assert names == ["owner", "sort"]
+
+    def test_ref_params_resolved(self):
+        """$ref parameters in the operation are resolved from components."""
+        operation = {
+            "parameters": [
+                {"$ref": "#/components/parameters/per-page"},
+                {"name": "q", "in": "query"},
+            ]
+        }
+        path_item = {"get": operation}
+        components = {
+            "parameters": {
+                "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+            }
+        }
+        result = resolve_operation_params(operation, path_item, components)
+        names = [p["name"] for p in result["parameters"]]
+        assert "per_page" in names
+        assert "q" in names
+
+    def test_path_level_params_merged(self):
+        """Path-level parameters are merged into the operation parameters."""
+        path_level_params = [
+            {"name": "owner", "in": "path", "required": True},
+            {"name": "repo", "in": "path", "required": True},
+        ]
+        operation = {
+            "parameters": [{"name": "sort", "in": "query"}]
+        }
+        path_item = {"parameters": path_level_params, "get": operation}
+        result = resolve_operation_params(operation, path_item, {})
+        names = [p["name"] for p in result["parameters"]]
+        assert "owner" in names
+        assert "repo" in names
+        assert "sort" in names
+
+    def test_operation_level_wins_on_collision(self):
+        """When path-level and operation-level define the same name+in, operation wins."""
+        path_level_params = [
+            {"name": "per_page", "in": "query", "schema": {"type": "integer"}, "default": 30}
+        ]
+        operation = {
+            "parameters": [
+                {"name": "per_page", "in": "query", "schema": {"type": "integer"}, "default": 100}
+            ]
+        }
+        path_item = {"parameters": path_level_params, "get": operation}
+        result = resolve_operation_params(operation, path_item, {})
+        per_page_params = [p for p in result["parameters"] if p["name"] == "per_page"]
+        assert len(per_page_params) == 1
+        assert per_page_params[0].get("default") == 100  # operation-level value
+
+    def test_unresolvable_refs_silently_dropped(self):
+        """Unresolvable $refs are dropped — they don't poison the result with (None, None) keys."""
+        operation = {
+            "parameters": [
+                {"$ref": "#/components/parameters/nonexistent"},
+                {"name": "q", "in": "query"},
+            ]
+        }
+        path_item = {"get": operation}
+        result = resolve_operation_params(operation, path_item, {})
+        names = [p["name"] for p in result["parameters"]]
+        assert names == ["q"]
+        # Verify no None entries slipped through
+        assert all(p.get("name") is not None for p in result["parameters"])
+
+    def test_github_style_spec_structure(self):
+        """Simulate a GitHub-style spec: path-level owner+repo refs, operation-level query params."""
+        component_params = {
+            "owner": {"name": "owner", "in": "path", "required": True, "schema": {"type": "string"}},
+            "repo": {"name": "repo", "in": "path", "required": True, "schema": {"type": "string"}},
+            "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}},
+        }
+        path_level_params = [
+            {"$ref": "#/components/parameters/owner"},
+            {"$ref": "#/components/parameters/repo"},
+        ]
+        operation = {
+            "operationId": "repos/list-commits",
+            "parameters": [
+                {"$ref": "#/components/parameters/per-page"},
+                {"name": "sha", "in": "query"},
+            ],
+        }
+        path_item = {"parameters": path_level_params, "get": operation}
+        result = resolve_operation_params(operation, path_item, {"parameters": component_params})
+        names = [p["name"] for p in result["parameters"]]
+        assert "owner" in names
+        assert "repo" in names
+        assert "per_page" in names
+        assert "sha" in names
+        assert len(names) == 4  # no duplicates

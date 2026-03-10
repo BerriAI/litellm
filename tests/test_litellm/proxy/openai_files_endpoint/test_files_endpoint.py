@@ -957,29 +957,41 @@ def test_managed_files_with_loadbalancing(mocker: MockerFixture, monkeypatch, ll
         async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
     
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
     proxy_logging_obj.proxy_hook_mapping["managed_files"] = ManagedFilesWithLoadbalancing()
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
-    
-    # Create batch file content
-    test_file_content = b'{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}}'
-    test_file = ("batch_data.jsonl", test_file_content, "application/jsonl")
-    
-    # Make request with both target_model_names AND enable_loadbalancing_on_batch_endpoints
-    response = client.post(
-        "/v1/files",
-        files={"file": test_file},
-        data={
-            "purpose": "batch",
-            "target_model_names": "azure-gpt-3-5-turbo,gpt-3.5-turbo",  # Multiple models
-        },
-        headers={"Authorization": "Bearer test-key"},
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    # Override auth to avoid dependence on shared proxy state in parallel CI
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN
     )
     
-    # Verify success
-    assert response.status_code == 200
+    try:
+        # Create batch file content
+        test_file_content = b'{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}}'
+        test_file = ("batch_data.jsonl", test_file_content, "application/jsonl")
+        
+        # Make request with both target_model_names AND enable_loadbalancing_on_batch_endpoints
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data={
+                "purpose": "batch",
+                "target_model_names": "azure-gpt-3-5-turbo,gpt-3.5-turbo",  # Multiple models
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
+        
+        # Verify success
+        assert response.status_code == 200, response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
     result = response.json()
     assert result["id"] == "litellm_managed_file_abc123"
     assert result["purpose"] == "batch"
@@ -1091,7 +1103,12 @@ def test_create_file_with_deep_nested_litellm_metadata(
     Regression test for: litellm_metadata[a][b][c] format should be correctly parsed.
     """
     from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+    import litellm.proxy.proxy_server as ps
     from litellm.types.llms.openai import OpenAIFileObject
+    
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     
     proxy_logging_obj = ProxyLogging(
         user_api_key_cache=DualCache(default_in_memory_ttl=1)
@@ -1139,35 +1156,42 @@ def test_create_file_with_deep_nested_litellm_metadata(
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
     
-    test_file_content = b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo"}}'
-    test_file = ("nested.jsonl", test_file_content, "application/jsonl")
-    
-    # Test with deeply nested metadata
-    response = client.post(
-        "/v1/files",
-        files={"file": test_file},
-        data={
-            "purpose": "batch",
-            "target_model_names": "gpt-3.5-turbo",
-            "litellm_metadata[config][database][host]": "localhost",
-            "litellm_metadata[config][database][port]": "5432",
-            "litellm_metadata[config][cache][enabled]": "true",
-        },
-        headers={"Authorization": "Bearer test-key"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
     )
     
-    # Verify success
-    assert response.status_code == 200
-    result = response.json()
-    assert result["id"] == "file-test-456"
-    
-    # Verify deeply nested metadata was correctly parsed
-    assert "config" in captured_litellm_metadata
-    assert "database" in captured_litellm_metadata["config"]
-    assert captured_litellm_metadata["config"]["database"]["host"] == "localhost"
-    assert captured_litellm_metadata["config"]["database"]["port"] == "5432"
-    assert "cache" in captured_litellm_metadata["config"]
-    assert captured_litellm_metadata["config"]["cache"]["enabled"] == "true"
+    try:
+        test_file_content = b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo"}}'
+        test_file = ("nested.jsonl", test_file_content, "application/jsonl")
+        
+        # Test with deeply nested metadata
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data={
+                "purpose": "batch",
+                "target_model_names": "gpt-3.5-turbo",
+                "litellm_metadata[config][database][host]": "localhost",
+                "litellm_metadata[config][database][port]": "5432",
+                "litellm_metadata[config][cache][enabled]": "true",
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
+        
+        # Verify success
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["id"] == "file-test-456"
+        
+        # Verify deeply nested metadata was correctly parsed
+        assert "config" in captured_litellm_metadata
+        assert "database" in captured_litellm_metadata["config"]
+        assert captured_litellm_metadata["config"]["database"]["host"] == "localhost"
+        assert captured_litellm_metadata["config"]["database"]["port"] == "5432"
+        assert "cache" in captured_litellm_metadata["config"]
+        assert captured_litellm_metadata["config"]["cache"]["enabled"] == "true"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 # ---------------------------------------------------------------------------
@@ -1303,3 +1327,121 @@ def test_file_no_team_setting_preserves_caller(
     )
     assert expires_after["anchor"] == "created_at"
     assert expires_after["seconds"] == 86400
+
+
+def test_file_team_injects_when_caller_sends_nothing(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Team enforcement applies even when caller sends no expiry."""
+    expires_after = _post_file_with_team_metadata(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {
+                "anchor": "created_at",
+                "seconds": 3600,
+            }
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert expires_after["anchor"] == "created_at"
+    assert expires_after["seconds"] == 3600
+
+
+# ---------------------------------------------------------------------------
+# Team-level enforced_file_expires_after validation error tests
+# ---------------------------------------------------------------------------
+
+
+def _post_file_raw(monkeypatch, llm_router: Router, team_metadata: dict, form_data: dict):
+    """POST /v1/files and return the raw response (no status assertion)."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    dummy, _ = _make_capturing_managed_files()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = dummy
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    user_key = UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata)
+    app.dependency_overrides[user_api_key_auth] = lambda: user_key
+
+    test_file = ("mydata.jsonl", b'{"prompt": "Hello"}', "application/json")
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data=form_data,
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    return response
+
+
+def test_file_missing_anchor_key_returns_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Missing 'anchor' key in team metadata returns 500."""
+    response = _post_file_raw(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {"seconds": 3600},
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 500
+    assert "malformed" in response.json()["error"]["message"]
+
+
+def test_file_missing_seconds_key_returns_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Missing 'seconds' key in team metadata returns 500."""
+    response = _post_file_raw(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {"anchor": "created_at"},
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 500
+    assert "malformed" in response.json()["error"]["message"]
+
+
+def test_file_invalid_anchor_returns_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Invalid anchor value in team metadata returns 500."""
+    response = _post_file_raw(
+        monkeypatch,
+        llm_router,
+        team_metadata={
+            "enforced_file_expires_after": {
+                "anchor": "updated_at",
+                "seconds": 3600,
+            },
+        },
+        form_data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 500
+    assert "created_at" in response.json()["error"]["message"]
