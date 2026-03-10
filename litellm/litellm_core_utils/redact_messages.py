@@ -123,6 +123,16 @@ def perform_redaction(model_call_details: dict, result):
         elif isinstance(_result, litellm.EmbeddingResponse):
             if hasattr(_result, "data") and _result.data is not None:
                 _result.data = []
+        elif isinstance(_result, dict) and "choices" in _result:
+            # ModelResponse.model_dump() returns dict - redact choices in place
+            if isinstance(_result.get("choices"), list) and len(_result["choices"]) > 0:
+                choice = _result["choices"][0]
+                if isinstance(choice, dict) and "message" in choice:
+                    msg = choice["message"]
+                    if isinstance(msg, dict) and "content" in msg:
+                        msg["content"] = "redacted-by-litellm"
+                    if isinstance(msg, dict) and "audio" in msg:
+                        msg["audio"] = None
         else:
             return {"text": "redacted-by-litellm"}
         return _result
