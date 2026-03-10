@@ -660,10 +660,22 @@ def generic_cost_per_token(  # noqa: PLR0915
     cache_creation = prompt_tokens_details["cache_creation_tokens"]
     image_tokens = prompt_tokens_details["image_tokens"]
 
+    # Check for double-counting: sum of details > prompt_tokens means overlap
     accounted_tokens = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
     has_double_counting = cache_hit > 0 and accounted_tokens > usage.prompt_tokens
-     # Double-counting fix (xAI etc.): recalculate text_tokens from scratch
-    if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
+ 
+    # Some models use alternative billing dimensions (image_count, character_count,
+    # video_length_seconds) that account for prompt_tokens without being included
+    # in the per-token detail fields. When these are active, a gap between
+    # accounted_tokens and prompt_tokens is expected and must NOT be filled.
+    has_alternative_billing = (
+        prompt_tokens_details["image_count"] > 0
+        or prompt_tokens_details["character_count"] > 0
+        or prompt_tokens_details["video_length_seconds"] > 0
+    )
+ 
+    if has_double_counting:
+        # Double-counting fix (xAI etc.): recalculate text_tokens from scratch
         text_tokens = (
             usage.prompt_tokens
             - cache_hit
@@ -672,13 +684,25 @@ def generic_cost_per_token(  # noqa: PLR0915
             - image_tokens
         )
         prompt_tokens_details["text_tokens"] = text_tokens
-    elif accounted_tokens < usage.prompt_tokens:
-        # unaccounted tokens fix: inline documents (PDF, DOCX, etc.) are counted
-        # in prompt_tokens by the provider but not broken out at input_cost_per_token.
+    elif (text_tokens == 0 and not has_alternative_billing):
+        # text_tokens not set by provider and no alternative billing dimensions:
+        # calculate text_tokens as the remainder of prompt_tokens
+        text_tokens = (
+            usage.prompt_tokens
+            - cache_hit
+            - audio_tokens
+            - cache_creation
+            - image_tokens
+        )
+        prompt_tokens_details["text_tokens"] = text_tokens
+    elif accounted_tokens < usage.prompt_tokens and not has_alternative_billing:
+        # Unaccounted tokens fix: inline documents (PDF, DOCX, etc.) are counted
+        # in prompt_tokens by the provider but not broken out into any detail field.
         # Add the gap to text_tokens so they are costed at input_cost_per_token.
         unaccounted_tokens = usage.prompt_tokens - accounted_tokens
         prompt_tokens_details["text_tokens"] += unaccounted_tokens
-        
+ 
+ 
     (
         prompt_base_cost,
         completion_base_cost,
@@ -688,7 +712,7 @@ def generic_cost_per_token(  # noqa: PLR0915
     ) = _get_token_base_cost(
         model_info=model_info, usage=usage, service_tier=service_tier
     )
-
+ 
     prompt_cost = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
         model_info=model_info,
