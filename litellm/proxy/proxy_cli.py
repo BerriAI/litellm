@@ -854,8 +854,6 @@ def run_server(  # noqa: PLR0915
                     check_prisma_schema_diff(db_url=None)
                 else:
                     if not PrismaManager.setup_database(use_migrate=not use_prisma_db_push):
-                        import sys
-
                         print(  # noqa
                             "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
                             "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
