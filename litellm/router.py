@@ -1501,20 +1501,21 @@ class Router:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(
-                    self.acompletion(
+
+                async def _run_silent_completion():
+                    await self.acompletion(
                         model=silent_model,
                         messages=cast(List[AllMessageValues], messages),
                         **silent_kwargs,
                     )
-                )
-                # Drain any remaining fire-and-forget tasks (e.g. alerting hooks)
-                # scheduled via asyncio.create_task during the acompletion call.
-                pending = asyncio.all_tasks(loop)
-                if pending:
-                    loop.run_until_complete(
-                        asyncio.gather(*pending, return_exceptions=True)
-                    )
+                    # Drain any fire-and-forget tasks (e.g. alerting hooks)
+                    # scheduled via asyncio.create_task during acompletion.
+                    pending = asyncio.all_tasks()
+                    pending.discard(asyncio.current_task())
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
+
+                loop.run_until_complete(_run_silent_completion())
             finally:
                 loop.close()
         except Exception as e:
