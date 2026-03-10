@@ -161,6 +161,30 @@ if MCP_AVAILABLE:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
 
+    def _validate_mcp_required_fields(payload: Any) -> None:
+        """Validate submission payload against admin-configured mcp_required_fields."""
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,
+        )
+
+        required_fields: Optional[List[str]] = proxy_general_settings.get(
+            "mcp_required_fields"
+        )
+        if not required_fields:
+            return
+
+        missing = [
+            f for f in required_fields if not getattr(payload, f, None)
+        ]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": f"Submission is missing required fields: {missing}. "
+                    "Configure required fields via general_settings.mcp_required_fields."
+                },
+            )
+
     def _is_public_registry_enabled() -> bool:
         from litellm.proxy.proxy_server import (
             general_settings as proxy_general_settings,
@@ -725,6 +749,7 @@ if MCP_AVAILABLE:
         )
 
         validate_and_normalize_mcp_server_payload(payload)
+        _validate_mcp_required_fields(payload)
 
         payload.approval_status = MCPApprovalStatus.pending_review
         payload.submitted_by = user_api_key_dict.user_id
@@ -858,6 +883,7 @@ if MCP_AVAILABLE:
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             review_notes=payload.review_notes,
         )
+        await global_mcp_server_manager.reload_servers_from_database()
         return _redact_mcp_credentials(rejected)
 
     @router.get(
