@@ -28,6 +28,9 @@ interface OpenAPIQuickPickerProps {
   onSelect: (entry: OpenAPIRegistryEntry) => void;
 }
 
+// Module-level cache so repeated modal opens don't re-fetch the static registry.
+let registryCache: OpenAPIRegistryEntry[] | null = null;
+
 const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({
   accessToken,
   selectedName,
@@ -39,9 +42,16 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({
 
   useEffect(() => {
     if (!accessToken) return;
+    if (registryCache !== null) {
+      setApis(registryCache);
+      return;
+    }
     setLoading(true);
     fetchOpenAPIRegistry(accessToken)
-      .then((data) => setApis(data.apis ?? []))
+      .then((data) => {
+        registryCache = data.apis ?? [];
+        setApis(registryCache);
+      })
       .catch(() => setApis([]))
       .finally(() => setLoading(false));
   }, [accessToken]);

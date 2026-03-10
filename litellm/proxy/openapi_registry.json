@@ -185,23 +185,6 @@
       ]
     },
     {
-      "name": "shopify",
-      "title": "Shopify",
-      "description": "Products, orders, customers, and store management via Shopify Admin REST API (requires your store subdomain)",
-      "icon_url": "https://cdn.simpleicons.org/shopify",
-      "spec_url": "https://raw.githubusercontent.com/Shopify/shopify-api-specs/main/admin/rest/2023-10/openapi.json",
-      "key_tools": [
-        { "name": "list_products", "description": "List products with variants, pricing, and inventory" },
-        { "name": "get_product", "description": "Get full product details including all variants" },
-        { "name": "list_orders", "description": "List orders with status, customer, and line item filters" },
-        { "name": "get_order", "description": "Get full order details including shipping and payment" },
-        { "name": "list_customers", "description": "List customers with order history and tags" },
-        { "name": "update_order", "description": "Update order notes, tags, or shipping address" },
-        { "name": "create_fulfillment", "description": "Fulfill an order with tracking info" },
-        { "name": "list_inventory_levels", "description": "Get stock levels across locations" }
-      ]
-    },
-    {
       "name": "snowflake",
       "title": "Snowflake",
       "description": "Data warehouse queries, database operations, and analytics via the Snowflake SQL API",
