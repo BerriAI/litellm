@@ -552,14 +552,16 @@ class TestSnowflakeStreamingHandler:
             json_mode=False,
         )
 
-        # Test end_turn -> stop
+        # Test end_turn -> stop (with usage containing only output_tokens per Snowflake spec)
         chunk = {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn"},
-            "usage": {"input_tokens": 10, "output_tokens": 20},
+            "usage": {"output_tokens": 20},
         }
         result = handler.chunk_parser(chunk)
         assert result.choices[0].finish_reason == "stop"
+        assert result.usage.completion_tokens == 20
+        assert result.usage.prompt_tokens == 0  # Not available in message_delta
 
         # Test tool_use -> tool_calls
         chunk = {
@@ -630,6 +632,8 @@ class TestSnowflakeStreamingHandler:
         assert isinstance(result, ModelResponseStream)
         assert result.id == "chatcmpl-123"
         assert result.model == "mistral-7b"
+        assert result.choices[0]["delta"]["content"] == "Hello"
+        assert result.choices[0]["finish_reason"] is None
 
     def test_streaming_handler_multiple_tool_calls(self):
         """
@@ -697,8 +701,6 @@ class TestSnowflakeStreamingHandler:
         # Stop the block
         handler.chunk_parser({"type": "content_block_stop"})
         assert handler.current_content_block_type is None
-        assert handler.current_tool_id is None
-        assert handler.current_tool_name is None
 
     def test_get_model_response_iterator_returns_streaming_handler(self):
         """

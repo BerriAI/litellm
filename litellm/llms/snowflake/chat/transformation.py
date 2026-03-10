@@ -345,11 +345,8 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         )
         # Track tool call index across chunks
         self.tool_index = -1
-        # Track current content block type
+        # Track current content block type (text or tool_use)
         self.current_content_block_type: Optional[str] = None
-        # Track current tool call ID and name for delta chunks
-        self.current_tool_id: Optional[str] = None
-        self.current_tool_name: Optional[str] = None
         # Generate consistent response ID for the stream
         self.response_id = _generate_id()
 
@@ -418,14 +415,14 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
             elif self.current_content_block_type == "tool_use":
                 # Tool use block start - extract id and name
                 self.tool_index += 1
-                self.current_tool_id = content_block.get("id", "")
-                self.current_tool_name = content_block.get("name", "")
+                tool_id = content_block.get("id", "")
+                tool_name = content_block.get("name", "")
 
                 tool_use = ChatCompletionToolCallChunk(
-                    id=self.current_tool_id,
+                    id=tool_id,
                     type="function",
                     function=ChatCompletionToolCallFunctionChunk(
-                        name=self.current_tool_name,
+                        name=tool_name,
                         arguments="",
                     ),
                     index=self.tool_index,
@@ -455,8 +452,6 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         elif type_chunk == "content_block_stop":
             # Reset current content block tracking
             self.current_content_block_type = None
-            self.current_tool_id = None
-            self.current_tool_name = None
 
         elif type_chunk == "message_delta":
             # End of message - extract finish_reason and final usage
@@ -473,14 +468,15 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
                 else:
                     finish_reason = stop_reason
 
-            # Extract final usage if available
+            # Extract final usage if available.
+            # Note: message_delta only contains output_tokens (completion counts).
+            # Prompt tokens are reported in message_start, not here.
             if "usage" in chunk:
                 usage_data = chunk["usage"]
                 usage = Usage(
-                    prompt_tokens=usage_data.get("input_tokens", 0),
+                    prompt_tokens=0,  # Not available in message_delta
                     completion_tokens=usage_data.get("output_tokens", 0),
-                    total_tokens=usage_data.get("input_tokens", 0)
-                    + usage_data.get("output_tokens", 0),
+                    total_tokens=usage_data.get("output_tokens", 0),
                 )
 
         # Build the response chunk
