@@ -258,8 +258,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 arguments_str = function.get("arguments", "{}")
                 try:
                     arguments = json.loads(arguments_str) if arguments_str else {}
-                except json.JSONDecodeError:
-                    arguments = {}
+                except (json.JSONDecodeError, TypeError):
+                    # TypeError if arguments is not a string (e.g., already a dict)
+                    arguments = arguments_str if isinstance(arguments_str, dict) else {}
 
                 content_list.append({
                     "type": "tool_use",
@@ -435,9 +436,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         if tool_choice:
             optional_params["tool_choice"] = self._transform_tool_choice(tool_choice)
 
-        # Transform messages from OpenAI format to Snowflake format
+        # Transform messages from OpenAI format to Snowflake format.
         # This handles role: "tool" -> role: "user" with tool_results content_list
-        # and assistant messages with tool_calls -> content_list with tool_use blocks
+        # and assistant messages with tool_calls -> content_list with tool_use blocks.
+        # Note: We call _transform_messages here directly because Snowflake builds
+        # its own request dict (doesn't delegate to super().transform_request()).
+        # This is intentional - Snowflake routes through base_llm_http_handler,
+        # not openai_like handler, so there's no double-transformation risk.
         transformed_messages = self._transform_messages(messages, model=model)
 
         return {
