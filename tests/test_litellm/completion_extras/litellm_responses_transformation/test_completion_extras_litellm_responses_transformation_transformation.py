@@ -1378,6 +1378,138 @@ def test_transform_response_preserves_annotations():
     print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
 
 
+def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
+    """
+    Test that ResponseApplyPatchToolCall items from the Responses API are
+    correctly converted to ChatCompletions-style tool calls by the bridge.
+
+    This is a regression test for a bug where litellm.completion() with a
+    responses/ model prefix crashed when the model returned an
+    apply_patch_call, because _convert_response_output_to_choices did not
+    handle ResponseApplyPatchToolCall items. The model DID use the tool,
+    but the bridge silently dropped it (or raised an error), while the
+    native litellm.responses() path worked correctly.
+    """
+    import json
+    from unittest.mock import Mock
+
+    from openai.types.responses.response_apply_patch_tool_call import (
+        OperationCreateFile,
+    )
+    from openai.types.responses.response_output_item import (
+        ResponseApplyPatchToolCall,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Build an apply_patch_call item like the model would return
+    operation = OperationCreateFile(
+        diff="--- /dev/null\n+++ b/hello.py\n@@ -0,0 +1 @@\n+print('hello world')\n",
+        path="hello.py",
+        type="create_file",
+    )
+    apply_patch_item = ResponseApplyPatchToolCall(
+        id="apc_001",
+        call_id="call_patch_hello",
+        operation=operation,
+        status="completed",
+        type="apply_patch_call",
+    )
+
+    # Minimal usage
+    usage = ResponseAPIUsage(
+        input_tokens=30,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=40,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=70,
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_apply_patch_test",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.2-codex",
+        object="response",
+        output=[apply_patch_item],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text=None,
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-apply-patch",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    logging_obj = Mock()
+
+    result = handler.transform_response(
+        model="gpt-5.2-codex",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.2-codex"},
+        messages=[
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Create hello.py"},
+        ],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Should have exactly one choice with finish_reason="tool_calls"
+    assert len(result.choices) == 1, f"Expected 1 choice, got {len(result.choices)}"
+
+    choice = result.choices[0]
+    assert choice.finish_reason == "tool_calls"
+
+    # The choice should contain one tool call for apply_patch
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None, "tool_calls should not be None"
+    assert len(tool_calls) == 1, f"Expected 1 tool_call, got {len(tool_calls)}"
+
+    tc = tool_calls[0]
+    assert tc["id"] == "call_patch_hello"
+    assert tc["type"] == "function"
+    assert tc["function"]["name"] == "apply_patch"
+
+    # The operation should be serialised as JSON in arguments
+    args = json.loads(tc["function"]["arguments"])
+    assert args["type"] == "create_file"
+    assert args["path"] == "hello.py"
+    assert "print('hello world')" in args["diff"]
 def test_multi_tool_call_stream_no_premature_finish():
     """
     Regression test for multi-tool-call streaming bug.
