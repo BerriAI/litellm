@@ -190,12 +190,6 @@
       "description": "Products, orders, customers, and store management via Shopify Admin REST API (requires your store subdomain)",
       "icon_url": "https://cdn.simpleicons.org/shopify",
       "spec_url": "https://raw.githubusercontent.com/Shopify/shopify-api-specs/main/admin/rest/2023-10/openapi.json",
-      "oauth": {
-        "authorization_url": "https://your-store.myshopify.com/admin/oauth/authorize",
-        "token_url": "https://your-store.myshopify.com/admin/oauth/access_token",
-        "pkce": false,
-        "docs_url": "https://shopify.dev/docs/apps/auth/get-access-tokens/authorization-code-grant"
-      },
       "key_tools": [
         { "name": "list_products", "description": "List products with variants, pricing, and inventory" },
         { "name": "get_product", "description": "Get full product details including all variants" },
@@ -213,12 +207,6 @@
       "description": "Data warehouse queries, database operations, and analytics via the Snowflake SQL API",
       "icon_url": "https://cdn.simpleicons.org/snowflake",
       "spec_url": "https://raw.githubusercontent.com/snowflakedb/snowflake-rest-api-specs/refs/heads/main/specifications/sqlapi.yaml",
-      "oauth": {
-        "authorization_url": "https://your-account.snowflakecomputing.com/oauth/authorize",
-        "token_url": "https://your-account.snowflakecomputing.com/oauth/token-request",
-        "pkce": false,
-        "docs_url": "https://docs.snowflake.com/en/user-guide/oauth-custom"
-      },
       "key_tools": [
         { "name": "execute_statement", "description": "Execute a SQL statement and get results" },
         { "name": "fetch_results", "description": "Fetch paginated results from a running query" },

@@ -169,6 +169,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     const result: typeof tools = [];
     for (const keyTool of keyTools) {
       const keywords = keyTool.name.split("_").map((k) => k.toLowerCase()).filter((k) => k.length > 1);
+      if (keywords.length === 0) continue;
       const normalize = (s: string) => s.toLowerCase().replace(/[-_/]/g, " ");
       let match = tools.find((t) => {
         if (usedNames.has(t.name)) return false;
