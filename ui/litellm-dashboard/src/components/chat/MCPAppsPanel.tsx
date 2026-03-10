@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Switch, Spin, Input } from "antd";
-import { SearchOutlined, RightOutlined } from "@ant-design/icons";
+import { Spin, Input, Button, Skeleton } from "antd";
+import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined } from "@ant-design/icons";
 import { fetchMCPServers, listMCPTools } from "../networking";
-import { MCPServer } from "../mcp_tools/types";
+import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
 import { message } from "antd";
 
 interface Props {
@@ -32,34 +32,66 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
-  const [expandedServer, setExpandedServer] = useState<string | null>(null);
+  const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
+  const [detailTools, setDetailTools] = useState<MCPTool[]>([]);
+  const [loadingTools, setLoadingTools] = useState(false);
+  // tool counts per server name, preloaded in background
+  const [toolCounts, setToolCounts] = useState<Record<string, number>>({});
+  const [loadingCounts, setLoadingCounts] = useState(false);
+
+  const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+
+    // 1. Load servers first — show the list immediately
     fetchMCPServers(accessToken)
-      .then((data) => {
+      .then((serverData) => {
         if (cancelled) return;
-        const list: MCPServer[] = Array.isArray(data) ? data : (data?.data ?? []);
+        const list: MCPServer[] = Array.isArray(serverData) ? serverData : (serverData?.data ?? []);
         setServers(list);
+        setLoading(false);
+
+        // 2. Fetch tools per server in parallel — each resolves independently and updates counts one by one
+        setLoadingCounts(true);
+        let remaining = list.length;
+        if (remaining === 0) { setLoadingCounts(false); return; }
+        list.forEach((s) => {
+          listMCPTools(accessToken, s.server_id)
+            .then((toolsData) => {
+              if (cancelled) return;
+              const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
+              const sname = nameOf(s);
+              setToolCounts((prev) => ({ ...prev, [sname]: tools.length }));
+            })
+            .catch(() => {})
+            .finally(() => {
+              if (cancelled) return;
+              remaining -= 1;
+              if (remaining === 0) setLoadingCounts(false);
+            });
+        });
       })
       .catch(() => {
-        if (!cancelled) setServers([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setServers([]);
+          setLoading(false);
+        }
       });
     return () => { cancelled = true; };
   }, [accessToken]);
 
-  const handleToggle = async (serverName: string, checked: boolean) => {
+  const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
     if (!checked) {
       onChange(selectedServers.filter((s) => s !== serverName));
       return;
     }
     setTogglingOn((prev) => new Set(prev).add(serverName));
     try {
-      const result = await listMCPTools(accessToken, serverName);
+      // Use UUID if available, fall back to name (for connectivity check only)
+      const idToFetch = serverId ?? serverName;
+      const result = await listMCPTools(accessToken, idToFetch);
       if (result?.error) {
         message.warning(`Could not load tools for ${serverName}`);
         return;
@@ -76,7 +108,29 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     }
   };
 
-  const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
+  // Fetch tools for the detail view — server_id must be the UUID
+  useEffect(() => {
+    if (!detailServer) {
+      setDetailTools([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingTools(true);
+    listMCPTools(accessToken, detailServer.server_id)
+      .then((result) => {
+        if (cancelled) return;
+        // API returns { tools: [...], error: null }
+        const tools: MCPTool[] = Array.isArray(result?.tools) ? result.tools : [];
+        setDetailTools(tools);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailTools([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTools(false);
+      });
+    return () => { cancelled = true; };
+  }, [detailServer, accessToken]);
 
   const filtered = servers.filter((s) => {
     const name = nameOf(s);
@@ -89,111 +143,172 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
   const connectedCount = servers.filter((s) => selectedServers.includes(nameOf(s))).length;
 
-  return (
-    <div style={{ width: "100%", maxWidth: 800, margin: "0 auto" }}>
+  // Total tools available across all servers (based on preloaded counts)
+  const totalTools = Object.values(toolCounts).reduce((sum, n) => sum + n, 0);
 
-      {/* ── Page header ── */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28, gap: 16, flexWrap: "wrap" }}>
+  // ── Detail view ──
+  if (detailServer) {
+    const name = nameOf(detailServer);
+    const isConnected = selectedServers.includes(name);
+    const isTogglingOn = togglingOn.has(name);
+    const color = getAvatarColor(name);
+
+    return (
+      <div style={{ width: "100%" }}>
+        {/* Back */}
+        <button
+          onClick={() => setDetailServer(null)}
+          style={{
+            display: "flex", alignItems: "center", gap: 6,
+            background: "none", border: "none", cursor: "pointer",
+            color: "#6b7280", fontSize: 13, padding: "0 0 20px 0",
+          }}
+        >
+          <ArrowLeftOutlined style={{ fontSize: 12 }} />
+          Back
+        </button>
+
+        {/* Avatar + name + connect */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 28 }}>
+          <div style={{
+            width: 64, height: 64, borderRadius: 16,
+            background: color, display: "flex",
+            alignItems: "center", justifyContent: "center",
+            color: "#fff", fontWeight: 700, fontSize: 28, flexShrink: 0,
+          }}>
+            {name.charAt(0).toUpperCase()}
+          </div>
+          <div style={{ flex: 1 }}>
+            <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, color: "#111827" }}>{name}</h2>
+            <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>{detailServer.description ?? "MCP server"}</p>
+          </div>
+          <Button
+            type={isConnected ? "default" : "primary"}
+            loading={isTogglingOn}
+            onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
+            style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
+          >
+            {isConnected ? "Disconnect" : "Connect"}
+          </Button>
+        </div>
+
+        {/* Info table */}
+        <h3 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 600, color: "#111827" }}>Information</h3>
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden", marginBottom: 28 }}>
+          {[
+            ["Server ID", detailServer.server_id],
+            ["Transport", handleTransport(detailServer.transport, detailServer.spec_path)],
+            ["Status", isConnected ? "Connected" : "Not connected"],
+          ].filter(([, v]) => v).map(([label, value], i, arr) => (
+            <div key={label} style={{
+              display: "flex",
+              padding: "12px 16px",
+              borderBottom: i < arr.length - 1 ? "1px solid #f3f4f6" : "none",
+              fontSize: 13,
+            }}>
+              <span style={{ width: 140, color: "#9ca3af", flexShrink: 0 }}>{label}</span>
+              <span style={{ color: "#111827", fontWeight: 500 }}>{value}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Tools section */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "#111827" }}>Available Tools</h3>
+          {!loadingTools && (
+            <span style={{
+              fontSize: 11, fontWeight: 600, color: "#6b7280",
+              background: "#f3f4f6", borderRadius: 4, padding: "1px 6px",
+            }}>{detailTools.length}</span>
+          )}
+        </div>
+        {loadingTools ? (
+          <div style={{ display: "flex", justifyContent: "center", padding: "24px 0" }}>
+            <Spin size="small" />
+          </div>
+        ) : detailTools.length === 0 ? (
+          <div style={{ color: "#9ca3af", fontSize: 13, padding: "8px 0" }}>
+            No tools available
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {detailTools.map((tool) => (
+              <div key={tool.name} style={{
+                border: "1px solid #e5e7eb", borderRadius: 8,
+                padding: "10px 14px", background: "#fafafa",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: tool.description ? 4 : 0 }}>
+                  <ToolOutlined style={{ fontSize: 13, color: "#6b7280" }} />
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "#111827", fontFamily: "monospace" }}>{tool.name}</span>
+                </div>
+                {tool.description && (
+                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280", paddingLeft: 21 }}>{tool.description}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── List view ──
+  return (
+    <div style={{ width: "100%" }}>
+
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 16, flexWrap: "wrap" }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#111827", letterSpacing: "-0.02em" }}>
-              MCP Servers
-            </h1>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#111827" }}>MCP Servers</h2>
             <span style={{
-              fontSize: 11, fontWeight: 600, color: "#1677ff",
-              background: "#e8f4ff", borderRadius: 4, padding: "2px 7px",
-              letterSpacing: "0.04em", textTransform: "uppercase",
-            }}>
-              BETA
-            </span>
+              fontSize: 10, fontWeight: 600, color: "#1677ff",
+              background: "#e8f4ff", borderRadius: 4, padding: "1px 6px",
+              letterSpacing: "0.05em", textTransform: "uppercase",
+            }}>Beta</span>
           </div>
-          <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>
-            Connect tools to your chat. Toggle servers to use them in every message.
-          </p>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>
+              Browse tools, authenticate once, use in chat — no setup needed.
+            </p>
+            {loadingCounts ? (
+              <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#9ca3af" }}>
+                <Spin size="small" style={{ transform: "scale(0.7)" }} />
+                Loading tools...
+              </span>
+            ) : totalTools > 0 ? (
+              <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#6b7280" }}>
+                <ToolOutlined style={{ fontSize: 11 }} />
+                {totalTools} tool{totalTools !== 1 ? "s" : ""} available
+              </span>
+            ) : null}
+          </div>
         </div>
-
-        {/* Search */}
-        <div style={{ width: 240, flexShrink: 0 }}>
-          <Input
-            prefix={<SearchOutlined style={{ color: "#9ca3af", fontSize: 14 }} />}
-            placeholder="Search servers..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            allowClear
-            style={{ borderRadius: 20, fontSize: 14, height: 38 }}
-          />
-        </div>
+        <Input
+          prefix={<SearchOutlined style={{ color: "#9ca3af", fontSize: 13 }} />}
+          placeholder="Search servers..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          allowClear
+          style={{ width: 220, borderRadius: 8, fontSize: 13 }}
+          size="middle"
+        />
       </div>
 
-      {/* ── Hero banner ── */}
-      {!query && (
-        <div style={{
-          borderRadius: 16,
-          background: "linear-gradient(135deg, #1677ff 0%, #36cfc9 60%, #faad14 100%)",
-          padding: "28px 32px",
-          marginBottom: 24,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 24,
-          overflow: "hidden",
-          position: "relative",
-        }}>
-          <div style={{ zIndex: 1 }}>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 6, letterSpacing: "-0.01em" }}>
-              Supercharge your chat with MCP tools
-            </div>
-            <div style={{ fontSize: 14, color: "rgba(255,255,255,0.85)", maxWidth: 400 }}>
-              MCP servers give Claude access to external data, APIs, and actions — right inside your conversation.
-            </div>
-            {connectedCount > 0 && (
-              <div style={{
-                marginTop: 14,
-                display: "inline-flex", alignItems: "center", gap: 6,
-                background: "rgba(255,255,255,0.2)", borderRadius: 20,
-                padding: "5px 14px", fontSize: 13, color: "#fff", fontWeight: 500,
-              }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#52c41a", flexShrink: 0, display: "inline-block" }} />
-                {connectedCount} server{connectedCount > 1 ? "s" : ""} connected
-              </div>
-            )}
-          </div>
-          {/* Decorative circles */}
-          <div style={{
-            position: "absolute", right: -20, top: -20,
-            width: 160, height: 160, borderRadius: "50%",
-            background: "rgba(255,255,255,0.08)",
-          }} />
-          <div style={{
-            position: "absolute", right: 60, bottom: -40,
-            width: 120, height: 120, borderRadius: "50%",
-            background: "rgba(255,255,255,0.06)",
-          }} />
-        </div>
-      )}
-
-      {/* ── Tabs ── */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+      {/* Tabs */}
+      <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", marginBottom: 16 }}>
         {(["all", "connected"] as TabKey[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             style={{
-              padding: "6px 16px",
-              borderRadius: 20,
-              border: "none",
-              cursor: "pointer",
-              fontSize: 14,
+              padding: "8px 16px", border: "none",
+              borderBottom: activeTab === tab ? "2px solid #1677ff" : "2px solid transparent",
+              cursor: "pointer", fontSize: 13,
               fontWeight: activeTab === tab ? 600 : 400,
-              background: activeTab === tab ? "#111827" : "transparent",
-              color: activeTab === tab ? "#fff" : "#6b7280",
-              transition: "all 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              if (activeTab !== tab) (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6";
-            }}
-            onMouseLeave={(e) => {
-              if (activeTab !== tab) (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+              background: "transparent",
+              color: activeTab === tab ? "#1677ff" : "#6b7280",
+              marginBottom: -1,
             }}
           >
             {tab === "all" ? "All" : `Connected${connectedCount > 0 ? ` (${connectedCount})` : ""}`}
@@ -201,89 +316,80 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         ))}
       </div>
 
-      {/* ── Server grid ── */}
+      {/* Grid */}
       {loading ? (
-        <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}>
-          <Spin size="large" />
+        <div style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}>
+          <Spin />
         </div>
       ) : filtered.length === 0 ? (
-        <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 14, padding: "60px 12px" }}>
+        <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, padding: "48px 12px" }}>
           {servers.length === 0
             ? "No MCP servers configured. Add servers in Tools → MCP Servers."
-            : activeTab === "connected"
-              ? "No servers connected yet. Toggle a server below to connect it."
-              : "No servers match your search."}
+            : activeTab === "connected" ? "No servers connected yet." : "No servers match your search."}
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
-          {filtered.map((server) => {
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 0, border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden" }}>
+          {filtered.map((server, idx) => {
             const name = nameOf(server);
             const isConnected = selectedServers.includes(name);
-            const isTogglingOn = togglingOn.has(name);
-            const isExpanded = expandedServer === name;
             const color = getAvatarColor(name);
+            const isLeftCol = idx % 2 === 0;
+            const count = toolCounts[name];
 
             return (
               <div
                 key={server.server_id}
+                onClick={() => setDetailServer(server)}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  padding: "16px 20px",
-                  background: isExpanded ? "#f9fafb" : "#fff",
-                  cursor: "pointer",
-                  borderBottom: "1px solid #f0f0f0",
-                  transition: "background 0.12s",
+                  display: "flex", alignItems: "center", gap: 12,
+                  padding: "14px 16px", background: "#fff",
+                  borderRight: isLeftCol ? "1px solid #f3f4f6" : "none",
+                  borderBottom: Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "1px solid #f3f4f6" : "none",
+                  cursor: "pointer", minWidth: 0,
+                  transition: "background 0.1s",
                 }}
-                onClick={() => setExpandedServer(isExpanded ? null : name)}
-                onMouseEnter={(e) => {
-                  if (!isExpanded) (e.currentTarget as HTMLDivElement).style.background = "#fafafa";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.background = isExpanded ? "#f9fafb" : "#fff";
-                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "#fafafa"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "#fff"; }}
               >
-                {/* Avatar */}
                 <div style={{
-                  width: 40, height: 40, borderRadius: 10,
-                  background: color, display: "flex",
-                  alignItems: "center", justifyContent: "center",
-                  color: "#fff", fontWeight: 700, fontSize: 16,
-                  flexShrink: 0, boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
+                  width: 38, height: 38, borderRadius: 10, background: color,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  color: "#fff", fontWeight: 700, fontSize: 16, flexShrink: 0,
                 }}>
                   {name.charAt(0).toUpperCase()}
                 </div>
-
-                {/* Info */}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{
-                    fontSize: 14, fontWeight: 600, color: "#111827",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {name}
                   </div>
-                  <div style={{
-                    fontSize: 12, color: "#6b7280", marginTop: 2,
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>
-                    {server.description ?? "MCP server"}
+                  <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 1, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {server.description ?? "MCP server"}
+                    </span>
+                    {count !== undefined ? (
+                      count > 0 ? (
+                        <span style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 3, color: "#9ca3af" }}>
+                          · <ToolOutlined style={{ fontSize: 10 }} /> {count}
+                        </span>
+                      ) : null
+                    ) : loadingCounts ? (
+                      <Skeleton.Input active size="small" style={{ width: 28, height: 12, minWidth: 28, flexShrink: 0 }} />
+                    ) : null}
                   </div>
                 </div>
-
-                {/* Right side: toggle (when expanded) or chevron */}
-                {isExpanded ? (
-                  <div onClick={(e) => e.stopPropagation()}>
-                    <Switch
-                      size="small"
-                      checked={isConnected}
-                      loading={isTogglingOn}
-                      onChange={(checked) => handleToggle(name, checked)}
-                    />
-                  </div>
-                ) : (
-                  <RightOutlined style={{ fontSize: 12, color: "#9ca3af", flexShrink: 0 }} />
+                {isConnected && (
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#1677ff", flexShrink: 0 }} />
                 )}
+                {server.auth_type === AUTH_TYPE.OAUTH2 && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 600, color: "#7c3aed",
+                    background: "#f3e8ff", borderRadius: 4, padding: "1px 5px",
+                    letterSpacing: "0.03em", flexShrink: 0, whiteSpace: "nowrap",
+                  }}>
+                    OAuth2
+                  </span>
+                )}
+                <RightOutlined style={{ fontSize: 11, color: "#d1d5db", flexShrink: 0 }} />
               </div>
             );
           })}

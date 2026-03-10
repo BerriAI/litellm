@@ -217,6 +217,7 @@ mcp_servers:
   | `bearer_token` | `Authorization: Bearer <auth_value>` |
   | `basic` | `Authorization: Basic <auth_value>` |
   | `authorization` | `Authorization: <auth_value>` |
+  | `aws_sigv4` | Per-request AWS SigV4 signature ([details](./mcp_aws_sigv4.md)) |
 
 - **Extra Headers**: Optional list of additional header names that should be forwarded from client to the MCP server
 - **Static Headers**: Optional map of header key/value pairs to include every request to the MCP server.
@@ -256,6 +257,16 @@ mcp_servers:
     url: "https://my-mcp-server.com/mcp"
     auth_type: "authorization"
     auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
+
+  # AWS SigV4 for Bedrock AgentCore MCP servers
+  agentcore_mcp:
+    url: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/<url-encoded-ARN>/invocations"
+    transport: "http"
+    auth_type: "aws_sigv4"
+    aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+    aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    aws_region_name: us-east-1
+    aws_service_name: bedrock-agentcore
 
   # Example with extra headers forwarding
   github_mcp:
@@ -703,6 +714,63 @@ asyncio.run(main())
 - All tool calls are tracked under `customer_123`
 
 [Learn more about customer management →](./proxy/customers)
+
+## Calling the Proxy's /v1/responses Endpoint
+
+When calling your LiteLLM Proxy's `/v1/responses` endpoint to use MCP tools, **always use `server_url: "litellm_proxy"`** in the tools array. This tells the proxy to use its configured MCP servers.
+
+:::important Do not use the full proxy URL
+Using `server_url: "https://your-proxy.com/mcp"` is incorrect when the request is already going to the proxy. The proxy needs the literal value `litellm_proxy` to route to its configured MCP servers.
+:::
+
+```bash title="Correct: Using litellm_proxy" showLineNumbers
+curl --location 'https://your-proxy.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never"
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+### Sending Custom Headers to MCP Servers
+
+To pass custom headers (e.g., API keys, auth tokens) to specific MCP servers, use either:
+
+**Option 1: Request headers** – Add `x-mcp-{server_alias}-{header_name}` to your request headers. The proxy forwards these to the matching MCP server.
+
+```bash
+# Send Authorization header to the "weather2" MCP server
+--header 'x-mcp-weather2-authorization: Bearer your-token'
+
+# Send custom header to the "github" MCP server  
+--header 'x-mcp-github-x-api-key: your-api-key'
+```
+
+**Option 2: Headers in tool config** – Include a `headers` object in the tool definition. These are merged with request headers.
+
+```json
+{
+    "type": "mcp",
+    "server_label": "litellm",
+    "server_url": "litellm_proxy",
+    "require_approval": "never",
+    "headers": {
+        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+        "x-mcp-servers": "Zapier_MCP,dev-group",
+        "x-mcp-weather2-authorization": "Bearer your-weather-api-token"
+    }
+}
+```
 
 ## Using your MCP with client side credentials
 

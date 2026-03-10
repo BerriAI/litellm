@@ -7,7 +7,7 @@ import contextvars
 import json
 import os
 from pathlib import PurePosixPath
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
@@ -92,7 +92,24 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
-        return spec["servers"][0]["url"]
+        server_url = spec["servers"][0]["url"]
+        
+        # If the server URL is relative (starts with /), derive base from spec_path
+        if server_url.startswith("/") and spec_path:
+            if spec_path.startswith("http://") or spec_path.startswith("https://"):
+                # Extract base URL from spec_path (e.g., https://petstore3.swagger.io/api/v3/openapi.json)
+                # Combine domain with the relative server URL
+                from urllib.parse import urlparse
+                parsed = urlparse(spec_path)
+                base_domain = f"{parsed.scheme}://{parsed.netloc}"
+                full_base_url = base_domain + server_url
+                verbose_logger.info(
+                    f"OpenAPI spec has relative server URL '{server_url}'. "
+                    f"Deriving base from spec_path: {full_base_url}"
+                )
+                return full_base_url
+        
+        return server_url
     # OpenAPI 2.x (Swagger)
     elif "host" in spec:
         scheme = spec.get("schemes", ["https"])[0]
@@ -115,6 +132,62 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
     return ""
 
 
+def _resolve_ref(
+    param: Dict[str, Any], component_params: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Resolve a single parameter, following a $ref if present.
+
+    Returns the resolved param dict, or None if the $ref target is absent from
+    components (so callers can skip/filter it rather than propagating a stub
+    with name=None that would corrupt deduplication).
+    """
+    ref = param.get("$ref", "")
+    if not ref.startswith("#/components/parameters/"):
+        return param
+    return component_params.get(ref.split("/")[-1])
+
+
+def _resolve_param_list(
+    raw: List[Dict[str, Any]], component_params: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Resolve $refs in a parameter list, dropping any unresolvable entries."""
+    result = []
+    for p in raw:
+        resolved = _resolve_ref(p, component_params)
+        if resolved is not None and resolved.get("name"):
+            result.append(resolved)
+    return result
+
+
+def resolve_operation_params(
+    operation: Dict[str, Any],
+    path_item: Dict[str, Any],
+    components: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return a copy of *operation* with fully-resolved, merged parameters.
+
+    Handles two common patterns in real-world OpenAPI specs:
+
+    1. **$ref parameters** — ``{"$ref": "#/components/parameters/per-page"}``
+       instead of inline objects.  Each ref is resolved against
+       ``components["parameters"]``; unresolvable refs are silently dropped so
+       they cannot corrupt the deduplication set with ``(None, None)`` keys.
+
+    2. **Path-level parameters** — params defined on the path item that apply
+       to every HTTP method on that path (e.g. ``owner``, ``repo``).  They are
+       merged with the operation-level params; operation-level wins when the
+       same ``name`` + ``in`` combination appears in both.
+    """
+    component_params = components.get("parameters", {})
+    path_level = _resolve_param_list(path_item.get("parameters", []), component_params)
+    op_level = _resolve_param_list(operation.get("parameters", []), component_params)
+    op_keys = {(p["name"], p.get("in")) for p in op_level}
+    merged = [p for p in path_level if (p["name"], p.get("in")) not in op_keys] + op_level
+    result = dict(operation)
+    result["parameters"] = merged
+    return result
+
+
 def extract_parameters(operation: Dict[str, Any]) -> tuple:
     """Extract parameter names from OpenAPI operation."""
     path_params = []
@@ -124,6 +197,8 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
     # OpenAPI 3.x and 2.x parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             if param.get("in") == "path":
                 path_params.append(param_name)
@@ -147,6 +222,8 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     # Process parameters
     if "parameters" in operation:
         for param in operation["parameters"]:
+            if "name" not in param:
+                continue
             param_name = param["name"]
             param_schema = param.get("schema", {})
             param_type = param_schema.get("type", "string")

@@ -78,7 +78,12 @@ import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 
 const isLocal = process.env.NODE_ENV === "development";
-const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+// In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
+// to the backend — use relative URLs (null) so rewrites can intercept them.
+const defaultProxyBaseUrl =
+  isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+    ? "http://localhost:4000"
+    : null;
 const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
@@ -98,7 +103,10 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
    * Special function for updating the proxy base url. Should only be called by getUiConfig.
    */
   const browserLocation = getWindowLocation();
-  const resolvedDefaultProxyBaseUrl = isLocal ? "http://localhost:4000" : browserLocation?.origin ?? null;
+  const resolvedDefaultProxyBaseUrl =
+    isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+      ? "http://localhost:4000"
+      : browserLocation?.origin ?? null;
   let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
   console.log("proxyBaseUrl:", proxyBaseUrl);
   console.log("serverRootPath:", serverRootPath);
@@ -898,19 +906,24 @@ export const keyCreateForAgentCall = async (
   agentId: string,
   keyAlias: string,
   models: string[],
+  metadata?: Record<string, any>,
 ) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
+  const body: Record<string, any> = {
+    agent_id: agentId,
+    key_alias: keyAlias,
+    models: models.length > 0 ? models : [],
+  };
+  if (metadata && Object.keys(metadata).length > 0) {
+    body.metadata = metadata;
+  }
   const response = await fetch(url, {
     method: "POST",
     headers: {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      agent_id: agentId,
-      key_alias: keyAlias,
-      models: models.length > 0 ? models : [],
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -1104,6 +1117,7 @@ export const userListCall = async (
   sso_user_id: string | null = null,
   sortBy: string | null = null,
   sortOrder: "asc" | "desc" | null = null,
+  organizationIds: string[] | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -1149,6 +1163,10 @@ export const userListCall = async (
 
     if (sortOrder) {
       queryParams.append("sort_order", sortOrder);
+    }
+
+    if (organizationIds && organizationIds.length > 0) {
+      queryParams.append("organization_ids", organizationIds.join(","));
     }
 
     const queryString = queryParams.toString();
@@ -2473,14 +2491,19 @@ export const allEndUsersCall = async (accessToken: string) => {
 
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
-
+    const base = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
+    const queryParams = new URLSearchParams();
     if (params.get("user_email")) {
-      url += `?user_email=${params.get("user_email")}`;
+      queryParams.append("user_email", params.get("user_email")!);
     }
     if (params.get("user_id")) {
-      url += `?user_id=${params.get("user_id")}`;
+      queryParams.append("user_id", params.get("user_id")!);
     }
+    if (params.get("team_id")) {
+      queryParams.append("team_id", params.get("team_id")!);
+    }
+    const qs = queryParams.toString();
+    const url = qs ? `${base}?${qs}` : base;
 
     const response = await fetch(url, {
       method: "GET",
@@ -6243,6 +6266,32 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
   }
 };
 
+export const fetchOpenAPIRegistry = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/openapi-registry`
+      : `/v1/mcp/openapi-registry`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch OpenAPI registry:", error);
+    throw error;
+  }
+};
+
 export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl
@@ -6478,6 +6527,99 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
     }
   } catch (error) {
     console.error("Failed to delete key:", error);
+    throw error;
+  }
+};
+
+export const registerMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/register`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to register MCP server:", error);
+    throw error;
+  }
+};
+
+export const fetchMCPSubmissions = async (accessToken: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/submissions`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to fetch MCP submissions:", error);
+    throw error;
+  }
+};
+
+export const approveMCPServer = async (accessToken: string, serverId: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${encodeURIComponent(serverId)}/approve`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to approve MCP server:", error);
+    throw error;
+  }
+};
+
+export const rejectMCPServer = async (accessToken: string, serverId: string, reviewNotes?: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${encodeURIComponent(serverId)}/reject`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ review_notes: reviewNotes ?? null }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to reject MCP server:", error);
     throw error;
   }
 };
@@ -7607,9 +7749,10 @@ export const getMajorAirlines = async (accessToken: string) => {
   }
 };
 
-export const getAgentsList = async (accessToken: string) => {
+export const getAgentsList = async (accessToken: string, healthCheck: boolean = false) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
+    const params = healthCheck ? "?health_check=true" : "";
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents${params}` : `/v1/agents${params}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -7695,6 +7838,10 @@ export const patchAgentCall = async (
     agent_name?: string;
     litellm_params?: Record<string, any>;
     agent_card_params?: Record<string, any>;
+    tpm_limit?: number | null;
+    rpm_limit?: number | null;
+    session_tpm_limit?: number | null;
+    session_rpm_limit?: number | null;
   },
 ) => {
   try {
@@ -8879,6 +9026,7 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   const data = await response.json();
   return data;
 };
+
 
 // ============================================================
 // Claude Code Marketplace Networking Functions

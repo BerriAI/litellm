@@ -2093,3 +2093,150 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     assert spend_meta["tool_count_total"] == 1
     assert spend_meta["allowed_server_count"] == 1
     assert spend_meta["per_server_tool_counts"]["server_a"] == 1
+
+
+def test_tool_name_matches_case_insensitive():
+    """Test that _tool_name_matches performs case-insensitive comparison.
+    
+    This is critical for OpenAPI-based MCP servers where:
+    1. operationIds are often in camelCase (e.g., 'addPet', 'updatePet')
+    2. Tool names are lowercased during registration (e.g., 'addpet', 'updatepet')
+    3. allowed_tools configuration may use the original camelCase names
+    
+    Without case-insensitive matching, all tools would be filtered out.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _tool_name_matches
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Test case 1: Unprefixed tool name with camelCase in filter list
+    assert _tool_name_matches("addpet", ["addPet", "updatePet"]) is True
+    assert _tool_name_matches("updatepet", ["addPet", "updatePet"]) is True
+    assert _tool_name_matches("deletepet", ["addPet", "updatePet"]) is False
+
+    # Test case 2: Prefixed tool name with camelCase in filter list
+    assert _tool_name_matches("per_store-addpet", ["addPet", "updatePet"]) is True
+    assert _tool_name_matches("per_store-updatepet", ["addPet", "updatePet"]) is True
+    assert _tool_name_matches("per_store-deletepet", ["addPet", "updatePet"]) is False
+
+    # Test case 3: Mixed case variations
+    assert _tool_name_matches("findPetsByStatus", ["findpetsbystatus"]) is True
+    assert _tool_name_matches("findpetsbystatus", ["findPetsByStatus"]) is True
+    assert _tool_name_matches("FINDPETSBYSTATUS", ["findPetsByStatus"]) is True
+
+    # Test case 4: Full prefixed name in filter list (case-insensitive)
+    assert _tool_name_matches("server-addPet", ["server-addpet"]) is True
+    assert _tool_name_matches("server-addpet", ["server-addPet"]) is True
+
+    # Test case 5: Ensure non-matching names still don't match
+    assert _tool_name_matches("addpet", ["deletePet", "updatePet"]) is False
+    assert _tool_name_matches("server-addpet", ["deletePet", "updatePet"]) is False
+
+
+def test_filter_tools_by_allowed_tools_case_insensitive():
+    """Test that filter_tools_by_allowed_tools handles case-insensitive matching.
+    
+    Ensures that OpenAPI tools with lowercase names can be filtered using
+    camelCase allowed_tools configuration from the OpenAPI spec.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_allowed_tools,
+        )
+        from litellm.types.mcp_server.tool_registry import MCPTool
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Mock handler function
+    def mock_handler(**kwargs):
+        return kwargs
+
+    # Create mock tools with lowercase names (as registered from OpenAPI)
+    tools = [
+        MCPTool(
+            name="per_store-addpet",
+            description="Add a pet",
+            input_schema={"type": "object"},
+            handler=mock_handler,
+        ),
+        MCPTool(
+            name="per_store-updatepet",
+            description="Update a pet",
+            input_schema={"type": "object"},
+            handler=mock_handler,
+        ),
+        MCPTool(
+            name="per_store-deletepet",
+            description="Delete a pet",
+            input_schema={"type": "object"},
+            handler=mock_handler,
+        ),
+        MCPTool(
+            name="per_store-findpetsbystatus",
+            description="Find pets by status",
+            input_schema={"type": "object"},
+            handler=mock_handler,
+        ),
+    ]
+
+    # Create mock server with camelCase allowed_tools (as from OpenAPI spec)
+    server = MCPServer(
+        server_id="test-server",
+        name="per_store",
+        transport=MCPTransport.http,
+        allowed_tools=["addPet", "updatePet", "findPetsByStatus"],
+    )
+
+    # Filter tools
+    filtered_tools = filter_tools_by_allowed_tools(tools, server)
+
+    # Should return 3 tools (case-insensitive match)
+    assert len(filtered_tools) == 3
+    assert any(t.name == "per_store-addpet" for t in filtered_tools)
+    assert any(t.name == "per_store-updatepet" for t in filtered_tools)
+    assert any(t.name == "per_store-findpetsbystatus" for t in filtered_tools)
+    assert not any(t.name == "per_store-deletepet" for t in filtered_tools)
+
+
+def test_filter_tools_by_allowed_tools_no_filter():
+    """Test that filter_tools_by_allowed_tools returns all tools when no filter is set."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_allowed_tools,
+        )
+        from litellm.types.mcp_server.tool_registry import MCPTool
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Mock handler function
+    def mock_handler(**kwargs):
+        return kwargs
+
+    tools = [
+        MCPTool(
+            name="fusion_litellm_mcp-model_list",
+            description="List models",
+            input_schema={"type": "object"},
+            handler=mock_handler,
+        ),
+        MCPTool(
+            name="fusion_litellm_mcp-chat_completion",
+            description="Chat completion",
+            input_schema={"type": "object"},
+            handler=mock_handler,
+        ),
+    ]
+
+    # Server with no allowed_tools filter
+    server = MCPServer(
+        server_id="test-server",
+        name="fusion_litellm_mcp",
+        transport=MCPTransport.http,
+        allowed_tools=None,
+    )
+
+    filtered_tools = filter_tools_by_allowed_tools(tools, server)
+
+    # Should return all tools when no filter is configured
+    assert len(filtered_tools) == 2

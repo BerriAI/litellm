@@ -4,6 +4,7 @@ import { ToolOutlined, CopyOutlined, CheckOutlined, EditOutlined } from "@ant-de
 import { Collapse, Tooltip } from "antd";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReasoningContent from "../playground/chat_ui/ReasoningContent";
@@ -19,7 +20,13 @@ function redactSensitiveValues(obj: Record<string, unknown>): Record<string, unk
   for (const [k, v] of Object.entries(obj)) {
     if (REDACTED_KEY_PATTERNS.test(k)) {
       result[k] = "[redacted]";
-    } else if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+    } else if (Array.isArray(v)) {
+      result[k] = v.map((item) =>
+        item !== null && typeof item === "object" && !Array.isArray(item)
+          ? redactSensitiveValues(item as Record<string, unknown>)
+          : item,
+      );
+    } else if (v !== null && typeof v === "object") {
       result[k] = redactSensitiveValues(v as Record<string, unknown>);
     } else {
       result[k] = v;
@@ -35,16 +42,16 @@ function formatTimestamp(ts: number): string {
   return `${hh}:${mm}`;
 }
 
-// Shared markdown code renderer matching ReasoningContent style
+// Shared markdown code renderer matching ReasoningContent style.
+// react-markdown v9 removed the `inline` prop; detect fenced blocks via language className.
 function MarkdownCodeRenderer({
   node,
-  inline,
   className,
   children,
   ...props
-}: React.ComponentPropsWithoutRef<"code"> & { inline?: boolean; node?: unknown }) {
+}: React.ComponentPropsWithoutRef<"code"> & { node?: unknown }) {
   const match = /language-(\w+)/.exec(className || "");
-  return !inline && match ? (
+  return match ? (
     <SyntaxHighlighter
       style={coy as Record<string, React.CSSProperties>}
       language={match[1]}
@@ -301,6 +308,7 @@ function AssistantBubble({
         }}
       >
         <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
           components={{
             code: MarkdownCodeRenderer as React.ComponentType<React.ComponentPropsWithoutRef<"code">>,
           }}
@@ -324,6 +332,8 @@ function CopyButton({ text }: { text: string }) {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      // clipboard not available (non-HTTPS or permission denied) — silently no-op
     });
   };
 
@@ -524,11 +534,8 @@ interface Props {
 }
 
 const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage }) => {
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  // Scrolling is managed by ChatPage.tsx (scroll lock during streaming,
+  // scroll-to-bottom on new message). No auto-scroll here.
 
   const lastIndex = messages.length - 1;
   const lastMsg = messages[lastIndex] ?? null;
@@ -563,8 +570,6 @@ const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage })
         );
       })}
 
-      {/* Bottom sentinel for auto-scroll */}
-      <div ref={bottomRef} />
     </div>
   );
 };
