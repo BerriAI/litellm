@@ -6252,24 +6252,29 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
 };
 
 export const fetchOpenAPIRegistry = async (accessToken: string) => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/mcp/openapi-registry`
-    : `/v1/mcp/openapi-registry`;
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/openapi-registry`
+      : `/v1/mcp/openapi-registry`;
 
-  const response = await fetch(url, {
-    method: HTTP_REQUEST.GET,
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  });
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
 
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(deriveErrorMessage(errorData));
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch OpenAPI registry:", error);
+    throw error;
   }
-
-  return await response.json();
 };
 
 export const fetchDiscoverableMCPServers = async (accessToken: string) => {

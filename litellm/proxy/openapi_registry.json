@@ -70,26 +70,26 @@
       ]
     },
     {
-      "name": "google",
-      "title": "Google APIs",
-      "description": "Gmail, Calendar, Drive, and other Google services",
-      "icon_url": "https://cdn.simpleicons.org/google",
-      "spec_url": "https://www.googleapis.com/discovery/v1/apis",
+      "name": "gmail",
+      "title": "Gmail",
+      "description": "Read, send, and manage Gmail messages and threads",
+      "icon_url": "https://cdn.simpleicons.org/gmail",
+      "spec_url": "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/googleapis.com/gmail/v1/openapi.yaml",
       "oauth": {
         "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url": "https://oauth2.googleapis.com/token",
         "pkce": true,
-        "docs_url": "https://developers.google.com/identity/protocols/oauth2/web-server"
+        "docs_url": "https://developers.google.com/gmail/api/auth/about-auth"
       },
       "key_tools": [
-        { "name": "list_messages", "description": "List Gmail messages and threads with search filters" },
+        { "name": "list_messages", "description": "List Gmail messages with search filters" },
+        { "name": "get_message", "description": "Get the full content of a specific message" },
         { "name": "send_message", "description": "Send an email via Gmail" },
-        { "name": "list_events", "description": "List Google Calendar events in a date range" },
-        { "name": "create_event", "description": "Create a Calendar event with attendees and video link" },
-        { "name": "list_files", "description": "List files and folders in Google Drive" },
-        { "name": "get_file", "description": "Get Drive file metadata and download content" },
-        { "name": "search_files", "description": "Search Drive files by name, type, or content" },
-        { "name": "create_spreadsheet", "description": "Create a new Google Sheets spreadsheet" }
+        { "name": "create_draft", "description": "Create a draft email" },
+        { "name": "list_labels", "description": "List all labels in the mailbox" },
+        { "name": "modify_message", "description": "Add or remove labels from a message" },
+        { "name": "list_threads", "description": "List email threads" },
+        { "name": "trash_message", "description": "Move a message to trash" }
       ]
     },
     {
@@ -118,7 +118,7 @@
     {
       "name": "hubspot",
       "title": "HubSpot",
-      "description": "CRM contacts, deals, companies, and marketing automation",
+      "description": "CRM contacts and properties via the HubSpot Contacts API",
       "icon_url": "https://cdn.simpleicons.org/hubspot",
       "spec_url": "https://raw.githubusercontent.com/HubSpot/HubSpot-public-api-spec-collection/main/PublicApiSpecs/CRM/Contacts/Rollouts/424/v3/contacts.json",
       "oauth": {
@@ -131,11 +131,11 @@
         { "name": "search_contacts", "description": "Search CRM contacts by email, name, or custom properties" },
         { "name": "create_contact", "description": "Create a new CRM contact with properties" },
         { "name": "update_contact", "description": "Update contact properties like lifecycle stage or owner" },
-        { "name": "create_deal", "description": "Create a new sales deal linked to a contact or company" },
-        { "name": "list_deals", "description": "List deals with stage and pipeline filters" },
-        { "name": "create_note", "description": "Log a note or activity against a contact or deal" },
-        { "name": "get_pipeline", "description": "Get deal pipeline stages and probabilities" },
-        { "name": "associate_objects", "description": "Link CRM objects (e.g. contact → deal → company)" }
+        { "name": "get_contact", "description": "Get full details of a specific contact" },
+        { "name": "archive_contact", "description": "Archive (soft-delete) a contact record" },
+        { "name": "merge_contacts", "description": "Merge two duplicate contact records" },
+        { "name": "list_contacts", "description": "List all contacts with pagination" },
+        { "name": "get_contact_properties", "description": "Get available contact property definitions" }
       ]
     },
     {
@@ -143,7 +143,7 @@
       "title": "Notion",
       "description": "Pages, databases, and workspace content in Notion",
       "icon_url": "https://cdn.simpleicons.org/notion",
-      "spec_url": "https://raw.githubusercontent.com/TakashiSasaki/notion-openapi/main/Page/notion_api_page_management_v1.yaml",
+      "spec_url": "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/notion.com/1.0.0/openapi.yaml",
       "oauth": {
         "authorization_url": "https://api.notion.com/v1/oauth/authorize",
         "token_url": "https://api.notion.com/v1/oauth/token",
@@ -187,12 +187,12 @@
     {
       "name": "shopify",
       "title": "Shopify",
-      "description": "Products, orders, customers, and store management",
+      "description": "Products, orders, customers, and store management (requires your store subdomain)",
       "icon_url": "https://cdn.simpleicons.org/shopify",
       "spec_url": "https://raw.githubusercontent.com/allengrant/shopify_openapi/master/shopify_openapi.json",
       "oauth": {
-        "authorization_url": "https://{shop}.myshopify.com/admin/oauth/authorize",
-        "token_url": "https://{shop}.myshopify.com/admin/oauth/access_token",
+        "authorization_url": "https://your-store.myshopify.com/admin/oauth/authorize",
+        "token_url": "https://your-store.myshopify.com/admin/oauth/access_token",
         "pkce": false,
         "docs_url": "https://shopify.dev/docs/apps/auth/get-access-tokens/authorization-code-grant"
       },
@@ -214,8 +214,8 @@
       "icon_url": "https://cdn.simpleicons.org/snowflake",
       "spec_url": "https://raw.githubusercontent.com/snowflakedb/snowflake-rest-api-specs/refs/heads/main/specifications/sqlapi.yaml",
       "oauth": {
-        "authorization_url": "https://<account>.snowflakecomputing.com/oauth/authorize",
-        "token_url": "https://<account>.snowflakecomputing.com/oauth/token-request",
+        "authorization_url": "https://your-account.snowflakecomputing.com/oauth/authorize",
+        "token_url": "https://your-account.snowflakecomputing.com/oauth/token-request",
         "pkce": false,
         "docs_url": "https://docs.snowflake.com/en/user-guide/oauth-custom"
       },

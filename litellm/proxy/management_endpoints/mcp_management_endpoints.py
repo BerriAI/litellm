@@ -1384,7 +1384,6 @@ if MCP_AVAILABLE:
     @router.get(
         "/openapi-registry",
         description="Returns well-known OpenAPI APIs with OAuth 2.0 metadata for the OpenAPI MCP picker",
-        dependencies=[Depends(user_api_key_auth)],
     )
     async def get_openapi_registry(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
