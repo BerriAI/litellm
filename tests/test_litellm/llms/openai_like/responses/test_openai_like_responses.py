@@ -325,6 +325,7 @@ class TestProviderConfigManagerResponsesAPI:
                 "supported_endpoints": ["/v1/responses"],
             },
         )
+        original = JSONProviderRegistry._providers.get("perplexity")
         JSONProviderRegistry._providers["perplexity"] = test_config
         try:
             config = ProviderConfigManager.get_provider_responses_api_config(
@@ -334,4 +335,7 @@ class TestProviderConfigManagerResponsesAPI:
             # Should be the Python class, not the JSON-generated one
             assert isinstance(config, PerplexityResponsesConfig)
         finally:
-            del JSONProviderRegistry._providers["perplexity"]
+            if original is not None:
+                JSONProviderRegistry._providers["perplexity"] = original
+            else:
+                del JSONProviderRegistry._providers["perplexity"]

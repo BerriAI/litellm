@@ -1155,6 +1155,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     ]  # Number of partial images to generate (1-3) for streaming image generation
     context_management: Optional[List[ContextManagementEntry]]
     """Context management configuration. E.g. [{\"type\": \"compaction\", \"compact_threshold\": 200000}] for server-side compaction (minimum 1000)."""
+    models: Optional[List[str]]
+    """Model fallback chain (e.g. Perplexity). Models are tried in order until one succeeds."""
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
