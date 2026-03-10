@@ -10,7 +10,6 @@ sys.path.insert(
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _is_user_agent_tag,
-    compute_tag_metadata_totals,
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
@@ -75,57 +74,6 @@ def test_is_user_agent_tag():
     assert _is_user_agent_tag("production") is False
     assert _is_user_agent_tag("tag:value") is False
     assert _is_user_agent_tag("user-agent-tag") is False  # no colon
-
-
-def test_compute_tag_metadata_totals():
-    """Test compute_tag_metadata_totals function."""
-    # Create mock records
-    class MockRecord:
-        def __init__(self, request_id, tag, spend, prompt_tokens=10, completion_tokens=5):
-            self.request_id = request_id
-            self.tag = tag
-            self.spend = spend
-            self.prompt_tokens = prompt_tokens
-            self.completion_tokens = completion_tokens
-            self.total_tokens = prompt_tokens + completion_tokens
-            self.cache_read_input_tokens = 0
-            self.cache_creation_input_tokens = 0
-            self.api_requests = 1
-            self.successful_requests = 1
-            self.failed_requests = 0
-
-    # Test deduplication by request_id (keeps max spend)
-    records = [
-        MockRecord("req-1", "production", spend=10.0),
-        MockRecord("req-1", "staging", spend=20.0),  # Higher spend, should be kept
-        MockRecord("req-2", "production", spend=15.0),
-    ]
-    result = compute_tag_metadata_totals(records)
-    assert result.spend == 35.0  # 20.0 + 15.0 (deduplicated req-1)
-    assert result.prompt_tokens == 20  # 10 + 10 (only deduplicated records)
-    assert result.completion_tokens == 10  # 5 + 5 (only deduplicated records)
-
-    # Test ignoring user-agent tags
-    records_with_ua = [
-        MockRecord("req-1", "production", spend=10.0),
-        MockRecord("req-1", "user-agent:chrome", spend=50.0),  # Should be ignored
-        MockRecord("req-2", "staging", spend=15.0),
-    ]
-    result = compute_tag_metadata_totals(records_with_ua)
-    assert result.spend == 25.0  # 10.0 + 15.0 (user-agent ignored)
-
-    # Test ignoring records without request_id
-    records_no_req_id = [
-        MockRecord("req-1", "production", spend=10.0),
-        MockRecord(None, "staging", spend=20.0),  # Should be ignored
-    ]
-    result = compute_tag_metadata_totals(records_no_req_id)
-    assert result.spend == 10.0
-
-    # Test empty records
-    result = compute_tag_metadata_totals([])
-    assert result.spend == 0.0
-    assert result.prompt_tokens == 0
 
 
 @pytest.mark.asyncio
@@ -409,8 +357,11 @@ async def test_get_api_key_metadata_regenerated_key_uses_most_recent_deleted_rec
 async def test_tag_daily_activity_metadata_totals_not_zero():
     """Test that tag daily activity returns correct metadata totals.
 
-    Regression test: previously compute_tag_metadata_totals skipped records
-    with NULL request_id, causing metadata totals (total_spend, etc.) to be 0.
+    Regression test: the tag endpoint previously passed metadata_metrics_func=
+    compute_tag_metadata_totals, which skipped every row whose request_id is
+    NULL.  Rows in litellm_dailytagspend are pre-aggregated and always have
+    NULL request_id, so the totals panel showed $0.  The fix is to pass
+    metadata_metrics_func=None so the fallback aggregation path is used instead.
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()

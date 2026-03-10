@@ -553,5 +553,12 @@ async def get_tag_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+        # metadata_metrics_func=None because litellm_dailytagspend rows are
+        # pre-aggregated per (date, tag, model, …) and have no request_id.
+        # Deduplication across tags is therefore not possible at this level —
+        # a request tagged with N tags contributes its spend to N separate rows,
+        # so passing compute_tag_metadata_totals would double-count spend when
+        # multiple tags are present.  The panel is primarily used to inspect
+        # individual tags, making this trade-off acceptable.
         metadata_metrics_func=None,
     )
