@@ -689,6 +689,21 @@ response = litellm.completion(
 
 ### Examples
 
+:::tip gpt-5.4 + reasoning_effort + function tools
+
+OpenAI does not support `reasoning_effort` with function tools for `gpt-5.4` in `/v1/chat/completions`. Use the responses bridge instead:
+
+```python
+response = litellm.completion(
+    model="openai/responses/gpt-5.4",  # routes to /v1/responses
+    messages=[{"role": "user", "content": "What's the weather?"}],
+    tools=[...],
+    reasoning_effort="low",
+)
+```
+
+:::
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
