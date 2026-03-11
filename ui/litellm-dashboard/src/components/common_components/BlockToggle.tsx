@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Badge, Text } from "@tremor/react";
 import { Switch, message } from "antd";
 import { LockOutlined, UnlockOutlined } from "@ant-design/icons";
+import { getProxyBaseUrl } from "../networking";
 
 export interface BlockToggleProps {
   entityType: "user" | "team" | "key";
@@ -20,7 +21,7 @@ const BlockToggle: React.FC<BlockToggleProps> = ({
   currentBlockedStatus,
   onToggle,
   accessToken,
-  baseUrl = "",
+  baseUrl,
   disabled = false,
   userRole = null,
 }) => {
@@ -42,9 +43,10 @@ const BlockToggle: React.FC<BlockToggleProps> = ({
 
     setIsLoading(true);
     try {
+      const effectiveBaseUrl = baseUrl || getProxyBaseUrl();
       const endpoint = newBlockedStatus
-        ? `${baseUrl}/${entityType}/block`
-        : `${baseUrl}/${entityType}/unblock`;
+        ? `${effectiveBaseUrl}/${entityType}/block`
+        : `${effectiveBaseUrl}/${entityType}/unblock`;
 
       // For keys, the API expects "key" not "key_id"
       const paramName = entityType === "key" ? "key" : `${entityType}_id`;

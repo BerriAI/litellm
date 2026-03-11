@@ -189,7 +189,7 @@ describe("BlockToggle", () => {
       expect(global.fetch).toHaveBeenCalledWith(
         "http://localhost:4000/key/block",
         expect.objectContaining({
-          body: JSON.stringify({ key_id: "test-key-123" }),
+          body: JSON.stringify({ key: "test-key-123" }),
         })
       );
     });
