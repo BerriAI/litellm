@@ -315,6 +315,36 @@ class TestRouterMetadataPropagation:
         litellm_params = {"metadata": metadata_for_callbacks}
         assert use_custom_pricing_for_model(litellm_params) is True
 
+    def test_responses_api_user_model_info_does_not_override_deployment(self):
+        """
+        User metadata should not overwrite router-provided model_info for
+        responses callback pricing calculation.
+        """
+        router = _make_router_with_custom_pricing("openai/gpt-4o")
+        deployment = router.model_list[0]
+
+        kwargs: dict = {}
+        router._update_kwargs_with_deployment(
+            deployment=deployment,
+            kwargs=kwargs,
+            function_name="_ageneric_api_call_with_fallbacks",
+        )
+
+        metadata_for_callbacks = dict(kwargs.get("litellm_metadata") or {})
+        user_metadata = {
+            "user_field": "present",
+            "model_info": {"id": "user-supplied", "input_cost_per_token": 0.0},
+        }
+        deployment_model_info = metadata_for_callbacks.pop("model_info", None)
+        metadata_for_callbacks.update(user_metadata)
+        if deployment_model_info:
+            metadata_for_callbacks["model_info"] = deployment_model_info
+
+        model_info = metadata_for_callbacks.get("model_info", {})
+        assert model_info.get("id") == DEPLOYMENT_MODEL_ID
+        assert model_info.get("input_cost_per_token") == CUSTOM_INPUT_COST
+        assert metadata_for_callbacks["user_field"] == "present"
+
     def test_messages_api_metadata_resolves_via_litellm_metadata(self):
         """
         For /v1/messages, the handler should merge litellm_metadata with explicit
@@ -337,6 +367,36 @@ class TestRouterMetadataPropagation:
 
         assert metadata_from_handler["user_field"] == "present"
         assert use_custom_pricing_for_model(litellm_params) is True
+
+    def test_messages_api_user_model_info_does_not_override_deployment(self):
+        """
+        User metadata should not overwrite router-provided model_info for
+        anthropic passthrough pricing calculation.
+        """
+        router = _make_router_with_custom_pricing("anthropic/claude-sonnet-4-20250514")
+        deployment = router.model_list[0]
+
+        kwargs: dict = {}
+        router._update_kwargs_with_deployment(
+            deployment=deployment,
+            kwargs=kwargs,
+            function_name="_ageneric_api_call_with_fallbacks",
+        )
+
+        metadata_from_handler = dict(kwargs.get("litellm_metadata") or {})
+        user_metadata = {
+            "user_field": "present",
+            "model_info": {"id": "user-supplied", "output_cost_per_token": 0.0},
+        }
+        deployment_model_info = metadata_from_handler.pop("model_info", None)
+        metadata_from_handler.update(user_metadata)
+        if deployment_model_info:
+            metadata_from_handler["model_info"] = deployment_model_info
+
+        model_info = metadata_from_handler.get("model_info", {})
+        assert model_info.get("id") == DEPLOYMENT_MODEL_ID
+        assert model_info.get("output_cost_per_token") == CUSTOM_OUTPUT_COST
+        assert metadata_from_handler["user_field"] == "present"
 
     def test_use_custom_pricing_detects_top_level_model_info(self):
         """Custom pricing detection should work when model_info is top-level."""
@@ -499,6 +559,65 @@ class TestResponsesAPICustomPricingCost:
                     input="Hello, how are you?",
                     stream=True,
                     metadata={"user_field": "present"},
+                )
+
+                async for chunk in response:
+                    pass
+
+                try:
+                    await asyncio.wait_for(cost_callback.event.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    pass
+
+            assert cost_callback.response_cost is not None
+            expected_custom_cost = 100 * CUSTOM_INPUT_COST + 50 * CUSTOM_OUTPUT_COST
+            assert cost_callback.response_cost == pytest.approx(
+                expected_custom_cost, rel=0.01
+            )
+        finally:
+            litellm.callbacks = []
+
+    @pytest.mark.asyncio
+    async def test_streaming_responses_with_user_model_info_ignored_for_pricing(self):
+        """Streaming /v1/responses should ignore user-supplied metadata.model_info."""
+        cost_callback = CostCapturingCallback()
+        litellm.callbacks = [cost_callback]
+
+        try:
+            router = _make_router_with_custom_pricing("openai/gpt-4o")
+
+            sse_events = [
+                'data: {"type":"response.created","response":{"id":"resp_test","object":"response","created_at":1741476542,"status":"in_progress","model":"gpt-4o","output":[],"usage":null}}',
+                'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_test","status":"in_progress","role":"assistant","content":[]}}',
+                'data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}',
+                'data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hello!"}',
+                'data: {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"Hello!"}',
+                'data: {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"Hello!","annotations":[]}}',
+                'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_test","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello!","annotations":[]}]}}',
+                f'data: {{"type":"response.completed","response":{json.dumps(RESPONSES_API_MOCK)}}}',
+                "data: [DONE]",
+            ]
+
+            mock_stream_response = MockStreamingHTTPResponse(sse_events)
+
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                new_callable=AsyncMock,
+            ) as mock_post:
+                mock_post.return_value = mock_stream_response
+
+                response = await router.aresponses(
+                    model="test-custom-pricing",
+                    input="Hello, how are you?",
+                    stream=True,
+                    metadata={
+                        "user_field": "present",
+                        "model_info": {
+                            "id": "user-garbage",
+                            "input_cost_per_token": 0.0,
+                            "output_cost_per_token": 0.0,
+                        },
+                    },
                 )
 
                 async for chunk in response:
@@ -747,6 +866,82 @@ class TestAnthropicPassthroughLoggingPayload:
                     max_tokens=100,
                     stream=True,
                     metadata={"user_field": "present"},
+                )
+
+                async for chunk in response:
+                    pass
+
+                try:
+                    await asyncio.wait_for(cost_callback.event.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    pass
+
+            assert cost_callback.response_cost is not None
+            expected_custom_cost = 100 * CUSTOM_INPUT_COST + 50 * CUSTOM_OUTPUT_COST
+            assert cost_callback.response_cost == pytest.approx(
+                expected_custom_cost, rel=0.01
+            )
+        finally:
+            litellm.callbacks = []
+
+    @pytest.mark.asyncio
+    async def test_streaming_messages_with_user_model_info_ignored_for_pricing(self):
+        """Streaming /v1/messages should ignore user-supplied metadata.model_info."""
+        cost_callback = CostCapturingCallback()
+        litellm.callbacks = [cost_callback]
+
+        try:
+            router = _make_router_with_custom_pricing(
+                "anthropic/claude-sonnet-4-20250514"
+            )
+
+            sse_events = [
+                'event: message_start',
+                f'data: {{"type":"message_start","message":{{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":100,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}',
+                '',
+                'event: content_block_start',
+                'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+                '',
+                'event: content_block_delta',
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}',
+                '',
+                'event: content_block_stop',
+                'data: {"type":"content_block_stop","index":0}',
+                '',
+                'event: message_delta',
+                'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":50}}',
+                '',
+                'event: message_stop',
+                'data: {"type":"message_stop"}',
+            ]
+
+            mock_stream_response = MockStreamingHTTPResponse(
+                sse_events,
+                headers={
+                    "content-type": "text/event-stream",
+                    "request-id": "req_test",
+                },
+            )
+
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                new_callable=AsyncMock,
+            ) as mock_post:
+                mock_post.return_value = mock_stream_response
+
+                response = await router.aanthropic_messages(
+                    model="test-custom-pricing",
+                    messages=[{"role": "user", "content": "Hello!"}],
+                    max_tokens=100,
+                    stream=True,
+                    metadata={
+                        "user_field": "present",
+                        "model_info": {
+                            "id": "user-garbage",
+                            "input_cost_per_token": 0.0,
+                            "output_cost_per_token": 0.0,
+                        },
+                    },
                 )
 
                 async for chunk in response:
