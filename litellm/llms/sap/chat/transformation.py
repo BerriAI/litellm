@@ -271,7 +271,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             _build_prompt_module(
                 model_name=model,
                 template_messages=template,
-                params=optional_params,
+                params=dict(optional_params),
             )
         ]
 

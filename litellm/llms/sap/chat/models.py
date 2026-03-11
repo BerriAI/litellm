@@ -1,7 +1,7 @@
 from typing import Union, Literal, Optional
 from enum import Enum
 
-from pydantic import BaseModel, Field, field_validator, model_validator, ValidationError
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def validate_different_content(v: Union[str, dict, list]) -> str:
@@ -134,7 +134,7 @@ class KeyValueListPair(BaseModel):
 
 
 class DocumentMetadataKeyValueListPairs(KeyValueListPair):
-    select_mode: list[Literal['ignoreIfKeyAbsent']] = None
+    select_mode: Optional[list[Literal['ignoreIfKeyAbsent']]] = None
 
 
 class GroundingSearchConfig(BaseModel):
@@ -149,7 +149,7 @@ class GroundingSearchConfig(BaseModel):
 
 
 class DocumentGroundingFilter(BaseModel):
-    id_: str = Field(default=None, alias="id")
+    id_: Optional[str] = Field(default=None, alias="id")
     data_repository_type: Literal["vector", "help.sap.com"]
     search_config: Optional[GroundingSearchConfig] = None
     data_repositories: Optional[list[str]]= None
@@ -568,13 +568,15 @@ class FilteringModuleConfig(BaseModel):
     output: Optional[OutputFiltering] = None
 
     @model_validator(mode="after")
-    def enforce_min_properties(cls, values):  # pylint: disable=no-self-argument
+    def enforce_min_properties(self) -> "FilteringModuleConfig":
         """
         Ensure at least one of input or output filtering is provided.
         """
-        assert values.input is not None or values.output is not None, \
-            "For using SAP Filtering Module you must provide at least one property: input or output filters."
-        return values
+        if self.input is None and self.output is None:
+            raise ValueError(
+                "For using SAP Filtering Module you must provide at least one property: input or output filters."
+            )
+        return self
 
 
 class SAPDocumentTranslationApplyToSelector(BaseModel):

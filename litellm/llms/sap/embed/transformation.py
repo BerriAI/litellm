@@ -49,8 +49,8 @@ class EmbeddingModel(BaseModel):
     name: str
     version: str = "latest"
     params: dict = Field(default_factory=dict, validation_alias="parameters")
-    timeout: Optional[int] = Field(default=600, ge=1, le=600)
-    max_retries: Optional[int] = Field(default=2, ge=0, le=5)
+    timeout: int = Field(default=600, ge=1, le=600)
+    max_retries: int = Field(default=2, ge=0, le=5)
 
 class EmbeddingsModelConfig(BaseModel):
     model: EmbeddingModel
