@@ -253,6 +253,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     tpm: Optional[int]
     rpm: Optional[int]
     provider_specific_entry: Optional[Dict[str, float]]
+    uses_embed_content: Optional[bool]
 
 
 class ModelInfo(ModelInfoBase, total=False):

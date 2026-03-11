@@ -1,3 +1,7 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
+
 # MCP - AWS SigV4 Auth
 
 Use AWS SigV4 authentication to connect LiteLLM to MCP servers hosted on [AWS Bedrock AgentCore](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html).
@@ -9,6 +13,36 @@ AWS services authenticate requests using [Signature Version 4](https://docs.aws.
 LiteLLM's `aws_sigv4` auth type handles this automatically: every outgoing MCP request is signed with your AWS credentials before it's sent.
 
 ## Quick Start
+
+<Tabs>
+<TabItem value="ui" label="LiteLLM UI">
+
+1. Navigate to **MCP Servers** and click **Add New MCP Server**
+2. Set the transport to **Streamable HTTP**
+3. Select **AWS SigV4** as the authentication type
+4. Fill in your AWS credentials:
+
+<Image
+  img={require('../img/mcp_aws_sigv4_ui.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+<br/>
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| **AWS Region** | Yes | AWS region for SigV4 signing (e.g., `us-east-1`) |
+| **AWS Service Name** | No | Defaults to `bedrock-agentcore` |
+| **AWS Access Key ID** | No | Falls back to boto3 credential chain if blank |
+| **AWS Secret Access Key** | No | Required if Access Key ID is provided |
+| **AWS Session Token** | No | Only needed for temporary STS credentials |
+
+Once created, LiteLLM will sign every outgoing MCP request with SigV4. The server's tools appear automatically in the MCP Tools list.
+
+**Editing credentials:** When editing an existing SigV4 server, leave credential fields blank to keep the current values. Only fields you fill in will be updated.
+
+</TabItem>
+<TabItem value="config" label="config.yaml">
 
 ### 1. Set AWS credentials
 
@@ -60,9 +94,12 @@ arn%3Aaws%3Abedrock-agentcore%3Aus-east-1%3A123456789012%3Aruntime%2Fmy-mcp-serv
 litellm --config config.yaml
 ```
 
-### 4. Use the MCP tools
+</TabItem>
+</Tabs>
 
-Once started, your AgentCore MCP tools are available through LiteLLM like any other MCP server:
+## Use the MCP tools
+
+Once configured, your AgentCore MCP tools are available through LiteLLM like any other MCP server:
 
 ```bash title="List available tools"
 curl http://localhost:4000/mcp-rest/tools/list \
