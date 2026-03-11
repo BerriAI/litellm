@@ -9,30 +9,57 @@ For now, this only affects encoding as it was the only reported issue.
 """
 import os
 import sys
+
 import pytest
+
+
+def _litellm_module_names():
+    return [name for name in sys.modules if name == "litellm" or name.startswith("litellm.")]
+
+
+def _clear_litellm_modules():
+    for module_name in _litellm_module_names():
+        del sys.modules[module_name]
+
+
+@pytest.fixture(autouse=True)
+def cleanup_env_and_modules():
+    """Restore litellm imports and environment after each test."""
+    original_modules = {
+        name: module for name, module in sys.modules.items() if name == "litellm" or name.startswith("litellm.")
+    }
+    original_disable_lazy_loading = os.environ.get("LITELLM_DISABLE_LAZY_LOADING")
+    original_tiktoken_cache_dir = os.environ.get("TIKTOKEN_CACHE_DIR")
+
+    yield
+
+    _clear_litellm_modules()
+    sys.modules.update(original_modules)
+
+    if original_disable_lazy_loading is None:
+        os.environ.pop("LITELLM_DISABLE_LAZY_LOADING", None)
+    else:
+        os.environ["LITELLM_DISABLE_LAZY_LOADING"] = original_disable_lazy_loading
+
+    if original_tiktoken_cache_dir is None:
+        os.environ.pop("TIKTOKEN_CACHE_DIR", None)
+    else:
+        os.environ["TIKTOKEN_CACHE_DIR"] = original_tiktoken_cache_dir
 
 
 def test_eager_loading_enabled():
     """Test that encoding is loaded at import time when env var is set"""
-    # Set environment variable
     os.environ["LITELLM_DISABLE_LAZY_LOADING"] = "1"
-    
-    # Clear any cached modules to ensure fresh import
-    modules_to_clear = [k for k in sys.modules.keys() if k.startswith("litellm")]
-    for module in modules_to_clear:
-        del sys.modules[module]
-    
-    # Import litellm - encoding should be loaded immediately
+
+    _clear_litellm_modules()
+
     import litellm
-    
-    # Check that encoding is available (not lazy loaded)
+
     assert hasattr(litellm, "encoding"), "Encoding should be available when eager loading is enabled"
-    
-    # Verify it's actually the encoding object
+
     encoding = litellm.encoding
     assert encoding is not None, "Encoding should not be None"
-    
-    # Test that it works
+
     tokens = encoding.encode("Hello, world!")
     assert len(tokens) > 0, "Encoding should work"
 
@@ -40,16 +67,13 @@ def test_eager_loading_enabled():
 def test_eager_loading_env_var_values():
     """Test that various env var values enable eager loading"""
     values = ["1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"]
-    
+
     for value in values:
         os.environ["LITELLM_DISABLE_LAZY_LOADING"] = value
-        
-        # Clear modules
-        modules_to_clear = [k for k in sys.modules.keys() if k.startswith("litellm")]
-        for module in modules_to_clear:
-            del sys.modules[module]
-        
+        _clear_litellm_modules()
+
         import litellm
+
         assert hasattr(litellm, "encoding"), f"Encoding should be available for value: {value}"
         encoding = litellm.encoding
         tokens = encoding.encode("test")
@@ -58,22 +82,14 @@ def test_eager_loading_env_var_values():
 
 def test_lazy_loading_default():
     """Test that encoding is lazy loaded by default (when env var is not set)"""
-    # Remove environment variable if set
-    if "LITELLM_DISABLE_LAZY_LOADING" in os.environ:
-        del os.environ["LITELLM_DISABLE_LAZY_LOADING"]
-    
-    # Clear any cached modules
-    modules_to_clear = [k for k in sys.modules.keys() if k.startswith("litellm")]
-    for module in modules_to_clear:
-        del sys.modules[module]
-    
-    # Import litellm - encoding should NOT be loaded yet
+    os.environ.pop("LITELLM_DISABLE_LAZY_LOADING", None)
+
+    _clear_litellm_modules()
+
     import litellm
-    
-    # Encoding should be accessible via __getattr__ (lazy loading)
-    encoding = litellm.encoding  # This triggers lazy loading
-    
-    # Verify it works
+
+    encoding = litellm.encoding
+
     tokens = encoding.encode("Hello, world!")
     assert len(tokens) > 0, "Encoding should work"
 
@@ -84,33 +100,15 @@ def test_tiktoken_cache_dir_set_on_lazy_load():
     This ensures the local tiktoken cache is used instead of downloading
     from the internet. Regression test for issue #19768.
     """
-    # Remove environment variables to ensure clean state
-    if "LITELLM_DISABLE_LAZY_LOADING" in os.environ:
-        del os.environ["LITELLM_DISABLE_LAZY_LOADING"]
-    if "TIKTOKEN_CACHE_DIR" in os.environ:
-        del os.environ["TIKTOKEN_CACHE_DIR"]
+    os.environ.pop("LITELLM_DISABLE_LAZY_LOADING", None)
+    os.environ.pop("TIKTOKEN_CACHE_DIR", None)
 
-    # Clear any cached modules
-    modules_to_clear = [k for k in sys.modules.keys() if k.startswith("litellm")]
-    for module in modules_to_clear:
-        del sys.modules[module]
+    _clear_litellm_modules()
 
-    # Import litellm fresh
     import litellm
 
-    # Access encoding (triggers lazy load)
     _ = litellm.encoding
 
-    # Verify TIKTOKEN_CACHE_DIR is now set and points to local tokenizers
     assert "TIKTOKEN_CACHE_DIR" in os.environ, "TIKTOKEN_CACHE_DIR should be set after lazy loading encoding"
     cache_dir = os.environ["TIKTOKEN_CACHE_DIR"]
     assert "tokenizers" in cache_dir, f"TIKTOKEN_CACHE_DIR should point to tokenizers directory, got: {cache_dir}"
-
-
-@pytest.fixture(autouse=True)
-def cleanup_env():
-    """Clean up environment variable after each test"""
-    yield
-    if "LITELLM_DISABLE_LAZY_LOADING" in os.environ:
-        del os.environ["LITELLM_DISABLE_LAZY_LOADING"]
-

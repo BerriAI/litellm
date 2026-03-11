@@ -27,6 +27,9 @@ except ImportError:
     pass
 
 
+_CardResolverBase = _A2ACardResolver if _A2ACardResolver is not None else object
+
+
 def is_localhost_or_internal_url(url: Optional[str]) -> bool:
     """
     Check if a URL is a localhost or internal URL.
@@ -73,7 +76,7 @@ def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
     return agent_card
 
 
-class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
+class LiteLLMA2ACardResolver(_CardResolverBase):  # type: ignore[misc]
     """
     Custom A2A card resolver that supports multiple well-known paths.
 
@@ -81,6 +84,13 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
     - /.well-known/agent-card.json (standard)
     - /.well-known/agent.json (previous/alternative)
     """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if _A2ACardResolver is None:
+            raise ImportError(
+                "The optional 'a2a' SDK is required to use LiteLLMA2ACardResolver."
+            )
+        super().__init__(*args, **kwargs)
 
     async def get_agent_card(
         self,
@@ -103,6 +113,11 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
         Raises:
             A2AClientHTTPError or A2AClientJSONError if both paths fail
         """
+        if _A2ACardResolver is None:
+            raise ImportError(
+                "The optional 'a2a' SDK is required to use LiteLLMA2ACardResolver."
+            )
+
         # If a specific path is provided, use the parent implementation
         if relative_card_path is not None:
             return await super().get_agent_card(

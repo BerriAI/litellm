@@ -835,7 +835,15 @@ class TestVideoLogging:
                 size="720x1280"
             )
 
-            await asyncio.sleep(1)  # Allow logging to complete
+            await asyncio.sleep(0)
+
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+            try:
+                await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+            except asyncio.TimeoutError:
+                pass
+            await asyncio.sleep(0.5)
 
             # Verify logging payload was created
             assert custom_logger.standard_logging_payload is not None
