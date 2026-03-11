@@ -11,6 +11,7 @@ Use policies to group guardrails and control which ones run for specific teams, 
 - Enable/disable specific guardrails for teams, keys, or models
 - Group guardrails into a single policy
 - Inherit from existing policies and override what you need
+- **Chain guardrails into pipelines** — Use the [Policy Flow Builder](./policy_flow_builder) for fallback guardrails and retry (e.g., strict fails → retry with permissive before blocking)
 
 ## Quick Start
 
@@ -323,6 +324,7 @@ policies:
       remove: [...]
     condition:
       model: ...
+    pipeline: ...   # optional - see Policy Flow Builder
 ```
 
 | Field | Type | Description |
@@ -332,6 +334,7 @@ policies:
 | `guardrails.add` | `list[string]` | Guardrails to enable. |
 | `guardrails.remove` | `list[string]` | Guardrails to disable (useful with inheritance). |
 | `condition.model` | `string` or `list[string]` | Optional. Only apply when model matches. Supports regex. |
+| `pipeline` | `object` | Optional. Ordered guardrail execution with conditional actions. See [Policy Flow Builder](./policy_flow_builder) for details. |
 
 ### `policy_attachments`
 
