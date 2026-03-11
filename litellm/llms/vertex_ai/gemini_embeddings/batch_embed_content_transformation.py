@@ -267,8 +267,11 @@ def process_embed_content_response(
     model_response.data = [openai_embedding]
     model_response.model = model
     
-    input_text = get_formatted_prompt(data={"input": input}, call_type="embedding")
-    prompt_tokens = token_counter(model=model, text=input_text)
+    if _is_multimodal_input(input):
+        prompt_tokens = 0
+    else:
+        input_text = get_formatted_prompt(data={"input": input}, call_type="embedding")
+        prompt_tokens = token_counter(model=model, text=input_text)
     model_response.usage = Usage(
         prompt_tokens=prompt_tokens, total_tokens=prompt_tokens
     )

@@ -55,8 +55,9 @@ class GoogleBatchEmbeddings(VertexLLM):
         
         for element in input_list:
             if isinstance(element, str) and _is_file_reference(element):
-                url = f"https://generativelanguage.googleapis.com/v1beta/{element}?key={api_key}"
-                response = sync_handler.get(url=url)
+                url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
+                headers = {"x-goog-api-key": api_key}
+                response = sync_handler.get(url=url, headers=headers)
                 
                 if response.status_code != 200:
                     raise Exception(
@@ -93,8 +94,9 @@ class GoogleBatchEmbeddings(VertexLLM):
         
         for element in input_list:
             if isinstance(element, str) and _is_file_reference(element):
-                url = f"https://generativelanguage.googleapis.com/v1beta/{element}?key={api_key}"
-                response = await async_handler.get(url=url)
+                url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
+                headers = {"x-goog-api-key": api_key}
+                response = await async_handler.get(url=url, headers=headers)
                 
                 if response.status_code != 200:
                     raise Exception(
@@ -151,8 +153,8 @@ class GoogleBatchEmbeddings(VertexLLM):
         optional_params = optional_params or {}
 
         is_multimodal = _is_multimodal_input(input)
-        
-        if is_multimodal:
+        use_embed_content = is_multimodal or (custom_llm_provider == "vertex_ai")
+        if use_embed_content:
             mode = "embedding"
         else:
             mode = "batch_embedding"
@@ -192,14 +194,14 @@ class GoogleBatchEmbeddings(VertexLLM):
                 timeout=timeout,
                 headers=headers,
                 input=input,
-                is_multimodal=is_multimodal,
+                use_embed_content=use_embed_content,
                 api_key=api_key,
                 optional_params=optional_params,
                 logging_obj=logging_obj,
             )
 
         ### TRANSFORMATION (sync path) ###
-        if is_multimodal:
+        if use_embed_content:
             resolved_files = {}
             if api_key:
                 resolved_files = self._resolve_file_references(
@@ -238,7 +240,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         _json_response = response.json()
         
-        if is_multimodal:
+        if use_embed_content:
             return process_embed_content_response(
                 input=input,
                 model_response=model_response,
@@ -265,7 +267,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         timeout: Optional[Union[float, httpx.Timeout]],
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-        is_multimodal: bool = False,
+        use_embed_content: bool = False,
         api_key: Optional[str] = None,
         optional_params: Optional[dict] = None,
         logging_obj: Optional[Any] = None,
@@ -287,7 +289,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             async_handler = client  # type: ignore
 
         ### TRANSFORMATION (async path) ###
-        if is_multimodal:
+        if use_embed_content:
             resolved_files = {}
             if api_key:
                 resolved_files = await self._async_resolve_file_references(
@@ -327,7 +329,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         _json_response = response.json()
         
-        if is_multimodal:
+        if use_embed_content:
             return process_embed_content_response(
                 input=input,
                 model_response=model_response,
