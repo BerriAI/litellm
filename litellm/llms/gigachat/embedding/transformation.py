@@ -202,8 +202,8 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             or get_secret_str("GIGACHAT_CREDENTIALS")
             or get_secret_str("GIGACHAT_API_KEY")
         )
-        scope = scope or optional_params.get("scope") or get_secret_str("GIGACHAT_SCOPE")
-        auth_url = auth_url or optional_params.get("auth_url") or get_secret_str("GIGACHAT_AUTH_URL")
+        scope = scope or litellm_params.get("scope") or optional_params.get("scope") or get_secret_str("GIGACHAT_SCOPE")
+        auth_url = auth_url or litellm_params.get("auth_url") or optional_params.get("auth_url") or get_secret_str("GIGACHAT_AUTH_URL")
 
         access_token = get_access_token(
             credentials=credentials,
