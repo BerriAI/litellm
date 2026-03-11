@@ -132,7 +132,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
         Anthropic expects: POST /v1/files with multipart form-data
         - file: the file content
-        - purpose: "messages" (required)
+        - purpose: "messages" (defaults to "messages" if not provided)
         """
         file_data = create_file_data.get("file")
         if file_data is None:
