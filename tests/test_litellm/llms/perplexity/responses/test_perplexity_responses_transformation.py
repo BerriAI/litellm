@@ -452,3 +452,62 @@ class TestPerplexityResponsesTransformation:
 
         assert response.id == "resp_123"
         assert response.status == "completed"
+
+    def test_streaming_cost_dict_to_float_via_validator(self):
+        """Cost dict in a streaming response.completed chunk is converted to float
+        end-to-end through transform_streaming_response via pydantic's recursive
+        construction of ResponsesAPIResponse → ResponseAPIUsage.parse_cost."""
+        config = PerplexityResponsesConfig()
+
+        completed_chunk = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_streaming_123",
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "completed",
+                "model": "openai/gpt-5.2",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_123",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "text": "Hello!", "annotations": []}
+                        ],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 200,
+                    "total_tokens": 300,
+                    "cost": {
+                        "currency": "USD",
+                        "input_cost": 0.0001,
+                        "output_cost": 0.0002,
+                        "total_cost": 0.0003,
+                    },
+                },
+            },
+        }
+
+        logging_obj = LiteLLMLoggingObj(
+            model="perplexity/openai/gpt-5.2",
+            messages=[],
+            stream=True,
+            call_type="responses",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+        )
+
+        result = config.transform_streaming_response(
+            model="perplexity/openai/gpt-5.2",
+            parsed_chunk=completed_chunk,
+            logging_obj=logging_obj,
+        )
+
+        assert result.type == "response.completed"
+        assert result.response.usage.cost == 0.0003
+        assert isinstance(result.response.usage.cost, float)
