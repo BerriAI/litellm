@@ -626,7 +626,43 @@ if MCP_AVAILABLE:
             user_api_key_dict
         )
         if team_id is not None and isinstance(team_id, str) and team_id.strip():
-            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(team_id.strip())
+            # Restricted virtual keys must not use the team_id filter to
+            # bypass their own access limitations.
+            if is_restricted_virtual_key:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Restricted virtual keys cannot query team-scoped MCP servers.",
+                )
+
+            # Only proxy admins may query another team's MCP servers.
+            # Non-admins must belong to the requested team.
+            sanitized_team_id = team_id.strip()
+            is_admin = _user_has_admin_view(user_api_key_dict)
+            if not is_admin:
+                from litellm.proxy.auth.auth_checks import get_team_object
+                from litellm.proxy.proxy_server import (
+                    prisma_client,
+                    user_api_key_cache,
+                )
+
+                team_obj = await get_team_object(
+                    team_id=sanitized_team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+                user_in_team = any(
+                    m.user_id is not None
+                    and m.user_id == user_api_key_dict.user_id
+                    for m in team_obj.members_with_roles
+                )
+                if not user_in_team:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="You do not have permission to view MCP servers for this team.",
+                    )
+
+            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(sanitized_team_id)
         else:
             user_mcp_management_mode = _get_user_mcp_management_mode()
 
