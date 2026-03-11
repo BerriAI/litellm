@@ -16,7 +16,6 @@ class FocusCsvSerializer(FocusSerializer):
 
     def serialize(self, frame: pl.DataFrame) -> bytes:
         """Encode the provided frame as a CSV payload."""
-        target = frame if not frame.is_empty() else pl.DataFrame(schema=frame.schema)
         buffer = io.BytesIO()
-        target.write_csv(buffer)
+        frame.write_csv(buffer)
         return buffer.getvalue()
