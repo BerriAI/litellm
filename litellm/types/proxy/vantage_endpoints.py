@@ -29,16 +29,24 @@ class VantageInitResponse(BaseModel):
 
 
 class VantageExportRequest(BaseModel):
-    """Request model for Vantage export operations"""
+    """Request model for Vantage export operations (actual export, no default limit)"""
 
     limit: Optional[int] = Field(
-        500, description="Limit on number of records to export (default: 500)"
+        None, description="Optional limit on number of records to export (default: no limit)"
     )
     start_time_utc: Optional[datetime] = Field(
         None, description="Start time for data export in UTC"
     )
     end_time_utc: Optional[datetime] = Field(
         None, description="End time for data export in UTC"
+    )
+
+
+class VantageDryRunRequest(BaseModel):
+    """Request model for Vantage dry-run operations (capped for preview)"""
+
+    limit: Optional[int] = Field(
+        500, description="Limit on number of records to preview (default: 500)"
     )
 
 

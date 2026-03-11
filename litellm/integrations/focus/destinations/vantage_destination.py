@@ -145,12 +145,15 @@ class FocusVantageDestination(FocusDestination):
         """Upload lines in chunks that stay under the 2 MB size limit.
 
         Individual rows that exceed the limit on their own are skipped with
-        a warning — they cannot be split further.
+        a warning — they cannot be split further.  Sub-batch failures are
+        recorded and the first error is re-raised after all sub-batches have
+        been attempted, consistent with ``_upload_batched``.
         """
         current_chunk: list[bytes] = []
         current_size = len(header) + 1  # header + newline
         sub_batch = 0
         header_size = len(header) + 1
+        first_error: Optional[Exception] = None
 
         for line in data_lines:
             line_size = len(line) + 1  # line + newline
@@ -166,7 +169,15 @@ class FocusVantageDestination(FocusDestination):
             if current_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD and current_chunk:
                 batch_csv = header + b"\n" + b"\n".join(current_chunk) + b"\n"
                 batch_filename = f"{filename}.part{batch_offset}_{sub_batch}"
-                await self._upload_csv(client, batch_csv, batch_filename)
+                try:
+                    await self._upload_csv(client, batch_csv, batch_filename)
+                except Exception as e:
+                    verbose_logger.error(
+                        "Vantage destination: sub-batch %s failed: %s",
+                        batch_filename, e,
+                    )
+                    if first_error is None:
+                        first_error = e
                 current_chunk = []
                 current_size = header_size
                 sub_batch += 1
@@ -176,4 +187,15 @@ class FocusVantageDestination(FocusDestination):
         if current_chunk:
             batch_csv = header + b"\n" + b"\n".join(current_chunk) + b"\n"
             batch_filename = f"{filename}.part{batch_offset}_{sub_batch}"
-            await self._upload_csv(client, batch_csv, batch_filename)
+            try:
+                await self._upload_csv(client, batch_csv, batch_filename)
+            except Exception as e:
+                verbose_logger.error(
+                    "Vantage destination: sub-batch %s failed: %s",
+                    batch_filename, e,
+                )
+                if first_error is None:
+                    first_error = e
+
+        if first_error is not None:
+            raise first_error
