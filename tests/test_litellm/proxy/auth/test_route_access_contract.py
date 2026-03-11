@@ -264,8 +264,7 @@ async def test_custom_auth_opt_in_runs_common_checks(route):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_common_checks_always_runs_route_check():
+def test_common_checks_always_runs_route_check():
     """
     Regression: common_checks must always run route authorization.
     The skip_route_check param (PR #22662) must NOT come back.
@@ -289,10 +288,15 @@ async def test_common_checks_always_runs_route_check():
 _VIRTUAL_KEY_CASES = [
     # (allowed_routes on key, route being accessed, expected)
     (["/chat/completions", "/key/info"], "/chat/completions", "allowed"),
-    # allowed_routes on the key restricts to only those routes;
-    # /config/update is not in any non-admin allowed set, so it's denied
+    # /config/update is admin-only; allowed_routes on a non-admin key can't override that
     (["/chat/completions"], "/config/update", "denied"),
     (["llm_api_routes"], "/v1/chat/completions", "allowed"),
+    # KEY TEST: /user/new is normally denied for INTERNAL_USER, but allowed_routes
+    # containing it should grant access — this is the allowed_routes fallback path
+    (["/user/new", "/chat/completions"], "/user/new", "allowed"),
+    # A custom non-standard route that isn't in any default allow-list;
+    # only reachable because allowed_routes explicitly includes it
+    (["/my-custom/endpoint"], "/my-custom/endpoint", "allowed"),
 ]
 
 
