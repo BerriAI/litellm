@@ -1284,6 +1284,37 @@ class MCPUserCredentialResponse(LiteLLMPydanticObjectBase):
     has_credential: bool
 
 
+class MCPOAuthUserCredentialRequest(LiteLLMPydanticObjectBase):
+    """Stores a user's OAuth2 token for an OpenAPI MCP server."""
+
+    access_token: str
+    refresh_token: Optional[str] = None
+    expires_in: Optional[int] = None  # seconds until expiry
+    scopes: Optional[List[str]] = None
+
+
+class MCPOAuthUserCredentialStatus(LiteLLMPydanticObjectBase):
+    """Describes whether the calling user has a stored OAuth credential."""
+
+    server_id: str
+    has_credential: bool
+    expires_at: Optional[str] = None  # ISO-8601
+    is_expired: bool = False
+    connected_at: Optional[str] = None  # ISO-8601
+
+
+class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
+    """One entry in the /user-credentials list."""
+
+    server_id: str
+    server_name: Optional[str] = None
+    alias: Optional[str] = None
+    credential_type: str  # "oauth2" or "byok"
+    has_credential: bool
+    expires_at: Optional[str] = None  # ISO-8601; None means non-expiring
+    connected_at: Optional[str] = None  # ISO-8601
+
+
 class RejectMCPServerRequest(LiteLLMPydanticObjectBase):
     review_notes: Optional[str] = None
 
