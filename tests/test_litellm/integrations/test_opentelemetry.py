@@ -920,7 +920,7 @@ class TestOpenTelemetry(unittest.TestCase):
 
         mock_tracer.start_span.assert_not_called()
 
-    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"})
     def test_record_metrics_with_none_custom_llm_provider(self):
         """Test that _record_metrics does not pass None attributes to OTEL histograms."""
         metric_reader = InMemoryMetricReader()
@@ -959,7 +959,7 @@ class TestOpenTelemetry(unittest.TestCase):
                                 found_provider = True
         self.assertTrue(found_provider, "Expected gen_ai.system=anthropic from kwargs fallback")
  
-    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"})
     def test_record_metrics_falls_back_to_unknown_when_provider_missing(self):
         """Test that _record_metrics uses 'Unknown' when custom_llm_provider is absent everywhere."""
         metric_reader = InMemoryMetricReader()
