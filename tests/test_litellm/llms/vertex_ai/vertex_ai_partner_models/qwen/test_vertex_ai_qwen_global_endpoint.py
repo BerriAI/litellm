@@ -81,47 +81,46 @@ class TestQwenGlobalOnlyDetection:
 
 
 class TestVertexBaseGetVertexRegion:
-    """Test the get_vertex_region method."""
+    """Test the get_vertex_region method using model_cost lookup."""
 
-    def test_global_only_model_returns_global(self):
-        """Test that global-only models return 'global' regardless of input."""
+    def test_global_model_no_user_region_returns_global(self):
+        """Test that global-only models return 'global' when user doesn't specify region."""
         vertex_base = VertexBase()
 
-        with patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-            return_value=True,
-        ):
-            result = vertex_base.get_vertex_region(
-                vertex_region="us-central1",
-                model="vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
-            )
-            assert result == "global"
-
-    def test_global_only_model_with_none_returns_global(self):
-        """Test that global-only models return 'global' even with None input."""
-        vertex_base = VertexBase()
-
-        with patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-            return_value=True,
+        with patch.dict(
+            litellm.model_cost,
+            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+            clear=False,
         ):
             result = vertex_base.get_vertex_region(
                 vertex_region=None,
-                model="vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
+                model="qwen/qwen3-next-80b-a3b-instruct-maas",
             )
             assert result == "global"
+
+    def test_global_model_with_user_region_trusts_user(self):
+        """Test that user-specified region is preserved even for global-only models."""
+        vertex_base = VertexBase()
+
+        with patch.dict(
+            litellm.model_cost,
+            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+            clear=False,
+        ):
+            result = vertex_base.get_vertex_region(
+                vertex_region="us-central1",
+                model="qwen/qwen3-next-80b-a3b-instruct-maas",
+            )
+            assert result == "us-central1"
 
     def test_non_global_model_uses_provided_region(self):
         """Test that non-global models use the provided region."""
         vertex_base = VertexBase()
 
-        with patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-            return_value=False,
-        ):
+        with patch.dict(litellm.model_cost, {}, clear=False):
             result = vertex_base.get_vertex_region(
                 vertex_region="europe-west1",
-                model="vertex_ai/gemini-1.5-pro",
+                model="gemini-1.5-pro",
             )
             assert result == "europe-west1"
 
@@ -129,13 +128,10 @@ class TestVertexBaseGetVertexRegion:
         """Test that non-global models with None region fallback to us-central1."""
         vertex_base = VertexBase()
 
-        with patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-            return_value=False,
-        ):
+        with patch.dict(litellm.model_cost, {}, clear=False):
             result = vertex_base.get_vertex_region(
                 vertex_region=None,
-                model="vertex_ai/gemini-1.5-pro",
+                model="unknown-model-xyz",
             )
             assert result == "us-central1"
 
@@ -217,15 +213,15 @@ async def test_vertex_ai_qwen_global_endpoint_url():
         client, "post", side_effect=mock_post_func
     ) as mock_post, patch.object(
         VertexLLM, "_ensure_access_token", return_value=("fake-token", "test-project")
-    ), patch(
-        "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-        return_value=True,
+    ), patch.dict(
+        litellm.model_cost,
+        {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+        clear=False,
     ):
         response = await litellm.acompletion(
             model="vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
             messages=[{"role": "user", "content": "Hello"}],
             vertex_ai_project="test-project",
-            vertex_ai_location="us-central1",
             client=client,
         )
 

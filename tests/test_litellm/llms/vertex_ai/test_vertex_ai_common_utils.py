@@ -588,39 +588,43 @@ def test_is_global_only_vertex_model(supported_regions, expected_result):
 
 
 @pytest.mark.parametrize(
-    "model_is_global_only, vertex_region, expected_region",
+    "model_cost_entry, vertex_region, expected_region",
     [
-        (True, None, "global"),  # Global-only model with no region specified
-        (True, "us-central1", "global"),  # Global-only model overrides specified region
-        (True, "europe-west1", "global"),  # Global-only model overrides any region
-        (False, None, "us-central1"),  # Non-global model defaults to us-central1
-        (
-            False,
-            "europe-west1",
-            "europe-west1",
-        ),  # Non-global model uses specified region
-        (False, "us-east1", "us-east1"),  # Non-global model uses specified region
+        # Model with supported_regions=["global"], no user region -> use "global"
+        ({"supported_regions": ["global"]}, None, "global"),
+        # Model with supported_regions=["global"], user specifies region -> trust user
+        ({"supported_regions": ["global"]}, "us-central1", "us-central1"),
+        # Model with supported_regions=["global"], user specifies region -> trust user
+        ({"supported_regions": ["global"]}, "europe-west1", "europe-west1"),
+        # Model with supported_regions=["us-west2"], no user region -> use "us-west2"
+        ({"supported_regions": ["us-west2"]}, None, "us-west2"),
+        # No model_cost entry, no user region -> default us-central1
+        ({}, None, "us-central1"),
+        # No model_cost entry, user specifies region -> use specified region
+        ({}, "europe-west1", "europe-west1"),
+        # No model_cost entry, user specifies region -> use specified region
+        ({}, "us-east1", "us-east1"),
     ],
 )
 def test_get_vertex_region_global_only_model(
-    model_is_global_only, vertex_region, expected_region
+    model_cost_entry, vertex_region, expected_region
 ):
-    """Test get_vertex_region ensures global-only models default to 'global' region"""
+    """Test get_vertex_region resolves region from model_cost supported_regions"""
+    import litellm
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
     vertex_base = VertexBase()
 
-    with patch(
-        "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model"
-    ) as mock_is_global_only:
-        mock_is_global_only.return_value = model_is_global_only
-
+    with patch.dict(
+        litellm.model_cost,
+        {"vertex_ai/test-model": model_cost_entry},
+        clear=False,
+    ):
         result = vertex_base.get_vertex_region(
             vertex_region=vertex_region, model="test-model"
         )
 
         assert result == expected_region
-        mock_is_global_only.assert_called_once_with("test-model")
 
 
 def test_vertex_filter_format_uri():
