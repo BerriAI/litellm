@@ -2,27 +2,29 @@ import React, { useState } from "react";
 import { Input, Tooltip } from "antd";
 import { InfoCircleOutlined, LinkOutlined } from "@ant-design/icons";
 
+const logos = "/ui/assets/logos/";
+
 const WELL_KNOWN_LOGOS: { name: string; url: string }[] = [
-  { name: "GitHub", url: "https://cdn.simpleicons.org/github" },
-  { name: "Slack", url: "https://cdn.simpleicons.org/slack" },
-  { name: "Notion", url: "https://cdn.simpleicons.org/notion" },
-  { name: "Linear", url: "https://cdn.simpleicons.org/linear" },
-  { name: "Jira", url: "https://cdn.simpleicons.org/jira" },
-  { name: "Figma", url: "https://cdn.simpleicons.org/figma" },
-  { name: "Gmail", url: "https://cdn.simpleicons.org/gmail" },
-  { name: "Google Drive", url: "https://cdn.simpleicons.org/googledrive" },
-  { name: "Stripe", url: "https://cdn.simpleicons.org/stripe" },
-  { name: "Shopify", url: "https://cdn.simpleicons.org/shopify" },
-  { name: "Salesforce", url: "https://cdn.simpleicons.org/salesforce" },
-  { name: "HubSpot", url: "https://cdn.simpleicons.org/hubspot" },
-  { name: "Twilio", url: "https://cdn.simpleicons.org/twilio" },
-  { name: "Cloudflare", url: "https://cdn.simpleicons.org/cloudflare" },
-  { name: "Sentry", url: "https://cdn.simpleicons.org/sentry" },
-  { name: "PostgreSQL", url: "https://cdn.simpleicons.org/postgresql" },
-  { name: "Snowflake", url: "https://cdn.simpleicons.org/snowflake" },
-  { name: "Zapier", url: "https://cdn.simpleicons.org/zapier" },
-  { name: "Confluence", url: "https://cdn.simpleicons.org/confluence" },
-  { name: "GitLab", url: "https://cdn.simpleicons.org/gitlab" },
+  { name: "GitHub", url: `${logos}github.svg` },
+  { name: "Slack", url: `${logos}slack.svg` },
+  { name: "Notion", url: `${logos}notion.svg` },
+  { name: "Linear", url: `${logos}linear.svg` },
+  { name: "Jira", url: `${logos}jira.svg` },
+  { name: "Figma", url: `${logos}figma.svg` },
+  { name: "Gmail", url: `${logos}gmail.svg` },
+  { name: "Google Drive", url: `${logos}google_drive.svg` },
+  { name: "Stripe", url: `${logos}stripe.svg` },
+  { name: "Shopify", url: `${logos}shopify.svg` },
+  { name: "Salesforce", url: `${logos}salesforce.svg` },
+  { name: "HubSpot", url: `${logos}hubspot.svg` },
+  { name: "Twilio", url: `${logos}twilio.svg` },
+  { name: "Cloudflare", url: `${logos}cloudflare.svg` },
+  { name: "Sentry", url: `${logos}sentry.svg` },
+  { name: "PostgreSQL", url: `${logos}postgresql.svg` },
+  { name: "Snowflake", url: `${logos}snowflake.svg` },
+  { name: "Zapier", url: `${logos}zapier.svg` },
+  { name: "Google", url: `${logos}google.svg` },
+  { name: "GitLab", url: `${logos}gitlab.svg` },
 ];
 
 interface MCPLogoSelectorProps {
