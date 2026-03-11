@@ -12,6 +12,7 @@ Anthropic Files API endpoints:
 - GET    /v1/files/{file_id}/content - Download file content
 """
 
+import calendar
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -33,23 +34,10 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import AnthropicModelInfo
+from ..common_utils import AnthropicError, AnthropicModelInfo
 
 ANTHROPIC_FILES_API_BASE = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER = "files-api-2025-04-14"
-
-
-class AnthropicError(BaseLLMException):
-    def __init__(
-        self,
-        status_code: int,
-        message: str,
-        headers: Union[dict, httpx.Headers] = {},
-    ):
-        self.status_code = status_code
-        self.message = message
-        self.headers = headers
-        super().__init__(status_code=status_code, message=message, headers=headers)
 
 
 class AnthropicFilesConfig(BaseFilesConfig):
@@ -291,7 +279,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         if created_at_str:
             try:
                 created_at = int(
-                    time.mktime(
+                    calendar.timegm(
                         time.strptime(
                             created_at_str.replace("Z", "+00:00")[:19],
                             "%Y-%m-%dT%H:%M:%S",
