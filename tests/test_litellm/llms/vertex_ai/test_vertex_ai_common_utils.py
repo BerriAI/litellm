@@ -592,12 +592,16 @@ def test_is_global_only_vertex_model(supported_regions, expected_result):
     [
         # Model with supported_regions=["global"], no user region -> use "global"
         ({"supported_regions": ["global"]}, None, "global"),
-        # Model with supported_regions=["global"], user specifies region -> trust user
-        ({"supported_regions": ["global"]}, "us-central1", "us-central1"),
-        # Model with supported_regions=["global"], user specifies region -> trust user
-        ({"supported_regions": ["global"]}, "europe-west1", "europe-west1"),
+        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
+        ({"supported_regions": ["global"]}, "us-central1", "global"),
+        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
+        ({"supported_regions": ["global"]}, "europe-west1", "global"),
         # Model with supported_regions=["us-west2"], no user region -> use "us-west2"
         ({"supported_regions": ["us-west2"]}, None, "us-west2"),
+        # Model with supported_regions=["us-west2", "us-central1"], user passes supported region -> respect it
+        ({"supported_regions": ["us-west2", "us-central1"]}, "us-central1", "us-central1"),
+        # Model with supported_regions=["us-west2", "us-central1"], user passes unsupported region -> override
+        ({"supported_regions": ["us-west2", "us-central1"]}, "europe-west1", "us-west2"),
         # No model_cost entry, no user region -> default us-central1
         ({}, None, "us-central1"),
         # No model_cost entry, user specifies region -> use specified region

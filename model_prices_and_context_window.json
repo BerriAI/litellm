@@ -33857,6 +33857,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#glm-models",
+        "supported_regions": ["global"],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
