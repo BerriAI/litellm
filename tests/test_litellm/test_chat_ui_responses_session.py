@@ -6,11 +6,15 @@ Verifies that:
 2. Absence of previous_response_id does not break the call
 3. The aresponses function signature exposes the expected parameters
 """
+import inspect
+import json
 import os
 import sys
+import unittest.mock as mock
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import httpx
 import pytest
 
 import litellm
@@ -21,8 +25,6 @@ class TestResponsesSessionChaining:
 
     def test_responses_api_signature_accepts_previous_response_id(self):
         """aresponses must accept previous_response_id and onResponseId-like params."""
-        import inspect
-
         sig = inspect.signature(litellm.aresponses)
         assert "previous_response_id" in sig.parameters, (
             "aresponses must accept previous_response_id for multi-turn session chaining"
@@ -33,13 +35,9 @@ class TestResponsesSessionChaining:
     @pytest.mark.asyncio
     async def test_previous_response_id_included_in_request_body(self):
         """previous_response_id must appear in the outgoing HTTP request body."""
-        import httpx
-
         captured_body: dict = {}
 
         async def mock_send(self_transport, request: httpx.Request, **kwargs):
-            import json
-
             try:
                 captured_body.update(json.loads(request.content))
             except Exception:
@@ -68,8 +66,6 @@ class TestResponsesSessionChaining:
                 request=request,
             )
 
-        import unittest.mock as mock
-
         with mock.patch("httpx.AsyncClient.send", mock_send):
             try:
                 await litellm.aresponses(
@@ -88,13 +84,9 @@ class TestResponsesSessionChaining:
     @pytest.mark.asyncio
     async def test_no_previous_response_id_omitted_from_request(self):
         """When previous_response_id is None, it must not appear in the request body."""
-        import httpx
-
         captured_body: dict = {}
 
         async def mock_send(self_transport, request: httpx.Request, **kwargs):
-            import json
-
             try:
                 captured_body.update(json.loads(request.content))
             except Exception:
@@ -117,8 +109,6 @@ class TestResponsesSessionChaining:
                 "created_at": 1700000000,
             }
             return httpx.Response(200, json=response_json, request=request)
-
-        import unittest.mock as mock
 
         with mock.patch("httpx.AsyncClient.send", mock_send):
             try:

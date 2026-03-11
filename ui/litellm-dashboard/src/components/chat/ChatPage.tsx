@@ -304,10 +304,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           previousResponseId,
           (id: string) => setResponsesSessionId(id),
           (event: MCPEvent) => {
+            // Accumulate locally only — persisted once in finally to avoid
+            // one full localStorage write per MCP event during streaming.
             accumulatedMCPEvents.push(event);
-            // Persist a snapshot to the assistant message so events survive
-            // across turns instead of disappearing when the next send starts.
-            updateLastAssistantMessage(convId!, { mcpEvents: [...accumulatedMCPEvents] });
           },
         );
       } catch (err: unknown) {
@@ -321,6 +320,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           });
         }
       } finally {
+        // Persist MCP events once after the turn ends (single localStorage write).
+        if (accumulatedMCPEvents.length > 0) {
+          updateLastAssistantMessage(convId!, { mcpEvents: accumulatedMCPEvents });
+        }
         setIsStreaming(false);
         abortControllerRef.current = null;
       }
