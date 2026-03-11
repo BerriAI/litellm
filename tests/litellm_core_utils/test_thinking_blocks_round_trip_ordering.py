@@ -259,10 +259,10 @@ def test_legacy_fallback_without_ordered_content_blocks_still_builds_assistant_c
 
     assert [block["type"] for block in content] == [
         "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
         "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
         "text",
-        "server_tool_use",
-        "web_search_tool_result",
-        "server_tool_use",
-        "web_search_tool_result",
     ]
