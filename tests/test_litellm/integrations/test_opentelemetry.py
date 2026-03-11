@@ -3,7 +3,7 @@ import os
 import sys
 import time
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
@@ -920,6 +920,79 @@ class TestOpenTelemetry(unittest.TestCase):
 
         mock_tracer.start_span.assert_not_called()
 
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
+    def test_record_metrics_with_none_custom_llm_provider(self):
+        """Test that _record_metrics does not pass None attributes to OTEL histograms."""
+        metric_reader = InMemoryMetricReader()
+        meter_provider = MeterProvider(metric_readers=[metric_reader])
+ 
+        otel = OpenTelemetry(meter_provider=meter_provider)
+ 
+        # Simulate kwargs as produced by the /v1/messages endpoint:
+        kwargs_with_none_provider = {
+            "litellm_params": {
+                "custom_llm_provider": None,
+                "metadata": {},
+            },
+            "custom_llm_provider": "anthropic",
+            "model": "claude-sonnet-4-20250514",
+            "standard_logging_object": {"metadata": {}},
+        }
+ 
+        start = datetime.now(UTC)
+        end = start + timedelta(seconds=0.5)
+ 
+        # Should not raise
+        otel._record_metrics(
+            kwargs_with_none_provider, {"usage": {"prompt_tokens": 10, "completion_tokens": 5}}, start, end
+        )
+ 
+        # Verify the metric was recorded with the correct provider from kwargs fallback
+        metrics_data = metric_reader.get_metrics_data()
+        found_provider = False
+        for resource_metric in metrics_data.resource_metrics:
+            for scope_metric in resource_metric.scope_metrics:
+                for metric in scope_metric.metrics:
+                    if metric.name == "gen_ai.client.operation.duration":
+                        for dp in metric.data.data_points:
+                            if dp.attributes.get("gen_ai.system") == "anthropic":
+                                found_provider = True
+        self.assertTrue(found_provider, "Expected gen_ai.system=anthropic from kwargs fallback")
+ 
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
+    def test_record_metrics_falls_back_to_unknown_when_provider_missing(self):
+        """Test that _record_metrics uses 'Unknown' when custom_llm_provider is absent everywhere."""
+        metric_reader = InMemoryMetricReader()
+        meter_provider = MeterProvider(metric_readers=[metric_reader])
+ 
+        otel = OpenTelemetry(meter_provider=meter_provider)
+ 
+        kwargs_no_provider = {
+            "litellm_params": {
+                "custom_llm_provider": None,
+                "metadata": {},
+            },
+            "model": None,
+            "standard_logging_object": {"metadata": {}},
+        }
+ 
+        start = datetime.now(UTC)
+        end = start + timedelta(seconds=0.5)
+ 
+        # Should not raise
+        otel._record_metrics(kwargs_no_provider, {"usage": {"prompt_tokens": 1, "completion_tokens": 1}}, start, end)
+ 
+        # Verify fallback to "Unknown"
+        metrics_data = metric_reader.get_metrics_data()
+        found_unknown = False
+        for resource_metric in metrics_data.resource_metrics:
+            for scope_metric in resource_metric.scope_metrics:
+                for metric in scope_metric.metrics:
+                    if metric.name == "gen_ai.client.operation.duration":
+                        for dp in metric.data.data_points:
+                            if dp.attributes.get("gen_ai.system") == "Unknown" and dp.attributes.get("gen_ai.request.model") == "Unknown":
+                                found_unknown = True
+        self.assertTrue(found_unknown, "Expected gen_ai.system=Unknown and gen_ai.request.model=Unknown as fallback")
 
 class TestOpenTelemetryHeaderSplitting(unittest.TestCase):
     """Test suite for _get_headers_dictionary method"""
