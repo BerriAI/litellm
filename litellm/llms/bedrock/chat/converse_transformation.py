@@ -51,7 +51,6 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
-    CompletionTokensDetailsWrapper,
     Function,
     Message,
     ModelResponse,
@@ -64,7 +63,6 @@ from litellm.utils import (
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
-    token_counter,
 )
 
 from ..common_utils import (
@@ -1208,7 +1206,6 @@ class AmazonConverseConfig(BaseConfig):
             self._validate_request_metadata(request_metadata)
 
         output_config: Optional[OutputConfigBlock] = inference_params.pop("outputConfig", None)
-        inference_params.pop("output_config", None)  # Bedrock Converse doesn't support it
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -1623,11 +1620,7 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
 
-    def _transform_usage(
-        self,
-        usage: ConverseTokenUsageBlock,
-        reasoning_content: Optional[str] = None,
-    ) -> Usage:
+    def _transform_usage(self, usage: ConverseTokenUsageBlock) -> Usage:
         input_tokens = usage["inputTokens"]
         output_tokens = usage["outputTokens"]
         total_tokens = usage["totalTokens"]
@@ -1644,19 +1637,6 @@ class AmazonConverseConfig(BaseConfig):
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens
         )
-        reasoning_tokens = (
-            token_counter(text=reasoning_content, count_response_tokens=True)
-            if reasoning_content
-            else 0
-        )
-        completion_tokens_details = CompletionTokensDetailsWrapper(
-            reasoning_tokens=reasoning_tokens,
-            text_tokens=(
-                output_tokens - reasoning_tokens
-                if reasoning_tokens > 0
-                else output_tokens
-            ),
-        )
         openai_usage = Usage(
             prompt_tokens=input_tokens,
             completion_tokens=output_tokens,
@@ -1664,7 +1644,6 @@ class AmazonConverseConfig(BaseConfig):
             prompt_tokens_details=prompt_tokens_details,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
-            completion_tokens_details=completion_tokens_details,
         )
         return openai_usage
 
@@ -2001,10 +1980,7 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["tool_calls"] = filtered_tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        usage = self._transform_usage(
-            completion_response["usage"],
-            reasoning_content=chat_completion_message.get("reasoning_content"),
-        )
+        usage = self._transform_usage(completion_response["usage"])
 
         ## HANDLE TOOL CALLS
         _message = Message(**chat_completion_message)

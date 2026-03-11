@@ -225,6 +225,60 @@ def test_chat_completion_token_logprob_invalid_top_logprobs_rejected():
         )
 
 
+# ---------------------------------------------------------------------------
+# native_finish_reason in provider_specific_fields
+# ---------------------------------------------------------------------------
+
+
+class TestNativeFinishReason:
+    """Choices exposes the raw provider finish_reason in provider_specific_fields
+    when it differs from the mapped OpenAI-compatible value."""
+
+    def test_provider_reason_exposed_when_mapped(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="end_turn")
+        assert choice.finish_reason == "stop"
+        assert choice.provider_specific_fields["native_finish_reason"] == "end_turn"
+
+    def test_provider_reason_not_set_when_already_openai(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="stop")
+        assert choice.finish_reason == "stop"
+        assert not hasattr(choice, "provider_specific_fields")
+
+    def test_provider_reason_merged_with_existing_fields(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(
+            finish_reason="max_tokens",
+            provider_specific_fields={"citations": [{"url": "http://example.com"}]},
+        )
+        assert choice.finish_reason == "length"
+        assert choice.provider_specific_fields["native_finish_reason"] == "max_tokens"
+        assert choice.provider_specific_fields["citations"] == [{"url": "http://example.com"}]
+
+    def test_gemini_safety_reason_exposed(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="SAFETY")
+        assert choice.finish_reason == "content_filter"
+        assert choice.provider_specific_fields["native_finish_reason"] == "SAFETY"
+
+    def test_anthropic_tool_use_reason_exposed(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="tool_use")
+        assert choice.finish_reason == "tool_calls"
+        assert choice.provider_specific_fields["native_finish_reason"] == "tool_use"
+
+    def test_max_tokens_reason_exposed(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="MAX_TOKENS")
+        assert choice.finish_reason == "length"
+        assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
 def test_delta_maps_reasoning_to_reasoning_content():
     """
     Test that Delta maps 'reasoning' field to 'reasoning_content'.
