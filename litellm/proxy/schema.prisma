@@ -63,9 +63,16 @@ model LiteLLM_AgentsTable {
   agent_name String @unique
   litellm_params Json?
   agent_card_params Json
+  static_headers       Json?          @default("{}")
+  extra_headers        String[]       @default([])
   agent_access_groups String[]       @default([])
   object_permission_id String?
   object_permission LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
+  spend      Float    @default(0.0)
+  tpm_limit  Int?
+  rpm_limit  Int?
+  session_tpm_limit Int?
+  session_rpm_limit Int?
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -260,6 +267,7 @@ model LiteLLM_ObjectPermissionTable {
   vector_stores         String[]       @default([])
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])
+  blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -276,6 +284,7 @@ model LiteLLM_MCPServerTable {
   alias        String?
   description  String?
   url          String?
+  spec_path    String?
   transport    String         @default("sse")
   auth_type    String?        
   credentials  Json?          @default("{}")
@@ -286,6 +295,8 @@ model LiteLLM_MCPServerTable {
   mcp_info     Json?          @default("{}")
   mcp_access_groups String[]
   allowed_tools String[]      @default([])
+  tool_name_to_display_name Json? @default("{}")
+  tool_name_to_description   Json? @default("{}")
   extra_headers String[]    @default([])
   static_headers Json?        @default("{}")
   // Health check status
@@ -301,6 +312,30 @@ model LiteLLM_MCPServerTable {
   registration_url   String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
+  is_byok               Boolean  @default(false)
+  byok_description      String[] @default([])
+  byok_api_key_help_url String?
+  source_url            String?
+  // BYOM submission lifecycle
+  approval_status  String?   @default("active")
+  submitted_by     String?
+  submitted_at     DateTime?
+  reviewed_at      DateTime?
+  review_notes     String?
+
+  @@index([approval_status])
+}
+
+// Per-user BYOK credentials for MCP servers
+model LiteLLM_MCPUserCredentials {
+  id             String   @id @default(uuid())
+  user_id        String
+  server_id      String
+  credential_b64 String
+  created_at     DateTime @default(now()) @map("created_at")
+  updated_at     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([user_id, server_id])
 }
 
 // Generate Tokens for Proxy
@@ -351,6 +386,7 @@ model LiteLLM_VerificationToken {
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+    jwt_key_mappings LiteLLM_JWTKeyMapping[]
 
     // SELECT COUNT(*) FROM (SELECT "public"."LiteLLM_VerificationToken"."token" FROM "public"."LiteLLM_VerificationToken" WHERE ("public"."LiteLLM_VerificationToken"."user_id" = $1 AND ("public"."LiteLLM_VerificationToken"."team_id" IS NULL OR "public"."LiteLLM_VerificationToken"."team_id" <> $2)) OFFSET $3 ) AS "sub"
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."user_id" = $1 OFFSET $2
@@ -361,6 +397,24 @@ model LiteLLM_VerificationToken {
 
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE (("public"."LiteLLM_VerificationToken"."expires" IS NULL OR "public"."LiteLLM_VerificationToken"."expires" > $1) AND "public"."LiteLLM_VerificationToken"."budget_reset_at" < $2) OFFSET $3
     @@index([budget_reset_at, expires])
+}
+
+model LiteLLM_JWTKeyMapping {
+    id                String   @id @default(uuid())
+    jwt_claim_name    String   // e.g. "sub", "email"
+    jwt_claim_value   String   // The claim value to match
+    token             String   // Hashed virtual key (FK)
+    description       String?
+    is_active         Boolean  @default(true)
+    created_at        DateTime @default(now())
+    created_by        String?
+    updated_at        DateTime @default(now()) @updatedAt
+    updated_by        String?
+
+    litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token])
+
+    @@unique([jwt_claim_name, jwt_claim_value])
+    @@index([jwt_claim_name, jwt_claim_value, is_active])
 }
 
 // Deprecated keys during grace period - allows old key to work until revoke_at
@@ -928,6 +982,16 @@ model LiteLLM_SpendLogGuardrailIndex {
   @@index([policy_id, start_time])
 }
 
+// Index for fast "last N logs for tool" from SpendLogs – see how a tool is called in production
+model LiteLLM_SpendLogToolIndex {
+  request_id String
+  tool_name  String   // matches LiteLLM_ToolTable.tool_name; join for input_policy/output_policy etc.
+  start_time DateTime
+
+  @@id([request_id, tool_name])
+  @@index([tool_name, start_time])
+}
+
 // Prompt table for storing prompt configurations
 model LiteLLM_PromptTable {
   id String @id @default(uuid())
@@ -1007,6 +1071,14 @@ model LiteLLM_UISettings {
   updated_at DateTime @updatedAt
 }
 
+// Generic config overrides table - one row per config_type
+model LiteLLM_ConfigOverrides {
+  config_type  String   @id
+  config_value Json
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+}
+
 // Skills table for storing LiteLLM-managed skills
 model LiteLLM_SkillsTable {
   skill_id       String   @id @default(uuid())
@@ -1065,26 +1137,31 @@ model LiteLLM_PolicyAttachmentTable {
   updated_by       String?
 }
 
-// Global tool registry - auto-discovered from LLM responses; admins set call_policy here
+// Global tool registry - auto-discovered from LLM responses; admins set input/output policies here
 model LiteLLM_ToolTable {
-  tool_id     String   @id @default(uuid())
-  tool_name   String   @unique   // e.g. "huggingface_remote-mcp__dynamic_space"
-  origin      String?            // MCP server name or "user_defined"
-  call_policy String   @default("untrusted")  // "trusted" | "untrusted" | "dual_llm" | "blocked"
-  call_count  Int      @default(0)            // cumulative number of times this tool was seen
-  assignments Json?    @default("{}")
-  key_hash    String?            // hash of the virtual key that first called this tool
-  team_id     String?            // team that first called this tool
-  key_alias   String?            // human-readable alias of the virtual key
-  created_at  DateTime @default(now())
-  created_by  String?
-  updated_at  DateTime @default(now()) @updatedAt
-  updated_by  String?
+  tool_id        String   @id @default(uuid())
+  tool_name      String   @unique   // e.g. "huggingface_remote-mcp__dynamic_space"
+  origin         String?            // MCP server name or "user_defined"
+  input_policy   String   @default("untrusted")  // "trusted" | "untrusted" | "blocked"
+  output_policy  String   @default("untrusted")  // "trusted" | "untrusted"
+  call_count     Int      @default(0)            // cumulative number of times this tool was seen
+  assignments    Json?    @default("{}")
+  key_hash       String?            // hash of the virtual key that first called this tool
+  team_id        String?            // team that first called this tool
+  key_alias      String?            // human-readable alias of the virtual key
+  user_agent     String?            // user-agent of the first request that discovered this tool
+  last_used_at   DateTime?          // timestamp of the most recent call
+  created_at     DateTime @default(now())
+  created_by     String?
+  updated_at     DateTime @default(now()) @updatedAt
+  updated_by     String?
 
-  @@index([call_policy])
+  @@index([input_policy])
+  @@index([output_policy])
   @@index([team_id])
 }
 
+// Per-(tool, team/key) policy overrides. When present, override replaces global tool policy for that scope.
 //Unified Access Groups table for storing unified access groups
 model LiteLLM_AccessGroupTable {
   access_group_id    String   @id @default(uuid())

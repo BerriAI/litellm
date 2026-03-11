@@ -156,7 +156,7 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
             {"type": "web_search_20250305", "name": "web_search"},
         ],
         "custom_llm_provider": "openai",
-        "api_key": "sk-fake",
+        "api_key": "fake-key-for-testing",
         "temperature": 0.7,
         "metadata": {"user": "test"},
     }
@@ -167,7 +167,7 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
     # All original keys must be preserved
     assert result["model"] == "gpt-4o"
     assert result["messages"] == [{"role": "user", "content": "Search for something"}]
-    assert result["api_key"] == "sk-fake"
+    assert result["api_key"] == "fake-key-for-testing"
     assert result["temperature"] == 0.7
     assert result["metadata"] == {"user": "test"}
     assert result["custom_llm_provider"] == "openai"

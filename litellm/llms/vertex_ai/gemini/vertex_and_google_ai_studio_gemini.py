@@ -800,9 +800,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
+        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview, etc.
         is_gemini3flash = model and (
-            "gemini-3-flash-preview" in model.lower()
-            or "gemini-3-flash" in model.lower()
+            "gemini-3-flash" in model.lower()
+            or "gemini-3.1-flash" in model.lower()
         )
         is_gemini31pro = model and (
             "gemini-3.1-pro-preview" in model.lower()
@@ -2905,6 +2906,7 @@ class ModelResponseIterator:
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
         self.cumulative_tool_call_index: int = 0
+        self.has_seen_tool_calls: bool = False
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -2942,6 +2944,40 @@ class ModelResponseIterator:
                     self.logging_obj.optional_params,
                     cumulative_tool_call_index=self.cumulative_tool_call_index,
                 )
+
+                # Track whether tool_calls have been seen across streaming chunks.
+                # Gemini sends tool_calls and finishReason in separate chunks,
+                # so we need to remember if earlier chunks contained tool_calls
+                # to correctly set finish_reason="tool_calls" per the OpenAI spec.
+                if not self.has_seen_tool_calls:
+                    for choice in model_response.choices:
+                        if hasattr(choice, "delta") and choice.delta and choice.delta.tool_calls:
+                            self.has_seen_tool_calls = True
+                            break
+
+                # Handle final chunk with finishReason but no content.
+                # _process_candidates skips candidates without "content",
+                # so the finish_reason from the final chunk is lost.
+                if not model_response.choices and _candidates:
+                    from litellm.types.utils import Delta, StreamingChoices
+
+                    for candidate in _candidates:
+                        finish_reason_str = candidate.get("finishReason")
+                        if finish_reason_str is not None:
+                            if self.has_seen_tool_calls:
+                                mapped_finish_reason = "tool_calls"
+                            else:
+                                mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
+                                    None, finish_reason_str
+                                )
+                            choice = StreamingChoices(
+                                finish_reason=mapped_finish_reason,
+                                index=candidate.get("index", 0),
+                                delta=Delta(content=None, role=None),
+                                logprobs=None,
+                                enhancements=None,
+                            )
+                            model_response.choices.append(choice)
 
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
