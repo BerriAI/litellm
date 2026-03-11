@@ -15,17 +15,16 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 import httpx
 
 # Type aliases for provider parameters
-FileCreateProvider = Literal["openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus"]
-FileRetrieveProvider = Literal["openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus"]
-FileDeleteProvider = Literal["openai", "azure", "gemini", "manus"]
-FileListProvider = Literal["openai", "azure", "manus"]
+FileCreateProvider = Literal["openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus", "anthropic"]
+FileRetrieveProvider = Literal["openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic"]
+FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic"]
+FileListProvider = Literal["openai", "azure", "manus", "anthropic"]
 FileContentProvider = Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"]
 
 import litellm
 from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.files.handler import AnthropicFilesHandler
 from litellm.llms.azure.common_utils import get_azure_credentials
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
@@ -61,14 +60,13 @@ openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
 bedrock_files_instance = BedrockFilesHandler()
-anthropic_files_instance = AnthropicFilesHandler()
 #################################################
 
 
 @client
 async def acreate_file(
     file: FileTypes,
-    purpose: Literal["assistants", "batch", "fine-tune"],
+    purpose: Literal["assistants", "batch", "fine-tune", "messages"],
     expires_after: Optional[FileExpiresAfter] = None,
     custom_llm_provider: FileCreateProvider = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
@@ -113,7 +111,7 @@ async def acreate_file(
 @client
 def create_file(
     file: FileTypes,
-    purpose: Literal["assistants", "batch", "fine-tune"],
+    purpose: Literal["assistants", "batch", "fine-tune", "messages"],
     expires_after: Optional[FileExpiresAfter] = None,
     custom_llm_provider: Optional[FileCreateProvider] = None,
     extra_headers: Optional[Dict[str, str]] = None,
@@ -225,7 +223,7 @@ def create_file(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai', 'manus'] are supported.".format(
+                message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai', 'manus', 'anthropic'] are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -355,22 +353,25 @@ def file_retrieve(
                 litellm_params_dict = get_litellm_params(**kwargs)
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
-                
+
                 logging_obj = kwargs.get("litellm_logging_obj")
                 if logging_obj is None:
                     from litellm.litellm_core_utils.litellm_logging import (
                         Logging as LiteLLMLoggingObj,
                     )
+
                     logging_obj = LiteLLMLoggingObj(
                         model="",
                         messages=[],
                         stream=False,
                         call_type="afile_retrieve" if _is_async else "file_retrieve",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                        litellm_call_id=kwargs.get(
+                            "litellm_call_id", str(uuid_module.uuid4())
+                        ),
                         function_id=str(kwargs.get("id") or ""),
                     )
-                
+
                 client = kwargs.get("client")
                 response = base_llm_http_handler.retrieve_file(
                     file_id=file_id,
@@ -389,7 +390,7 @@ def file_retrieve(
                 )
             else:
                 raise litellm.exceptions.BadRequestError(
-                    message="LiteLLM doesn't support {} for 'file_retrieve'. Only 'openai', 'azure', and 'manus' are supported.".format(
+                    message="LiteLLM doesn't support {} for 'file_retrieve'. Only 'openai', 'azure', 'manus', and 'anthropic' are supported.".format(
                         custom_llm_provider
                     ),
                     model="n/a",
@@ -532,22 +533,25 @@ def file_delete(
             if provider_config is not None:
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
-                
+
                 logging_obj = kwargs.get("litellm_logging_obj")
                 if logging_obj is None:
                     from litellm.litellm_core_utils.litellm_logging import (
                         Logging as LiteLLMLoggingObj,
                     )
+
                     logging_obj = LiteLLMLoggingObj(
                         model="",
                         messages=[],
                         stream=False,
                         call_type="afile_delete" if _is_async else "file_delete",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                        litellm_call_id=kwargs.get(
+                            "litellm_call_id", str(uuid_module.uuid4())
+                        ),
                         function_id=str(kwargs.get("id") or ""),
                     )
-                
+
                 response = base_llm_http_handler.delete_file(
                     file_id=file_id,
                     provider_config=provider_config,
@@ -565,7 +569,7 @@ def file_delete(
                 )
             else:
                 raise litellm.exceptions.BadRequestError(
-                    message="LiteLLM doesn't support {} for 'file_delete'. Only 'openai', 'azure', 'gemini', and 'manus' are supported.".format(
+                    message="LiteLLM doesn't support {} for 'file_delete'. Only 'openai', 'azure', 'gemini', 'manus', and 'anthropic' are supported.".format(
                         custom_llm_provider
                     ),
                     model="n/a",
@@ -655,7 +659,7 @@ def file_list(
             timeout = 600.0
 
         _is_async = kwargs.pop("is_async", False) is True
-        
+
         # Check if provider has a custom files config (e.g., Manus, Bedrock, Vertex AI)
         provider_config = ProviderConfigManager.get_provider_files_config(
             model="",
@@ -665,22 +669,25 @@ def file_list(
             litellm_params_dict = get_litellm_params(**kwargs)
             litellm_params_dict["api_key"] = optional_params.api_key
             litellm_params_dict["api_base"] = optional_params.api_base
-            
+
             logging_obj = kwargs.get("litellm_logging_obj")
             if logging_obj is None:
                 from litellm.litellm_core_utils.litellm_logging import (
                     Logging as LiteLLMLoggingObj,
                 )
+
                 logging_obj = LiteLLMLoggingObj(
                     model="",
                     messages=[],
                     stream=False,
                     call_type="afile_list" if _is_async else "file_list",
                     start_time=time.time(),
-                    litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                    litellm_call_id=kwargs.get(
+                        "litellm_call_id", str(uuid_module.uuid4())
+                    ),
                     function_id=str(kwargs.get("id", "")),
                 )
-            
+
             client = kwargs.get("client")
             response = base_llm_http_handler.list_files(
                 purpose=purpose,
@@ -730,7 +737,7 @@ def file_list(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'file_list'. Only 'openai', 'azure', and 'manus' are supported.".format(
+                message="LiteLLM doesn't support {} for 'file_list'. Only 'openai', 'azure', 'manus', and 'anthropic' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -839,15 +846,43 @@ def file_content(
 
         _is_async = kwargs.pop("afile_content", False) is True
 
-        # Check if this is an Anthropic batch results request
-        if custom_llm_provider == "anthropic":
-            response = anthropic_files_instance.file_content(
-                _is_async=_is_async,
+        # Check if provider has a custom files config (e.g., Anthropic, Manus)
+        provider_config = ProviderConfigManager.get_provider_files_config(
+            model="",
+            provider=LlmProviders(custom_llm_provider),
+        )
+        if provider_config is not None:
+            litellm_params_dict["api_key"] = optional_params.api_key
+            litellm_params_dict["api_base"] = optional_params.api_base
+
+            logging_obj = kwargs.get("litellm_logging_obj")
+            if logging_obj is None:
+                logging_obj = LiteLLMLoggingObj(
+                    model="",
+                    messages=[],
+                    stream=False,
+                    call_type="afile_content" if _is_async else "file_content",
+                    start_time=time.time(),
+                    litellm_call_id=kwargs.get(
+                        "litellm_call_id", str(uuid_module.uuid4())
+                    ),
+                    function_id=str(kwargs.get("id") or ""),
+                )
+
+            response = base_llm_http_handler.retrieve_file_content(
                 file_content_request=_file_content_request,
-                api_base=optional_params.api_base,
-                api_key=optional_params.api_key,
+                provider_config=provider_config,
+                litellm_params=litellm_params_dict,
+                headers=extra_headers or {},
+                logging_obj=logging_obj,
+                _is_async=_is_async,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
                 timeout=timeout,
-                max_retries=optional_params.max_retries,
             )
             return response
 
@@ -920,7 +955,7 @@ def file_content(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'bedrock', 'manus'.".format(
+                message="LiteLLM doesn't support {} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'bedrock', 'manus', 'anthropic'.".format(
                     custom_llm_provider
                 ),
                 model="n/a",

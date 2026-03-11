@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# Team-Based Guardrails
+# Team Bring-Your-Own Guardrails
 
 Team-based guardrails let **developers** register a guardrail for their team via the API; an **admin** then reviews and approves or rejects it in the LiteLLM UI. Only [Generic Guardrail API](/docs/adding_provider/generic_guardrail_api) guardrails can be registered this way.
 

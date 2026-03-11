@@ -91,7 +91,7 @@ class UISettings(BaseModel):
 
     require_auth_for_public_ai_hub: bool = Field(
         default=False,
-        description="If true, requires authentication for accessing the public AI Hub."
+        description="If true, requires authentication for accessing the public AI Hub.",
     )
 
     forward_client_headers_to_llm_api: bool = Field(
@@ -102,6 +102,31 @@ class UISettings(BaseModel):
     enable_projects_ui: bool = Field(
         default=False,
         description="If enabled, shows the Projects feature in the UI sidebar and the project field in key management.",
+    )
+
+    disable_agents_for_internal_users: bool = Field(
+        default=False,
+        description="If true, internal users cannot access agent management endpoints or the Agents page in the UI.",
+    )
+
+    allow_agents_for_team_admins: bool = Field(
+        default=False,
+        description="If true, team admins are exempt from the agents disable restriction (only takes effect when disable_agents_for_internal_users is true).",
+    )
+
+    disable_vector_stores_for_internal_users: bool = Field(
+        default=False,
+        description="If true, internal users cannot access vector store management endpoints or the Vector Stores page in the UI.",
+    )
+
+    allow_vector_stores_for_team_admins: bool = Field(
+        default=False,
+        description="If true, team admins are exempt from the vector stores disable restriction (only takes effect when disable_vector_stores_for_internal_users is true).",
+    )
+
+    scope_user_search_to_org: bool = Field(
+        default=False,
+        description="If enabled, the user search endpoint (/user/filter/ui) restricts results by organization. When off, any authenticated user can search all users.",
     )
 
 
@@ -119,7 +144,22 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
     "enable_projects_ui",
+    "disable_agents_for_internal_users",
+    "allow_agents_for_team_admins",
+    "disable_vector_stores_for_internal_users",
+    "allow_vector_stores_for_team_admins",
+    "scope_user_search_to_org",
 }
+
+# Flags that must be synced from the persisted UISettings into
+# general_settings at runtime (on both read and write).
+_RUNTIME_GENERAL_SETTINGS_FLAGS = [
+    "forward_client_headers_to_llm_api",
+    "disable_agents_for_internal_users",
+    "allow_agents_for_team_admins",
+    "disable_vector_stores_for_internal_users",
+    "allow_vector_stores_for_team_admins",
+]
 
 
 class MCPSemanticFilterSettings(BaseModel):
@@ -383,7 +423,9 @@ async def update_default_team_member_budget(
 
 
 async def _update_litellm_setting(
-    settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings],
+    settings: Union[
+        DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings
+    ],
     settings_key: str,
     in_memory_var: Any,
     success_message: str,
@@ -823,9 +865,7 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
             verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from config")
         if "LITELLM_FAVICON_URL" in os.environ:
             del os.environ["LITELLM_FAVICON_URL"]
-            verbose_proxy_logger.debug(
-                "Removed LITELLM_FAVICON_URL from environment"
-            )
+            verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from environment")
 
     # Handle environment variable encryption if needed
     stored_config = config.copy()
@@ -940,6 +980,49 @@ async def get_in_product_nudges():
     return InProductNudgeResponse(is_claude_code_enabled=False)
 
 
+UI_SETTINGS_CACHE_KEY = "ui_settings:settings_dict"
+UI_SETTINGS_CACHE_TTL = 600  # 10 minutes
+
+
+async def get_ui_settings_cached() -> Dict[str, Any]:
+    """
+    Return the persisted UI settings dict, using DualCache for reads.
+
+    Cache hit  → return cached dict immediately.
+    Cache miss → read from DB, populate cache, return dict.
+    """
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    # 1. Try cache
+    cached = await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY)
+    if cached is not None and isinstance(cached, dict):
+        return cached
+
+    # 2. Fallback to DB
+    if prisma_client is None:
+        return {}
+
+    db_record = await prisma_client.db.litellm_uisettings.find_unique(
+        where={"id": "ui_settings"}
+    )
+    ui_settings: Dict[str, Any] = {}
+    if db_record and db_record.ui_settings:
+        raw = db_record.ui_settings
+        ui_settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
+
+    # Sanitize
+    ui_settings = {
+        k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
+    }
+
+    # 3. Populate cache with TTL
+    await user_api_key_cache.async_set_cache(
+        key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL
+    )
+
+    return ui_settings
+
+
 @router.get(
     "/get/ui_settings",
     tags=["UI Settings"],
@@ -976,14 +1059,22 @@ async def get_ui_settings():
         k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
     }
 
-    # Sync forward_client_headers_to_llm_api into general_settings so the proxy
-    # picks it up at runtime (covers server restart scenarios).
-    if "forward_client_headers_to_llm_api" in ui_settings:
+    # Sync runtime flags into general_settings so the proxy picks them up
+    # at runtime (covers server restart scenarios).
+    _flags_to_sync = {
+        k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings
+    }
+    if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
-        general_settings["forward_client_headers_to_llm_api"] = ui_settings[
-            "forward_client_headers_to_llm_api"
-        ]
+        general_settings.update(_flags_to_sync)
+
+    # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    await user_api_key_cache.async_set_cache(
+        key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL
+    )
 
     # Build config-like object for schema helper
     config: Dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
@@ -1028,12 +1119,25 @@ async def update_ui_settings(
             },
         )
 
-    settings_dict = settings.model_dump(exclude_none=True)
+    # Only include fields the caller actually sent (not Pydantic defaults).
+    settings_dict = settings.model_dump(exclude_unset=True)
 
     # Enforce allowlist and drop anything unexpected
-    ui_settings = {
+    incoming = {
         k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS
     }
+
+    # Merge with existing persisted settings so a partial PATCH doesn't
+    # overwrite fields the caller didn't send.
+    existing: dict = {}
+    db_existing = await prisma_client.db.litellm_uisettings.find_unique(
+        where={"id": "ui_settings"}
+    )
+    if db_existing and db_existing.ui_settings:
+        raw = db_existing.ui_settings
+        existing = json.loads(raw) if isinstance(raw, str) else dict(raw)
+
+    ui_settings = {**existing, **incoming}
 
     await prisma_client.db.litellm_uisettings.upsert(
         where={"id": "ui_settings"},
@@ -1048,14 +1152,25 @@ async def update_ui_settings(
         },
     )
 
-    # Sync forward_client_headers_to_llm_api to general_settings so the proxy
-    # picks it up at runtime (general_settings is checked in pre-call utils).
-    if "forward_client_headers_to_llm_api" in ui_settings:
+    # Sync runtime flags to general_settings so the proxy picks them up
+    # at runtime (general_settings is checked in pre-call utils).
+    _flags_to_sync = {
+        k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings
+    }
+    if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
-        general_settings["forward_client_headers_to_llm_api"] = ui_settings[
-            "forward_client_headers_to_llm_api"
-        ]
+        general_settings.update(_flags_to_sync)
+
+    # Invalidate + set DualCache so subsequent reads see the new values immediately
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    sanitized = {
+        k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
+    }
+    await user_api_key_cache.async_set_cache(
+        key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL
+    )
 
     return {
         "message": "UI settings updated successfully",

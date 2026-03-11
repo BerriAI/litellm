@@ -116,22 +116,20 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             AzureTextModerationGuardrailResponse,
         )
 
-        chunks = self.split_text_by_words(
-            text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
-        )
+        chunks = self.split_text_by_words(text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: Optional[AzureTextModerationGuardrailResponse] = None
 
         for chunk in chunks:
             request_body = AzureTextModerationGuardrailRequestBody(
                 text=chunk,
-                **self.optional_params_request_body,
+                **self.optional_params_request_body,  # type: ignore[misc]
             )
             response_json = await self._post_to_content_safety(
                 "text:analyze", cast(dict, request_body)
             )
 
-            chunk_response = AzureTextModerationGuardrailResponse(**response_json)
+            chunk_response = cast(AzureTextModerationGuardrailResponse, response_json)
 
             # For multi-chunk texts the callers only see the final response,
             # so we must check every intermediate chunk here to avoid silently

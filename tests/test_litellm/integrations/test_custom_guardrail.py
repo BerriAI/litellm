@@ -386,6 +386,118 @@ class TestGuardrailLoggingAggregation:
         assert info[1]["guardrail_name"] == "test_guardrail"
 
 
+class TestGuardrailSensitiveFieldStripping:
+    """Tests that secret_fields is stripped from guardrail responses before logging.
+
+    Matches the pattern used by Langfuse and Arize integrations which also
+    pop("secret_fields") to prevent raw Authorization headers from being persisted.
+    """
+
+    def _make_guardrail(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="test_guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    def test_secret_fields_stripped_from_guardrail_response(self):
+        """Ensure secret_fields (containing raw Authorization headers) is not persisted."""
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail_response_with_secrets = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "secret_fields": {
+                "raw_headers": {
+                    "authorization": "Bearer sk-live-secret-key-12345",
+                    "content-type": "application/json",
+                }
+            },
+            "proxy_server_request": {"url": "http://localhost:4000/chat/completions"},
+        }
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=guardrail_response_with_secrets,
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(info) == 1
+        logged_response = info[0]["guardrail_response"]
+
+        # secret_fields must be stripped
+        assert "secret_fields" not in logged_response
+
+        # Other fields should be preserved
+        assert "model" in logged_response
+        assert "messages" in logged_response
+        assert "proxy_server_request" in logged_response
+
+    def test_string_guardrail_response_not_affected(self):
+        """String responses (e.g. 'allow', 'deny') should pass through unchanged."""
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="allow",
+            request_data=request_data,
+            guardrail_status="success",
+            duration=0.5,
+        )
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert info[0]["guardrail_response"] == "allow"
+
+    def test_no_authorization_header_in_logged_response(self):
+        """Verify no plaintext Authorization header ends up in the logged guardrail response."""
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "model": "gpt-4",
+                "secret_fields": {
+                    "raw_headers": {
+                        "authorization": "Bearer sk-live-SHOULD-NOT-APPEAR",
+                    }
+                },
+            },
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        logged_response = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+        assert "secret_fields" not in logged_response
+        assert "sk-live-SHOULD-NOT-APPEAR" not in json.dumps(logged_response)
+
+    def test_secret_fields_stripped_from_list_dict_response(self):
+        """Ensure secret_fields is stripped from List[dict] guardrail responses too."""
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=[
+                {"result": "ok", "secret_fields": {"raw_headers": {"authorization": "Bearer sk-secret"}}},
+                {"result": "also_ok"},
+            ],
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        import json
+        serialized = json.dumps(request_data)
+        assert "secret_fields" not in serialized
+        assert "sk-secret" not in serialized
+
+
 class TestCustomGuardrailPassthroughSupport:
     """Tests for passthrough endpoint guardrail support - Issue fixes."""
 

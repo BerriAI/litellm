@@ -44,8 +44,12 @@ def _print_policies_on_startup(
         condition = policy_data.get("condition")
         description = policy_data.get("description")
 
-        guardrails_add = guardrails.get("add", []) if isinstance(guardrails, dict) else []
-        guardrails_remove = guardrails.get("remove", []) if isinstance(guardrails, dict) else []
+        guardrails_add = (
+            guardrails.get("add", []) if isinstance(guardrails, dict) else []
+        )
+        guardrails_remove = (
+            guardrails.get("remove", []) if isinstance(guardrails, dict) else []
+        )
         inherit_str = f" (inherits: {inherit})" if inherit else ""
 
         print(  # noqa: T201
@@ -58,7 +62,9 @@ def _print_policies_on_startup(
         if guardrails_remove:
             print(f"      guardrails.remove: {guardrails_remove}")  # noqa: T201
         if condition:
-            model_condition = condition.get("model") if isinstance(condition, dict) else None
+            model_condition = (
+                condition.get("model") if isinstance(condition, dict) else None
+            )
             if model_condition:
                 print(f"      condition.model: {model_condition}")  # noqa: T201
 
@@ -258,19 +264,23 @@ def get_policies_summary() -> Dict[str, Any]:
             "description": policy.description if policy else None,
             "guardrails_add": policy.guardrails.get_add() if policy else [],
             "guardrails_remove": policy.guardrails.get_remove() if policy else [],
-            "condition": policy.condition.model_dump() if policy and policy.condition else None,
+            "condition": policy.condition.model_dump()
+            if policy and policy.condition
+            else None,
             "resolved_guardrails": resolved_policy.guardrails,
             "inheritance_chain": resolved_policy.inheritance_chain,
         }
 
     # Add attachment info
     for attachment in attachment_registry.get_all_attachments():
-        summary["attachments"].append({
-            "policy": attachment.policy,
-            "scope": attachment.scope,
-            "teams": attachment.teams,
-            "keys": attachment.keys,
-            "models": attachment.models,
-        })
+        summary["attachments"].append(
+            {
+                "policy": attachment.policy,
+                "scope": attachment.scope,
+                "teams": attachment.teams,
+                "keys": attachment.keys,
+                "models": attachment.models,
+            }
+        )
 
     return summary

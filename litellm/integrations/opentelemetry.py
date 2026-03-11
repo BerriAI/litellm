@@ -735,13 +735,10 @@ class OpenTelemetry(CustomLogger):
             self._maybe_log_raw_request(
                 kwargs, response_obj, start_time, end_time, span
             )
-            # Ensure proxy-request parent span is annotated with the actual operation kind
-            if (
-                parent_span is not None
-                and hasattr(parent_span, "name")
-                and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
-            ):
-                self.set_attributes(parent_span, kwargs, response_obj)
+            # Do NOT duplicate attributes onto the parent proxy-request span.
+            # The child litellm_request span already carries all attributes;
+            # copying them to the parent doubles storage and complicates
+            # search (Issue #4).
         else:
             # Do not create primary span (keep hierarchy shallow when parent exists)
             from opentelemetry.trace import Status, StatusCode
@@ -757,8 +754,12 @@ class OpenTelemetry(CustomLogger):
                 kwargs, response_obj, start_time, end_time, parent_span
             )
 
-        # 3. Guardrail span
-        self._create_guardrail_span(kwargs=kwargs, context=ctx)
+        # 3. Guardrail span — ensure guardrails are always parented to an
+        #    existing span so they never become orphaned root spans (Issue #5).
+        guardrail_ctx = self._resolve_guardrail_context(
+            span=span, parent_span=parent_span, fallback_ctx=ctx
+        )
+        self._create_guardrail_span(kwargs=kwargs, context=guardrail_ctx)
 
         # 4. Metrics & cost recording
         self._record_metrics(kwargs, response_obj, start_time, end_time)
@@ -1145,6 +1146,27 @@ class OpenTelemetry(CustomLogger):
             )
             otel_logger.emit(log_record)
 
+    @staticmethod
+    def _resolve_guardrail_context(
+        span: Optional[Any],
+        parent_span: Optional[Any],
+        fallback_ctx: Optional[Any],
+    ) -> Optional[Any]:
+        """
+        Return a valid OTEL context for guardrail child spans so they are
+        never orphaned (Issue #5).  Priority:
+          1. The litellm_request span that was just created
+          2. The parent proxy-request span
+          3. The original fallback context (may be None — last resort)
+        """
+        from opentelemetry import trace as _trace
+
+        if span is not None:
+            return _trace.set_span_in_context(span)
+        if parent_span is not None:
+            return _trace.set_span_in_context(parent_span)
+        return fallback_ctx
+
     def _create_guardrail_span(
         self, kwargs: Optional[dict], context: Optional[Context]
     ):
@@ -1250,6 +1272,7 @@ class OpenTelemetry(CustomLogger):
             "USE_OTEL_LITELLM_REQUEST_SPAN"
         )
 
+        span = None
         if should_create_primary_span:
             # Span 1: Request sent to litellm SDK
             otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
@@ -1275,8 +1298,11 @@ class OpenTelemetry(CustomLogger):
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
                 self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
 
-        # Create span for guardrail information
-        self._create_guardrail_span(kwargs=kwargs, context=_parent_context)
+        # Create span for guardrail information — ensure proper parenting (Issue #5)
+        guardrail_ctx = self._resolve_guardrail_context(
+            span=span, parent_span=parent_otel_span, fallback_ctx=_parent_context
+        )
+        self._create_guardrail_span(kwargs=kwargs, context=guardrail_ctx)
 
         # Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
@@ -1579,12 +1605,19 @@ class OpenTelemetry(CustomLogger):
                     value=optional_params.get("user"),
                 )
 
-            # The unique identifier for the completion.
-            if response_obj and response_obj.get("id"):
+            # The unique identifier for the LLM call.
+            # Completions have a provider response ID (e.g. "chatcmpl-xxx"),
+            # but Embeddings and Image-gen responses do not.  Fall back to
+            # the litellm call ID so every call type can be correlated
+            # across LiteLLM UI, Phoenix traces, and provider logs (Issue #8).
+            response_id = (
+                response_obj.get("id") if response_obj else None
+            ) or standard_logging_payload.get("id")
+            if response_id:
                 self.safe_set_attribute(
                     span=span,
                     key="gen_ai.response.id",
-                    value=response_obj.get("id"),
+                    value=response_id,
                 )
 
             # The model used to generate the response.
@@ -1808,8 +1841,10 @@ class OpenTelemetry(CustomLogger):
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
         try:
-            self.set_attributes(span, kwargs, response_obj)
-            kwargs.get("optional_params", {})
+            # Only set provider-specific raw payload attributes on this span.
+            # The parent litellm_request span already carries the standard
+            # gen_ai.* / metadata.* attributes — duplicating them here doubles
+            # storage and adds noise (Issue #3).
             litellm_params = kwargs.get("litellm_params", {}) or {}
             custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
 

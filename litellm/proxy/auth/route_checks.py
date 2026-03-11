@@ -94,7 +94,7 @@ class RouteChecks:
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
+            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}",
         )
 
     @staticmethod
@@ -164,9 +164,8 @@ class RouteChecks:
 
         if RouteChecks.is_llm_api_route(route=route):
             pass
-        elif (
-            route in LiteLLMRoutes.info_routes.value
-        ):  # check if user allowed to call an info route
+        elif RouteChecks.is_info_route(route=route):
+            # check if user allowed to call an info route
             if route == "/key/info":
                 # handled by function itself
                 pass
@@ -293,7 +292,7 @@ class RouteChecks:
 
         if route in LiteLLMRoutes.anthropic_routes.value:
             return True
-        
+
         if route in LiteLLMRoutes.google_routes.value:
             return True
 
@@ -301,7 +300,7 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
         ):
             return True
-        
+
         if RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.agent_routes.value
         ):
@@ -357,6 +356,13 @@ class RouteChecks:
         Check if route is a management route
         """
         return route in LiteLLMRoutes.management_routes.value
+
+    @staticmethod
+    def is_info_route(route: str) -> bool:
+        """
+        Check if route is an info route
+        """
+        return route in LiteLLMRoutes.info_routes.value
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:

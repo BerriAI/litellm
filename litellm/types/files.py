@@ -293,10 +293,10 @@ Two-Step File Upload Types
 class TwoStepFileUploadRequest(TypedDict):
     """
     Request structure for two-step file upload process.
-    
+
     Step 1: Initial request to get upload URL
     Step 2: Upload file content to the upload URL
-    
+
     Used by providers like Manus and Google Cloud Storage.
     """
 
@@ -309,7 +309,7 @@ class TwoStepFileUploadRequest(TypedDict):
 class TwoStepFileUploadConfig(TypedDict, total=False):
     """
     Configuration for two-step file upload process.
-    
+
     Properties:
         initial_request: Request to create file record and get upload URL
         upload_request: Request to upload actual file content

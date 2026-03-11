@@ -9,7 +9,7 @@ sys.path.insert(
 
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -514,6 +514,131 @@ async def test_update_tag_db_without_prisma_client():
     )
 
     assert writer.spend_update_queue.add_update.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_update_agent_db_enqueues_agent_spend():
+    """
+    Test that _update_agent_db enqueues a SpendUpdateQueueItem with entity_type=AGENT.
+    """
+    from litellm.proxy._types import Litellm_EntityType
+
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    agent_id = "agent-123"
+    response_cost = 0.1
+
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_agent_db(
+        response_cost=response_cost,
+        agent_id=agent_id,
+        prisma_client=mock_prisma,
+    )
+
+    writer.spend_update_queue.add_update.assert_called_once()
+    call_args = writer.spend_update_queue.add_update.call_args[1]
+    assert call_args["update"]["entity_type"] == Litellm_EntityType.AGENT
+    assert call_args["update"]["entity_id"] == agent_id
+    assert call_args["update"]["response_cost"] == response_cost
+
+
+@pytest.mark.asyncio
+async def test_update_agent_db_skips_when_agent_id_none():
+    """_update_agent_db does not enqueue when agent_id is None."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_agent_db(
+        response_cost=0.05,
+        agent_id=None,
+        prisma_client=mock_prisma,
+    )
+
+    writer.spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_agent_db_skips_when_prisma_client_none():
+    """_update_agent_db does not enqueue when prisma_client is None."""
+    writer = DBSpendUpdateWriter()
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_agent_db(
+        response_cost=0.05,
+        agent_id="agent-456",
+        prisma_client=None,
+    )
+
+    writer.spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_increments_agent_spend():
+    """
+    Test that _commit_spend_updates_to_db calls litellm_agentstable.update_many
+    with spend increment when agent_list_transactions is present.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_verificationtoken = MagicMock()
+    mock_batcher.litellm_verificationtoken.update_many = MagicMock()
+    mock_batcher.litellm_usertable = MagicMock()
+    mock_batcher.litellm_usertable.update_many = MagicMock()
+    mock_batcher.litellm_teamtable = MagicMock()
+    mock_batcher.litellm_teamtable.update_many = MagicMock()
+    mock_batcher.litellm_teammembership = MagicMock()
+    mock_batcher.litellm_teammembership.update_many = MagicMock()
+    mock_batcher.litellm_organizationtable = MagicMock()
+    mock_batcher.litellm_organizationtable.update_many = MagicMock()
+    mock_batcher.litellm_tagtable = MagicMock()
+    mock_batcher.litellm_tagtable.update_many = MagicMock()
+    mock_batcher.litellm_agentstable = MagicMock()
+    mock_batcher.litellm_agentstable.update_many = MagicMock()
+
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+
+    mock_proxy_logging = MagicMock()
+
+    agent_id = "agent-789"
+    response_cost = 0.25
+    db_spend_update_transactions = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {agent_id: response_cost},
+    }
+
+    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=mock_proxy_logging,
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
+
+    mock_batcher.litellm_agentstable.update_many.assert_called_once()
+    call_kwargs = mock_batcher.litellm_agentstable.update_many.call_args[1]
+    assert call_kwargs["where"] == {"agent_id": agent_id}
+    assert call_kwargs["data"] == {"spend": {"increment": response_cost}}
 
 
 @pytest.mark.asyncio
@@ -1048,6 +1173,8 @@ async def test_commit_key_spend_updates_includes_last_active():
     mock_batcher.litellm_teamtable.update_many = MagicMock()
     mock_batcher.litellm_organizationtable = MagicMock()
     mock_batcher.litellm_organizationtable.update_many = MagicMock()
+    mock_batcher.litellm_agentstable = MagicMock()
+    mock_batcher.litellm_agentstable.update_many = MagicMock()
 
     mock_proxy_logging = MagicMock()
 
@@ -1059,6 +1186,7 @@ async def test_commit_key_spend_updates_includes_last_active():
         "team_member_list_transactions": {},
         "org_list_transactions": {},
         "tag_list_transactions": {},
+        "agent_list_transactions": {},
     }
 
     before_call = datetime.now(timezone.utc)
@@ -1142,6 +1270,7 @@ async def test_batch_database_updates_isolation_on_failure():
     db_writer._update_team_db = AsyncMock()
     db_writer._update_org_db = AsyncMock()
     db_writer._update_tag_db = AsyncMock()
+    db_writer._update_agent_db = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock()
@@ -1169,6 +1298,7 @@ async def test_batch_database_updates_isolation_on_failure():
     db_writer._update_team_db.assert_awaited_once()
     db_writer._update_org_db.assert_awaited_once()
     db_writer._update_tag_db.assert_awaited_once()
+    db_writer._update_agent_db.assert_awaited_once()
     db_writer.add_spend_log_transaction_to_daily_user_transaction.assert_awaited_once()
     db_writer.add_spend_log_transaction_to_daily_end_user_transaction.assert_awaited_once()
     db_writer.add_spend_log_transaction_to_daily_agent_transaction.assert_awaited_once()
@@ -1203,6 +1333,7 @@ async def test_daily_agent_receives_deepcopied_payload():
     db_writer._update_team_db = AsyncMock()
     db_writer._update_org_db = AsyncMock()
     db_writer._update_tag_db = AsyncMock()
+    db_writer._update_agent_db = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(

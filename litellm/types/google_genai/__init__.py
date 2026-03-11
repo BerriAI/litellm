@@ -7,7 +7,7 @@ from .main import (
 
 __all__ = [
     "ContentListUnion",
-    "ContentListUnionDict", 
+    "ContentListUnionDict",
     "GenerateContentConfigOrDict",
     "GenerateContentResponse",
-] 
+]

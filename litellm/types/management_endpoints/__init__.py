@@ -21,4 +21,3 @@ __all__ = [
     "REDIS_TYPE_DESCRIPTIONS",
     "CacheSettingsField",
 ]
-

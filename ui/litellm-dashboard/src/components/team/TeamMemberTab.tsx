@@ -148,7 +148,7 @@ export default function TeamMemberTab({
       roleTooltip="This role applies only to this team and is independent from the user's proxy-level role."
       extraColumns={extraColumns}
       showDeleteForMember={() =>
-        isProxyAdmin || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)
+        isProxyAdmin || (canEditTeam && !isUserTeamAdmin) || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)
       }
     />
   );

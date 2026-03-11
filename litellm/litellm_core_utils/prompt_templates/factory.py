@@ -1035,9 +1035,12 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
         parsed_args = parse_tool_call_arguments(
             tool_arguments, tool_name=tool_name, context="Anthropic XML tool invoke"
         )
-        parameters = "".join(
-            f"<{param}>{val}</{param}>\n" for param, val in parsed_args.items()
-        )
+        if isinstance(parsed_args, dict):
+            parameters = "".join(
+                f"<{param}>{val}</{param}>\n" for param, val in parsed_args.items()
+            )
+        else:
+            parameters = f"<result>{parsed_args}</result>\n"
         invokes += (
             "<invoke>\n"
             f"<tool_name>{tool_name}</tool_name>\n"
@@ -1390,10 +1393,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {
@@ -1701,7 +1704,9 @@ def convert_to_anthropic_tool_result(
                     anthropic_content_element=_anthropic_image_param,
                     original_content_element=content,
                 )
-                anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
+                anthropic_content_list.append(
+                    cast(AnthropicMessagesImageParam, _anthropic_image_param)
+                )
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -2032,7 +2037,7 @@ def _sanitize_empty_text_content(
     """
     Case C: Sanitize empty text content
     - Replace empty or whitespace-only text content with a placeholder message.
-        
+
     Returns:
         The message with sanitized content if needed, otherwise the original message
     """
@@ -2041,14 +2046,16 @@ def _sanitize_empty_text_content(
         if isinstance(content, str):
             if not content or not content.strip():
                 message = cast(AllMessageValues, dict(message))  # Make a copy
-                message["content"] = "[System: Empty message content sanitised to satisfy protocol]"
+                message[
+                    "content"
+                ] = "[System: Empty message content sanitised to satisfy protocol]"
                 verbose_logger.debug(
                     f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
                 )
     return message
 
 
-def _add_missing_tool_results( # noqa: PLR0915
+def _add_missing_tool_results(  # noqa: PLR0915
     current_message: AllMessageValues,
     messages: List[AllMessageValues],
     current_index: int,
@@ -2080,40 +2087,40 @@ def _add_missing_tool_results( # noqa: PLR0915
             tool_call_id = getattr(tool_call, "id", None)
         if tool_call_id:
             expected_tool_call_ids.add(tool_call_id)
-    
+
     # Collect actual tool result messages that follow this assistant message
     found_tool_call_ids = set()
     actual_tool_results: List[AllMessageValues] = []
     j = current_index + 1
-    
+
     while j < len(messages):
         next_msg = messages[j]
         next_role = next_msg.get("role")
-        
+
         if next_role == "assistant":
             break
-        
+
         if next_role in ["tool", "function"]:
             tool_call_id = next_msg.get("tool_call_id")
             if tool_call_id and tool_call_id in expected_tool_call_ids:
                 found_tool_call_ids.add(tool_call_id)
                 actual_tool_results.append(next_msg)
-        
+
         j += 1
-    
+
     # Find missing tool results
     missing_tool_call_ids = expected_tool_call_ids - found_tool_call_ids
-    
+
     if missing_tool_call_ids:
         verbose_logger.debug(
             f"_add_missing_tool_results: Found {len(missing_tool_call_ids)} orphaned tool calls. Adding dummy tool results."
         )
-        
+
         result_messages.append(current_message)
-        
+
         # Add existing tool results FIRST
         result_messages.extend(actual_tool_results)
-        
+
         # Then add dummy tool results for missing ones
         for tool_call_id in missing_tool_call_ids:
             tool_name = "unknown_tool"
@@ -2123,7 +2130,7 @@ def _add_missing_tool_results( # noqa: PLR0915
                     tc_id = tool_call.get("id")
                 else:
                     tc_id = getattr(tool_call, "id", None)
-                
+
                 if tc_id == tool_call_id:
                     if isinstance(tool_call, dict):
                         function = tool_call.get("function", {})
@@ -2136,17 +2143,17 @@ def _add_missing_tool_results( # noqa: PLR0915
                         if function:
                             tool_name = getattr(function, "name", "unknown_tool")
                     break
-            
+
             dummy_tool_result: ChatCompletionToolMessage = {
                 "role": "tool",
                 "tool_call_id": tool_call_id,
                 "content": f"[System: Tool execution skipped/interrupted by user. No result provided for tool '{tool_name}'.]",
             }
             result_messages.append(dummy_tool_result)
-        
+
         # Return the messages and the number of original messages to skip
         return (result_messages, len(actual_tool_results))
-    
+
     return ([current_message], 0)
 
 
@@ -2158,21 +2165,21 @@ def _is_orphaned_tool_result(
     Case B: Orphaned tool_result (unexpected result)
     - Check if a tool message references a tool_call_id that doesn't exist in the previous
       assistant message.
-        
+
     Returns:
         True if this is an orphaned tool result that should be removed, False otherwise
     """
     if current_message.get("role") not in ["tool", "function"]:
         return False
-    
+
     tool_call_id = current_message.get("tool_call_id")
-    
+
     if not tool_call_id:
         return False
-    
+
     # Look back to find the most recent assistant message with tool_calls
     found_matching_tool_call = False
-    
+
     for j in range(len(sanitized_messages) - 1, -1, -1):
         prev_msg = sanitized_messages[j]
         if prev_msg.get("role") == "assistant":
@@ -2184,19 +2191,19 @@ def _is_orphaned_tool_result(
                         tc_id = tool_call.get("id")
                     else:
                         tc_id = getattr(tool_call, "id", None)
-                    
+
                     if tc_id == tool_call_id:
                         found_matching_tool_call = True
                         break
-            
+
             break
-    
+
     if not found_matching_tool_call:
         verbose_logger.debug(
             "_is_orphaned_tool_result: Found orphaned tool result with redacted tool_call_id"
         )
         return True
-    
+
     return False
 
 
@@ -2205,53 +2212,103 @@ def sanitize_messages_for_tool_calling(
 ) -> List[AllMessageValues]:
     """
     Sanitize messages for tool calling to handle common issues when modify_params=True:
-    
+
     Case A: Missing tool_result for tool_use (orphaned tool calls)
     - If an assistant message has tool_calls but no corresponding tool result follows,
       add a dummy tool result message indicating the user did not provide the result.
-    
+
     Case B: Orphaned tool_result (unexpected result)
     - If a tool message references a tool_call_id that doesn't exist in the previous
       assistant message, remove that tool message.
-    
+
     Case C: Empty text content
     - Replace empty or whitespace-only text content with a placeholder message.
-    
+
+    Case D: Duplicate tool_result for same tool_use (duplicate results)
+    - If multiple tool messages reference the same tool_call_id, keep only the last
+      occurrence. Anthropic requires exactly one tool_result per tool_use and rejects
+      with: "each tool_use must have a single result".
+
     This function operates on OpenAI format messages before they are converted to
     provider-specific formats.
     """
     if not litellm.modify_params:
         return messages
-    
+
     sanitized_messages: List[AllMessageValues] = []
     i = 0
-    
+
     while i < len(messages):
         current_message = messages[i]
-        
+
         # Case C: Sanitize empty text content
         current_message = _sanitize_empty_text_content(current_message)
-        
+
         # Case A: Check if assistant message has tool_calls without following tool results
         if current_message.get("role") == "assistant":
-            result_messages, messages_consumed = _add_missing_tool_results(current_message, messages, i)
-            
+            result_messages, messages_consumed = _add_missing_tool_results(
+                current_message, messages, i
+            )
+
             # If dummy tool results were added, extend sanitized_messages and skip consumed messages
             if len(result_messages) > 1:
                 sanitized_messages.extend(result_messages)
                 # Skip the assistant message and any actual tool results that were included
                 i += 1 + messages_consumed
                 continue
-        
+
         # Case B: Check for orphaned tool results
         if _is_orphaned_tool_result(current_message, sanitized_messages):
             i += 1
             continue  # Skip this orphaned tool result
-        
+
         # Add the message to sanitized list
         sanitized_messages.append(current_message)
         i += 1
-    
+
+    # Case D: Deduplicate tool results with the same tool_call_id.
+    # Anthropic requires exactly one tool_result per tool_use. Session history
+    # (e.g. from conversation resume) can contain duplicate tool_result messages
+    # for the same tool_call_id. Keep only the last occurrence *within each
+    # contiguous block of tool results following an assistant message*. This
+    # avoids dropping results from earlier turns if a tool_call_id is reused.
+    #
+    # NOTE: This intentionally keeps the *last* occurrence (most complete for
+    # session-resume duplicates), unlike _deduplicate_bedrock_content_blocks
+    # which keeps the *first*. The Bedrock case handles provider-side content
+    # block duplication where the first is authoritative; here the duplicate
+    # arises from history replay where the last entry is the final state.
+    duplicates_to_remove: Set[int] = set()
+    seen_in_block: Dict[str, int] = {}  # tool_call_id -> index (reset per block)
+    for idx, msg in enumerate(sanitized_messages):
+        role = msg.get("role")
+        tcid = msg.get("tool_call_id") if role in ["tool", "function"] else None
+        if tcid:
+            if tcid in seen_in_block:
+                # Mark the earlier occurrence for removal (keep latest)
+                duplicates_to_remove.add(seen_in_block[tcid])
+                verbose_logger.warning(
+                    "sanitize_messages_for_tool_calling: dropping duplicate "
+                    "tool_result with tool_call_id=%s. This may indicate "
+                    "duplicate tool messages in conversation history.",
+                    tcid,
+                )
+            seen_in_block[tcid] = idx
+        elif role not in ("tool", "function"):
+            # Non-tool message (user, assistant, system) marks a
+            # conversational-turn boundary — reset tracking.
+            # Tool/function messages with no tool_call_id are malformed;
+            # they should NOT reset the block because they don't represent
+            # a turn boundary and would mask real within-block duplicates.
+            seen_in_block = {}
+
+    if duplicates_to_remove:
+        sanitized_messages = [
+            msg
+            for idx, msg in enumerate(sanitized_messages)
+            if idx not in duplicates_to_remove
+        ]
+
     return sanitized_messages
 
 
@@ -2276,7 +2333,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
     """
     # Sanitize messages for tool calling issues when modify_params=True
     messages = sanitize_messages_for_tool_calling(messages)
-    
+
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
@@ -2331,9 +2388,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
                             if isinstance(image_url_value, str):
-                                image_url_input: Union[str, dict[str, Any]] = (
-                                    image_url_value
-                                )
+                                image_url_input: Union[
+                                    str, dict[str, Any]
+                                ] = image_url_value
                             else:
                                 # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
@@ -2360,9 +2417,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -2400,9 +2457,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2435,7 +2492,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 "provider_specific_fields"
             )
             if isinstance(_provider_specific_fields_raw, dict):
-                _compaction_blocks = _provider_specific_fields_raw.get("compaction_blocks")
+                _compaction_blocks = _provider_specific_fields_raw.get(
+                    "compaction_blocks"
+                )
                 if _compaction_blocks and isinstance(_compaction_blocks, list):
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
                     assistant_content.extend(_compaction_blocks)  # type: ignore
@@ -3560,16 +3619,12 @@ def _convert_to_bedrock_tool_call_invoke(
                         #   '{"cmd":"a"}{"cmd":"b"}{"cmd":"c"}'
                         # Split them and emit one toolUse block per object.
                         # Fixes: https://github.com/BerriAI/litellm/issues/20543
-                        parsed_objects = split_concatenated_json_objects(
-                            arguments
-                        )
+                        parsed_objects = split_concatenated_json_objects(arguments)
                         if parsed_objects:
                             # First object keeps the original tool id.
                             for obj_idx, obj in enumerate(parsed_objects):
                                 block_id = (
-                                    tool_id
-                                    if obj_idx == 0
-                                    else f"{tool_id}_{obj_idx}"
+                                    tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
                                 )
                                 bedrock_tool = BedrockToolUseBlock(
                                     input=obj, name=name, toolUseId=block_id
@@ -3582,9 +3637,7 @@ def _convert_to_bedrock_tool_call_invoke(
                             if tool.get("cache_control", None) is not None:
                                 _parts_list.append(
                                     BedrockContentBlock(
-                                        cachePoint=CachePointBlock(
-                                            type="default"
-                                        )
+                                        cachePoint=CachePointBlock(type="default")
                                     )
                                 )
                             continue
@@ -4337,7 +4390,9 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
 
-            assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
+            assistant_content = _deduplicate_bedrock_content_blocks(
+                assistant_content, "toolUse"
+            )
 
             if assistant_content:
                 contents.append(
@@ -4653,7 +4708,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             # AWS Bedrock doesn't allow empty or whitespace-only text content
                             # Skip completely empty strings to avoid blank content blocks
                             if element.get("text", "").strip():
-                                assistants_part = BedrockContentBlock(text=element["text"])
+                                assistants_part = BedrockContentBlock(
+                                    text=element["text"]
+                                )
                                 assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
@@ -4679,7 +4736,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
             elif _assistant_content is not None and isinstance(_assistant_content, str):
                 # Skip completely empty strings to avoid blank content blocks
                 if _assistant_content.strip():
-                    assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                    assistant_content.append(
+                        BedrockContentBlock(text=_assistant_content)
+                    )
                 # Add cache point block for assistant string content
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -4696,7 +4755,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
             msg_i += 1
 
-        assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
+        assistant_content = _deduplicate_bedrock_content_blocks(
+            assistant_content, "toolUse"
+        )
 
         if assistant_content:
             contents.append(
@@ -4760,18 +4821,18 @@ def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
 def _is_bedrock_tool_block(tool: dict) -> bool:
     """
     Check if a tool is already a BedrockToolBlock.
-    
+
     BedrockToolBlock has one of: systemTool, toolSpec, or cachePoint.
     This is used to detect tools that are already in Bedrock format
     (e.g., systemTool for Nova grounding) vs OpenAI-style function tools
     that need transformation.
-    
+
     Args:
         tool: The tool dict to check
-        
+
     Returns:
         True if the tool is already a BedrockToolBlock, False otherwise
-        
+
     Examples:
         >>> _is_bedrock_tool_block({"systemTool": {"name": "nova_grounding"}})
         True

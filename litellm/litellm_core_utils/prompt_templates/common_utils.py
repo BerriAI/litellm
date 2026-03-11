@@ -20,6 +20,7 @@ from typing import (
     cast,
 )
 
+from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -643,6 +644,10 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
         # If it's a file-like object
+        # Try to get filename from file handle if not already set
+        if not filename and hasattr(file_content, "name"):
+            filename = Path(file_content.name).name
+
         content = file_content.read()
 
         if isinstance(content, str):
@@ -1278,16 +1283,76 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
     return images
 
 
+def _attempt_json_repair(s: str) -> Optional[Any]:
+    """
+    Attempt to repair truncated JSON produced by LLM tool calls.
+
+    Handles the most common truncation patterns where the model generates
+    valid JSON that is cut short (missing closing brackets/braces).
+
+    Returns the parsed value on success, or None if repair fails.
+    """
+    import json
+
+    stripped = s.rstrip()
+    if not stripped:
+        return None
+
+    # Track the stack of unmatched openers to respect nesting order
+    opener_stack: list = []
+    in_string = False
+    escape_next = False
+
+    for ch in stripped:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            if in_string:
+                escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            opener_stack.append("}")
+        elif ch == "[":
+            opener_stack.append("]")
+        elif ch in ("}", "]"):
+            if opener_stack and opener_stack[-1] == ch:
+                opener_stack.pop()
+
+    if not opener_stack:
+        return None
+
+    # Remove trailing comma before we close brackets
+    candidate = stripped.rstrip(",")
+
+    # Close in reverse order of opening (respects nesting)
+    candidate += "".join(reversed(opener_stack))
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
 def parse_tool_call_arguments(
     arguments: Optional[str],
     tool_name: Optional[str] = None,
     context: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> Any:
     """
     Parse tool call arguments from a JSON string.
 
-    This function handles malformed JSON gracefully by raising a ValueError
-    with context about what failed and what the problematic input was.
+    When the JSON is malformed (e.g. truncated by the model), this function
+    attempts a lightweight repair (closing unmatched brackets/braces) before
+    raising an error.  A warning is logged whenever repair succeeds so that
+    callers are aware the arguments were not perfectly formed.
 
     Args:
         arguments: The JSON string containing tool arguments, or None.
@@ -1295,19 +1360,34 @@ def parse_tool_call_arguments(
         context: Optional context string (e.g., "Anthropic Messages API").
 
     Returns:
-        Parsed arguments as a dictionary. Returns empty dict if arguments is None or empty.
+        Parsed arguments (usually a dict, but may be any JSON-deserializable
+        type such as list, str, int, float, or None).  Returns empty dict if
+        arguments is None or empty.
 
     Raises:
-        ValueError: If the arguments string is not valid JSON.
+        ValueError: If the arguments string is not valid JSON and cannot be repaired.
     """
     import json
 
-    if not arguments:
+    if not arguments or not arguments.strip():
         return {}
 
     try:
         return json.loads(arguments)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError as original_error:
+        repaired = _attempt_json_repair(arguments)
+        if repaired is not None:
+            verbose_logger.warning(
+                "Repaired truncated tool call arguments for tool '%s' (%s). "
+                "Original (%d chars): %.200s%s",
+                tool_name or "<unknown>",
+                context or "unknown context",
+                len(arguments),
+                arguments,
+                "..." if len(arguments) > 200 else "",
+            )
+            return repaired
+
         error_parts = ["Failed to parse tool call arguments"]
 
         if tool_name:
@@ -1316,10 +1396,11 @@ def parse_tool_call_arguments(
             error_parts.append(f"({context})")
 
         error_message = (
-            " ".join(error_parts) + f". Error: {str(e)}. Arguments: {arguments}"
+            " ".join(error_parts)
+            + f". Error: {str(original_error)}. Arguments: {arguments}"
         )
 
-        raise ValueError(error_message) from e
+        raise ValueError(error_message) from original_error
 
 
 def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:

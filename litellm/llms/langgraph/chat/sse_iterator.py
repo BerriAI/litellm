@@ -232,4 +232,3 @@ class LangGraphSSEStreamIterator:
         except Exception as e:
             verbose_logger.error(f"Error in LangGraph SSE stream: {str(e)}")
             raise StopAsyncIteration
-

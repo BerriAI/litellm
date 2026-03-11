@@ -164,7 +164,11 @@ class GenericAPILogger(CustomBatchLogger):
         self.callback_name: Optional[str] = callback_name
 
         # Validate and store log_format
-        if log_format is not None and log_format not in ["json_array", "ndjson", "single"]:
+        if log_format is not None and log_format not in [
+            "json_array",
+            "ndjson",
+            "single",
+        ]:
             raise ValueError(
                 f"Invalid log_format: {log_format}. Must be one of: 'json_array', 'ndjson', 'single'"
             )

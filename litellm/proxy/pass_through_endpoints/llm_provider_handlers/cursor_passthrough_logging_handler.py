@@ -126,9 +126,7 @@ class CursorPassthroughLoggingHandler:
             )
 
             return {
-                "result": StandardPassThroughResponseObject(
-                    response=response_summary
-                ),
+                "result": StandardPassThroughResponseObject(response=response_summary),
                 "kwargs": kwargs,
             }
         except Exception as e:
