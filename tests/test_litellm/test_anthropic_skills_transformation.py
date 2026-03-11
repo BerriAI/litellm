@@ -6,8 +6,6 @@ building, and response parsing without requiring a live Anthropic API key
 or beta access to the Skills API.
 """
 from unittest.mock import MagicMock, patch
-import json
-from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -28,11 +26,13 @@ FAKE_API_KEY = "sk-ant-test-key-1234"
 FAKE_API_BASE = "https://api.anthropic.com"
 
 
-def _make_mock_response(json_data: dict, status_code: int = 200) -> httpx.Response:
+def _make_mock_response(
+    json_data: dict, status_code: int = 200, method: str = "POST"
+) -> httpx.Response:
     return httpx.Response(
         status_code=status_code,
         json=json_data,
-        request=httpx.Request("GET", "https://api.anthropic.com/v1/skills"),
+        request=httpx.Request(method, "https://api.anthropic.com/v1/skills"),
     )
 
 
@@ -275,7 +275,7 @@ class TestAnthropicSkillsConfigResponseTransformation:
 
     def test_get_skill_response_parses_skill(self):
         payload = _make_skill_payload(id="skill_xyz", display_title="Another")
-        raw = _make_mock_response(payload)
+        raw = _make_mock_response(payload, method="GET")
         skill = self.config.transform_get_skill_response(
             raw_response=raw, logging_obj=self.logging_obj
         )
@@ -289,7 +289,7 @@ class TestAnthropicSkillsConfigResponseTransformation:
             "has_more": False,
             "next_page": None,
         }
-        raw = _make_mock_response(payload)
+        raw = _make_mock_response(payload, method="GET")
         result = self.config.transform_list_skills_response(
             raw_response=raw, logging_obj=self.logging_obj
         )
@@ -305,7 +305,7 @@ class TestAnthropicSkillsConfigResponseTransformation:
             "has_more": True,
             "next_page": "page_token_xyz",
         }
-        raw = _make_mock_response(payload)
+        raw = _make_mock_response(payload, method="GET")
         result = self.config.transform_list_skills_response(
             raw_response=raw, logging_obj=self.logging_obj
         )
@@ -314,7 +314,7 @@ class TestAnthropicSkillsConfigResponseTransformation:
 
     def test_delete_skill_response_parses_correctly(self):
         payload = {"id": "skill_abc123", "type": "skill_deleted"}
-        raw = _make_mock_response(payload)
+        raw = _make_mock_response(payload, method="DELETE")
         result = self.config.transform_delete_skill_response(
             raw_response=raw, logging_obj=self.logging_obj
         )
