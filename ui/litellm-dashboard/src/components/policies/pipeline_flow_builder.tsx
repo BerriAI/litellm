@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Select, Typography, message, Spin } from "antd";
+import { Select, Typography, message, Spin, InputNumber } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
 import { DotsVerticalIcon } from "@heroicons/react/solid";
@@ -46,6 +46,7 @@ function createDefaultStep(): PipelineStep {
     on_fail: "block",
     pass_data: false,
     modify_response_message: null,
+    num_retries: 0,
   };
 }
 
@@ -92,6 +93,7 @@ function derivePipelineFromPolicy(policy: Policy | null | undefined): GuardrailP
         on_fail: "block" as const,
         pass_data: false,
         modify_response_message: null,
+        num_retries: 0,
       })),
     };
   }
@@ -151,6 +153,13 @@ const PassIcon: React.FC = () => (
 const FailIcon: React.FC = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
     <circle cx="12" cy="12" r="10" />
+  </svg>
+);
+
+const RetryIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <polyline points="23 4 23 10 17 10" />
+    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
   </svg>
 );
 
@@ -347,6 +356,35 @@ const StepCard: React.FC<StepCardProps> = ({
             />
           </div>
         )}
+      </div>
+
+      {/* RETRIES section */}
+      <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
+        <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
+          <RetryIcon />
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>RETRIES</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+              Retry on failure
+            </label>
+            <InputNumber
+              min={0}
+              max={10}
+              value={step.num_retries ?? 0}
+              onChange={(value) => onChange({ num_retries: value ?? 0 })}
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div style={{ flex: 2 }}>
+            <span style={{ fontSize: 12, color: "#9ca3af", lineHeight: 1.4, display: "block", marginTop: 18 }}>
+              {(step.num_retries ?? 0) === 0
+                ? "No retries — on_fail action runs immediately."
+                : `Retry up to ${step.num_retries} time${(step.num_retries ?? 0) > 1 ? "s" : ""} before applying the on_fail action.`}
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -565,14 +603,19 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
           {/* Divider */}
           <div style={{ borderTop: "1px solid #f3f4f6", marginBottom: 10 }} />
 
-          {/* Pass / Fail */}
-          <div className="flex items-center gap-6" style={{ fontSize: 13, color: "#374151" }}>
+          {/* Pass / Fail / Retries */}
+          <div className="flex items-center gap-6" style={{ fontSize: 13, color: "#374151", flexWrap: "wrap" }}>
             <span className="flex items-center gap-1.5">
               <PassIcon /> Pass &#8594; {ACTION_LABELS[step.on_pass] || step.on_pass}
             </span>
             <span className="flex items-center gap-1.5">
               <FailIcon /> Fail &#8594; {ACTION_LABELS[step.on_fail] || step.on_fail}
             </span>
+            {(step.num_retries ?? 0) > 0 && (
+              <span className="flex items-center gap-1.5">
+                <RetryIcon /> {step.num_retries} {step.num_retries === 1 ? "retry" : "retries"}
+              </span>
+            )}
           </div>
         </div>
       </React.Fragment>
@@ -842,6 +885,11 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
                     {step.duration_seconds != null && (
                       <span style={{ marginLeft: 8 }}>
                         ({(step.duration_seconds * 1000).toFixed(0)}ms)
+                      </span>
+                    )}
+                    {(step.retries_attempted ?? 0) > 0 && (
+                      <span style={{ marginLeft: 8, color: "#f59e0b" }}>
+                        ({step.retries_attempted} {step.retries_attempted === 1 ? "retry" : "retries"})
                       </span>
                     )}
                   </div>

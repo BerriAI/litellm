@@ -46,6 +46,28 @@ class AlwaysFailGuardrail(CustomGuardrail):
         raise HTTPException(status_code=400, detail="Content policy violation")
 
 
+class FailThenPassGuardrail(CustomGuardrail):
+    """Mock guardrail that fails N times then passes."""
+
+    def __init__(self, guardrail_name: str, fail_count: int = 2):
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook="pre_call",
+            default_on=True,
+        )
+        self.calls = 0
+        self.fail_count = fail_count
+
+    def should_run_guardrail(self, data, event_type) -> bool:
+        return True
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        if self.calls <= self.fail_count:
+            raise HTTPException(status_code=400, detail="Transient failure")
+        return None
+
+
 class AlwaysPassGuardrail(CustomGuardrail):
     """Mock guardrail that always passes."""
 
@@ -480,5 +502,222 @@ async def test_step_results_include_duration():
 
         assert result.step_results[0].duration_seconds is not None
         assert result.step_results[0].duration_seconds >= 0
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Retry Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_retry_succeeds_after_transient_failure():
+    """
+    Guardrail fails twice then passes. With num_retries=3, it should succeed.
+    """
+    guard = FailThenPassGuardrail(guardrail_name="flaky-guard", fail_count=2)
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="flaky-guard",
+                on_fail="block",
+                on_pass="allow",
+                num_retries=3,
+            )
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={"messages": [{"role": "user", "content": "test"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="retry-test",
+        )
+
+        assert guard.calls == 3  # 1 initial + 2 retries
+        assert result.terminal_action == "allow"
+        assert result.step_results[0].outcome == "pass"
+        assert result.step_results[0].retries_attempted == 2
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_retry_exhausted_still_fails():
+    """
+    Guardrail fails 4 times. With num_retries=2, it should exhaust retries and fail.
+    """
+    guard = FailThenPassGuardrail(guardrail_name="stubborn-guard", fail_count=4)
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="stubborn-guard",
+                on_fail="block",
+                on_pass="allow",
+                num_retries=2,
+            )
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={"messages": [{"role": "user", "content": "test"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="retry-test",
+        )
+
+        assert guard.calls == 3  # 1 initial + 2 retries
+        assert result.terminal_action == "block"
+        assert result.step_results[0].outcome == "fail"
+        assert result.step_results[0].retries_attempted == 2
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_no_retries_when_zero():
+    """
+    With num_retries=0 (default), guardrail failure triggers on_fail immediately.
+    """
+    guard = AlwaysFailGuardrail(guardrail_name="no-retry")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="no-retry",
+                on_fail="block",
+                on_pass="allow",
+                num_retries=0,
+            )
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={"messages": [{"role": "user", "content": "test"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="retry-test",
+        )
+
+        assert guard.calls == 1
+        assert result.terminal_action == "block"
+        assert result.step_results[0].retries_attempted == 0
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_no_retries_on_pass():
+    """
+    When a guardrail passes on the first try, no retries should be attempted.
+    """
+    guard = AlwaysPassGuardrail(guardrail_name="pass-guard")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="pass-guard",
+                on_fail="block",
+                on_pass="allow",
+                num_retries=3,
+            )
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={"messages": [{"role": "user", "content": "test"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="retry-test",
+        )
+
+        assert guard.calls == 1
+        assert result.terminal_action == "allow"
+        assert result.step_results[0].retries_attempted == 0
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_retry_with_on_fail_next_still_retries():
+    """
+    Retries happen even when on_fail is 'next'. After retries exhausted, the
+    on_fail action is taken.
+    """
+    guard = AlwaysFailGuardrail(guardrail_name="retry-then-next")
+    fallback = AlwaysPassGuardrail(guardrail_name="fallback")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="retry-then-next",
+                on_fail="next",
+                on_pass="allow",
+                num_retries=1,
+            ),
+            PipelineStep(
+                guardrail="fallback",
+                on_fail="block",
+                on_pass="allow",
+            ),
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [guard, fallback]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={"messages": [{"role": "user", "content": "test"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="retry-test",
+        )
+
+        assert guard.calls == 2  # 1 initial + 1 retry
+        assert fallback.calls == 1
+        assert result.terminal_action == "allow"
+        assert result.step_results[0].outcome == "fail"
+        assert result.step_results[0].action_taken == "next"
+        assert result.step_results[0].retries_attempted == 1
+        assert result.step_results[1].outcome == "pass"
     finally:
         litellm.callbacks = original_callbacks

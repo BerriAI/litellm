@@ -26,6 +26,7 @@ export interface PipelineStep {
   on_pass: "allow" | "block" | "next" | "modify_response";
   pass_data?: boolean;
   modify_response_message?: string | null;
+  num_retries?: number;
 }
 
 export interface GuardrailPipeline {
@@ -99,6 +100,7 @@ export interface PipelineStepResult {
   modified_data: Record<string, any> | null;
   error_detail: string | null;
   duration_seconds: number | null;
+  retries_attempted?: number;
 }
 
 export interface PipelineTestResult {

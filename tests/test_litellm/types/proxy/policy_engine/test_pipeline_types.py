@@ -23,6 +23,7 @@ def test_pipeline_step_defaults():
     assert step.on_pass == "allow"
     assert step.pass_data is False
     assert step.modify_response_message is None
+    assert step.num_retries == 0
 
 
 def test_pipeline_step_valid_actions():
@@ -150,3 +151,42 @@ def test_pipeline_extra_fields_rejected():
             steps=[PipelineStep(guardrail="g")],
             unknown="value",
         )
+
+
+def test_pipeline_step_num_retries():
+    step = PipelineStep(guardrail="g", num_retries=3)
+    assert step.num_retries == 3
+
+
+def test_pipeline_step_num_retries_max():
+    step = PipelineStep(guardrail="g", num_retries=10)
+    assert step.num_retries == 10
+
+
+def test_pipeline_step_num_retries_negative_rejected():
+    with pytest.raises(ValidationError):
+        PipelineStep(guardrail="g", num_retries=-1)
+
+
+def test_pipeline_step_num_retries_exceeds_max_rejected():
+    with pytest.raises(ValidationError):
+        PipelineStep(guardrail="g", num_retries=11)
+
+
+def test_pipeline_step_result_retries_attempted():
+    result = PipelineStepResult(
+        guardrail_name="g1",
+        outcome="pass",
+        action_taken="allow",
+        retries_attempted=2,
+    )
+    assert result.retries_attempted == 2
+
+
+def test_pipeline_step_result_retries_attempted_default():
+    result = PipelineStepResult(
+        guardrail_name="g1",
+        outcome="pass",
+        action_taken="allow",
+    )
+    assert result.retries_attempted == 0

@@ -5,6 +5,7 @@ Runs guardrails sequentially per pipeline step definitions, handling
 pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
+import asyncio
 import time
 from typing import Any, List, Optional
 
@@ -72,6 +73,27 @@ class PipelineExecutor:
                 call_type=call_type,
             )
 
+            retries_attempted = 0
+            if outcome != "pass" and step.num_retries > 0:
+                for retry in range(step.num_retries):
+                    retries_attempted = retry + 1
+                    verbose_proxy_logger.debug(
+                        f"Pipeline '{policy_name}' step {i}: retrying guardrail "
+                        f"'{step.guardrail}' (attempt {retries_attempted}/{step.num_retries})"
+                    )
+                    await asyncio.sleep(0.1 * retries_attempted)
+                    outcome, modified_data, error_detail = (
+                        await PipelineExecutor._run_step(
+                            step=step,
+                            mode=mode,
+                            data=working_data,
+                            user_api_key_dict=user_api_key_dict,
+                            call_type=call_type,
+                        )
+                    )
+                    if outcome == "pass":
+                        break
+
             duration = time.perf_counter() - start_time
 
             action = step.on_pass if outcome == "pass" else step.on_fail
@@ -83,12 +105,13 @@ class PipelineExecutor:
                 modified_data=modified_data,
                 error_detail=error_detail,
                 duration_seconds=round(duration, 4),
+                retries_attempted=retries_attempted,
             )
             step_results.append(step_result)
 
             verbose_proxy_logger.debug(
                 f"Pipeline '{policy_name}' step {i}: guardrail={step.guardrail}, "
-                f"outcome={outcome}, action={action}"
+                f"outcome={outcome}, action={action}, retries={retries_attempted}"
             )
 
             # Forward modified data to next step if pass_data is True
