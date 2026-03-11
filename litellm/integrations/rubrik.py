@@ -618,7 +618,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
         choices = service_response.get("choices", [])
         if not choices:
-            raise Exception("Tool blocking service returned empty response")
+            verbose_logger.warning(
+                "Tool blocking service returned empty choices — allowing all tools (fail-open)"
+            )
+            return all_tool_calls, None
 
         message = choices[0].get("message", {})
         returned_tool_calls = message.get("tool_calls", [])

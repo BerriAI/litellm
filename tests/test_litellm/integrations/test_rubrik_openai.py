@@ -680,7 +680,7 @@ class TestAsyncPostCallStreamingIteratorHook:
         async for chunk in handler.async_post_call_streaming_iterator_hook(
             user_api_key_dict={},
             response=mock_stream(),
-            request_data={},
+            request_data=create_openai_request_data(),
         ):
             chunks.append(chunk)
 
