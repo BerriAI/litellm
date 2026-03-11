@@ -354,7 +354,7 @@ def test_generic_cost_per_token_anthropic_prompt_caching():
 
 
 def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
-    model = "claude-3-5-haiku-20241022"
+    model = "claude-haiku-4-5-20251001"
     usage = Usage(
         completion_tokens=90,
         prompt_tokens=28436,
@@ -379,7 +379,7 @@ def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
     )
 
     print(f"prompt_cost: {prompt_cost}")
-    assert round(prompt_cost, 3) == 0.023
+    assert round(prompt_cost, 3) == 0.029
 
 
 def test_string_cost_values():
