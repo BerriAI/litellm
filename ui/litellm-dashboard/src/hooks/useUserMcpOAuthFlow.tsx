@@ -195,6 +195,19 @@ export const useUserMcpOAuthFlow = ({
     const storedResult = getStorage(RESULT_KEY);
     if (!storedResult) return;
 
+    // When multiple OAuth2ConnectButton components are mounted (one per server
+    // card), each holds its own hook instance.  All run resumeOAuthFlow() on
+    // mount and would compete for the same RESULT_KEY.  Peek at the stored
+    // flow state first: only the hook instance whose serverId matches the one
+    // that initiated the OAuth flow should consume the result.
+    const rawFlowState = getStorage(FLOW_STATE_KEY);
+    if (rawFlowState) {
+      try {
+        const peeked = JSON.parse(rawFlowState) as StoredFlowState;
+        if (peeked.serverId && peeked.serverId !== serverId) return;
+      } catch (_) {}
+    }
+
     processingRef.current = true;
     clearStorage(RESULT_KEY);
 
@@ -259,7 +272,7 @@ export const useUserMcpOAuthFlow = ({
       clearStorage(FLOW_STATE_KEY);
       setTimeout(() => { processingRef.current = false; }, 1000);
     }
-  }, [accessToken, onSuccess]);
+  }, [accessToken, serverId, onSuccess]);
 
   useEffect(() => {
     resumeOAuthFlow();
