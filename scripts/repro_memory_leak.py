@@ -36,30 +36,42 @@ import psutil
 
 # ─── Request templates ────────────────────────────────────────────────
 
+# Use large messages to increase per-request memory pressure
+# (mimics production payloads with long conversation histories)
+LARGE_CONTENT = "Explain the theory of relativity in detail. " * 20  # ~800 chars
+
 ANTHROPIC_MESSAGES_BODY = {
     "model": "claude-3-5-sonnet",
     "max_tokens": 100,
-    "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+    "messages": [
+        {"role": "user", "content": LARGE_CONTENT},
+    ],
 }
 
 ANTHROPIC_MESSAGES_BODY_STREAM = {
     "model": "claude-3-5-sonnet",
     "max_tokens": 100,
     "stream": True,
-    "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+    "messages": [
+        {"role": "user", "content": LARGE_CONTENT},
+    ],
 }
 
 CHAT_COMPLETIONS_BODY = {
     "model": "gpt-4o",
     "max_tokens": 100,
-    "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+    "messages": [
+        {"role": "user", "content": LARGE_CONTENT},
+    ],
 }
 
 CHAT_COMPLETIONS_BODY_STREAM = {
     "model": "gpt-4o",
     "max_tokens": 100,
     "stream": True,
-    "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+    "messages": [
+        {"role": "user", "content": LARGE_CONTENT},
+    ],
 }
 
 HEADERS = {
@@ -85,6 +97,7 @@ class Snapshot:
     requests_sent: int
     requests_failed: int
     rps: float
+    rss_children_mb: float = 0.0  # RSS of child processes
 
 
 @dataclass
@@ -106,21 +119,38 @@ class MetricsCollector:
         now = time.time()
         elapsed = now - self.start_time
 
-        # RSS memory
+        # RSS memory (main process + children)
+        rss_mb = -1
+        rss_children_mb = 0.0
         try:
             proc = psutil.Process(self.pid)
             rss_mb = proc.memory_info().rss / (1024 * 1024)
+            # Also get children RSS (uvicorn workers)
+            for child in proc.children(recursive=True):
+                try:
+                    rss_children_mb += child.memory_info().rss / (1024 * 1024)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             rss_mb = -1
 
-        # File descriptors
-        fd_count = -1
-        fd_dir = Path(f"/proc/{self.pid}/fd")
-        if fd_dir.exists():
-            try:
-                fd_count = len(list(fd_dir.iterdir()))
-            except (PermissionError, OSError):
-                pass
+        # Total RSS = main + children
+        total_rss = rss_mb + rss_children_mb
+
+        # File descriptors (main + children)
+        fd_count = 0
+        try:
+            proc = psutil.Process(self.pid)
+            pids = [self.pid] + [c.pid for c in proc.children(recursive=True)]
+            for pid in pids:
+                fd_dir = Path(f"/proc/{pid}/fd")
+                if fd_dir.exists():
+                    try:
+                        fd_count += len(list(fd_dir.iterdir()))
+                    except (PermissionError, OSError):
+                        pass
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            fd_count = -1
 
         # RPS since last snapshot
         dt = now - self._last_snapshot_time if self._last_snapshot_time else elapsed
@@ -130,11 +160,12 @@ class MetricsCollector:
         snap = Snapshot(
             timestamp=now,
             elapsed_s=elapsed,
-            rss_mb=rss_mb,
+            rss_mb=total_rss,
             fd_count=fd_count,
             requests_sent=self._requests_sent,
             requests_failed=self._requests_failed,
             rps=rps,
+            rss_children_mb=rss_children_mb,
         )
         self.snapshots.append(snap)
         self._last_snapshot_requests = self._requests_sent
@@ -304,12 +335,48 @@ async def load_generator(
 
 # ─── Monitoring ───────────────────────────────────────────────────────
 
-async def monitor_loop(metrics: MetricsCollector, interval_s: int, duration_s: int):
+async def poll_debug_memory(base_url: str) -> Optional[dict]:
+    """Poll the proxy's /debug/memory/details endpoint for internal stats."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{base_url}/debug/memory/details?top_n=10",
+                headers={"Authorization": "Bearer sk-1234"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+    except Exception:
+        pass
+    return None
+
+
+async def monitor_loop(metrics: MetricsCollector, interval_s: int, duration_s: int, base_url: str = "http://localhost:4000"):
     """Periodically take and print snapshots."""
     start = time.time()
+    gc_logged = False
     while time.time() - start < duration_s + 5:
         snap = metrics.take_snapshot()
         metrics.print_snapshot(snap)
+
+        # Every 60s, also poll internal debug memory
+        if not gc_logged or int(snap.elapsed_s) % 60 < interval_s:
+            debug_data = await poll_debug_memory(base_url)
+            if debug_data:
+                gc_info = debug_data.get("garbage_collector", {})
+                obj_info = debug_data.get("objects", {})
+                cache_info = debug_data.get("cache_memory", {})
+                proc_info = debug_data.get("process_memory", {})
+                print(
+                    f"  [internal] gc_gen0={gc_info.get('current_counts', {}).get('generation_0', '?')}  "
+                    f"total_objects={obj_info.get('total_tracked', '?')}  "
+                    f"process_rss={proc_info.get('ram_usage', {}).get('megabytes', '?')}MB  "
+                    f"cache_items: user_keys={cache_info.get('user_api_key_cache', {}).get('num_items', '?')} "
+                    f"router={cache_info.get('llm_router_cache', {}).get('num_items', '?')} "
+                    f"logging={cache_info.get('proxy_logging_cache', {}).get('num_items', '?')}"
+                )
+                gc_logged = True
+
         await asyncio.sleep(interval_s)
 
     # Final snapshot
@@ -428,6 +495,7 @@ async def main():
             metrics=metrics,
             interval_s=args.interval,
             duration_s=args.duration,
+            base_url=base_url,
         ),
     )
 
