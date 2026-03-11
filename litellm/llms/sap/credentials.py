@@ -249,17 +249,17 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
                                        if config.get(f'AICORE_{cv.name.upper()}') is not None
                                        else config.get(cv.name))),
         Source("VCAP service",
-               lambda cv: _str_or_none(
+               lambda cv: (_str_or_none(
                    _get_nested(vcap_service, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,))
                )
-               if vcap_service else None), # type: ignore[arg-type]
+               if vcap_service else None)), # type: ignore[arg-type]
     ]
 
     credentials = resolve_credentials(sources)
 
     resource_group = resolve_resource_group(sources)
 
-    if resource_group:
+    if resource_group is not None:
         credentials['resource_group'] = resource_group
 
     if 'cert_url' in credentials:
