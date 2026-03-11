@@ -336,6 +336,85 @@ class TestPerplexityResponsesTransformation:
         assert data["input"] == "What is AI?"
         assert "temperature" in data
 
+    def test_preset_handling_list_input(self):
+        """Preset with list input preserves type field"""
+        config = PerplexityResponsesConfig()
+
+        list_input = [
+            {"type": "message", "role": "user", "content": "What is AI?"},
+        ]
+
+        data = config.transform_responses_api_request(
+            model="preset/pro-search",
+            input=list_input,
+            response_api_optional_request_params={"temperature": 0.7},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["preset"] == "pro-search"
+        assert isinstance(data["input"], list)
+        assert data["input"][0]["type"] == "message"
+        assert data["input"][0]["role"] == "user"
+
+    def test_non_preset_list_input(self):
+        """Non-preset with list input preserves type field"""
+        config = PerplexityResponsesConfig()
+
+        list_input = [
+            {"type": "message", "role": "user", "content": "Hello"},
+        ]
+
+        data = config.transform_responses_api_request(
+            model="openai/gpt-5.2",
+            input=list_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["model"] == "openai/gpt-5.2"
+        assert isinstance(data["input"], list)
+        assert data["input"][0]["type"] == "message"
+
+    def test_list_input_adds_type_message_when_missing(self):
+        """Input items without type get type='message' added automatically"""
+        config = PerplexityResponsesConfig()
+
+        list_input = [
+            {"role": "user", "content": "Hello"},
+        ]
+
+        data = config.transform_responses_api_request(
+            model="openai/gpt-5.2",
+            input=list_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["input"][0]["type"] == "message"
+        assert data["input"][0]["role"] == "user"
+        assert data["input"][0]["content"] == "Hello"
+
+    def test_list_input_preserves_existing_type(self):
+        """Input items that already have type are not modified"""
+        config = PerplexityResponsesConfig()
+
+        list_input = [
+            {"type": "function_call_output", "call_id": "123", "output": "{}"},
+        ]
+
+        data = config.transform_responses_api_request(
+            model="openai/gpt-5.2",
+            input=list_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["input"][0]["type"] == "function_call_output"
+
     def test_get_complete_url(self):
         """Correct endpoint URL"""
         config = PerplexityResponsesConfig()
