@@ -1902,6 +1902,73 @@ def add_cache_control_to_content(
     return anthropic_content_element
 
 
+def _build_anthropic_assistant_content_from_ordered_blocks(
+    ordered_content_blocks: List[Any],
+    unique_tool_ids: Set[str],
+) -> List[AnthropicMessagesAssistantMessageValues]:
+    ordered_assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
+    skipped_tool_use_ids: Set[str] = set()
+
+    for block in ordered_content_blocks:
+        if not isinstance(block, dict):
+            continue
+
+        block_type = block.get("type", "")
+        if block_type == "text":
+            text = cast(str, block.get("text", ""))
+            if len(text) == 0:
+                continue
+
+            anthropic_message = AnthropicMessagesTextParam(type="text", text=text)
+            cached_message = add_cache_control_to_content(
+                anthropic_content_element=anthropic_message,
+                original_content_element=dict(block),
+            )
+            ordered_assistant_content.append(
+                cast(AnthropicMessagesTextParam, cached_message)
+            )
+            continue
+
+        if block_type in ("thinking", "redacted_thinking", "compaction"):
+            ordered_assistant_content.append(
+                cast(
+                    AnthropicMessagesAssistantMessageValues,
+                    copy.deepcopy(block),
+                )
+            )
+            continue
+
+        if block_type in ("tool_use", "server_tool_use"):
+            item_id = block.get("id")
+            if item_id:
+                if item_id in unique_tool_ids:
+                    skipped_tool_use_ids.add(item_id)
+                    continue
+                unique_tool_ids.add(item_id)
+
+            ordered_assistant_content.append(
+                cast(
+                    AnthropicMessagesAssistantMessageValues,
+                    copy.deepcopy(block),
+                )
+            )
+            continue
+
+        if isinstance(block_type, str) and block_type.endswith("_tool_result"):
+            tool_use_id = block.get("tool_use_id")
+            if tool_use_id and tool_use_id in skipped_tool_use_ids:
+                continue
+
+            ordered_assistant_content.append(
+                cast(
+                    AnthropicMessagesAssistantMessageValues,
+                    copy.deepcopy(block),
+                )
+            )
+
+    return ordered_assistant_content
+
+
 def _anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> Union[AnthropicMessagesImageParam, AnthropicMessagesDocumentParam]:
@@ -2482,15 +2549,31 @@ def anthropic_messages_pt(  # noqa: PLR0915
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
 
-            # Extract compaction_blocks from provider_specific_fields and add them first
+            _provider_specific_fields: Dict[str, Any] = {}
             _provider_specific_fields_raw = assistant_content_block.get(
                 "provider_specific_fields"
             )
             if isinstance(_provider_specific_fields_raw, dict):
-                _compaction_blocks = _provider_specific_fields_raw.get("compaction_blocks")
-                if _compaction_blocks and isinstance(_compaction_blocks, list):
-                    # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
-                    assistant_content.extend(_compaction_blocks)  # type: ignore
+                _provider_specific_fields = cast(
+                    Dict[str, Any], _provider_specific_fields_raw
+                )
+
+            _ordered_content_blocks = _provider_specific_fields.get(
+                "ordered_content_blocks"
+            )
+            if isinstance(_ordered_content_blocks, list):
+                assistant_content.extend(
+                    _build_anthropic_assistant_content_from_ordered_blocks(
+                        ordered_content_blocks=_ordered_content_blocks,
+                        unique_tool_ids=unique_tool_ids,
+                    )
+                )
+                msg_i += 1
+                continue
+
+            _compaction_blocks = _provider_specific_fields.get("compaction_blocks")
+            if _compaction_blocks and isinstance(_compaction_blocks, list):
+                assistant_content.extend(_compaction_blocks)  # type: ignore
 
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
 
@@ -2750,14 +2833,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 # Get web_search_results and tool_results from provider_specific_fields
                 # for server_tool_use reconstruction.
                 # Fixes: https://github.com/BerriAI/litellm/issues/17737
-                _provider_specific_fields_raw = assistant_content_block.get(
-                    "provider_specific_fields"
-                )
-                _provider_specific_fields: Dict[str, Any] = {}
-                if isinstance(_provider_specific_fields_raw, dict):
-                    _provider_specific_fields = cast(
-                        Dict[str, Any], _provider_specific_fields_raw
-                    )
                 _web_search_results = _provider_specific_fields.get(
                     "web_search_results"
                 )

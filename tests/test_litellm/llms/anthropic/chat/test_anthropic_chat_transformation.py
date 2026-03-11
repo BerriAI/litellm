@@ -34,7 +34,6 @@ def test_response_format_transformation_unit_test():
     assert result["input_schema"]["properties"] == {
         "agent_doing": {"title": "Agent Doing", "type": "string"}
     }
-    print(result)
 
 
 def test_calculate_usage():
@@ -435,6 +434,92 @@ def test_web_search_tool_result_in_provider_specific_fields():
     assert provider_fields["web_search_results"][0]["tool_use_id"] == "srvtoolu_provider_test"
 
 
+def test_transform_parsed_response_includes_ordered_content_blocks():
+    """
+    Interleaved Anthropic content should be preserved for request round-trips
+    without replay heuristics in the shared prompt-template layer.
+    """
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+
+    completion_response = {
+        "id": "msg_interleaved_ordered_blocks",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "First thought",
+                "signature": "sig_1",
+            },
+            {
+                "type": "text",
+                "text": "Here is the first result.",
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_ordered_1",
+                "name": "web_search",
+                "input": {"query": "search 1"},
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_ordered_1",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/1",
+                        "title": "Result 1",
+                    }
+                ],
+            },
+            {
+                "type": "tool_search_tool_result",
+                "tool_use_id": "srvtoolu_ordered_1",
+                "content": [{"type": "text", "text": "internal metadata"}],
+            },
+            {
+                "type": "thinking",
+                "thinking": "Second thought",
+                "signature": "sig_2",
+            },
+        ],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 50,
+            "output_tokens": 25,
+            "server_tool_use": {"web_search_requests": 1},
+        },
+    }
+
+    raw_response = httpx.Response(status_code=200, headers={})
+    model_response = ModelResponse()
+
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+    provider_fields = result.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert [block["type"] for block in provider_fields["ordered_content_blocks"]] == [
+        "thinking",
+        "text",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+    ]
+    assert provider_fields["ordered_content_blocks"][0]["signature"] == "sig_1"
+    assert provider_fields["ordered_content_blocks"][-1]["signature"] == "sig_2"
+
+
 def test_multiple_web_search_tool_results():
     """
     Test that multiple web_search_tool_result blocks are all extracted.
@@ -512,7 +597,6 @@ def test_map_tool_choice():
     result = config._map_tool_choice(tool_choice=tool_choice, parallel_tool_use=True)
     assert result is not None
     assert result["type"] == "none"
-    print(result)
 
 
 def test_map_tool_choice_string_auto():
@@ -845,8 +929,6 @@ def test_anthropic_structured_output_beta_header():
     )
 
     assert response is not None
-    print(f"response: {response}")
-    print(f"raw_request_headers: {response['raw_request_headers']}")
     assert (
         "structured-outputs-2025-11-13"
         in response["raw_request_headers"]["anthropic-beta"]

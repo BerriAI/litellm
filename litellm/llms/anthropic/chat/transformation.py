@@ -1,3 +1,4 @@
+import copy
 import json
 import re
 import time
@@ -1565,6 +1566,39 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             compaction_blocks,
         )
 
+    @staticmethod
+    def _extract_ordered_content_blocks(
+        completion_response: dict,
+    ) -> Optional[List[Any]]:
+        ordered_content_blocks: List[Any] = []
+
+        for content in completion_response.get("content", []):
+            if not isinstance(content, dict):
+                continue
+
+            content_type = content.get("type")
+            if content_type == "tool_search_tool_result":
+                continue
+
+            if content_type == "text":
+                if content.get("text"):
+                    ordered_content_blocks.append(copy.deepcopy(content))
+                continue
+
+            if content.get("thinking") is not None or content_type in (
+                "redacted_thinking",
+                "compaction",
+                "tool_use",
+                "server_tool_use",
+            ):
+                ordered_content_blocks.append(copy.deepcopy(content))
+                continue
+
+            if isinstance(content_type, str) and content_type.endswith("_tool_result"):
+                ordered_content_blocks.append(copy.deepcopy(content))
+
+        return ordered_content_blocks or None
+
     def calculate_usage(
         self,
         usage_object: dict,
@@ -1733,6 +1767,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
             container: Optional[Dict] = completion_response.get("container")
+            ordered_content_blocks = self._extract_ordered_content_blocks(
+                completion_response=completion_response
+            )
 
             provider_specific_fields: Dict[str, Any] = {
                 "citations": citations,
@@ -1748,6 +1785,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 provider_specific_fields["container"] = container
             if compaction_blocks is not None:
                 provider_specific_fields["compaction_blocks"] = compaction_blocks
+            if ordered_content_blocks is not None:
+                provider_specific_fields["ordered_content_blocks"] = (
+                    ordered_content_blocks
+                )
 
             _message = litellm.Message(
                 tool_calls=tool_calls,
