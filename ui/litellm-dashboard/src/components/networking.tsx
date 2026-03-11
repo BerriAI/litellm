@@ -6286,10 +6286,13 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   }
 };
 
-export const fetchMCPServers = async (accessToken: string) => {
+export const fetchMCPServers = async (accessToken: string, teamId?: string) => {
   try {
     // Construct base URL
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    if (teamId) {
+      url += `?team_id=${encodeURIComponent(teamId)}`;
+    }
 
     console.log("Fetching MCP servers from:", url);
 
@@ -6355,10 +6358,13 @@ export const fetchMCPServerHealth = async (accessToken: string, serverIds?: stri
   }
 };
 
-export const fetchMCPAccessGroups = async (accessToken: string) => {
+export const fetchMCPAccessGroups = async (accessToken: string, teamId?: string) => {
   try {
     // Construct base URL
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/access_groups` : `/v1/mcp/access_groups`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/access_groups` : `/v1/mcp/access_groups`;
+    if (teamId) {
+      url += `?team_id=${encodeURIComponent(teamId)}`;
+    }
 
     console.log("Fetching MCP access groups from:", url);
 

@@ -1324,6 +1324,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           value={form.getFieldValue("allowed_mcp_servers_and_groups")}
                           accessToken={accessToken}
                           placeholder="Select MCP servers or access groups (optional)"
+                          teamId={selectedCreateKeyTeam?.team_id}
                         />
                       </Form.Item>
 

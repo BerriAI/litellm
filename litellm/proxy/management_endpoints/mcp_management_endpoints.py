@@ -280,6 +280,94 @@ if MCP_AVAILABLE:
         allowed_routes = getattr(user_api_key_dict, "allowed_routes", None)
         return isinstance(allowed_routes, list) and len(allowed_routes) > 0
 
+    async def _verify_team_membership(
+        user_api_key_dict: UserAPIKeyAuth, team_id: str
+    ) -> None:
+        """Verify the caller is a member of the specified team or is an admin."""
+        if _user_has_admin_view(user_api_key_dict):
+            return
+
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+        if team_obj is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Team {team_id} not found"},
+            )
+
+        # Check if user is a member of the team
+        user_id = user_api_key_dict.user_id
+        is_member = False
+        for member in team_obj.members_with_roles or []:
+            member_user_id = getattr(member, "user_id", None)
+            if member_user_id == user_id:
+                is_member = True
+                break
+
+        if not is_member:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": f"User is not a member of team {team_id}"
+                },
+            )
+
+    async def _get_team_scoped_mcp_servers(
+        team_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> List[LiteLLM_MCPServerTable]:
+        """Return MCP servers allowed by the team + allow_all_keys servers."""
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.management_helpers.object_permission_utils import (
+            get_team_mcp_permissions,
+        )
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+
+        team_mcp = await get_team_mcp_permissions(team_obj) if team_obj else None
+        allow_all_ids = set(global_mcp_server_manager.get_allow_all_keys_server_ids())
+
+        if team_mcp is not None:
+            allowed_ids = set(team_mcp["mcp_servers"]) | allow_all_ids
+        else:
+            # Team has no MCP config - only allow_all_keys servers
+            allowed_ids = allow_all_ids
+
+        all_servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+        filtered = [s for s in all_servers if s.server_id in allowed_ids]
+        return _redact_mcp_credentials_list(filtered)
+
+    async def _get_team_scoped_access_groups(team_id: str) -> dict:
+        """Return access groups available to the specified team."""
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+
+        if team_obj is None or getattr(team_obj, "object_permission", None) is None:
+            return {"access_groups": []}
+
+        team_access_groups = team_obj.object_permission.mcp_access_groups or []
+        return {"access_groups": sorted(team_access_groups)}
+
     def _sanitize_mcp_server_for_virtual_key(
         mcp_server: LiteLLM_MCPServerTable,
     ) -> LiteLLM_MCPServerTable:
@@ -456,6 +544,10 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
     )
     async def get_mcp_access_groups(
+        team_id: Optional[str] = Query(
+            None,
+            description="Filter access groups by team. Caller must be a member of the team or an admin.",
+        ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
@@ -465,6 +557,11 @@ if MCP_AVAILABLE:
             global_mcp_server_manager,
         )
         from litellm.proxy.proxy_server import prisma_client
+
+        # If team_id is provided, return team-scoped access groups
+        if isinstance(team_id, str):
+            await _verify_team_membership(user_api_key_dict, team_id)
+            return await _get_team_scoped_access_groups(team_id)
 
         access_groups = set()
 
@@ -485,6 +582,18 @@ if MCP_AVAILABLE:
                         access_groups.update(server.mcp_access_groups)
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
+
+        # Filter for non-admins
+        from litellm.proxy.management_helpers.object_permission_utils import (
+            get_allowed_mcp_access_groups_for_user,
+        )
+
+        if prisma_client is not None:
+            allowed = await get_allowed_mcp_access_groups_for_user(
+                user_api_key_dict, prisma_client
+            )
+            if allowed is not None:
+                access_groups = access_groups & allowed
 
         # Convert to sorted list
         access_groups_list = sorted(list(access_groups))
@@ -561,6 +670,10 @@ if MCP_AVAILABLE:
         response_model=List[LiteLLM_MCPServerTable],
     )
     async def fetch_all_mcp_servers(
+        team_id: Optional[str] = Query(
+            None,
+            description="Filter MCP servers by team. Caller must be a member of the team or an admin.",
+        ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
@@ -570,6 +683,11 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
+
+        # If team_id is provided, verify membership and return team-scoped results
+        if isinstance(team_id, str):
+            await _verify_team_membership(user_api_key_dict, team_id)
+            return await _get_team_scoped_mcp_servers(team_id, user_api_key_dict)
 
         user_mcp_management_mode = _get_user_mcp_management_mode()
         is_restricted_virtual_key = _is_restricted_virtual_key_request(

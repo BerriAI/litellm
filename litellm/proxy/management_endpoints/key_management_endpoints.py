@@ -64,6 +64,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    validate_key_mcp_servers_against_team,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -637,6 +638,13 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             data_json["metadata"]["tags"] = data_json["tags"]
 
         data_json.pop("tags")
+
+    # Validate MCP server permissions against the key's team
+    await validate_key_mcp_servers_against_team(
+        object_permission=data.object_permission,
+        team_obj=team_table,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     data_json = await _set_object_permission(
         data_json=data_json,
@@ -1946,6 +1954,23 @@ async def update_key_fn(
             )
 
             # Set Management Endpoint Metadata Fields
+
+        # Validate MCP server permissions against the key's team on update
+        if data.object_permission is not None:
+            effective_team_id = data.team_id or existing_key_row.team_id
+            effective_team_obj = team_obj
+            if effective_team_obj is None and effective_team_id is not None:
+                effective_team_obj = await get_team_object(
+                    team_id=effective_team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+            await validate_key_mcp_servers_against_team(
+                object_permission=data.object_permission,
+                team_obj=effective_team_obj,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row

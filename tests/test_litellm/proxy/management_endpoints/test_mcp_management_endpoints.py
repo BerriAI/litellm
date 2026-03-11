@@ -1512,3 +1512,127 @@ class TestManagementPayloadValidation:
             assert len(result) == 1
             assert result[0]["server_id"] == "server-1"
             assert result[0]["status"] == "healthy"
+
+
+class TestTeamIdParam:
+    """Tests for team_id query param on MCP endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_mcp_servers_team_id_returns_team_scoped_results(self):
+        """team_id param returns only the team's allowed servers + allow_all_keys."""
+        mock_team = MagicMock()
+        mock_team.object_permission = MagicMock()
+        mock_team.object_permission.mcp_servers = ["server-1"]
+        mock_team.object_permission.mcp_access_groups = []
+        mock_team.object_permission.mcp_tool_permissions = {}
+        mock_team.members_with_roles = [MagicMock(user_id="user-1")]
+
+        admin_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin-1",
+        )
+
+        server_1 = generate_mock_mcp_server_db_record(server_id="server-1")
+        server_2 = generate_mock_mcp_server_db_record(server_id="server-2")
+        server_public = generate_mock_mcp_server_db_record(server_id="server-public")
+
+        mock_manager = MagicMock()
+        mock_manager.get_allow_all_keys_server_ids.return_value = ["server-public"]
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(
+            return_value=[server_1, server_2, server_public]
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._verify_team_membership",
+                AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                AsyncMock(return_value=mock_team),
+            ),
+            patch(
+                "litellm.proxy.management_helpers.object_permission_utils.get_team_mcp_permissions",
+                AsyncMock(return_value={"mcp_servers": ["server-1"], "mcp_access_groups": []}),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.user_api_key_cache",
+                MagicMock(),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(
+                team_id="team-1",
+                user_api_key_dict=admin_auth,
+            )
+
+            server_ids = {s.server_id for s in result}
+            assert "server-1" in server_ids
+            assert "server-public" in server_ids
+            assert "server-2" not in server_ids
+
+    @pytest.mark.asyncio
+    async def test_fetch_mcp_servers_team_id_non_member_rejected(self):
+        """team_id param with non-member user -> rejected."""
+        mock_team = MagicMock()
+        mock_team.members_with_roles = [MagicMock(user_id="other-user")]
+
+        non_member_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-test",
+            user_id="user-not-member",
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                AsyncMock(return_value=mock_team),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.user_api_key_cache",
+                MagicMock(),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                _verify_team_membership,
+            )
+
+            with pytest.raises(HTTPException) as exc:
+                await _verify_team_membership(non_member_auth, "team-1")
+            assert exc.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_fetch_mcp_servers_team_id_admin_bypasses_membership(self):
+        """Admin can use team_id param without being a team member."""
+        admin_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin-1",
+        )
+
+        # Should not raise for admin
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _verify_team_membership,
+        )
+
+        await _verify_team_membership(admin_auth, "team-1")
