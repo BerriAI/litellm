@@ -1618,7 +1618,57 @@ def completion(  # type: ignore # noqa: PLR0915
                 stream=stream,
             )
 
-        if custom_llm_provider == "azure":
+        if (
+            custom_llm_provider in litellm._custom_providers
+        ):  # Explicitly registered custom providers always take priority
+            # over built-in model-name or provider-name matching below.
+            # Get the Custom Handler
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
+
+            ## ROUTE LLM CALL ##
+            handler_fn = custom_chat_llm_router(
+                async_fn=acompletion, stream=stream, custom_llm=custom_handler
+            )
+
+            headers = headers or litellm.headers or {}
+
+            ## CALL FUNCTION
+            response = handler_fn(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                encoding=_get_encoding(),
+            )
+            if stream is True:
+                return CustomStreamWrapper(
+                    completion_stream=response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    logging_obj=logging,
+                )
+            return response
+
+        elif custom_llm_provider == "azure":
             # azure configs
             ## check dynamic params ##
             dynamic_params = False
@@ -4277,54 +4327,6 @@ def completion(  # type: ignore # noqa: PLR0915
             model_response.created = int(time.time())
             model_response.model = model
             response = model_response
-
-        elif (
-            custom_llm_provider in litellm._custom_providers
-        ):  # Assume custom LLM provider
-            # Get the Custom Handler
-            custom_handler: Optional[CustomLLM] = None
-            for item in litellm.custom_provider_map:
-                if item["provider"] == custom_llm_provider:
-                    custom_handler = item["custom_handler"]
-
-            if custom_handler is None:
-                raise LiteLLMUnknownProvider(
-                    model=model, custom_llm_provider=custom_llm_provider
-                )
-
-            ## ROUTE LLM CALL ##
-            handler_fn = custom_chat_llm_router(
-                async_fn=acompletion, stream=stream, custom_llm=custom_handler
-            )
-
-            headers = headers or litellm.headers or {}
-
-            ## CALL FUNCTION
-            response = handler_fn(
-                model=model,
-                messages=messages,
-                headers=headers,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                api_key=api_key,
-                api_base=api_base,
-                acompletion=acompletion,
-                logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                timeout=timeout,  # type: ignore
-                custom_prompt_dict=custom_prompt_dict,
-                client=client,  # pass AsyncOpenAI, OpenAI client
-                encoding=_get_encoding(),
-            )
-            if stream is True:
-                return CustomStreamWrapper(
-                    completion_stream=response,
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    logging_obj=logging,
-                )
 
         elif custom_llm_provider == "langgraph":
             # LangGraph - Agent Runtime Provider
