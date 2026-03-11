@@ -2493,74 +2493,257 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     assistant_content.extend(_compaction_blocks)  # type: ignore
 
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
+
+            # Check if tool_calls contain server tool calls (web search, etc.)
+            # If so, we need to interleave thinking blocks with tool call groups
+            # to preserve the original content block ordering.
+            # Fixes: https://github.com/BerriAI/litellm/issues/23047
+            assistant_tool_calls = assistant_content_block.get("tool_calls")
+            _has_server_tool_calls = False
+            if assistant_tool_calls is not None:
+                for _tc in assistant_tool_calls:
+                    _tc_id = (
+                        _tc.get("id")
+                        if isinstance(_tc, dict)
+                        else getattr(_tc, "id", None)
+                    )
+                    if _tc_id and isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_"):
+                        _has_server_tool_calls = True
+                        break
+
             if (
                 thinking_blocks is not None
-            ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
-                assistant_content.extend(thinking_blocks)
-            if "content" in assistant_content_block and isinstance(
-                assistant_content_block["content"], list
+                and _has_server_tool_calls
+                and isinstance(
+                    assistant_content_block.get("content", None), (str, type(None))
+                )
             ):
-                for m in assistant_content_block["content"]:
-                    # handle thinking blocks
-                    thinking_block = cast(str, m.get("thinking", ""))
-                    text_block = cast(str, m.get("text", ""))
-                    if (
-                        m.get("type", "") == "thinking" and len(thinking_block) > 0
-                    ):  # don't pass empty text blocks. anthropic api raises errors.
-                        anthropic_message: Union[
-                            ChatCompletionThinkingBlock,
-                            AnthropicMessagesTextParam,
-                        ] = cast(ChatCompletionThinkingBlock, m)
-                        assistant_content.append(anthropic_message)
-                    # handle text
-                    elif (
-                        m.get("type", "") == "text" and len(text_block) > 0
-                    ):  # don't pass empty text blocks. anthropic api raises errors.
-                        anthropic_message = AnthropicMessagesTextParam(
-                            type="text", text=text_block
-                        )
-                        _cached_message = add_cache_control_to_content(
-                            anthropic_content_element=anthropic_message,
-                            original_content_element=dict(m),
-                        )
+                # INTERLEAVED MODE: When we have both thinking blocks and server
+                # tool calls (e.g. web search), Anthropic's original response
+                # interleaves them: [thinking_1, server_tool_use_1, result_1,
+                # thinking_2, text, server_tool_use_2, result_2, ...].
+                # We must preserve this interleaved order because Anthropic
+                # verifies thinking block signatures based on position.
 
-                        assistant_content.append(
-                            cast(AnthropicMessagesTextParam, _cached_message)
-                        )
-                    # handle server_tool_use blocks (tool search, web search, etc.)
-                    # Pass through as-is since these are Anthropic-native content types
-                    elif m.get("type", "") == "server_tool_use":
-                        assistant_content.append(m)  # type: ignore
-                    # handle all *_tool_result blocks (tool_search_tool_result,
-                    # web_search_tool_result, bash_code_execution_tool_result, etc.)
-                    # Pass through as-is since these are Anthropic-native content types
-                    elif m.get("type", "").endswith("_tool_result"):
-                        assistant_content.append(m)  # type: ignore
-            elif (
-                "content" in assistant_content_block
-                and isinstance(assistant_content_block["content"], str)
-                and assistant_content_block[
-                    "content"
-                ]  # don't pass empty text blocks. anthropic api raises errors.
-            ):
-                _anthropic_text_content_element = AnthropicMessagesTextParam(
-                    type="text",
-                    text=assistant_content_block["content"],
+                # Build the tool call groups (server_tool_use + its result)
+                _provider_specific_fields_raw_tc = assistant_content_block.get(
+                    "provider_specific_fields"
+                )
+                _provider_specific_fields_tc: Dict[str, Any] = {}
+                if isinstance(_provider_specific_fields_raw_tc, dict):
+                    _provider_specific_fields_tc = cast(
+                        Dict[str, Any], _provider_specific_fields_raw_tc
+                    )
+                _web_search_results_tc = _provider_specific_fields_tc.get(
+                    "web_search_results"
+                )
+                _tool_results_tc = _provider_specific_fields_tc.get("tool_results")
+                tool_invoke_results = convert_to_anthropic_tool_invoke(
+                    assistant_tool_calls,  # type: ignore
+                    web_search_results=_web_search_results_tc,
+                    tool_results=_tool_results_tc,
                 )
 
-                _content_element = add_cache_control_to_content(
-                    anthropic_content_element=_anthropic_text_content_element,
-                    original_content_element=dict(assistant_content_block),
+                # Group tool invoke results into (server_tool_use, result) pairs
+                # and separate regular tool_use blocks
+                server_tool_groups: List[List[Any]] = []
+                regular_tool_uses: List[Any] = []
+                _current_group: List[Any] = []
+                for item in tool_invoke_results:
+                    item_type = (
+                        item.get("type", "")
+                        if isinstance(item, dict)
+                        else getattr(item, "type", "")
+                    )
+                    if item_type == "server_tool_use":
+                        if _current_group:
+                            server_tool_groups.append(_current_group)
+                        _current_group = [item]
+                    elif item_type.endswith("_tool_result"):
+                        _current_group.append(item)
+                    elif item_type == "tool_use":
+                        regular_tool_uses.append(item)
+                    else:
+                        _current_group.append(item)
+                if _current_group:
+                    server_tool_groups.append(_current_group)
+
+                # Build the text block if content is a non-empty string
+                text_element = None
+                if (
+                    isinstance(assistant_content_block.get("content"), str)
+                    and assistant_content_block["content"]
+                ):
+                    _anthropic_text_content_element = AnthropicMessagesTextParam(
+                        type="text",
+                        text=assistant_content_block["content"],
+                    )
+                    _content_element = add_cache_control_to_content(
+                        anthropic_content_element=_anthropic_text_content_element,
+                        original_content_element=dict(assistant_content_block),
+                    )
+                    if "cache_control" in _content_element:
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
+                    text_element = _anthropic_text_content_element
+
+                # Interleave: each thinking block precedes its server tool group.
+                # Pattern: thinking[0], group[0], thinking[1], group[1], ...
+                # Any remaining thinking blocks (after all groups) go before text.
+                # Any remaining groups (after all thinking blocks) go after.
+                tb_idx = 0
+                grp_idx = 0
+                num_tb = len(thinking_blocks) if thinking_blocks else 0
+                num_grp = len(server_tool_groups)
+
+                while tb_idx < num_tb or grp_idx < num_grp:
+                    if tb_idx < num_tb and grp_idx < num_grp:
+                        # Emit thinking block then its tool group
+                        assistant_content.append(thinking_blocks[tb_idx])
+                        tb_idx += 1
+                        for block in server_tool_groups[grp_idx]:
+                            item_id = (
+                                block.get("id")
+                                if isinstance(block, dict)
+                                else getattr(block, "id", None)
+                            )
+                            if item_id and item_id in unique_tool_ids:
+                                continue
+                            if item_id:
+                                unique_tool_ids.add(item_id)
+                            assistant_content.append(
+                                cast(AnthropicMessagesAssistantMessageValues, block)
+                            )
+                        grp_idx += 1
+                    elif tb_idx < num_tb:
+                        # More thinking blocks than tool groups - emit before text
+                        assistant_content.append(thinking_blocks[tb_idx])
+                        tb_idx += 1
+                    else:
+                        # More tool groups than thinking blocks - emit remaining
+                        for block in server_tool_groups[grp_idx]:
+                            item_id = (
+                                block.get("id")
+                                if isinstance(block, dict)
+                                else getattr(block, "id", None)
+                            )
+                            if item_id and item_id in unique_tool_ids:
+                                continue
+                            if item_id:
+                                unique_tool_ids.add(item_id)
+                            assistant_content.append(
+                                cast(AnthropicMessagesAssistantMessageValues, block)
+                            )
+                        grp_idx += 1
+
+                # Add text block (if any)
+                if text_element is not None:
+                    assistant_content.append(text_element)
+
+                # Add regular (non-server) tool calls at the end
+                for item in regular_tool_uses:
+                    item_id = (
+                        item.get("id")
+                        if isinstance(item, dict)
+                        else getattr(item, "id", None)
+                    )
+                    if item_id and item_id in unique_tool_ids:
+                        continue
+                    if item_id:
+                        unique_tool_ids.add(item_id)
+                    assistant_content.append(
+                        cast(AnthropicMessagesAssistantMessageValues, item)
+                    )
+
+                # Mark tool_calls as already processed so they are not added again
+                assistant_tool_calls = None
+
+            else:
+                # SEQUENTIAL MODE: No server tool calls, or no thinking blocks,
+                # or content is a list. Use the original sequential approach.
+
+                # When content is a list, check if it already contains thinking
+                # blocks inline. If so, skip prepending thinking_blocks to avoid
+                # duplication and preserve the original interleaved order.
+                # Fixes the gap where list-content messages bypass INTERLEAVED
+                # MODE and still get thinking blocks prepended out of order.
+                _content_is_list = "content" in assistant_content_block and isinstance(
+                    assistant_content_block["content"], list
                 )
+                _list_has_thinking = False
+                if _content_is_list:
+                    for _item in assistant_content_block["content"]:
+                        if isinstance(_item, dict) and _item.get("type") in ("thinking", "redacted_thinking"):
+                            _list_has_thinking = True
+                            break
 
-                if "cache_control" in _content_element:
-                    _anthropic_text_content_element["cache_control"] = _content_element[
-                        "cache_control"
-                    ]
+                if (
+                    thinking_blocks is not None
+                    and not _list_has_thinking
+                ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
+                    assistant_content.extend(thinking_blocks)
+                if _content_is_list:
+                    for m in assistant_content_block["content"]:
+                        # handle thinking blocks
+                        thinking_block = cast(str, m.get("thinking", ""))
+                        text_block = cast(str, m.get("text", ""))
+                        if (
+                            m.get("type", "") == "thinking" and len(thinking_block) > 0
+                        ):  # don't pass empty text blocks. anthropic api raises errors.
+                            anthropic_message: Union[
+                                ChatCompletionThinkingBlock,
+                                AnthropicMessagesTextParam,
+                            ] = cast(ChatCompletionThinkingBlock, m)
+                            assistant_content.append(anthropic_message)
+                        # handle text
+                        elif (
+                            m.get("type", "") == "text" and len(text_block) > 0
+                        ):  # don't pass empty text blocks. anthropic api raises errors.
+                            anthropic_message = AnthropicMessagesTextParam(
+                                type="text", text=text_block
+                            )
+                            _cached_message = add_cache_control_to_content(
+                                anthropic_content_element=anthropic_message,
+                                original_content_element=dict(m),
+                            )
 
-                assistant_content.append(_anthropic_text_content_element)
+                            assistant_content.append(
+                                cast(AnthropicMessagesTextParam, _cached_message)
+                            )
+                        # handle server_tool_use blocks (tool search, web search, etc.)
+                        # Pass through as-is since these are Anthropic-native content types
+                        elif m.get("type", "") == "server_tool_use":
+                            assistant_content.append(m)  # type: ignore
+                        # handle all *_tool_result blocks (tool_search_tool_result,
+                        # web_search_tool_result, bash_code_execution_tool_result, etc.)
+                        # Pass through as-is since these are Anthropic-native content types
+                        elif m.get("type", "").endswith("_tool_result"):
+                            assistant_content.append(m)  # type: ignore
+                elif (
+                    "content" in assistant_content_block
+                    and isinstance(assistant_content_block["content"], str)
+                    and assistant_content_block[
+                        "content"
+                    ]  # don't pass empty text blocks. anthropic api raises errors.
+                ):
+                    _anthropic_text_content_element = AnthropicMessagesTextParam(
+                        type="text",
+                        text=assistant_content_block["content"],
+                    )
 
-            assistant_tool_calls = assistant_content_block.get("tool_calls")
+                    _content_element = add_cache_control_to_content(
+                        anthropic_content_element=_anthropic_text_content_element,
+                        original_content_element=dict(assistant_content_block),
+                    )
+
+                    if "cache_control" in _content_element:
+                        _anthropic_text_content_element["cache_control"] = _content_element[
+                            "cache_control"
+                        ]
+
+                    assistant_content.append(_anthropic_text_content_element)
+
             if (
                 assistant_tool_calls is not None
             ):  # support assistant tool invoke conversion
