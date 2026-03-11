@@ -86,6 +86,37 @@ class VantageLogger(FocusLogger):
             resolved_token[:4] + "***" if resolved_token and len(resolved_token) > 4 else "***",
         )
 
+    async def initialize_focus_export_job(self) -> None:
+        """Override to use the Vantage-specific pod lock key.
+
+        Without this, VantageLogger and FocusLogger would compete for the
+        same ``FOCUS_USAGE_DATA_JOB_NAME`` lock, causing one to silently
+        skip its export cycle when both are configured simultaneously.
+        """
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        pod_lock_manager = None
+        if proxy_logging_obj is not None:
+            writer = getattr(proxy_logging_obj, "db_spend_update_writer", None)
+            if writer is not None:
+                pod_lock_manager = getattr(writer, "pod_lock_manager", None)
+
+        if pod_lock_manager and pod_lock_manager.redis_cache:
+            acquired = await pod_lock_manager.acquire_lock(
+                cronjob_id=VANTAGE_USAGE_DATA_JOB_NAME
+            )
+            if not acquired:
+                verbose_logger.debug("Vantage export: unable to acquire pod lock")
+                return
+            try:
+                await self._run_scheduled_export()
+            finally:
+                await pod_lock_manager.release_lock(
+                    cronjob_id=VANTAGE_USAGE_DATA_JOB_NAME
+                )
+        else:
+            await self._run_scheduled_export()
+
     @staticmethod
     async def init_vantage_background_job(
         scheduler: AsyncIOScheduler,

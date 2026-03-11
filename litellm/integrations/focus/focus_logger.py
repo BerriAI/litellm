@@ -53,7 +53,15 @@ class FocusLogger(CustomLogger):
             if interval_seconds is not None
             else os.getenv("FOCUS_INTERVAL_SECONDS")
         )
-        self.interval_seconds = int(raw_interval) if raw_interval is not None else None
+        self.interval_seconds: Optional[int] = None
+        if raw_interval is not None:
+            try:
+                self.interval_seconds = int(raw_interval)
+            except (ValueError, TypeError):
+                verbose_logger.warning(
+                    "Invalid FOCUS_INTERVAL_SECONDS value: %s, ignoring",
+                    raw_interval,
+                )
         env_prefix = os.getenv("FOCUS_PREFIX")
         self.prefix: str = (
             prefix if prefix is not None else (env_prefix if env_prefix else "focus_exports")

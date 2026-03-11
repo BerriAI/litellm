@@ -5,7 +5,7 @@ Vantage endpoint types for LiteLLM Proxy
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class VantageInitRequest(BaseModel):
@@ -19,6 +19,13 @@ class VantageInitRequest(BaseModel):
         default="https://api.vantage.sh",
         description="Vantage API base URL (default: https://api.vantage.sh)",
     )
+
+    @field_validator("api_key", "integration_token")
+    @classmethod
+    def must_be_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
 
 
 class VantageInitResponse(BaseModel):
