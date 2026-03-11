@@ -22,19 +22,9 @@ import {
   storeMCPOAuthUserCredential,
 } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import { extractErrorMessage } from "@/utils/errorUtils";
 
 export type UserMcpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
-
-function extractErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === "object") {
-    const e = err as Record<string, unknown>;
-    if (typeof e.detail === "string") return e.detail;
-    if (typeof e.message === "string") return e.message;
-    return JSON.stringify(err);
-  }
-  return String(err);
-}
 
 interface UseUserMcpOAuthFlowOptions {
   accessToken: string;
@@ -89,8 +79,11 @@ const genChallenge = async (verifier: string) => {
 
 const setStorage = (key: string, value: string) => {
   try {
+    // Use sessionStorage only — do not write to localStorage.
+    // The flow state may contain the LiteLLM access token; writing it to
+    // localStorage would persist it across browser sessions and make it
+    // readable by any injected script (XSS).
     window.sessionStorage.setItem(key, value);
-    window.localStorage.setItem(key, value);
   } catch (_) {}
 };
 

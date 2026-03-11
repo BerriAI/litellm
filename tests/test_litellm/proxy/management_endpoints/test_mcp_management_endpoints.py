@@ -1854,3 +1854,183 @@ class TestValidateMCPRequiredFields:
                 _validate_mcp_required_fields(payload)
         assert exc_info.value.status_code == 500
         assert "source_Url" in str(exc_info.value.detail)
+
+
+# ── OAuth user credential endpoint unit tests ──────────────────────────────────
+
+
+def _make_user_auth(user_id: str = "user-abc") -> "UserAPIKeyAuth":
+    return UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id=user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+
+def _make_prisma_client():
+    """Return a minimal mock PrismaClient accepted by get_prisma_client_or_throw."""
+    client = MagicMock()
+    client.db = MagicMock()
+    return client
+
+
+@pytest.mark.asyncio
+async def test_store_mcp_oauth_user_credential_returns_status():
+    """store_mcp_oauth_user_credential persists the token and echoes back status."""
+    from litellm.proxy._types import (
+        MCPOAuthUserCredentialRequest,
+        MCPOAuthUserCredentialStatus,
+    )
+
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        store_mcp_oauth_user_credential,
+    )
+
+    server_id = "srv-1"
+    user_id = "user-123"
+    stored_payload = {
+        "type": "oauth2",
+        "access_token": "tok",
+        "expires_at": "2099-01-01T00:00:00+00:00",
+        "connected_at": "2026-01-01T00:00:00+00:00",
+        "server_id": server_id,
+    }
+
+    mock_prisma = _make_prisma_client()
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=mock_prisma,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            new=AsyncMock(return_value=generate_mock_mcp_server_db_record(server_id=server_id)),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=AsyncMock(return_value=stored_payload),
+        ),
+    ):
+        result = await store_mcp_oauth_user_credential(
+            server_id=server_id,
+            payload=MCPOAuthUserCredentialRequest(
+                access_token="tok",
+                expires_in=3600,
+            ),
+            user_api_key_dict=_make_user_auth(user_id),
+        )
+
+    assert isinstance(result, MCPOAuthUserCredentialStatus)
+    assert result.has_credential is True
+    assert result.server_id == server_id
+    # expires_at should come from the stored record, not be recomputed
+    assert result.expires_at == "2099-01-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_oauth_user_credential_only_deletes_oauth():
+    """delete_mcp_oauth_user_credential only deletes OAuth2 credentials, not BYOK."""
+    from litellm.proxy._types import MCPOAuthUserCredentialStatus
+
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_oauth_user_credential,
+    )
+
+    server_id = "srv-2"
+    user_id = "user-456"
+    delete_mock = AsyncMock(return_value=None)
+
+    # When get_user_oauth_credential returns None (no OAuth cred), delete should NOT be called.
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            new=delete_mock,
+        ),
+    ):
+        result = await delete_mcp_oauth_user_credential(
+            server_id=server_id,
+            user_api_key_dict=_make_user_auth(user_id),
+        )
+
+    delete_mock.assert_not_called()
+    assert isinstance(result, MCPOAuthUserCredentialStatus)
+    assert result.has_credential is False
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_user_credentials_batch_server_fetch():
+    """list_mcp_user_credentials uses a single batch DB call, not N+1 queries."""
+    from litellm.proxy._types import MCPUserCredentialListItem
+
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        list_mcp_user_credentials,
+    )
+
+    user_id = "user-789"
+    server_id = "srv-3"
+    stored_creds = [
+        {
+            "type": "oauth2",
+            "access_token": "tok",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "connected_at": "2026-01-01T00:00:00+00:00",
+            "server_id": server_id,
+        }
+    ]
+    mock_server = generate_mock_mcp_server_db_record(server_id=server_id, alias="My Server")
+    # get_mcp_servers (batch) should be called once; get_mcp_server (single) must not be called.
+    batch_mock = AsyncMock(return_value=[mock_server])
+    single_mock = AsyncMock(return_value=mock_server)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.list_user_oauth_credentials",
+            new=AsyncMock(return_value=stored_creds),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_servers",
+            new=batch_mock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            new=single_mock,
+        ),
+    ):
+        result = await list_mcp_user_credentials(
+            user_api_key_dict=_make_user_auth(user_id),
+        )
+
+    batch_mock.assert_called_once()
+    single_mock.assert_not_called()
+    assert len(result) == 1
+    assert isinstance(result[0], MCPUserCredentialListItem)
+    assert result[0].server_id == server_id
+    assert result[0].alias == "My Server"
+    # expires_at should always be the raw timestamp (not set to None when expired)
+    assert result[0].expires_at == "2099-01-01T00:00:00+00:00"

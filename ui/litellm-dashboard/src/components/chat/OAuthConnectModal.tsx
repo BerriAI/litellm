@@ -66,11 +66,12 @@ export const OAuthConnectModal: React.FC<OAuthConnectModalProps> = ({
     scopes,
     onSuccess: () => {
       onSuccess(server.server_id);
-      handleClose();
+      // handleClose is invoked by the useEffect below to avoid calling it twice.
     },
   });
 
-  // If we return from OAuth callback, close the modal so the user isn't stuck.
+  // Close the modal whenever the flow reaches "success" — covers both the
+  // in-page path (status set directly) and the post-redirect resume path.
   useEffect(() => {
     if (status === "success") {
       handleClose();

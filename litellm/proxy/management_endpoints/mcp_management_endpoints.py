@@ -36,6 +36,11 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 
+try:
+    from prisma.errors import RecordNotFoundError
+except ImportError:
+    RecordNotFoundError = Exception  # type: ignore
+
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
@@ -84,6 +89,7 @@ if MCP_AVAILABLE:
         delete_user_credential,
         get_all_mcp_servers_for_user,
         get_mcp_server,
+        get_mcp_servers,
         get_mcp_submissions,
         get_user_oauth_credential,
         list_user_oauth_credentials,
@@ -1427,14 +1433,11 @@ if MCP_AVAILABLE:
             expires_in=payload.expires_in,
             scopes=payload.scopes,
         )
-        from datetime import timedelta
-        from datetime import timezone as _tz
-
-        expires_at: Optional[str] = None
-        if payload.expires_in is not None:
-            expires_at = (
-                datetime.now(_tz.utc) + timedelta(seconds=payload.expires_in)
-            ).isoformat()
+        # Read back the persisted record so the response reflects the stored
+        # expires_at rather than recomputing it here (which could diverge by
+        # milliseconds or if the storage logic ever adds a grace period).
+        stored = await get_user_oauth_credential(prisma_client, user_id, server_id)
+        expires_at: Optional[str] = stored.get("expires_at") if stored else None
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=True,
@@ -1463,10 +1466,15 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        try:
-            await delete_user_credential(prisma_client, user_id, server_id)
-        except Exception:
-            pass  # Already gone
+        # Only delete if the stored credential is actually an OAuth2 token.
+        # This prevents accidentally deleting a BYOK credential if one exists
+        # for the same (user_id, server_id) pair.
+        cred_to_delete = await get_user_oauth_credential(prisma_client, user_id, server_id)
+        if cred_to_delete is not None:
+            try:
+                await delete_user_credential(prisma_client, user_id, server_id)
+            except RecordNotFoundError:
+                pass  # Already gone — treat as a successful delete
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=False,
@@ -1485,8 +1493,6 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """Return credential status (has_credential, expiry) without exposing the token."""
-        from datetime import timezone as _tz
-
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
@@ -1505,10 +1511,8 @@ if MCP_AVAILABLE:
         is_expired = False
         if expires_at:
             try:
-                from datetime import datetime as _dt
-
-                exp = _dt.fromisoformat(expires_at)
-                is_expired = exp < _dt.now(_tz.utc)
+                exp = datetime.fromisoformat(expires_at)
+                is_expired = exp < datetime.now(timezone.utc)
             except Exception:
                 pass
         return MCPOAuthUserCredentialStatus(
@@ -1530,8 +1534,6 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """Return all servers the calling user has connected via OAuth2."""
-        from datetime import timezone as _tz
-
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
@@ -1544,13 +1546,12 @@ if MCP_AVAILABLE:
         oauth_creds = await list_user_oauth_credentials(prisma_client, user_id)
         if not oauth_creds:
             return []
-        # Fetch server metadata for display names
+        # Fetch server metadata for display names — single batch query instead of N+1.
         server_ids = [c["server_id"] for c in oauth_creds]
-        servers = {}
-        for sid in server_ids:
-            srv = await get_mcp_server(prisma_client, sid)
-            if srv is not None:
-                servers[sid] = srv
+        servers = {
+            srv.server_id: srv
+            for srv in await get_mcp_servers(prisma_client, server_ids)
+        }
         items: List[MCPUserCredentialListItem] = []
         for cred in oauth_creds:
             sid = cred["server_id"]
@@ -1559,9 +1560,7 @@ if MCP_AVAILABLE:
             is_expired = False
             if expires_at:
                 try:
-                    from datetime import datetime as _dt
-
-                    is_expired = _dt.fromisoformat(expires_at) < _dt.now(_tz.utc)
+                    is_expired = datetime.fromisoformat(expires_at) < datetime.now(timezone.utc)
                 except Exception:
                     pass
             items.append(
@@ -1571,7 +1570,7 @@ if MCP_AVAILABLE:
                     alias=getattr(srv, "alias", None) if srv else None,
                     credential_type="oauth2",
                     has_credential=True,
-                    expires_at=None if is_expired else expires_at,
+                    expires_at=expires_at,  # always pass the raw timestamp; client computes expiry state
                     connected_at=cred.get("connected_at"),
                 )
             )

@@ -9600,7 +9600,17 @@ export const storeMCPOAuthUserCredential = async (
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error((err as { detail?: { error?: string } })?.detail?.error || "Failed to store OAuth credential");
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      Array.isArray(detail)
+        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
+        : typeof detail === "string"
+          ? detail
+          : detail && typeof (detail as Record<string, unknown>).error === "string"
+            ? (detail as Record<string, unknown>).error as string
+            : undefined;
+    throw new Error(detailMsg || "Failed to store OAuth credential");
   }
   return response.json();
 };
@@ -9618,7 +9628,17 @@ export const deleteMCPOAuthUserCredential = async (
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error((err as { detail?: { error?: string } })?.detail?.error || "Failed to revoke OAuth credential");
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      Array.isArray(detail)
+        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
+        : typeof detail === "string"
+          ? detail
+          : detail && typeof (detail as Record<string, unknown>).error === "string"
+            ? (detail as Record<string, unknown>).error as string
+            : undefined;
+    throw new Error(detailMsg || "Failed to revoke OAuth credential");
   }
   return response.json();
 };
