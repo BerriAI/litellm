@@ -166,3 +166,63 @@ def create_config_class(provider: SimpleProviderConfig):
             return provider.slug
 
     return JSONProviderConfig
+
+
+_responses_config_cache: dict = {}
+
+
+def create_responses_config_class(provider: SimpleProviderConfig):
+    """Generate a Responses API config class dynamically from JSON configuration.
+
+    Parallel to create_config_class() but for /v1/responses endpoints.
+    Classes are cached per provider slug to avoid regeneration on every request.
+    """
+    if provider.slug in _responses_config_cache:
+        return _responses_config_cache[provider.slug]
+
+    from litellm.llms.openai_like.responses.transformation import (
+        OpenAILikeResponsesConfig,
+    )
+    from litellm.types.router import GenericLiteLLMParams
+
+    class JSONProviderResponsesConfig(OpenAILikeResponsesConfig):
+        @property
+        def custom_llm_provider(self):  # type: ignore[override]
+            return provider.slug
+
+        def validate_environment(
+            self,
+            headers: dict,
+            model: str,
+            litellm_params: Optional[GenericLiteLLMParams],
+        ) -> dict:
+            litellm_params = litellm_params or GenericLiteLLMParams()
+            api_key = (
+                litellm_params.api_key
+                or get_secret_str(provider.api_key_env)
+            )
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            return headers
+
+        def get_complete_url(
+            self,
+            api_base: Optional[str],
+            litellm_params: dict,
+        ) -> str:
+            if not api_base:
+                if provider.api_base_env:
+                    api_base = get_secret_str(provider.api_base_env)
+                if not api_base:
+                    api_base = provider.base_url
+
+            if api_base is None:
+                raise ValueError(
+                    f"api_base is required for provider {provider.slug}"
+                )
+
+            api_base = api_base.rstrip("/")
+            return f"{api_base}/responses"
+
+    _responses_config_cache[provider.slug] = JSONProviderResponsesConfig
+    return JSONProviderResponsesConfig
