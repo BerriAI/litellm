@@ -196,6 +196,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
 
         # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param

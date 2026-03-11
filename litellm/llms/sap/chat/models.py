@@ -143,7 +143,7 @@ class GroundingSearchConfig(BaseModel):
 
     @model_validator(mode='after')
     def validate_max_chunk_count_and_max_document_count(self):
-        if self.max_chunk_count and self.max_document_count:
+        if self.max_chunk_count is not None and self.max_document_count is not None:
             raise ValueError("Cannot specify both maxChunkCount and maxDocumentCount.")
         return self
 

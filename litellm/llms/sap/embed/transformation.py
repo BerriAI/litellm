@@ -49,8 +49,8 @@ class EmbeddingModel(BaseModel):
     name: str
     version: str = "latest"
     params: dict = Field(default_factory=dict)
-    timeout: int = Field(default=600, ge=1, le=600)
-    max_retries: int = Field(default=2, ge=0, le=5)
+    timeout: Optional[int] = Field(default=None, ge=1, le=600)
+    max_retries: Optional[int] = Field(default=None, ge=0, le=5)
 
 class EmbeddingsModelConfig(BaseModel):
     model: EmbeddingModel
@@ -160,6 +160,10 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         model_dict["name"] = model
         model_dict["version"] = optional_params.get("version", "latest")
         model_dict["params"] = optional_params.get("parameters", {})
+        if optional_params.get("timeout", None):
+            model_dict["timeout"] = optional_params.get("timeout")
+        if optional_params.get("max_retries", None):
+            model_dict["max_retries"] = optional_params.get("max_retries")
         input_dict = {"text": input}
         if optional_params.get("type"):
             input_dict["type"] = optional_params.get("type")
