@@ -65,7 +65,7 @@ MODEL_CONFIGS = [
             "us-west-2",
         ],
         262144,
-        262144,
+        65536,
     ),
     (
         "qwen.qwen3-coder-next",
@@ -158,10 +158,38 @@ class TestModelSpecificFeatures:
         assert model_info["max_output_tokens"] == 8192
 
     def test_moonshotai_kimi_k2_5_context_window(self):
-        """Moonshot AI Kimi K2.5 has 256K context window"""
+        """Moonshot AI Kimi K2.5 has 256K input, 64K output"""
         model_info = get_model_info("bedrock/us-east-1/moonshotai.kimi-k2.5")
         assert model_info["max_input_tokens"] == 262144
-        assert model_info["max_output_tokens"] == 262144
+        assert model_info["max_output_tokens"] == 65536
+
+    def test_moonshotai_kimi_k2_5_output_less_than_context_window(self):
+        """Regression test for #22478: max_output_tokens must be < context window.
+
+        Bedrock enforces input_tokens + max_tokens <= context_window, so
+        max_output_tokens cannot equal the full 262144 context window.
+        """
+        for region in [
+            "us-east-1",
+            "us-east-2",
+            "us-west-2",
+            "ap-northeast-1",
+            "ap-south-1",
+        ]:
+            model_info = get_model_info(f"bedrock/{region}/moonshotai.kimi-k2.5")
+            assert model_info["max_output_tokens"] == 65536, (
+                f"bedrock/{region}/moonshotai.kimi-k2.5 max_output_tokens should be "
+                f"65536, got {model_info['max_output_tokens']}"
+            )
+            assert model_info["max_output_tokens"] < model_info["max_input_tokens"], (
+                f"max_output_tokens ({model_info['max_output_tokens']}) must be less "
+                f"than max_input_tokens ({model_info['max_input_tokens']})"
+            )
+
+        # Also check the bare model entry (bedrock_converse provider)
+        bare_info = get_model_info("moonshotai.kimi-k2.5")
+        assert bare_info["max_output_tokens"] == 65536
+        assert bare_info["max_input_tokens"] == 262144
 
     def test_qwen3_coder_next_context_window(self):
         """Qwen3 Coder Next has 256K input, 8K output"""
