@@ -56,21 +56,25 @@ class FocusVantageDestination(FocusDestination):
             verbose_logger.debug("Vantage destination: empty content, skipping upload")
             return
 
-        # Check both size and row-count limits before single-shot upload
-        lines = content.split(b"\n")
-        data_line_count = sum(1 for line in lines[1:] if line.strip())
-        within_limits = (
-            len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD
-            and data_line_count <= VANTAGE_MAX_ROWS_PER_UPLOAD
-        )
-        if within_limits:
-            await self._upload_csv(content, filename)
-            return
+        # Reuse a single HTTP client for the entire deliver() call
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # Check both size and row-count limits before single-shot upload
+            lines = content.split(b"\n")
+            data_line_count = sum(1 for line in lines[1:] if line.strip())
+            within_limits = (
+                len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD
+                and data_line_count <= VANTAGE_MAX_ROWS_PER_UPLOAD
+            )
+            if within_limits:
+                await self._upload_csv(client, content, filename)
+                return
 
-        # Otherwise split into batches respecting both limits
-        await self._upload_batched(content, filename)
+            # Otherwise split into batches respecting both limits
+            await self._upload_batched(client, content, filename)
 
-    async def _upload_csv(self, csv_bytes: bytes, filename: str) -> None:
+    async def _upload_csv(
+        self, client: httpx.AsyncClient, csv_bytes: bytes, filename: str
+    ) -> None:
         url = (
             f"{self.base_url}/v2/integrations/"
             f"{self.integration_token}/costs.csv"
@@ -79,13 +83,12 @@ class FocusVantageDestination(FocusDestination):
             "Authorization": f"Bearer {self.api_key}",
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                url,
-                headers=headers,
-                files={"file": (filename, csv_bytes, "text/csv")},
-            )
-            response.raise_for_status()
+        response = await client.post(
+            url,
+            headers=headers,
+            files={"file": (filename, csv_bytes, "text/csv")},
+        )
+        response.raise_for_status()
 
         verbose_logger.debug(
             "Vantage destination: uploaded %d bytes (%s)",
@@ -93,7 +96,9 @@ class FocusVantageDestination(FocusDestination):
             filename,
         )
 
-    async def _upload_batched(self, csv_bytes: bytes, filename: str) -> None:
+    async def _upload_batched(
+        self, client: httpx.AsyncClient, csv_bytes: bytes, filename: str
+    ) -> None:
         """Split the CSV into batches and upload each."""
         lines = csv_bytes.split(b"\n")
         header = lines[0]
@@ -106,14 +111,17 @@ class FocusVantageDestination(FocusDestination):
 
             # If a single batch still exceeds 2 MB, split further by size
             if len(batch_csv) > VANTAGE_MAX_BYTES_PER_UPLOAD:
-                await self._upload_size_limited(header, batch_lines, filename, batch_num)
+                await self._upload_size_limited(
+                    client, header, batch_lines, filename, batch_num
+                )
             else:
                 batch_filename = f"{filename}.part{batch_num}"
-                await self._upload_csv(batch_csv, batch_filename)
+                await self._upload_csv(client, batch_csv, batch_filename)
             batch_num += 1
 
     async def _upload_size_limited(
         self,
+        client: httpx.AsyncClient,
         header: bytes,
         data_lines: list[bytes],
         filename: str,
@@ -129,7 +137,7 @@ class FocusVantageDestination(FocusDestination):
             if current_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD and current_chunk:
                 batch_csv = header + b"\n" + b"\n".join(current_chunk) + b"\n"
                 batch_filename = f"{filename}.part{batch_offset}_{sub_batch}"
-                await self._upload_csv(batch_csv, batch_filename)
+                await self._upload_csv(client, batch_csv, batch_filename)
                 current_chunk = []
                 current_size = len(header) + 1
                 sub_batch += 1
@@ -139,4 +147,4 @@ class FocusVantageDestination(FocusDestination):
         if current_chunk:
             batch_csv = header + b"\n" + b"\n".join(current_chunk) + b"\n"
             batch_filename = f"{filename}.part{batch_offset}_{sub_batch}"
-            await self._upload_csv(batch_csv, batch_filename)
+            await self._upload_csv(client, batch_csv, batch_filename)

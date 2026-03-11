@@ -62,8 +62,9 @@ class VantageSettingsView(BaseModel):
         None,
         description="Masked API key showing only first 4 and last 4 characters",
     )
-    integration_token: Optional[str] = Field(
-        None, description="Vantage integration token"
+    integration_token_masked: Optional[str] = Field(
+        None,
+        description="Masked integration token showing only first 4 and last 4 characters",
     )
     base_url: Optional[str] = Field(None, description="Vantage API base URL")
     status: Optional[str] = Field(None, description="Configuration status")
