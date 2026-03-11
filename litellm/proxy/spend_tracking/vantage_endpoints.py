@@ -1,5 +1,6 @@
 import json
 
+import litellm
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
@@ -26,6 +27,18 @@ _sensitive_masker = SensitiveDataMasker()
 VANTAGE_SETTINGS_PARAM_NAME = "vantage_settings"
 
 
+def _get_registered_vantage_logger():
+    """Return the VantageLogger already registered in litellm.callbacks, if any."""
+    from litellm.integrations.vantage.vantage_logger import VantageLogger
+
+    vantage_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        callback_type=VantageLogger
+    )
+    if vantage_loggers:
+        return vantage_loggers[0]
+    return None
+
+
 async def _set_vantage_settings(
     api_key: str, integration_token: str, base_url: str
 ):
@@ -39,10 +52,11 @@ async def _set_vantage_settings(
         )
 
     encrypted_api_key = encrypt_value_helper(api_key)
+    encrypted_integration_token = encrypt_value_helper(integration_token)
 
     vantage_settings = {
         "api_key": encrypted_api_key,
-        "integration_token": integration_token,
+        "integration_token": encrypted_integration_token,
         "base_url": base_url,
     }
 
@@ -94,6 +108,22 @@ async def _get_vantage_settings():
                 },
             )
         settings["api_key"] = decrypted_api_key
+
+    encrypted_integration_token = settings.get("integration_token")
+    if encrypted_integration_token:
+        decrypted_integration_token = decrypt_value_helper(
+            encrypted_integration_token,
+            key="vantage_integration_token",
+            exception_type="error",
+        )
+        if decrypted_integration_token is None:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Failed to decrypt Vantage integration token. Check your salt key configuration."
+                },
+            )
+        settings["integration_token"] = decrypted_integration_token
 
     return settings
 
@@ -346,6 +376,7 @@ async def vantage_dry_run_export(
         # Dry-run uses the FOCUS database + transformer directly,
         # bypassing the destination so no Vantage credentials are required.
         from litellm.integrations.focus.database import FocusLiteLLMDatabase
+        from litellm.integrations.focus.export_engine import FocusExportEngine
         from litellm.integrations.focus.transformer import FocusTransformer
 
         database = FocusLiteLLMDatabase()
@@ -357,11 +388,12 @@ async def vantage_dry_run_export(
         usage_sample = data.head(min(50, len(data))).to_dicts() if not data.is_empty() else []
         normalized_sample = normalized.head(min(50, len(normalized))).to_dicts() if not normalized.is_empty() else []
 
+        # Use the same column names as FocusExportEngine.dry_run_export_usage_data
         summary = {
             "total_records": len(normalized),
-            "total_spend": float(normalized.select("BilledCost").sum().item()) if not normalized.is_empty() and "BilledCost" in normalized.columns else 0.0,
-            "unique_teams": normalized["SubAccountId"].n_unique() if not normalized.is_empty() and "SubAccountId" in normalized.columns else 0,
-            "unique_models": normalized["ResourceType"].n_unique() if not normalized.is_empty() and "ResourceType" in normalized.columns else 0,
+            "total_spend": FocusExportEngine._sum_column(normalized, "BilledCost"),
+            "unique_teams": FocusExportEngine._count_unique(normalized, "SubAccountId"),
+            "unique_models": FocusExportEngine._count_unique(normalized, "ResourceType"),
         }
 
         dry_run_result = {
@@ -420,15 +452,18 @@ async def vantage_export(
         )
 
     try:
-        settings = await _get_vantage_settings()
-
         from litellm.integrations.vantage.vantage_logger import VantageLogger
 
-        logger = VantageLogger(
-            api_key=settings.get("api_key"),
-            integration_token=settings.get("integration_token"),
-            base_url=settings.get("base_url"),
-        )
+        # Prefer the already-registered logger to avoid recreating HTTP clients
+        # on every export call.
+        logger = _get_registered_vantage_logger()
+        if logger is None:
+            settings = await _get_vantage_settings()
+            logger = VantageLogger(
+                api_key=settings.get("api_key"),
+                integration_token=settings.get("integration_token"),
+                base_url=settings.get("base_url"),
+            )
         await logger.export_usage_data(
             limit=request.limit,
             start_time_utc=request.start_time_utc,
