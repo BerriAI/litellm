@@ -99,25 +99,40 @@ class FocusVantageDestination(FocusDestination):
     async def _upload_batched(
         self, client: httpx.AsyncClient, csv_bytes: bytes, filename: str
     ) -> None:
-        """Split the CSV into batches and upload each."""
+        """Split the CSV into batches and upload each.
+
+        Continues uploading remaining batches even if one fails, then raises
+        the first error encountered so callers know the export was partial.
+        """
         lines = csv_bytes.split(b"\n")
         header = lines[0]
         data_lines = [line for line in lines[1:] if line.strip()]
 
+        first_error: Optional[Exception] = None
         batch_num = 0
         for start in range(0, len(data_lines), VANTAGE_MAX_ROWS_PER_UPLOAD):
             batch_lines = data_lines[start : start + VANTAGE_MAX_ROWS_PER_UPLOAD]
             batch_csv = header + b"\n" + b"\n".join(batch_lines) + b"\n"
 
-            # If a single batch still exceeds 2 MB, split further by size
-            if len(batch_csv) > VANTAGE_MAX_BYTES_PER_UPLOAD:
-                await self._upload_size_limited(
-                    client, header, batch_lines, filename, batch_num
+            try:
+                # If a single batch still exceeds 2 MB, split further by size
+                if len(batch_csv) > VANTAGE_MAX_BYTES_PER_UPLOAD:
+                    await self._upload_size_limited(
+                        client, header, batch_lines, filename, batch_num
+                    )
+                else:
+                    batch_filename = f"{filename}.part{batch_num}"
+                    await self._upload_csv(client, batch_csv, batch_filename)
+            except Exception as e:
+                verbose_logger.error(
+                    "Vantage destination: batch %d failed: %s", batch_num, e
                 )
-            else:
-                batch_filename = f"{filename}.part{batch_num}"
-                await self._upload_csv(client, batch_csv, batch_filename)
+                if first_error is None:
+                    first_error = e
             batch_num += 1
+
+        if first_error is not None:
+            raise first_error
 
     async def _upload_size_limited(
         self,
@@ -127,19 +142,33 @@ class FocusVantageDestination(FocusDestination):
         filename: str,
         batch_offset: int,
     ) -> None:
-        """Upload lines in chunks that stay under the 2 MB size limit."""
+        """Upload lines in chunks that stay under the 2 MB size limit.
+
+        Individual rows that exceed the limit on their own are skipped with
+        a warning — they cannot be split further.
+        """
         current_chunk: list[bytes] = []
         current_size = len(header) + 1  # header + newline
         sub_batch = 0
+        header_size = len(header) + 1
 
         for line in data_lines:
             line_size = len(line) + 1  # line + newline
+
+            # Skip individual rows that exceed the limit on their own
+            if header_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD:
+                verbose_logger.warning(
+                    "Vantage destination: skipping oversized row (%d bytes)",
+                    line_size,
+                )
+                continue
+
             if current_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD and current_chunk:
                 batch_csv = header + b"\n" + b"\n".join(current_chunk) + b"\n"
                 batch_filename = f"{filename}.part{batch_offset}_{sub_batch}"
                 await self._upload_csv(client, batch_csv, batch_filename)
                 current_chunk = []
-                current_size = len(header) + 1
+                current_size = header_size
                 sub_batch += 1
             current_chunk.append(line)
             current_size += line_size

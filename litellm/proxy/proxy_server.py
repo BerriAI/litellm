@@ -6152,7 +6152,9 @@ class ProxyStartupEvent:
                             integration_token=db_settings.get("integration_token"),
                             base_url=db_settings.get("base_url"),
                         )
-                        litellm.callbacks.append(vantage_logger)  # type: ignore[arg-type]
+                        litellm.logging_callback_manager.add_litellm_callback(
+                            vantage_logger
+                        )
                 except Exception as e:
                     verbose_proxy_logger.warning(
                         "Failed to register VantageLogger from DB settings: %s", e
