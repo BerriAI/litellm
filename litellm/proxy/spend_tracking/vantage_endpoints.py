@@ -388,7 +388,8 @@ async def vantage_dry_run_export(
         usage_sample = data.head(min(50, len(data))).to_dicts() if not data.is_empty() else []
         normalized_sample = normalized.head(min(50, len(normalized))).to_dicts() if not normalized.is_empty() else []
 
-        # Use the same column names as FocusExportEngine.dry_run_export_usage_data
+        # Compute summary from the FOCUS-normalized DataFrame.
+        # These use post-transform column names specific to this endpoint.
         summary = {
             "total_records": len(normalized),
             "total_spend": FocusExportEngine._sum_column(normalized, "BilledCost"),
@@ -459,6 +460,13 @@ async def vantage_export(
         logger = _get_registered_vantage_logger()
         if logger is None:
             settings = await _get_vantage_settings()
+            if not settings:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error": "Vantage settings not found. Please initialize settings first using /vantage/init"
+                    },
+                )
             logger = VantageLogger(
                 api_key=settings.get("api_key"),
                 integration_token=settings.get("integration_token"),

@@ -55,9 +55,10 @@ class FocusExportEngine:
 
         summary = {
             "total_records": len(normalized),
-            "total_spend": self._sum_column(normalized, "BilledCost"),
-            "unique_teams": self._count_unique(normalized, "SubAccountId"),
-            "unique_models": self._count_unique(normalized, "ResourceType"),
+            "total_spend": self._sum_column(data, "spend"),
+            "total_tokens": self._sum_column(data, "total_tokens"),
+            "unique_teams": self._count_unique(data, "team_id"),
+            "unique_models": self._count_unique(data, "model"),
         }
 
         return {
