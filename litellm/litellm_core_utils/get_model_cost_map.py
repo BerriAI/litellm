@@ -11,6 +11,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import json
 import os
 from importlib.resources import files
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import httpx
@@ -37,10 +38,31 @@ class GetModelCostMap:
     def load_local_model_cost_map() -> dict:
         """Load the local backup model cost map bundled with the package."""
         content = json.loads(
-            files("litellm")
-            .joinpath("model_prices_and_context_window_backup.json")
-            .read_text(encoding="utf-8")
+            files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
         )
+        return content
+
+    @staticmethod
+    def load_checkout_model_cost_map() -> Optional[dict]:
+        """
+        Load the repository model cost map when running from a source checkout.
+
+        This keeps runtime metadata aligned with the branch under test instead of
+        always pulling `main` or the packaged backup.
+        """
+        checkout_model_cost_path = Path(__file__).resolve().parents[2] / "model_prices_and_context_window.json"
+        if not checkout_model_cost_path.is_file():
+            return None
+
+        content = json.loads(checkout_model_cost_path.read_text(encoding="utf-8"))
+        if not isinstance(content, dict):
+            verbose_logger.warning(
+                "LiteLLM: Repository model cost map at %s is not a dict (type=%s). Ignoring checkout file.",
+                checkout_model_cost_path,
+                type(content).__name__,
+            )
+            return None
+
         return content
 
     @classmethod
@@ -56,16 +78,14 @@ class GetModelCostMap:
         """Check 1: fetched map is a non-empty dict."""
         if not isinstance(fetched_map, dict):
             verbose_logger.warning(
-                "LiteLLM: Fetched model cost map is not a dict (type=%s). "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched model cost map is not a dict (type=%s). Falling back to local backup.",
                 type(fetched_map).__name__,
             )
             return False
 
         if len(fetched_map) == 0:
             verbose_logger.warning(
-                "LiteLLM: Fetched model cost map is empty. "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched model cost map is empty. Falling back to local backup.",
             )
             return False
 
@@ -259,6 +279,21 @@ def get_model_cost_map(url: str) -> dict:
         _cost_map_source_info.fallback_reason = None
         return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
 
+    checkout_content = GetModelCostMap.load_checkout_model_cost_map()
+    if checkout_content is not None:
+        if GetModelCostMap.validate_model_cost_map(
+            fetched_map=checkout_content,
+            backup_model_count=GetModelCostMap._get_backup_model_count(),
+        ):
+            _cost_map_source_info.source = "local"
+            _cost_map_source_info.url = None
+            _cost_map_source_info.is_env_forced = False
+            _cost_map_source_info.fallback_reason = "Loaded repository checkout file"
+            return _expand_model_aliases(checkout_content)
+        verbose_logger.warning(
+            "LiteLLM: Repository model cost map failed integrity validation. Falling back to remote/default sources."
+        )
+
     _cost_map_source_info.url = url
     _cost_map_source_info.is_env_forced = False
 
@@ -266,8 +301,7 @@ def get_model_cost_map(url: str) -> dict:
         content = GetModelCostMap.fetch_remote_model_cost_map(url)
     except Exception as e:
         verbose_logger.warning(
-            "LiteLLM: Failed to fetch remote model cost map from %s: %s. "
-            "Falling back to local backup.",
+            "LiteLLM: Failed to fetch remote model cost map from %s: %s. Falling back to local backup.",
             url,
             str(e),
         )
@@ -281,8 +315,7 @@ def get_model_cost_map(url: str) -> dict:
         backup_model_count=GetModelCostMap._get_backup_model_count(),
     ):
         verbose_logger.warning(
-            "LiteLLM: Fetched model cost map failed integrity check. "
-            "Using local backup instead. url=%s",
+            "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
             url,
         )
         _cost_map_source_info.source = "local"
