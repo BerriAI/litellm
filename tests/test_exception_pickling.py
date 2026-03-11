@@ -53,3 +53,9 @@ def test_pickle_roundtrip(cls, kwargs):
     assert restored.llm_provider == "openai"
     assert restored.model == "gpt-4o"
     assert kwargs["message"] in str(restored)
+
+    # Verify extra fields survive the roundtrip
+    if "status_code" in kwargs:
+        assert restored.status_code == kwargs["status_code"]
+    if "request_data" in kwargs:
+        assert restored.request_data == kwargs["request_data"]
