@@ -5356,7 +5356,7 @@ class Router:
             "model_group_retry_policy", self.model_group_retry_policy
         )
         model_group: Optional[str] = kwargs.get("model")
-        num_retries = kwargs.pop("num_retries")
+        num_retries: int = kwargs.pop("num_retries") or 0  # guard against None (e.g. router.num_retries not set)
 
         ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
         _metadata: dict = kwargs.get("litellm_metadata", kwargs.get("metadata")) or {}
