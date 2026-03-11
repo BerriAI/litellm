@@ -130,6 +130,21 @@ const config = {
         };
       },
     }),
+    // Shim that ensures window.gtag is always defined, preventing
+    // "window.gtag is not a function" errors when GA script hasn't loaded yet
+    () => ({
+      name: 'gtag-shim',
+      injectHtmlTags() {
+        return {
+          headTags: [
+            {
+              tagName: 'script',
+              innerHTML: `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}if(!window.gtag){window.gtag=gtag;}`,
+            },
+          ],
+        };
+      },
+    }),
   ],
 
   presets: [
@@ -137,10 +152,9 @@ const config = {
       'classic',
       /** @type {import('@docusaurus/preset-classic').Options} */
       ({
-        gtag: {
-          trackingID: 'G-K7K215ZVNC',
-          anonymizeIP: true,
-        },
+        gtag: process.env.NODE_ENV === 'production'
+          ? { trackingID: 'G-K7K215ZVNC', anonymizeIP: true }
+          : undefined,
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
         },
@@ -163,7 +177,7 @@ const config = {
       src: 'https://www.feedbackrocket.io/sdk/v1.2.js',
       'data-fr-id': 'GQwepB0f0L-x_ZH63kR_V',
       'data-fr-theme': 'dynamic',
-    }
+    },
   ],
 
   themeConfig:
@@ -181,10 +195,22 @@ const config = {
             label: 'Docs',
           },
           {
+            type: 'docSidebar',
+            sidebarId: 'guidesSidebar',
+            position: 'left',
+            label: 'Guides',
+          },
+          {
+            type: 'docSidebar',
+            sidebarId: 'tutorialsSidebar',
+            position: 'left',
+            label: 'Tutorials',
+          },
+          {
+            type: 'docSidebar',
             sidebarId: 'integrationsSidebar',
             position: 'left',
             label: 'Integrations',
-            to: "docs/integrations"
           },
           {
             sidebarId: 'tutorialSidebar',
