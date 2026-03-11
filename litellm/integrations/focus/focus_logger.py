@@ -137,11 +137,15 @@ class FocusLogger(CustomLogger):
     ) -> None:
         """Register the export cron/interval job with the provided scheduler."""
 
-        focus_loggers: List[
-            CustomLogger
-        ] = litellm.logging_callback_manager.get_custom_loggers_for_type(
-            callback_type=FocusLogger
-        )
+        # Use exact type match to exclude subclasses like VantageLogger,
+        # which have their own dedicated scheduling method.
+        focus_loggers: List[CustomLogger] = [
+            cb
+            for cb in litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=FocusLogger
+            )
+            if type(cb) is FocusLogger
+        ]
         if not focus_loggers:
             verbose_logger.debug(
                 "No Focus export logger registered; skipping scheduler"
