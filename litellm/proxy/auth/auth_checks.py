@@ -2681,7 +2681,7 @@ def get_effective_team_models(
     """
     Compute the effective model set for a team member.
 
-    When LITELLM_TEAM_MODEL_OVERRIDES is enabled and team_default_models is
+    When LITELLM_TEAM_MODEL_OVERRIDES_ENABLED is enabled and team_default_models is
     configured in team metadata, returns the union of team_default_models and
     the member's per-user model overrides.  Otherwise returns the full team
     model list (unchanged behavior).
@@ -2696,7 +2696,7 @@ def get_effective_team_models(
 
     metadata = (
         team_metadata
-        if team_metadata is not None
+        if isinstance(team_metadata, dict)
         else (
             team_object.metadata
             if team_object and isinstance(team_object.metadata, dict)

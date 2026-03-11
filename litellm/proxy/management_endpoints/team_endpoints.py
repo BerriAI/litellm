@@ -2385,18 +2385,25 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
-    ### upsert new budget
+    ### upsert new budget (only when there are budget-related params to process)
+    _has_budget_params = (
+        data.max_budget_in_team is not None
+        or data.tpm_limit is not None
+        or data.rpm_limit is not None
+        or identified_budget_id is not None
+    )
     async with prisma_client.db.tx() as tx:
-        await _upsert_budget_and_membership(
-            tx=tx,
-            team_id=data.team_id,
-            user_id=received_user_id,
-            max_budget=data.max_budget_in_team,
-            existing_budget_id=identified_budget_id,
-            user_api_key_dict=user_api_key_dict,
-            tpm_limit=data.tpm_limit,
-            rpm_limit=data.rpm_limit,
-        )
+        if _has_budget_params:
+            await _upsert_budget_and_membership(
+                tx=tx,
+                team_id=data.team_id,
+                user_id=received_user_id,
+                max_budget=data.max_budget_in_team,
+                existing_budget_id=identified_budget_id,
+                user_api_key_dict=user_api_key_dict,
+                tpm_limit=data.tpm_limit,
+                rpm_limit=data.rpm_limit,
+            )
 
         ### update team member models (inside transaction for atomicity)
         if data.models is not None:

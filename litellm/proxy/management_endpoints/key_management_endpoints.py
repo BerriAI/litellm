@@ -1270,7 +1270,10 @@ async def generate_key_fn(
                     ),
                 )
                 if _effective:  # only enforce when effective models is non-empty
-                    disallowed = set(data.models) - set(_effective)
+                    from litellm.proxy._types import SpecialModelNames
+
+                    _special_values = {m.value for m in SpecialModelNames}
+                    disallowed = (set(data.models) - _special_values) - set(_effective)
                     if disallowed:
                         raise HTTPException(
                             status_code=403,
