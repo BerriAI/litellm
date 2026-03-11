@@ -626,9 +626,13 @@ class RouteChecks:
                 in [
                     "/user/new",
                     "/user/delete",
+                    "/user/block",
+                    "/user/unblock",
                     "/team/new",
                     "/team/update",
                     "/team/delete",
+                    "/team/block",
+                    "/team/unblock",
                     "/model/new",
                     "/model/update",
                     "/model/delete",
