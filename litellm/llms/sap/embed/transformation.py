@@ -179,7 +179,6 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
             "input": input_dict,
         }
         body = validate_dict(body, EmbeddingRequest)
-
         return body
 
     def transform_embedding_response(
